@@ -31,6 +31,14 @@ struct MachineModelTests {
         precondition(back[1].firmware.lastPathComponent == "u-boot.bin" && back[1].firmware.deletingLastPathComponent() == back[1].directory)
         precondition(String(decoding: data, as: UTF8.self).contains("\"kind\":\"linux\""))
 
+        // lastExternalScreen is optional: old JSON decodes without it, and a saved size round-trips.
+        precondition(old[0].lastExternalScreen == nil && back[1].lastExternalScreen == nil)
+        var withScreen = old[0]
+        withScreen.lastExternalScreen = PixelSize(width: 3840, height: 2160)
+        let screenData = try JSONEncoder().encode([withScreen])
+        precondition(MachineList.decode(screenData, diskExists: { _ in true })! == [withScreen])
+        precondition(String(decoding: screenData, as: UTF8.self).contains("\"lastExternalScreen\":{"))
+
         // A machine whose disk is gone is dropped; a damaged list is nil, not empty.
         precondition(MachineList.decode(data, diskExists: { $0.guest == .mac })!.map(\.name) == ["Sequoia"])
         precondition(MachineList.decode(Data("{".utf8)) == nil)

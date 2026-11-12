@@ -5,6 +5,12 @@ enum GuestKind: String, Codable, Hashable {
     case mac, linux
 }
 
+/// A size in pixels, saved with a machine.
+struct PixelSize: Codable, Hashable {
+    var width: Int
+    var height: Int
+}
+
 /// A machine brought over or made here: its files, and the identity it was installed with.
 /// Linux machines keep ecid and seed at 0; they only mean something for a Mac.
 struct VirtualMac: Identifiable, Codable, Hashable {
@@ -27,6 +33,8 @@ struct VirtualMac: Identifiable, Codable, Hashable {
     var guest: GuestKind { kind ?? .mac }
     /// This machine's own CPU count. Missing: the global henge.cpus setting.
     var cpus: Int?
+    /// The external screen this machine last ran on; a Mac boots at its size when that screen is there again.
+    var lastExternalScreen: PixelSize?
 
     var directory: URL { MachinePaths.directory(for: id) }
     var rom: URL { directory.appendingPathComponent("AVPBooter.vmapple2.bin") }

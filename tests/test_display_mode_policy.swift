@@ -99,6 +99,20 @@ struct DisplayModePolicyTests {
         f = ModeFollower(initial: tv)
         precondition(f.externalDisplay(tv, now: 0) == nil)
 
+        // Booted on an external screen: it holds the boot mode, rotation waits, unplugging returns the phone mode.
+        f = ModeFollower(initial: tv, phone: landscape, external: tv)
+        precondition(f.orientation(portrait, now: 0) == nil)
+        precondition(f.externalDisplay(tv, now: 1) == nil)
+        precondition(f.externalDisplay(nil, now: 2) == .init(mode: portrait, at: 3))
+
+        // External sizes: capped at 4K, rounded down to 8, insets taken off.
+        func ext(_ w: CGFloat, _ h: CGFloat) -> GuestMode { DisplayModePolicy.externalMode(pixels: CGSize(width: w, height: h)) }
+        precondition(ext(3840, 2160) == tv && ext(2560, 1440) == GuestMode(w: 2560, h: 1440))
+        precondition(ext(5120, 2880) == tv && ext(1366, 768) == GuestMode(w: 1360, h: 768))
+        precondition(DisplayModePolicy.externalMode(pixels: CGSize(width: 1920, height: 1080),
+                                                    insets: DisplayInsets(top: 20, left: 24, bottom: 20, right: 24)) == GuestMode(w: 1872, h: 1040))
+        precondition(DisplayModePolicy.guestScale(shortSide: 2160, isPhone: false) == 2 && DisplayModePolicy.guestScale(shortSide: 1440, isPhone: false) == 1)
+
         print("test_display_mode_policy: ok")
     }
 }
