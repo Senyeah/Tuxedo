@@ -74,7 +74,7 @@ static NSString *const shaders = @"#include <metal_stdlib>\n"
     id<MTLSamplerState> linear, nearest;
     dispatch_queue_t work;
     dispatch_group_t completions;
-    _Atomic int stopping, queued;
+    _Atomic int stopping, queued, paused; /* paused: no present runs, so no command buffer is committed */
     _Atomic uint64_t last_ns, frames;
     BOOL capture;
     os_unfair_lock layer_lock; /* the target and its generation */
@@ -146,7 +146,7 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
 
 /* Any thread. One present is queued at a time, and it reads the newest state when it runs. */
 - (void)kick {
-    if (atomic_load(&stopping) || atomic_exchange(&queued, 1)) return;
+    if (atomic_load(&stopping) || atomic_load(&paused) || atomic_exchange(&queued, 1)) return; /* resume kicks */
     uint64_t due = atomic_load(&last_ns) + FRAME_NS, now = now_ns();
     if (due > now) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(due - now)), work, ^{ [self present]; });
     else dispatch_async(work, ^{ [self present]; });
@@ -462,7 +462,7 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
 - (void)present {
     atomic_store(&last_ns, now_ns()); /* before queued clears, or a kick in between would not wait */
     atomic_store(&queued, 0);
-    if (atomic_load(&stopping) || !g) return;
+    if (atomic_load(&stopping) || atomic_load(&paused) || !g) return;
     @autoreleasepool {
         [last_cb waitUntilCompleted]; /* the GPU must be done with tex before it is rewritten */
         last_cb = nil;
@@ -560,6 +560,23 @@ void hv_vgpu_metal_destroy(HvVgpuMetal *m) {
         dispatch_group_wait(p->completions, DISPATCH_TIME_FOREVER);
         if (getenv("HV_VGPU_STATS")) print_stats(&p->stats);
     }
+}
+
+void hv_vgpu_metal_pause(HvVgpuMetal *m) {
+    if (!m) return;
+    HvVgpuPresenter *p = (__bridge HvVgpuPresenter *)m;
+    atomic_store(&p->paused, 1);
+    dispatch_sync(p->work, ^{ /* a present that began before the flag is done, and its GPU work */
+        [p->last_cb waitUntilCompleted];
+        p->last_cb = nil;
+    });
+    dispatch_group_wait(p->completions, DISPATCH_TIME_FOREVER);
+}
+
+void hv_vgpu_metal_resume(HvVgpuMetal *m) {
+    if (!m) return;
+    HvVgpuPresenter *p = (__bridge HvVgpuPresenter *)m;
+    if (atomic_exchange(&p->paused, 0)) [p kick]; /* the guest may have drawn meanwhile */
 }
 
 void hv_vgpu_metal_set_layer(HvVgpuMetal *m, void *layer) {

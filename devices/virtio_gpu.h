@@ -144,5 +144,8 @@ int hv_virtio_gpu_take_dirty(HvVirtioGpu *g, HvVgpuRect *r);
 HvVgpuResource *hv_virtio_gpu_resource(HvVirtioGpu *g, uint32_t id);
 /* 1 when freed; 0 when a stuck renderer made it leave the device (the renderer must be left too). */
 int hv_virtio_gpu_destroy(HvVirtioGpu *g);
+/* Not on a CPU's thread. Waits up to ms for the renderer to finish every request it holds (fenced ones too). 0 when it
+   holds none, -1 on time out. New requests come only from CPUs, so with the CPUs stopped, 0 stays true. */
+int hv_virtio_gpu_wait_idle(HvVirtioGpu *g, unsigned ms);
 
 #endif

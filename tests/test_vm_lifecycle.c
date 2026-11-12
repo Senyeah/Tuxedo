@@ -213,6 +213,9 @@ int main(void) {
             {"host stop", FW_SPIN, 0, HENGE_VM_OUTCOME_HOST_STOP, "HENGE SPIN\n"},
             {"power key", FW_OFF, 1, HENGE_VM_OUTCOME_SHUTDOWN, "KEY\n"},
         };
+        check("the background policy: silent pauses, sound keeps a plain machine running, acceleration always pauses",
+              hv_vm_background_pauses(0, 0) && !hv_vm_background_pauses(0, 1) && hv_vm_background_pauses(1, 0) &&
+                  hv_vm_background_pauses(1, 1));
         check("no board before a boot", henge_vm_board_kind() == -1);
         check("missing firmware file fails", henge_vm_boot_linux("/nonexistent/u-boot.bin", disk, 64, 2, 0, error, sizeof error) != 0 &&
                                                 henge_vm_state() == 0 && henge_vm_can_start() && fds() == initial_fds &&

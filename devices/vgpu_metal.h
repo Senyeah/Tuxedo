@@ -20,6 +20,10 @@ void hv_vgpu_metal_destroy(HvVgpuMetal *p);
    but the presenter's; waits for a present in flight, so after set_3d(p, NULL, NULL) the renderer may be destroyed.
    Without it a 3D scanout shows black. snapshot reads the surface while the scanout is 3D. */
 void hv_vgpu_metal_set_3d(HvVgpuMetal *p, const HvGpu3dScanoutOps *ops, void *renderer);
+/* The iOS app may not commit Metal work in the background. pause waits for the present in flight and its GPU work; then
+   nothing is drawn, uploaded or blitted until resume, which draws once. Not on the presenter's queue. Safe to repeat. */
+void hv_vgpu_metal_pause(HvVgpuMetal *p);
+void hv_vgpu_metal_resume(HvVgpuMetal *p);
 /* Any thread, at any time; NULL stops drawing. The layer is retained until the next call. */
 void hv_vgpu_metal_set_layer(HvVgpuMetal *p, void *layer);
 /* Frames presented to a layer. */

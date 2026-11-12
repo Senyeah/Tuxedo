@@ -828,6 +828,19 @@ static int drain_3d(HvVirtioGpu *g) {
     return clean;
 }
 
+int hv_virtio_gpu_wait_idle(HvVirtioGpu *g, unsigned ms) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += ms / 1000, ts.tv_nsec += (ms % 1000) * 1000000L;
+    if (ts.tv_nsec >= 1000000000L) ts.tv_sec++, ts.tv_nsec -= 1000000000L;
+    pthread_mutex_lock(&g->cmu);
+    int rc = 0;
+    while (g->nopen && !rc) rc = pthread_cond_timedwait(&g->ccv, &g->cmu, &ts);
+    int idle = g->nopen == 0;
+    pthread_mutex_unlock(&g->cmu);
+    return idle ? 0 : -1;
+}
+
 /* Every context and resource goes to the renderer to destroy, and the tables empty. Not for a running guest. */
 static int reset_3d(HvVirtioGpu *g) {
     uint32_t nres = 0, nctx = 0;

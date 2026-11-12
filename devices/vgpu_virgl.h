@@ -23,6 +23,11 @@ const HvGpu3dScanoutOps *hv_vgpu_virgl_scanout_ops(void);
    destroys what the guest left, then releases EGL. Waits for the thread: no time limit. */
 void hv_vgpu_virgl_destroy(HvVgpuVirgl *r);
 
+/* Not on the renderer's thread. Waits up to wait_ms until the thread has run everything queued before the call and
+   glFinish: the GPU holds no work then. 0 when done, -1 on time out (the thread still gets there). The caller stops the
+   guest first: this does not keep new requests out. */
+int hv_vgpu_virgl_quiesce(HvVgpuVirgl *r, unsigned wait_ms);
+
 /* For a renderer stuck past the device's drain: stops it without waiting. Queued requests fail unrun and the thread
    cleans up after its current job; the renderer, its device and guest RAM must stay allocated. */
 void hv_vgpu_virgl_abandon(HvVgpuVirgl *r);

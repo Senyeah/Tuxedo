@@ -118,9 +118,17 @@ int hv_vm_pause(void);
 /* Returns the seconds hidden from the guest, 0 if it was not paused. */
 double hv_vm_resume(void);
 int hv_vm_paused(void);
-/* The iOS app in the background (1) or not (0): pause now, or, while the guest plays sound (which keeps
-   the app running), as soon as it stops. 0 resumes. Not on a CPU's thread. */
+/* A pause also stops the Metal presenter, after the CPUs. With graphics acceleration it first waits up to 1.5 s for the
+   renderer to finish what it holds (logged once if it does not): the iOS app may commit no Metal work in the background.
+   Resume starts the presenter again. For checks: frames the presenter has drawn and requests the renderer has run;
+   returns 1 while the GPU is held, 0 when it runs, -1 without a GPU. */
+int hv_vm_gpu_counts(uint64_t *frames, uint64_t *requests);
+/* The iOS app in the background (1) or not (0). Pauses now, except a machine without graphics acceleration whose guest
+   plays sound: sound keeps the app running, so that one pauses as soon as the sound stops. An accelerated machine always
+   pauses, so its sound stops in the background: no guest GPU work may run there. 0 resumes. Not on a CPU's thread. */
 void hv_vm_set_background(int on);
+/* That policy alone. */
+int hv_vm_background_pauses(int accelerated, int sound_playing);
 void hv_vm_flush_disks(void);
 const char *hv_vm_reason_name(int reason);
 

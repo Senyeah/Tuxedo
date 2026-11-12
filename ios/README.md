@@ -98,7 +98,7 @@ worktree) when the libraries exist (`scripts/gfx_env.sh`). Without them, and in 
 no acceleration and the switch shows an error. In Xcode, set both settings by hand. A Linux machine has a "Graphics acceleration" switch in its settings, off by
 default, passed to `henge_vm_boot_linux`. GPU memory (textures, render targets, the scanout's `IOSurface`)
 counts against the app on the phone, unlike guest RAM, and `phys_footprint` in the simulator does not
-show it, so memory figures need the device. ANGLE, libepoxy and virglrenderer licences are in
+show it, so memory figures need the device. In the background an accelerated machine pauses whole (`hv_vm_set_background`), even while its guest plays sound, because iOS allows no Metal work there: `hv_vm_pause` waits up to 1.5 s for the renderer's queue to empty, then stops the presenter until the resume. A machine without acceleration pauses unless its guest plays sound. ANGLE, libepoxy and virglrenderer licences are in
 `Henge/Resources/legal/`.
 
 Code from Husk (GPL-2.0-or-later): `Henge/JIT/*`, `Henge/HengeLog.swift`,
