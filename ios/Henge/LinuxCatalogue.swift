@@ -54,10 +54,33 @@ enum LinuxCatalogue {
         }
         do {
             let fixed = try JSONSerialization.data(withJSONObject: ["images": list])
-            return try JSONDecoder().decode(File.self, from: fixed).images
+            let images = try JSONDecoder().decode(File.self, from: fixed).images
+            try images.forEach(validate)
+            return images
+        } catch let error as LinuxError {
+            throw error
         } catch {
             throw LinuxError.text("The catalogue is not in the format Henge expects (\(error.localizedDescription)).")
         }
+    }
+
+    /// 1 TiB keeps every size sum and shift far from overflow.
+    static let maxBytes: Int64 = 1 << 40
+    /// The Disk size stepper stops here (GiB), so a bigger image has no valid setting.
+    static let maxDiskGB = 512
+
+    /// id and version go into file names: no path separators, no "..".
+    static func safeName(_ s: String) -> Bool {
+        !s.isEmpty && s.count <= 64 && !s.hasPrefix(".") && !s.contains("..")
+            && s.unicodeScalars.allSatisfy { $0.isASCII && (CharacterSet.alphanumerics.contains($0) || "._-+".unicodeScalars.contains($0)) }
+    }
+
+    private static func validate(_ image: LinuxImage) throws {
+        guard safeName(image.id) else { throw LinuxError.text("The catalogue has an image id that is not a plain name.") }
+        guard safeName(image.version) else { throw LinuxError.text("\(image.name) has a version that is not a plain name.") }
+        let sizes = [image.diskBytes, image.unpackedBytes, image.logicalBytes, image.firmwareBytes]
+        guard sizes.allSatisfy({ $0 >= 0 && $0 <= maxBytes }) else { throw LinuxError.text("\(image.name) has a size that is out of range.") }
+        guard image.logicalBytes <= Int64(maxDiskGB) << 30 else { throw LinuxError.text("\(image.name) needs a bigger disk than Henge can make.") }
     }
 
     static func fetch(_ url: URL) async throws -> [LinuxImage] {

@@ -18,6 +18,13 @@ settings:
     # The app's entitlements file. Override on the xcodebuild command line (the JIT helper doesn't use it, so a
     # personal team can sign the app with fewer entitlements without touching the helper).
     HENGE_ENTITLEMENTS: Henge/Henge.entitlements
+    # Graphics acceleration (A9) is opt-in: HENGE_GFX=1 builds the engine with GFX=1 and links the libraries that
+    # tools/gfx/build-deps.sh put in HENGE_GFX_DIR. sim_build.sh and package_ipa.sh set both (ios/scripts/gfx_env.sh);
+    # a build without them, such as CI, has no acceleration.
+    HENGE_GFX: ""
+    HENGE_GFX_DIR: $(SRCROOT)/../build/gfx
+    HENGE_GFX_LIBS_: ""
+    HENGE_GFX_LIBS_1: "$(HENGE_GFX_DIR)/$(HENGE_GFX_PLATFORM)/lib/libvirglrenderer.a $(HENGE_GFX_DIR)/$(HENGE_GFX_PLATFORM)/lib/libepoxy.a $(HENGE_GFX_DIR)/$(HENGE_GFX_PLATFORM)/lib/libEGL.a $(HENGE_GFX_DIR)/$(HENGE_GFX_PLATFORM)/lib/libGLESv2.a"
     ARCHS: arm64
     ONLY_ACTIVE_ARCH: YES
     ENABLE_BITCODE: NO
@@ -49,6 +56,7 @@ targets:
       - path: HengeJITHelper/HengeJITMessages.swift
     settings:
       base:
+        HENGE_GFX_PLATFORM: ios
         PRODUCT_BUNDLE_IDENTIFIER: $(HENGE_BUNDLE_IDENTIFIER)
         PRODUCT_NAME: Henge
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -72,6 +80,11 @@ targets:
           - "$(inherited)"
           # The engine (make ios-lib) and what its network needs (scripts/fetch_deps.sh).
           - "-lhengevm"
+          # The renderer behind Graphics acceleration (A9), when HENGE_GFX=1.
+          - "$(HENGE_GFX_LIBS_$(HENGE_GFX))"
+          - "-lc++"
+          - "-framework"
+          - "QuartzCore"
           # The installer (tools/build_ios_restore.sh): libirecovery, usbmuxd, idevicerestore and their libraries.
           - "-lhengerestore"
           - "-lz"
@@ -102,7 +115,7 @@ targets:
         script: |
           set -e
           cd "$SRCROOT/.."
-          make ios-lib build/henge-agent.gz
+          make ios-lib ${HENGE_GFX:+GFX=1} build/henge-agent.gz
           ./tools/build_ios_restore.sh
         basedOnDependencyAnalysis: false
     postBuildScripts:
@@ -194,6 +207,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(HENGE_BUNDLE_IDENTIFIER)
         PRODUCT_NAME: Henge
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        HENGE_GFX_PLATFORM: sim
         SDKROOT: iphonesimulator
         SUPPORTED_PLATFORMS: iphonesimulator
         ARCHS: arm64
@@ -219,6 +233,10 @@ targets:
         OTHER_LDFLAGS:
           - "$(inherited)"
           - "-lhengevm"
+          - "$(HENGE_GFX_LIBS_$(HENGE_GFX))"
+          - "-lc++"
+          - "-framework"
+          - "QuartzCore"
           - "-lhengerestore"
           - "-lz"
           - "-liconv"
@@ -240,7 +258,7 @@ targets:
         script: |
           set -e
           cd "$SRCROOT/.."
-          make ios-sim-lib build/henge-agent.gz
+          make ios-sim-lib ${HENGE_GFX:+GFX=1} build/henge-agent.gz
           ./tools/build_ios_restore.sh sim
         basedOnDependencyAnalysis: false
     postBuildScripts:

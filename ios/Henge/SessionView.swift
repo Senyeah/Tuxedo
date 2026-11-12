@@ -949,8 +949,8 @@ struct SessionView: View {
             HengeLog.log("session", "screen \(guestScreen.width)x\(guestScreen.height) retina \(mac.isRetina) mm \(macMM.width)x\(macMM.height)")
             rc = henge_vm_boot(mac.rom.path, mac.disk.path, mac.aux.path, mac.ecid, mac.seed, ram, Int32(cpus), &buffer, buffer.count)
         case .linux:
-            HengeLog.log("session", "linux screen \(guestScreen.width)x\(guestScreen.height)\(current.followsPhoneScreen ? " (phone native, scale 2)" : "")")
-            rc = henge_vm_boot_linux(mac.firmware.path, mac.disk.path, ram, Int32(cpus), &buffer, buffer.count)
+            HengeLog.log("session", "linux screen \(guestScreen.width)x\(guestScreen.height)\(current.followsPhoneScreen ? " (phone native, scale 2)" : "")\(mac.accel == true ? ", graphics acceleration" : "")")
+            rc = henge_vm_boot_linux(mac.firmware.path, mac.disk.path, ram, Int32(cpus), mac.accel == true ? 1 : 0, &buffer, buffer.count)
         }
         if rc != 0 {
             error = String(cString: buffer)

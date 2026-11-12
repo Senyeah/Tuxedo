@@ -33,6 +33,23 @@ struct LinuxCatalogueTests {
         precondition(fails { _ = try LinuxCatalogue.decode(Data("{\"nope\":1}".utf8), base: base) } != nil)
         precondition(fails { _ = try LinuxCatalogue.decode(Data("{\"images\":[{\"id\":\"x\"}]}".utf8), base: base) } != nil)
 
+        // id and version go into file names; sizes must not overflow or break the disk stepper.
+        func entry(id: String = "x", version: String = "1", disk: String = "10", logical: String = "30") -> Data {
+            Data("""
+            {"images":[{"id":"\(id)","name":"N","version":"\(version)","kind":"console","diskURL":"d","diskBytes":\(disk),
+             "diskSHA256":"00","unpackedBytes":20,"logicalBytes":\(logical),"firmwareURL":"f","firmwareBytes":5,"firmwareSHA256":"00"}]}
+            """.utf8)
+        }
+        precondition(fails { _ = try LinuxCatalogue.decode(entry(), base: base) } == nil)
+        for bad in ["../x", "a/b", "a\\\\b", "..", "a..b", ".hidden", "", "x y"] {
+            precondition(fails { _ = try LinuxCatalogue.decode(entry(id: bad), base: base) } != nil, "id \(bad)")
+            precondition(fails { _ = try LinuxCatalogue.decode(entry(version: bad), base: base) } != nil, "version \(bad)")
+        }
+        precondition(fails { _ = try LinuxCatalogue.decode(entry(disk: "9223372036854775807"), base: base) } != nil)
+        precondition(fails { _ = try LinuxCatalogue.decode(entry(disk: "-1"), base: base) } != nil)
+        precondition(fails { _ = try LinuxCatalogue.decode(entry(logical: "\(Int64(513) << 30)"), base: base) } != nil)
+        precondition(fails { _ = try LinuxCatalogue.decode(entry(logical: "\(Int64(512) << 30)"), base: base) } == nil)
+
         // Space: what is left to download, plus the decoded file, plus 1 GB.
         let gb: Int64 = 1 << 30
         precondition(a.spaceNeeded() == 192528501 + 1507200 + 473957360 + gb)

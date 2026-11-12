@@ -19,6 +19,8 @@ the App Store.
 | StikJIT (the Bitrise build applies `ci/stikjit-high-address.patch`) | MPL-2.0 | `ios/Henge/Resources/legal/` |
 | idevice | MIT | `ios/Henge/Resources/legal/` |
 | Pairing library's Rust crates | Listed per crate | `ios/Henge/Resources/legal/LICENSES-rppairing-crates.txt` |
+| ANGLE (with the third-party code in its static libraries) | BSD-3-Clause and others, per file | `ios/Henge/Resources/legal/LICENSES-ANGLE.txt` |
+| libepoxy, virglrenderer | MIT | `ios/Henge/Resources/legal/` |
 | libslirp, pcre2 | BSD | Prebuilt from Husk |
 | glib, libintl | LGPL-2.1-or-later | Prebuilt from Husk |
 

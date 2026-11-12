@@ -146,6 +146,17 @@ struct MachineModelTests {
         precondition(!String(decoding: data, as: UTF8.self).contains("sharpText"))
         precondition(ScreenPreset.fhd.denseMM == (width: 185, height: 104) && ScreenPreset.qhd.denseMM == (width: 246, height: 139))
 
+        // A9: acceleration is off unless chosen, and is left out of the JSON when never chosen.
+        precondition(old[0].accel == nil && chosenBack[0].accel == nil)
+        precondition(!String(decoding: data, as: UTF8.self).contains("accel"))
+        chosen.accel = true
+        let accelBack = MachineList.decode(try JSONEncoder().encode([chosen]), diskExists: { _ in true })!
+        precondition(accelBack[0].accel == true)
+
+        // A9: the Home thumbnail follows the saved picture, not the machine's 16:9 screen.
+        precondition(PreviewShape.aspect(width: 640, height: 1386, fallback: 16.0 / 9) == 640.0 / 1386)
+        precondition(PreviewShape.aspect(width: 0, height: 0, fallback: 16.0 / 9) == 16.0 / 9)
+
         print("machine model: ok")
     }
 }

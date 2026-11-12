@@ -132,7 +132,7 @@ static void console_out(void *opaque, uint8_t c) {
     pthread_mutex_unlock(&console_mutex);
 }
 
-int henge_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb, int cpus, char *err, size_t errlen) {
+int henge_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb, int cpus, int accel, char *err, size_t errlen) {
     { extern void hv_prof_ios_start(void); hv_prof_ios_start(); }
     if (!firmware) {
         snprintf(err, errlen, "A Linux machine needs its firmware (u-boot.bin).");
@@ -144,10 +144,10 @@ int henge_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb,
         snprintf(err, errlen, "Henge has no JIT region. Turn on JIT first.");
         return failed_start();
     }
-    HvVmConfig c = {.board = HV_BOARD_VIRT, .rom = firmware, .disk = disk, .ram_mb = ram_mb, .ncpus = cpus, .log = 1,
+    HvVmConfig c = {.board = HV_BOARD_VIRT, .rom = firmware, .disk = disk, .ram_mb = ram_mb, .ncpus = cpus, .log = 1, .accel = accel,
                     .jit_rx = jit->rx_addr, .jit_rw = jit->rw_addr, .jit_bytes = jit->size};
-    fprintf(stderr, "henge: booting Linux with %d CPUs, %llu MB RAM, a %zu MB JIT region\n", cpus,
-            (unsigned long long)ram_mb, jit->size >> 20);
+    fprintf(stderr, "henge: booting Linux with %d CPUs, %llu MB RAM, a %zu MB JIT region%s\n", cpus,
+            (unsigned long long)ram_mb, jit->size >> 20, accel ? ", graphics acceleration" : "");
     console_clear();
     hv_vm_console_set_output(console_out, NULL); /* destroy clears it, so every boot sets it */
     if (hv_vm_create(&c, err, errlen) != 0) return failed_start();

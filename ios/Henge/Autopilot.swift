@@ -13,6 +13,7 @@ import UIKit
 ///   type TEXT          typed into the guest's keyboard (the log shows only how long it is)
 ///   console TEXT       a line typed into a Linux machine's console, with Return (the log shows only how long it is)
 ///   console-wait SECONDS TEXT   wait until TEXT is in the console's newest output, or SECONDS pass (the log says which)
+///   console-tail N     the last N characters of the console's newest output, into the log (raw guest text: keep henge.log private)
 ///   key CODE           a Linux key code (28 is Return, 1 is Escape)
 ///   cmd KEY            KEY (a character, or space) with Command held
 ///   move X Y, click X Y  the pointer to a spot on the guest's screen (its pixels), and a click there
@@ -98,6 +99,10 @@ enum Autopilot {
                 try? await Task.sleep(nanoseconds: 200_000_000)
             }
             HengeLog.log("autopilot", "console-wait: \(ConsoleModel.active?.tail.contains(w[1]) == true ? "found" : "timed out")")
+        case "console-tail": // what a console command printed, for a test that reads the log
+            let n = min(max(Int(arg) ?? 400, 1), 4000)
+            let text = (ConsoleModel.active?.tail ?? "").suffix(n).replacingOccurrences(of: "\u{1b}", with: "").replacingOccurrences(of: "\r", with: "")
+            HengeLog.log("autopilot", "console-tail: " + text.replacingOccurrences(of: "\n", with: " | "))
         case "key":
             if let code = UInt16(arg) { Keys.press(code) }
         case "move", "click": // guest display pixels: nudged there in small steps, as macOS accelerates big ones

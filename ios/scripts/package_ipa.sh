@@ -14,10 +14,11 @@ OUT="$HOME/Desktop/Henge.ipa"
 [ -d "$IOS/deps/StikJIT.xcframework" ] || "$IOS/scripts/fetch_deps.sh"
 cd "$IOS"
 xcodegen generate >/dev/null
+. "$IOS/scripts/gfx_env.sh" # graphics acceleration when the libraries are built, else none
 DD="$IOS/build/DerivedData"
 mkdir -p "$IOS/build"
 xcodebuild -project Henge.xcodeproj -scheme Henge -configuration Release -skipPackagePluginValidation -destination 'generic/platform=iOS' \
-    -derivedDataPath "$DD" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build > "$DD.buildlog" 2>&1 || {
+    -derivedDataPath "$DD" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" HENGE_GFX_DIR="$GFX_ROOT" HENGE_GFX="$HENGE_GFX" build > "$DD.buildlog" 2>&1 || {
     # Never package what an older build left behind.
     grep -E "error:|BUILD" "$DD.buildlog" | sort -u
     echo "==> the build failed; nothing packaged" >&2

@@ -52,6 +52,8 @@ struct VirtualMac: Identifiable, Codable, Hashable {
     var screenFollowsExternal: Bool?
     /// R9: macOS "Sharp text (HiDPI)". Missing: on only for an external screen taller than 1440 px.
     var sharpText: Bool?
+    /// A9: Linux "Graphics acceleration" (virgl). Missing: off.
+    var accel: Bool?
 
     var directory: URL { MachinePaths.directory(for: id) }
     var rom: URL { directory.appendingPathComponent("AVPBooter.vmapple2.bin") }
@@ -114,6 +116,13 @@ enum MachineFolder {
         var info: [String: Any] = ["name": mac.name, "ramMB": mac.ramMB]
         if mac.guest == .linux { info["kind"] = GuestKind.linux.rawValue } else { info["ecid"] = mac.ecid; info["seed"] = mac.seed }
         return info
+    }
+}
+
+enum PreviewShape {
+    /// The saved picture's own shape: a phone-native Linux screen is not 16:9.
+    static func aspect(width: Double, height: Double, fallback: Double) -> Double {
+        width > 0 && height > 0 && width.isFinite && height.isFinite ? width / height : fallback
     }
 }
 

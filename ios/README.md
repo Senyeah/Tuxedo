@@ -76,6 +76,18 @@ made in-process the way `host/jit_region.c` does (RW map, alias, R-X): a simulat
 process, so no debugger is needed. Settings shows JIT "On" and `henge.log` has "self: PASS ... simulator memory".
 Launch with `simctl`, not under a debugger. Memory figures in Settings read zero in the simulator.
 
+## Graphics acceleration (Linux machines)
+
+It is opt-in, as on the Mac. With `HENGE_GFX=1` both app targets build the engine with `GFX=1` and link
+the static ANGLE, libepoxy and virglrenderer from `build/gfx/{ios,sim}` (`tools/gfx/build-deps.sh`).
+`sim_build.sh` and `package_ipa.sh` set `HENGE_GFX` and `HENGE_GFX_DIR` (from the main checkout, also in a
+worktree) when the libraries exist (`scripts/gfx_env.sh`). Without them, and in CI, the app builds with
+no acceleration and the switch shows an error. In Xcode, set both settings by hand. A Linux machine has a "Graphics acceleration" switch in its settings, off by
+default, passed to `henge_vm_boot_linux`. GPU memory (textures, render targets, the scanout's `IOSurface`)
+counts against the app on the phone, unlike guest RAM, and `phys_footprint` in the simulator does not
+show it, so memory figures need the device. ANGLE, libepoxy and virglrenderer licences are in
+`Henge/Resources/legal/`.
+
 Code from Husk (GPL-2.0-or-later): `Henge/JIT/*`, `Henge/HengeLog.swift`,
 `Henge/Native/henge-ios-jit.*`, `henge-brk.S`, `HengeJITHelper/`. StikJIT is
 MPL-2.0 and idevice MIT (`Henge/Resources/legal/`); `tcg-apple-jit.h` is QEMU's
