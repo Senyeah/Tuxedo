@@ -39,6 +39,7 @@ static void reset(HvVirtio *v) {
     v->qsel = 0;
     for (int i = 0; i < v->nq; i++) v->q[i] = (HvVirtq){.size = HV_VIRTQ_MAX_SIZE};
     hv_pci_set_intx(&v->pci, 0);
+    if (v->reset) v->reset(v);
 }
 
 static uint64_t common_read(HvVirtio *v, uint64_t off) {
