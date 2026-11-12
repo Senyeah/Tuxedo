@@ -380,7 +380,11 @@ void hv_virtio_gpu_poll(HvVirtioGpu *g) {
     if (want == ((uint64_t)g->width << 32 | g->height)) return;
     pthread_mutex_lock(&g->mu);
     g->width = (uint32_t)(want >> 32), g->height = (uint32_t)want;
+    int off = !g->scanout_res;
+    if (off) scanout_all_dirty(g); /* the black screen takes the new size */
     pthread_mutex_unlock(&g->mu);
+    void (*wake_fn)(void *) = __atomic_load_n(&g->on_flush, __ATOMIC_ACQUIRE);
+    if (off && wake_fn) wake_fn(__atomic_load_n(&g->opaque, __ATOMIC_RELAXED));
     if (!(g->vio.status & 4)) return; /* a driver that starts later asks with GET_DISPLAY_INFO */
     put32(g->vio.config + CFG_EVENTS_READ, get32(g->vio.config + CFG_EVENTS_READ) | EVENT_DISPLAY);
     hv_virtio_config_changed(&g->vio);

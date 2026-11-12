@@ -773,7 +773,11 @@ static void test_gpu(HvVirtioGpu *g) {
     uint8_t gen = rd8(GPU_BAR + 0x15);
     hv_virtio_gpu_set_mode(g, 1280, 800);
     check("mode waits for the poll", g->width, 1920);
+    hv_virtio_gpu_take_dirty(g, &d);
+    int woke_mode = woke;
     hv_virtio_gpu_poll(g);
+    check("a mode change with the scanout off wakes the presenter", woke, woke_mode + 1);
+    check("and the black screen takes the new size", hv_virtio_gpu_take_dirty(g, &d) && d.width == 1280 && d.height == 800, 1);
     check("display event", rd32(&m, GPU_BAR + 0x2000), 1);
     check("config change in the ISR", rd8(GPU_BAR + 0x1000) & 2, 2);
     check("config generation", rd8(GPU_BAR + 0x15) != gen, 1);
