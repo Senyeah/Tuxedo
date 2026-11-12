@@ -63,6 +63,110 @@ static void expect(const char *what, HvCpu *cpu, uint64_t va, HvAccess acc, int 
     }
 }
 
+#define MSR_TTBR0 0xd5182001u   /* msr ttbr0_el1, x1 */
+#define MSR_TTBR1 0xd5182021u   /* msr ttbr1_el1, x1 */
+#define TLBI_VAE1 0xd5088721u   /* tlbi vae1, x1 */
+#define TLBI_ASIDE1 0xd5088741u /* tlbi aside1, x1 */
+
+static void msr(HvCpu *cpu, uint32_t insn, uint64_t v) {
+    cpu->x[1] = v;
+    if (((insn >> 12) & 0xf) == 8) hv_sysreg_sys(cpu, insn, 0);
+    else hv_sysreg_msr(cpu, insn, 0);
+}
+
+/* Linux's cpu_do_switch_mm with TCR.A1: TTBR0 to an empty table, the new ASID into TTBR1, then the new TTBR0. */
+static void linux_switch(HvCpu *cpu, uint64_t empty, uint64_t ttbr1, uint64_t root, uint16_t asid) {
+    msr(cpu, MSR_TTBR0, empty);
+    msr(cpu, MSR_TTBR1, ttbr1 | (uint64_t)asid << 48);
+    msr(cpu, MSR_TTBR0, root);
+}
+
+/* Whether cpu's TLB maps va (table 0: EL0, 1: EL1) to the RAM at pa now, without a walk. */
+static int tlb_has(HvCpu *cpu, uint64_t va, int table, uint64_t pa) {
+    const HvTlbEntry *e = hv_tlb_ent(cpu, (uint32_t)(va >> 14) & (HV_TLB_SIZE - 1), table);
+    return e->read_tag == va - HV_TLB_ADJ && (uint8_t *)(uintptr_t)(va + (uint64_t)e->addend) == pt + (pa - PT_PA);
+}
+
+static void check_that(int ok, const char *what) {
+    checks++;
+    if (!ok) printf("  FAIL %s\n", what), failures++;
+}
+
+/* P1: Linux sets TCR.A1, so the ASID is in TTBR1. Two processes with their own ASIDs and page tables, switched
+   the way Linux does it: TTBR1's ASID change must not flush, and each process gets its entries back. */
+static void linux_asids(HvMachine *m, HvCpu *cpu) {
+    hv_cpu_reset(cpu, m);
+    pt_next = 0;
+    const uint64_t U = 0x4000, V = 0x8000, K = 0xfffffff000010000ull, D = PT_PA + 0xc0000;
+    const uint16_t A = 0x21, B = 0x142;
+    uint64_t rA = alloc_table(), rB = alloc_table(), empty = alloc_table(), rK = alloc_table();
+    map(rA, 14, 36, U, 3, D | PAGE | AF | AP(1), 0);
+    map(rA, 14, 36, V, 3, (D + 0x4000) | PAGE | AF | AP(1), 0);
+    map(rB, 14, 36, U, 3, (D + 0x8000) | PAGE | AF | AP(1), 0);
+    map(rB, 14, 36, V, 3, (D + 0xc000) | PAGE | AF | AP(1), 0);
+    map(rK, 14, 36, K, 3, (D + 0x10000) | PAGE | AF, 0);
+    cpu->mair_el1 = 0xff;
+    cpu->tcr_el1 = 28 | 2u << 14 | 28u << 16 | 1u << 22 | 1u << 30 | 5ull << 32 | 1ull << 36; /* 36-bit, 16K, A1, AS */
+    cpu->sctlr_el1 |= 1;
+    cpu->el = 1;
+    uint64_t pa;
+    msr(cpu, MSR_TTBR1, rK | (uint64_t)A << 48);
+    msr(cpu, MSR_TTBR0, rA);
+    hv_mmu_access(cpu, U, HV_ACC_READ, 0, &pa);
+    hv_mmu_access(cpu, V, HV_ACC_READ, 0, &pa);
+    hv_mmu_access(cpu, K, HV_ACC_READ, 1, &pa);
+    static HvBlock fb;
+    fb = (HvBlock){.va = U + 0x10, .flags = 0, .code = (uint32_t *)(uintptr_t)0x1234};
+    hv_ijc_fill(cpu, &fb);
+    uint64_t salt_a = cpu->ijc_salt[0];
+    uint16_t cid_a = cpu->asid_cid[A];
+    uint64_t *ent = m->percpu[0].ijc + (size_t)hv_ijc_index(fb.va ^ salt_a) * 2;
+    check_that(cid_a && salt_a == (uint64_t)cid_a << 48, "A1: the user branch cache is keyed by TTBR1's ASID");
+
+    uint64_t ttbr1_flushes = m->stats.flush_why[3], saves = m->stats.stash_saves;
+    m->stats_interval = 1; /* count the stash saves */
+    linux_switch(cpu, empty, rK, rB, B);
+    check_that(m->stats.flush_why[3] == ttbr1_flushes, "A1: an ASID change in TTBR1 flushed the TLB");
+    check_that(m->stats.stash_saves == saves + 1, "A1: a switch saved other than one stash (the empty TTBR0 took a slot?)");
+    check_that(tlb_has(cpu, K, 1, D + 0x10000), "A1: a process switch dropped a kernel entry");
+    check_that(!tlb_has(cpu, U, 0, D) && !tlb_has(cpu, V, 0, D + 0x4000), "A1: the old process's entries are still live");
+    check_that(cpu->ijc_salt[0] != salt_a, "A1: the new process uses the old one's branch targets");
+    check_that(cpu->asid_cid[A] == cid_a, "A1: the empty TTBR0 gave the old ASID a new id");
+    check_that(hv_mmu_access(cpu, U, HV_ACC_READ, 0, &pa) == 0 && pa == D + 0x8000, "A1: B's page after the switch");
+    hv_mmu_access(cpu, V, HV_ACC_READ, 0, &pa);
+
+    linux_switch(cpu, empty, rK, rA, A);
+    check_that(tlb_has(cpu, U, 0, D) && tlb_has(cpu, V, 0, D + 0x4000), "A1: A's entries did not come back");
+    check_that(cpu->ijc_salt[0] == salt_a && ent[0] == (fb.va ^ salt_a), "A1: A's branch targets did not come back");
+
+    /* A TLBI of B's page U while A runs: B's stashed entry for it goes, its other one stays. */
+    msr(cpu, TLBI_VAE1, (uint64_t)B << 48 | U >> 12);
+    linux_switch(cpu, empty, rK, rB, B);
+    check_that(!tlb_has(cpu, U, 0, D + 0x8000), "A1: a TLBI by VA for B while A ran left B's stashed entry");
+    check_that(tlb_has(cpu, V, 0, D + 0xc000), "A1: a TLBI of one page of B dropped B's other stashed entry");
+
+    /* A TLBI of all of A while B runs: A comes back with nothing kept and new branch-cache ids. */
+    msr(cpu, TLBI_ASIDE1, (uint64_t)A << 48);
+    linux_switch(cpu, empty, rK, rA, A);
+    check_that(!tlb_has(cpu, U, 0, D) && !tlb_has(cpu, V, 0, D + 0x4000), "A1: a TLBI by ASID for A left A's stashed entries");
+    check_that(cpu->ijc_salt[0] != salt_a, "A1: a TLBI by ASID for A kept A's branch targets");
+
+    /* TTBR1's table still flushes everything; without A1 (xnu) its ASID field means nothing. */
+    hv_mmu_access(cpu, U, HV_ACC_READ, 0, &pa);
+    msr(cpu, MSR_TTBR1, (rK + 0x4000) | (uint64_t)A << 48);
+    check_that(m->stats.flush_why[3] == ttbr1_flushes + 1 && !tlb_has(cpu, U, 0, D), "A1: a new TTBR1 table did not flush");
+    msr(cpu, MSR_TTBR1, rK | (uint64_t)A << 48);
+    cpu->tcr_el1 &= ~(1ull << 22);
+    msr(cpu, MSR_TTBR0, rA | (uint64_t)A << 48);
+    hv_mmu_access(cpu, U, HV_ACC_READ, 0, &pa);
+    hv_mmu_access(cpu, K, HV_ACC_READ, 1, &pa);
+    uint64_t salt = cpu->ijc_salt[0], f = m->stats.flush_why[3];
+    msr(cpu, MSR_TTBR1, rK | (uint64_t)B << 48);
+    check_that(m->stats.flush_why[3] == f && tlb_has(cpu, U, 0, D) && tlb_has(cpu, K, 1, D + 0x10000) && cpu->ijc_salt[0] == salt,
+         "no A1: TTBR1's ASID field changed something");
+    m->stats_interval = 0;
+}
+
 int main(void) {
     static HvMachine m;
     static HvCpu cpu;
@@ -473,6 +577,8 @@ int main(void) {
         }
         hv_knob[HV_K_WALKLOG] = 1;
     }
+
+    linux_asids(&m, &cpu);
 
     printf("%d checks, %d failures\n", checks, failures);
     return failures != 0;

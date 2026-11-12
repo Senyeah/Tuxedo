@@ -205,10 +205,11 @@ static int write_reg(HvCpu *cpu, uint32_t reg, uint64_t v) {
         hv_ijc_switch(cpu);
         return 0;
     }
-    case R(3, 0, 2, 0, 1): { /* TTBR1: rewritten unchanged on context switches; its ASID field only counts with TCR.A1 */
-        uint64_t changed = (cpu->ttbr1_el1 ^ v) & ((cpu->tcr_el1 >> 22) & 1 ? ~0ull : 0x0000ffffffffffffull);
+    case R(3, 0, 2, 0, 1): { /* TTBR1: xnu rewrites it unchanged on context switches; with TCR.A1 Linux switches ASIDs here */
+        uint64_t old = cpu->ttbr1_el1;
         cpu->ttbr1_el1 = v;
-        if (changed) cpu->m->stats.flush_why[3]++, hv_tlb_flush(cpu);
+        if ((old ^ v) & 0x0000ffffffffffffull) cpu->m->stats.flush_why[3]++, hv_tlb_flush(cpu);
+        else if ((old ^ v) >> 48 && (cpu->tcr_el1 >> 22) & 1) hv_tlb_switch_asid(cpu, old);
         return 0;
     }
     case R(3, 0, 2, 0, 2):

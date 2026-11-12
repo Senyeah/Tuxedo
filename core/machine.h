@@ -144,7 +144,7 @@ typedef struct HvStats {
 #define HV_STASHES 8
 #define HV_STASH_CAP 1024
 typedef struct HvTlbStash {
-    uint64_t ttbr0;      /* the address space (0: empty); read by other CPUs */
+    uint64_t ttbr0;      /* the address space, ASID in bits 63..48 (space_of in mmu.c; 0: empty); read by other CPUs */
     uint32_t gen;        /* bumped by TLBIs (atomic) */
     uint32_t saved_gen;  /* gen when the entries were saved */
     uint32_t n;
