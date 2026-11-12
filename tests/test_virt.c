@@ -125,6 +125,12 @@ static void test_xhci(void) {
     uint32_t ports = rd32(&m, bar + 4) >> 24, proto = rd32(&m, bar + XECP + 8);
     check("xHCI USB 2 protocol starts at port 1", proto & 0xff, 1);
     check("xHCI USB 2 protocol covers every port", (proto >> 8) & 0xff, ports);
+    /* Linux reads speed ID 2 as low speed and refuses the trackpad's 64-byte ep0, so the virt board says high (3). */
+    check("virt keyboard port is full speed", (rd32(&m, bar + OP + 0x400) >> 10) & 0xf, 1);
+    check("virt trackpad port is high speed", (rd32(&m, bar + OP + 0x410) >> 10) & 0xf, 3);
+    HvXhci *mac = hv_xhci_create(&m, b.pcie); /* what vmapple builds: no Linux speeds */
+    check("vmapple keyboard port speed is unchanged", (mac->portsc[0] >> 10) & 0xf, 1);
+    check("vmapple trackpad port speed is unchanged", (mac->portsc[1] >> 10) & 0xf, 2);
 
     uint64_t mem = VIRT_MEM + 0x200000, dcbaa = mem, cmd = mem + 0x1000, erst = mem + 0x2000, ev = mem + 0x3000;
     uint64_t out = mem + 0x4000, in = mem + 0x5000, ep0 = mem + 0x6000, buf = mem + 0x7000;

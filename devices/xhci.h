@@ -85,9 +85,12 @@ typedef struct HvXhci {
     uint32_t tp_multi_logs; /* multi-finger deliveries logged, capped */
     uint8_t tp_f1[8];   /* feature report 1: the header for the selected sensor register */
     int tp_f1_len;
+    int tp_speed;       /* PORTSC speed ID of the trackpad port */
 } HvXhci;
 
 HvXhci *hv_xhci_create(HvMachine *m, HvPcie *bus);
+/* Linux boards: the trackpad port reports speed ID 3 (high). Linux reads vmapple's 2 as low speed and refuses a 64-byte ep0. */
+void hv_xhci_set_linux_speeds(HvXhci *x);
 /* Any thread: a key went down or up (HID usage page 7 usage, e.g. 4 = A; 0xe0-0xe7 are modifiers). */
 void hv_xhci_key(HvXhci *x, uint8_t usage, int down);
 /* The same, by Linux input key code (what the host UI produces). */
