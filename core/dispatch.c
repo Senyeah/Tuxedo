@@ -1139,6 +1139,7 @@ static int run_loop(HvCpu *cpu, int one) {
             break;
         case HV_EXIT_WFI:
             if (wait_for_interrupt(cpu) != 0) return HV_EXIT_WFI;
+            if (m->stats_interval && cpu->index == 0) print_stats(cpu, 0); /* an idle guest runs no blocks to trigger it */
             break;
         default:
             return (int)cpu->exit_reason;

@@ -13,18 +13,8 @@
 /* System registers are named by op0:op1:CRn:CRm:op2, which is bits 20..5 of MRS/MSR. */
 #define R(op0, op1, crn, crm, op2) ((op0) << 14 | (op1) << 11 | (crn) << 7 | (crm) << 3 | (op2))
 
-/* ID registers: only features the translator handles. Host features are a
-   superset (Apple M1 and later), so copied instructions always exist. */
-#define ID_AA64PFR0  0x1100000001110011ull /* EL0/EL1 AArch64, FP+AdvSIMD with FP16, GICv3 sysregs, CSV2, CSV3 */
-#define ID_AA64ISAR0 0x0011100110212120ull /* AES+PMULL, SHA1, SHA2/512, CRC32, LSE, RDM, SHA3, DotProd, FHM, FlagM */
-#define ID_AA64ISAR1 0x0000001110211011ull /* DPB, PAuth (no-op), JSCVT, FCMA, LRCPC2, PACGA, FRINTTS, SB */
-#define ID_AA64MMFR0 0x0000000000100025ull /* 48-bit PA, 16-bit ASID, 4K/16K/64K granules */
-#define ID_AA64MMFR1 0x0000000000111000ull /* HPDS, LOR, PAN */
-#define ID_AA64DFR0  0x0000000000000006ull /* Armv8 debug, no PMU */
-#define MIDR         0x611f0220ull         /* Apple; a configuration constant for now */
-#define CTR_EL0      0x9444c004ull         /* 64-byte lines, PIPT I-cache, IDC */
+
 #define CLIDR        0x0a200023ull         /* L1 split, L2 unified */
-#define CNTFRQ       24000000ull
 
 static uint64_t counter(void) {
     return mach_absolute_time(); /* 24 MHz on Apple silicon */
@@ -113,17 +103,18 @@ static int read_reg(HvCpu *cpu, uint32_t reg, uint64_t *v) {
     case R(3, 2, 0, 0, 0): *v = cpu->csselr_el1; return 0;
 
     /* Identification */
-    case R(3, 0, 0, 0, 0): *v = MIDR; return 0;
+    case R(3, 0, 0, 0, 0): *v = m->id.midr; return 0;
     case R(3, 0, 0, 0, 5): *v = cpu->mpidr; return 0;
     case R(3, 0, 0, 0, 6): *v = 0; return 0;                             /* REVIDR */
-    case R(3, 0, 0, 4, 0): *v = ID_AA64PFR0; return 0;
-    case R(3, 0, 0, 5, 0): *v = ID_AA64DFR0; return 0;
-    case R(3, 0, 0, 6, 0): *v = ID_AA64ISAR0; return 0;
-    case R(3, 0, 0, 6, 1): *v = ID_AA64ISAR1; return 0;
-    case R(3, 0, 0, 7, 0): *v = ID_AA64MMFR0; return 0;
-    case R(3, 0, 0, 7, 1): *v = ID_AA64MMFR1; return 0;
-    case R(3, 3, 0, 0, 1): *v = CTR_EL0; return 0;
-    case R(3, 3, 0, 0, 7): *v = 4; return 0;                             /* DCZID: 64-byte DC ZVA */
+    case R(3, 0, 0, 4, 0): *v = m->id.pfr0; return 0;
+    case R(3, 0, 0, 5, 0): *v = m->id.dfr0; return 0;
+    case R(3, 0, 0, 6, 0): *v = m->id.isar0; return 0;
+    case R(3, 0, 0, 6, 1): *v = m->id.isar1; return 0;
+    case R(3, 0, 0, 7, 0): *v = m->id.mmfr0; return 0;
+    case R(3, 0, 0, 7, 1): *v = m->id.mmfr1; return 0;
+    case R(3, 0, 0, 7, 2): *v = m->id.mmfr2; return 0;
+    case R(3, 3, 0, 0, 1): *v = HV_CTR_EL0; return 0;
+    case R(3, 3, 0, 0, 7): *v = HV_DCZID_EL0; return 0;
     case R(3, 1, 0, 0, 1): *v = CLIDR; return 0;
     case R(3, 1, 0, 0, 7): *v = 0; return 0;                             /* AIDR */
     case R(3, 1, 0, 0, 0):                                               /* CCSIDR for CSSELR's level */
@@ -131,7 +122,7 @@ static int read_reg(HvCpu *cpu, uint32_t reg, uint64_t *v) {
         return 0;
 
     /* Generic timer */
-    case R(3, 3, 14, 0, 0): *v = CNTFRQ; return 0;
+    case R(3, 3, 14, 0, 0): *v = HV_CNTFRQ; return 0;
     case R(3, 3, 14, 0, 1): case R(3, 3, 14, 0, 5): *v = now; return 0;
     case R(3, 3, 14, 0, 2): case R(3, 3, 14, 0, 6): *v = now - cpu->cntvoff; return 0;
     case R(3, 3, 14, 2, 0): *v = (uint32_t)(cpu->cntp_cval - now); return 0;
@@ -205,10 +196,12 @@ static int write_reg(HvCpu *cpu, uint32_t reg, uint64_t v) {
         hv_ijc_switch(cpu);
         return 0;
     }
-    case R(3, 0, 2, 0, 1): { /* TTBR1: rewritten unchanged on context switches; its ASID field only counts with TCR.A1 */
-        uint64_t changed = (cpu->ttbr1_el1 ^ v) & ((cpu->tcr_el1 >> 22) & 1 ? ~0ull : 0x0000ffffffffffffull);
+    case R(3, 0, 2, 0, 1): { /* TTBR1: xnu rewrites it unchanged on context switches; with TCR.A1 Linux switches ASIDs here */
+        uint64_t old = cpu->ttbr1_el1;
         cpu->ttbr1_el1 = v;
-        if (changed) cpu->m->stats.flush_why[3]++, hv_tlb_flush(cpu);
+        if ((old ^ v) & 0x0000ffffffffffffull) cpu->m->stats.flush_why[3]++, hv_tlb_flush(cpu);
+        /* Kernel entries are not tagged by ASID: kept, as the TTBR1 half is global unless its table changes */
+        else if ((old ^ v) >> 48 && (cpu->tcr_el1 >> 22) & 1) hv_tlb_switch_asid(cpu, old);
         return 0;
     }
     case R(3, 0, 2, 0, 2):
@@ -416,7 +409,8 @@ void hv_tlbi_apply(HvCpu *cpu, uint32_t op1, uint32_t crn, uint32_t crm, uint32_
                 else if (!have && __atomic_compare_exchange_n(&cpu->m->switch_flush_pc[i], &zero, pc, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) known = 1;
             }
         }
-        if (crm == 7 && hv_knob[HV_K_SWITCHFLUSH] && (since_switch < 480 || late) &&
+        /* Not under TCR.A1: Linux's ASID rollover needs this flush to retire the old ids */
+        if (crm == 7 && hv_knob[HV_K_SWITCHFLUSH] && !((cpu->tcr_el1 >> 22) & 1) && (since_switch < 480 || late) &&
             (hv_knob[HV_K_SWITCHFLUSH] < 2 || (nth++ & 127) || !hv_tlb_check_all(cpu))) {
             if (cpu->m->stats_interval) cpu->m->stats.flush_skipped++, cpu->m->stats.flush_skipped_late += (uint64_t)late;
             return;

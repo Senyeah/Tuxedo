@@ -120,7 +120,9 @@ def main():
     d = args.linux_dir or linux_dir()
     image = args.image or os.path.join(d, "debian-desktop.img")
     partuuid = open(os.path.join(d, "debian-desktop.partuuid")).read().strip()
-    kernel, initrd, fw = (os.path.join(d, f) for f in ("Image", "initrd.img", "u-boot.bin"))
+    kernel, initrd = (os.path.join(d, f) for f in ("Image", "initrd.img"))
+    # u-boot.bin has no countdown for the keyboard to stop (P2)
+    fw = next(f for f in (os.path.join(d, "u-boot-stock.bin"), os.path.join(d, "u-boot.bin")) if os.path.exists(f))
     for f in (args.hengevm, image):
         if not os.path.exists(f):
             raise Fail(f"missing {f}")

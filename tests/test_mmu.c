@@ -63,6 +63,217 @@ static void expect(const char *what, HvCpu *cpu, uint64_t va, HvAccess acc, int 
     }
 }
 
+#define MSR_TTBR0 0xd5182001u   /* msr ttbr0_el1, x1 */
+#define MSR_TTBR1 0xd5182021u   /* msr ttbr1_el1, x1 */
+#define TLBI_VAE1 0xd5088721u   /* tlbi vae1, x1 */
+#define TLBI_ASIDE1 0xd5088741u /* tlbi aside1, x1 */
+
+static void msr(HvCpu *cpu, uint32_t insn, uint64_t v) {
+    cpu->x[1] = v;
+    if (((insn >> 12) & 0xf) == 8) hv_sysreg_sys(cpu, insn, 0);
+    else hv_sysreg_msr(cpu, insn, 0);
+}
+
+/* Linux's cpu_do_switch_mm with TCR.A1: TTBR0 to an empty table, the new ASID into TTBR1, then the new TTBR0. */
+static void linux_switch(HvCpu *cpu, uint64_t empty, uint64_t ttbr1, uint64_t root, uint16_t asid) {
+    msr(cpu, MSR_TTBR0, empty);
+    msr(cpu, MSR_TTBR1, ttbr1 | (uint64_t)asid << 48);
+    msr(cpu, MSR_TTBR0, root);
+}
+
+/* Whether cpu's TLB maps va (table 0: EL0, 1: EL1) to the RAM at pa now, without a walk. */
+static int tlb_has(HvCpu *cpu, uint64_t va, int table, uint64_t pa) {
+    const HvTlbEntry *e = hv_tlb_ent(cpu, (uint32_t)(va >> 14) & (HV_TLB_SIZE - 1), table);
+    return e->read_tag == va - HV_TLB_ADJ && (uint8_t *)(uintptr_t)(va + (uint64_t)e->addend) == pt + (pa - PT_PA);
+}
+
+static void check_that(int ok, const char *what) {
+    checks++;
+    if (!ok) printf("  FAIL %s\n", what), failures++;
+}
+
+/* P1: Linux sets TCR.A1, so the ASID is in TTBR1. Two processes with their own ASIDs and page tables, switched
+   the way Linux does it: TTBR1's ASID change must not flush, and each process gets its entries back. */
+static void linux_asids(HvMachine *m, HvCpu *cpu) {
+    hv_cpu_reset(cpu, m);
+    pt_next = 0;
+    const uint64_t U = 0x4000, V = 0x8000, K = 0xfffffff000010000ull, D = PT_PA + 0xc0000;
+    const uint16_t A = 0x21, B = 0x142;
+    uint64_t rA = alloc_table(), rB = alloc_table(), empty = alloc_table(), rK = alloc_table();
+    map(rA, 14, 36, U, 3, D | PAGE | AF | AP(1), 0);
+    map(rA, 14, 36, V, 3, (D + 0x4000) | PAGE | AF | AP(1), 0);
+    map(rB, 14, 36, U, 3, (D + 0x8000) | PAGE | AF | AP(1), 0);
+    map(rB, 14, 36, V, 3, (D + 0xc000) | PAGE | AF | AP(1), 0);
+    map(rK, 14, 36, K, 3, (D + 0x10000) | PAGE | AF, 0);
+    cpu->mair_el1 = 0xff;
+    cpu->tcr_el1 = 28 | 2u << 14 | 28u << 16 | 1u << 22 | 1u << 30 | 5ull << 32 | 1ull << 36; /* 36-bit, 16K, A1, AS */
+    cpu->sctlr_el1 |= 1;
+    cpu->el = 1;
+    uint64_t pa;
+    msr(cpu, MSR_TTBR1, rK | (uint64_t)A << 48);
+    msr(cpu, MSR_TTBR0, rA);
+    hv_mmu_access(cpu, U, HV_ACC_READ, 0, &pa);
+    hv_mmu_access(cpu, V, HV_ACC_READ, 0, &pa);
+    hv_mmu_access(cpu, K, HV_ACC_READ, 1, &pa);
+    static HvBlock fb;
+    fb = (HvBlock){.va = U + 0x10, .flags = 0, .code = (uint32_t *)(uintptr_t)0x1234};
+    hv_ijc_fill(cpu, &fb);
+    uint64_t salt_a = cpu->ijc_salt[0];
+    uint16_t cid_a = cpu->asid_cid[A];
+    uint64_t *ent = m->percpu[0].ijc + (size_t)hv_ijc_index(fb.va ^ salt_a) * 2;
+    check_that(cid_a && salt_a == (uint64_t)cid_a << 48, "A1: the user branch cache is keyed by TTBR1's ASID");
+
+    uint64_t ttbr1_flushes = m->stats.flush_why[3], saves = m->stats.stash_saves;
+    m->stats_interval = 1; /* count the stash saves */
+    linux_switch(cpu, empty, rK, rB, B);
+    check_that(m->stats.flush_why[3] == ttbr1_flushes, "A1: an ASID change in TTBR1 flushed the TLB");
+    check_that(m->stats.stash_saves == saves + 1, "A1: a switch saved other than one stash (the empty TTBR0 took a slot?)");
+    check_that(tlb_has(cpu, K, 1, D + 0x10000), "A1: a process switch dropped a kernel entry");
+    check_that(!tlb_has(cpu, U, 0, D) && !tlb_has(cpu, V, 0, D + 0x4000), "A1: the old process's entries are still live");
+    check_that(cpu->ijc_salt[0] != salt_a, "A1: the new process uses the old one's branch targets");
+    check_that(cpu->asid_cid[A] == cid_a, "A1: the empty TTBR0 gave the old ASID a new id");
+    check_that(hv_mmu_access(cpu, U, HV_ACC_READ, 0, &pa) == 0 && pa == D + 0x8000, "A1: B's page after the switch");
+    hv_mmu_access(cpu, V, HV_ACC_READ, 0, &pa);
+
+    linux_switch(cpu, empty, rK, rA, A);
+    check_that(tlb_has(cpu, U, 0, D) && tlb_has(cpu, V, 0, D + 0x4000), "A1: A's entries did not come back");
+    check_that(cpu->ijc_salt[0] == salt_a && ent[0] == (fb.va ^ salt_a), "A1: A's branch targets did not come back");
+
+    /* A TLBI of B's page U while A runs: B's stashed entry for it goes, its other one stays. */
+    msr(cpu, TLBI_VAE1, (uint64_t)B << 48 | U >> 12);
+    linux_switch(cpu, empty, rK, rB, B);
+    check_that(!tlb_has(cpu, U, 0, D + 0x8000), "A1: a TLBI by VA for B while A ran left B's stashed entry");
+    check_that(tlb_has(cpu, V, 0, D + 0xc000), "A1: a TLBI of one page of B dropped B's other stashed entry");
+
+    /* A TLBI of all of A while B runs: A comes back with nothing kept and new branch-cache ids. */
+    msr(cpu, TLBI_ASIDE1, (uint64_t)A << 48);
+    linux_switch(cpu, empty, rK, rA, A);
+    check_that(!tlb_has(cpu, U, 0, D) && !tlb_has(cpu, V, 0, D + 0x4000), "A1: a TLBI by ASID for A left A's stashed entries");
+    check_that(cpu->ijc_salt[0] != salt_a, "A1: a TLBI by ASID for A kept A's branch targets");
+
+    /* TTBR1's table still flushes everything; without A1 (xnu) its ASID field means nothing. */
+    hv_mmu_access(cpu, U, HV_ACC_READ, 0, &pa);
+    msr(cpu, MSR_TTBR1, (rK + 0x4000) | (uint64_t)A << 48);
+    check_that(m->stats.flush_why[3] == ttbr1_flushes + 1 && !tlb_has(cpu, U, 0, D), "A1: a new TTBR1 table did not flush");
+    msr(cpu, MSR_TTBR1, rK | (uint64_t)A << 48);
+    cpu->tcr_el1 &= ~(1ull << 22);
+    msr(cpu, MSR_TTBR0, rA | (uint64_t)A << 48);
+    hv_mmu_access(cpu, U, HV_ACC_READ, 0, &pa);
+    hv_mmu_access(cpu, K, HV_ACC_READ, 1, &pa);
+    uint64_t salt = cpu->ijc_salt[0], f = m->stats.flush_why[3];
+    msr(cpu, MSR_TTBR1, rK | (uint64_t)B << 48);
+    check_that(m->stats.flush_why[3] == f && tlb_has(cpu, U, 0, D) && tlb_has(cpu, K, 1, D + 0x10000) && cpu->ijc_salt[0] == salt,
+         "no A1: TTBR1's ASID field changed something");
+    m->stats_interval = 0;
+}
+
+/* Another CPU's TLBIs against an A1 stash (its ASID taken from TTBR1): by VA and by range for a switched-out
+   process, and by VA for the running one; each process gets the rest back when it runs again. */
+static void linux_remote(HvMachine *m) {
+    static HvCpu c;
+    hv_cpu_reset_index(&c, m, 1);
+    pt_next = 0;
+    const uint64_t U = 0x4000, V = 0x8000, W = 0xc000, K = 0xfffffff000010000ull, D = PT_PA + 0xc0000;
+    const uint16_t A = 0x33, B = 0x77;
+    uint64_t rA = alloc_table(), rB = alloc_table(), empty = alloc_table(), rK = alloc_table();
+    map(rA, 14, 36, U, 3, D | PAGE | AF | AP(1), 0);
+    map(rA, 14, 36, V, 3, (D + 0x4000) | PAGE | AF | AP(1), 0);
+    map(rA, 14, 36, W, 3, (D + 0x8000) | PAGE | AF | AP(1), 0);
+    map(rB, 14, 36, U, 3, (D + 0xc000) | PAGE | AF | AP(1), 0);
+    map(rK, 14, 36, K, 3, (D + 0x10000) | PAGE | AF, 0);
+    c.mair_el1 = 0xff;
+    c.tcr_el1 = 28 | 2u << 14 | 28u << 16 | 1u << 22 | 1u << 30 | 5ull << 32 | 1ull << 36;
+    c.sctlr_el1 |= 1;
+    c.el = 1;
+    uint64_t pa;
+    msr(&c, MSR_TTBR1, rK | (uint64_t)A << 48);
+    msr(&c, MSR_TTBR0, rA);
+    hv_mmu_access(&c, U, HV_ACC_READ, 0, &pa);
+    hv_mmu_access(&c, V, HV_ACC_READ, 0, &pa);
+    hv_mmu_access(&c, W, HV_ACC_READ, 0, &pa);
+    linux_switch(&c, empty, rK, rB, B);
+    hv_mmu_access(&c, U, HV_ACC_READ, 0, &pa);
+
+    check_that(hv_tlbi_drop_remote_va(&c, U, A) == 1, "A1 remote: a TLBI by VA for a switched-out ASID was not done");
+    check_that(hv_tlbi_drop_remote_range(&c, W, 1, A) == 1, "A1 remote: a range TLBI for a switched-out ASID was not done");
+    hv_mmu_access(&c, U, HV_ACC_READ, 0, &pa); /* the live slot went too, whatever its ASID */
+    linux_switch(&c, empty, rK, rA, A);
+    check_that(!tlb_has(&c, U, 0, D), "A1 remote: a TLBI by VA left the switched-out process's entry");
+    check_that(!tlb_has(&c, W, 0, D + 0x8000), "A1 remote: a range TLBI left the switched-out process's entry");
+    check_that(tlb_has(&c, V, 0, D + 0x4000), "A1 remote: a TLBI of other pages dropped this one");
+
+    /* The running process's page goes from the live TLB; B's stashed entry for the same VA stays. */
+    check_that(hv_tlbi_drop_remote_va(&c, U, A) == 1 && hv_tlbi_drop_remote_va(&c, V, A) == 1 && !tlb_has(&c, V, 0, D + 0x4000),
+               "A1 remote: a TLBI by VA for the running ASID left its entry");
+    linux_switch(&c, empty, rK, rB, B);
+    check_that(tlb_has(&c, U, 0, D + 0xc000), "A1 remote: a TLBI for A dropped B's stashed entry");
+
+    /* HV_SWITCH_FLUSH never skips Linux's TLBI VMALLE1 right after a switch: its ASID rollover needs it. */
+    int knob = hv_knob[HV_K_SWITCHFLUSH];
+    hv_knob[HV_K_SWITCHFLUSH] = 1;
+    linux_switch(&c, empty, rK, rA, A);
+    hv_mmu_access(&c, U, HV_ACC_READ, 0, &pa);
+    linux_switch(&c, empty, rK, rB, B);
+    hv_sysreg_sys(&c, 0xd508871fu, 0); /* tlbi vmalle1 */
+    linux_switch(&c, empty, rK, rA, A);
+    check_that(!tlb_has(&c, U, 0, D), "A1: HV_SWITCH_FLUSH left out a TLBI VMALLE1 after a switch");
+    hv_knob[HV_K_SWITCHFLUSH] = knob;
+}
+
+/* E0PD (the virt board advertises it): EL0 and unprivileged accesses to a half with TCR.E0PDx set fault at level 0. */
+static void e0pd(HvMachine *m, HvCpu *cpu) {
+    hv_cpu_reset(cpu, m);
+    pt_next = 0;
+    const uint64_t U = 0x4000, K = 0xfffffff000010000ull, D = PT_PA + 0xc0000;
+    uint64_t r0 = alloc_table(), r1 = alloc_table();
+    map(r0, 14, 36, U, 3, D | PAGE | AF | AP(1), 0);
+    map(r1, 14, 36, K, 3, (D + 0x4000) | PAGE | AF | AP(1), 0); /* EL0 may read it: only E0PD stops it */
+    cpu->mair_el1 = 0xff;
+    cpu->tcr_el1 = 28 | 2u << 14 | 28u << 16 | 1u << 22 | 1u << 30 | 5ull << 32 | 1ull << 36;
+    cpu->sctlr_el1 |= 1;
+    cpu->ttbr0_el1 = r0, cpu->ttbr1_el1 = r1;
+    expect("no E0PD: EL0 reads the upper half", cpu, K, HV_ACC_READ, 0, D + 0x4000, 0);
+    cpu->tcr_el1 |= 1ull << 56;
+    expect("E0PD1: EL0 faults at level 0", cpu, K, HV_ACC_READ, 0, 0, HV_FSC_TRANSLATION(0));
+    expect("E0PD1: EL1 still reads it", cpu, K, HV_ACC_READ, 1, D + 0x4000, 0);
+    expect("E0PD1: the lower half is not affected", cpu, U, HV_ACC_READ, 0, D, 0);
+    cpu->tcr_el1 ^= 3ull << 55;
+    expect("E0PD0: EL0 faults in the lower half", cpu, U, HV_ACC_READ, 0, 0, HV_FSC_TRANSLATION(0));
+    expect("E0PD0: EL0 reads the upper half", cpu, K, HV_ACC_READ, 0, D + 0x4000, 0);
+    cpu->tcr_el1 &= ~(3ull << 55);
+
+    /* The vmapple values, bit for bit (the macOS guest reads these). */
+    static const struct { uint32_t mrs; uint64_t v; const char *n; } vm[] = {
+        {0xd5380001u, 0x611f0220ull, "MIDR_EL1"},
+        {0xd5380401u, 0x1100000001110011ull, "ID_AA64PFR0_EL1"},
+        {0xd5380501u, 0x0000000000000006ull, "ID_AA64DFR0_EL1"},
+        {0xd5380601u, 0x0011100110212120ull, "ID_AA64ISAR0_EL1"},
+        {0xd5380621u, 0x0000001110211011ull, "ID_AA64ISAR1_EL1"},
+        {0xd5380701u, 0x0000000000100025ull, "ID_AA64MMFR0_EL1"},
+        {0xd5380721u, 0x0000000000111000ull, "ID_AA64MMFR1_EL1"},
+        {0xd5380741u, 0, "ID_AA64MMFR2_EL1"},
+    };
+    HvIdRegs keep = m->id;
+    cpu->el = 1;
+    for (unsigned i = 0; i < sizeof vm / sizeof *vm; i++) {
+        cpu->x[1] = 1;
+        hv_sysreg_mrs(cpu, vm[i].mrs, 0);
+        char what[64];
+        snprintf(what, sizeof what, "%s is not the vmapple value by default", vm[i].n);
+        check_that(cpu->x[1] == vm[i].v, what);
+    }
+    m->id = (HvIdRegs){.midr = 1, .pfr0 = 2, .dfr0 = 3, .isar0 = 4, .isar1 = 5, .mmfr0 = 6, .mmfr1 = 7, .mmfr2 = 1ull << 60};
+    for (unsigned i = 0; i < sizeof vm / sizeof *vm; i++) {
+        cpu->x[1] = 99;
+        hv_sysreg_mrs(cpu, vm[i].mrs, 0);
+        uint64_t want = i == 7 ? 1ull << 60 : i + 1;
+        char what[64];
+        snprintf(what, sizeof what, "%s does not read as the board's value", vm[i].n);
+        check_that(cpu->x[1] == want, what);
+    }
+    m->id = keep;
+}
+
 int main(void) {
     static HvMachine m;
     static HvCpu cpu;
@@ -473,6 +684,10 @@ int main(void) {
         }
         hv_knob[HV_K_WALKLOG] = 1;
     }
+
+    linux_asids(&m, &cpu);
+    linux_remote(&m);
+    e0pd(&m, &cpu);
 
     printf("%d checks, %d failures\n", checks, failures);
     return failures != 0;

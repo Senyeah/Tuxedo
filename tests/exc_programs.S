@@ -166,6 +166,43 @@ PROGRAM p_sysregs
     mrs x23, cntv_ctl_el0      // enabled and already expired: ISTATUS set
 END p_sysregs
 
+// Registers the translator reads inline as constants, and PAuth key writes it drops.
+PROGRAM p_sysregs_const
+    SETUP
+    mrs x1, cntfrq_el0
+    mrs x2, ctr_el0
+    mrs x3, dczid_el0
+    mov x15, #0x1234
+    msr s3_0_c2_c1_0, x15      // APIAKeyLo
+    msr s3_0_c2_c1_1, x15
+    msr s3_0_c2_c2_0, x15      // APDAKeyLo
+    msr s3_0_c2_c3_1, x15      // APGAKeyHi
+    mrs x4, s3_0_c2_c1_0
+    mrs x5, s3_0_c2_c3_1
+    mrs xzr, ctr_el0           // no destination: nothing to write
+    mov x6, #0x77
+    msr s3_0_c2_c1_0, xzr
+    mrs x7, dczid_el0
+END p_sysregs_const
+
+// At EL0 DCZID_EL0 always reads; CTR_EL0 and CNTFRQ_EL0 are undefined while SCTLR_EL1.UCT and CNTKCTL_EL1 are 0.
+PROGRAM p_sysregs_const_el0
+    SETUP
+    msr sp_el0, x9
+    adr x0, 1f
+    msr elr_el1, x0
+    msr spsr_el1, xzr
+    eret
+1:  mrs x1, dczid_el0
+    mrs x2, ctr_el0
+    mov x3, x20             // ESR of the undefined CTR_EL0 read
+    mov x4, x24
+    mrs x5, cntfrq_el0
+    mov x6, x24
+    mrs x7, s3_0_c2_c1_0    // keys are EL1 only: undefined
+    mov x8, x24
+END p_sysregs_const_el0
+
 // The test raises the IRQ line before running; it is masked until DAIFClr.
 PROGRAM p_irq
     SETUP

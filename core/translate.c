@@ -7,6 +7,7 @@
 #include "memop.h"
 #include "mmu.h"
 #include "operands.h"
+#include "sysreg.h"
 
 /* A block has two parts. The hot part is the code that runs every time: the translated
    instructions. The cold part is what hardly ever does: exits not chained yet, memory slow
@@ -1482,7 +1483,22 @@ static int translate_sysreg_inline(Emit *e, uint32_t insn, uint64_t pc) {
     uint32_t reg = (insn >> 5) & 0xffff;
     int el1 = (e->flags & HV_BLOCK_EL1) != 0, spx = (e->flags & HV_BLOCK_SPX) != 0;
     int fp_ok = !(e->flags & HV_BLOCK_FPOFF);
+    /* PAuth keys (CRn 2, CRm 1..3): signing is a no-op, so writes go nowhere and reads give 0. Linux writes
+       APIAKey on every kernel entry and exit. */
+    if (el1 && (reg >> 14) == 3 && ((reg >> 11) & 7) == 0 && ((reg >> 7) & 15) == 2 && (((reg >> 3) & 15) - 1u) < 3u) {
+        if (read) put_const_to(e, rt, 0);
+        return 1;
+    }
     switch (reg) {
+    case SR(3, 3, 0, 0, 7): /* DCZID_EL0: constant, EL0 may read it; Linux's clear_page reads it on every call */
+        if (!read) return 0;
+        put_const_to(e, rt, HV_DCZID_EL0);
+        return 1;
+    case SR(3, 3, 0, 0, 1):  /* CTR_EL0, CNTFRQ_EL0: constant; EL0 reads depend on SCTLR_EL1.UCT and CNTKCTL_EL1 */
+    case SR(3, 3, 14, 0, 0):
+        if (!read || !el1) return 0;
+        put_const_to(e, rt, reg == SR(3, 3, 0, 0, 1) ? HV_CTR_EL0 : HV_CNTFRQ);
+        return 1;
     case SR(3, 3, 14, 0, 2): /* CNTVCT_EL0 */
     case SR(3, 3, 14, 0, 6): /* CNTVCTSS_EL0 */
     case SR(3, 3, 14, 0, 1): /* CNTPCT_EL0 */

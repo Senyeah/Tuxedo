@@ -53,6 +53,7 @@ void hv_mmu_walk(HvCpu *cpu, uint64_t va, HvAccess acc, int el, HvWalk *out) {
     if (acc == HV_ACC_EXEC && tbid) tbi = 0;
     uint32_t tsz = hi ? (tcr >> 16) & 63 : tcr & 63;
     int epd = hi ? (tcr >> 23) & 1 : (tcr >> 7) & 1;
+    int e0pd = el == 0 && (hi ? (tcr >> 56) & 1 : (tcr >> 55) & 1); /* E0PD: EL0 faults as if unmapped (Linux, instead of KPTI) */
     int hpd = hi ? (tcr >> 42) & 1 : (tcr >> 41) & 1;
     int g = granule_bits(hi ? (tcr >> 30) & 3 : (tcr >> 14) & 3, hi);
     if (tsz < 16) tsz = 16;
@@ -62,7 +63,7 @@ void hv_mmu_walk(HvCpu *cpu, uint64_t va, HvAccess acc, int el, HvWalk *out) {
     /* Bits above the input size must all match bit 55 (or bit 63 without TBI). */
     int top = tbi ? 55 : 63;
     uint64_t mask = (top - inputsize + 1 >= 64 ? ~0ull : ((1ull << (top - inputsize + 1)) - 1)) << inputsize;
-    if ((va & mask) != (hi ? mask : 0) || epd) {
+    if ((va & mask) != (hi ? mask : 0) || epd || e0pd) {
         out->fsc = HV_FSC_TRANSLATION(0);
         return;
     }
@@ -169,9 +170,9 @@ static void ijc_clear(HvCpu *cpu, int kernel) {
         memset(cpu->pc_state->ijc + (size_t)t * (HV_IJC_TABLE_BYTES / 8), 0, HV_IJC_TABLE_BYTES);
 }
 
-/* ASIDs live in TTBR0 unless TCR.A1 puts them in TTBR1; then every process looks alike to us. */
+/* The ASID is in TTBR0 (xnu) unless TCR.A1 puts it in TTBR1 (Linux). */
 static int current_asid(HvCpu *cpu) {
-    return (cpu->tcr_el1 >> 22) & 1 ? -1 : (int)(cpu->ttbr0_el1 >> 48);
+    return (int)(((cpu->tcr_el1 >> 22) & 1 ? cpu->ttbr1_el1 : cpu->ttbr0_el1) >> 48);
 }
 
 /* ---- the (user id, page) set ---- */
@@ -253,12 +254,11 @@ static int ret_new_remote(HvCpu *cpu, int kernel) {
 void hv_ijc_switch(HvCpu *cpu) {
     int asid = current_asid(cpu);
     ret_new(cpu, 0); /* a switch forgets the old process's returns: its frames miss once at worst */
-    if (asid < 0) { /* no ASIDs to tell processes apart: a switch forgets the old one */
-        cpu->ijc_salt[0] = (uint64_t)fresh_cid(cpu) << 48;
-        return;
-    }
     uint64_t base = cpu->ttbr0_el1 & OA_MASK & ~1ull;
-    if (!cpu->asid_cid[asid] || cpu->asid_base[asid] != base) {
+    /* Linux (TCR.A1) points TTBR0 at an empty table while it changes the ASID, and reuses an ASID only
+       after a whole-TLB flush: there the ASID alone names the process. */
+    int moved = !((cpu->tcr_el1 >> 22) & 1) && cpu->asid_base[asid] != base;
+    if (!cpu->asid_cid[asid] || moved) {
         cpu->asid_cid[asid] = fresh_cid(cpu);
         cpu->asid_base[asid] = base;
         cpu->cid_asid[cpu->asid_cid[asid]] = (uint16_t)asid;
@@ -271,8 +271,7 @@ void hv_ijc_switch(HvCpu *cpu) {
 void hv_ijc_drop_asid(HvCpu *cpu, uint16_t asid) {
     if (cpu->m) cpu->m->stats.ijc_resets++;
     cpu->asid_cid[asid] = 0;
-    int cur = current_asid(cpu);
-    if (cur == asid || cur < 0) hv_ijc_switch(cpu); /* without ASIDs, any drop may be about the current process */
+    if (current_asid(cpu) == asid) hv_ijc_switch(cpu);
 }
 
 void hv_ijc_reset(HvCpu *cpu, int kernel) {
@@ -446,7 +445,7 @@ static int ijc_drop_va(HvCpu *cpu, uint64_t va, int asid, int remote) {
         uint64_t page = va & ~((1ull << HV_TLB_PAGE_BITS) - 1);
         uint32_t sl = (uint32_t)(va >> HV_TLB_PAGE_BITS) & (HV_TLB_SIZE - 1);
         const HvTlbEntry *t1 = hv_tlb_ent(cpu, sl, 1), *t2 = hv_tlb_ent(cpu, sl, 2);
-        int some = kernel ? t1->exec_tag == hv_exec_key(page, t1->addend) || t2->exec_tag == hv_exec_key(page, t2->addend) : asid < 0 || asid == current_asid(cpu) || current_asid(cpu) < 0;
+        int some = kernel ? t1->exec_tag == hv_exec_key(page, t1->addend) || t2->exec_tag == hv_exec_key(page, t2->addend) : asid < 0 || asid == current_asid(cpu);
         if (some) {
             if (!remote) ret_new(cpu, kernel);
             else if (!ret_new_remote(cpu, kernel)) return 0;
@@ -461,8 +460,8 @@ static int ijc_drop_va(HvCpu *cpu, uint64_t va, int asid, int remote) {
             uint32_t h = (uint32_t)(va >> HV_TLB_PAGE_BITS) & 0xffff;
             drop = p->ijc_pages[0][h >> 6] >> (h & 63) & 1;
         } else {
-            uint64_t salt = current_asid(cpu) < 0 ? cpu->ijc_salt[0] : (uint64_t)cpu->asid_cid[asid] << 48;
-            drop = (salt >> 48) && ucode_has(p, (uint32_t)(salt >> 48), va);
+            uint32_t cid = cpu->asid_cid[asid];
+            drop = cid && ucode_has(p, cid, va);
         }
         if (drop) {
             if (remote && !kernel && asid < 0) return 0;
@@ -470,7 +469,7 @@ static int ijc_drop_va(HvCpu *cpu, uint64_t va, int asid, int remote) {
             uint64_t page = va & ~((1ull << HV_TLB_PAGE_BITS) - 1);
             if (kernel) ijc_clear_page(cpu, page, 1, cpu->ijc_salt[1], !remote);
             else if (asid < 0) m->stats.reset_why[5]++, hv_ijc_reset(cpu, 0); /* every address space: their slots differ, so start the user half over */
-            else ijc_clear_page(cpu, page, 0, current_asid(cpu) < 0 ? cpu->ijc_salt[0] : (uint64_t)cpu->asid_cid[asid] << 48, !remote);
+            else ijc_clear_page(cpu, page, 0, (uint64_t)cpu->asid_cid[asid] << 48, !remote);
         }
     }
     return 1;
@@ -516,8 +515,8 @@ void hv_ijc_drop_range(HvCpu *cpu, uint64_t va, uint64_t len, int asid) {
         hv_ijc_reset(cpu, 0);
         return;
     }
-    if (asid == current_asid(cpu) || current_asid(cpu) < 0) ret_new(cpu, 0);
-    uint64_t salt = current_asid(cpu) < 0 ? cpu->ijc_salt[0] : (uint64_t)cpu->asid_cid[asid] << 48;
+    if (asid == current_asid(cpu)) ret_new(cpu, 0);
+    uint64_t salt = (uint64_t)cpu->asid_cid[asid] << 48;
     uint32_t cid = (uint32_t)(salt >> 48);
     if (!cid) return; /* nothing cached for it */
     uint64_t first = va >> HV_TLB_PAGE_BITS, last = (va + len - 1) >> HV_TLB_PAGE_BITS;
@@ -964,10 +963,6 @@ void hv_ijc_drop_code_page(HvCpu *cpu, uint64_t v) {
         ijc_clear_page(cpu, page, 1, cpu->ijc_salt[1], 1);
         return;
     }
-    if (current_asid(cpu) < 0) {
-        ijc_clear_page(cpu, page, 0, cpu->ijc_salt[0], 1);
-        return;
-    }
     if (cpu->nasid_log > HV_ASID_LOG) { /* the ids given out are not all known: start the user half over */
         hv_ijc_reset(cpu, 0);
         return;
@@ -1197,16 +1192,21 @@ int hv_tlb_check_all(HvCpu *cpu) {
     return bad;
 }
 
-/* TTBR0 went from old to now (a process switch): keep old's user entries
-   aside, drop them from the TLB, and bring back now's if they were kept and no
-   TLBI touched them since. */
-void hv_tlb_switch_user(HvCpu *cpu, uint64_t old, uint64_t now) {
+/* The address space a stash is kept under: TTBR0, with TTBR1's ASID when TCR.A1 puts it there. */
+static uint64_t space_of(const HvCpu *cpu, uint64_t ttbr0, uint64_t ttbr1) {
+    return (cpu->tcr_el1 >> 22) & 1 ? (ttbr0 & OA_MASK) | (ttbr1 & ~OA_MASK) : ttbr0;
+}
+
+/* The address space went from old to now (a process switch): keep old's user
+   entries aside, drop them from the TLB, and bring back now's if they were kept
+   and no TLBI touched them since. */
+static void switch_user(HvCpu *cpu, uint64_t old, uint64_t now) {
     HvPerCpu *p = cpu->pc_state;
     HvMachine *m = cpu->m;
     if (old == now) return; /* the same address space: a TLB tagged by ASID would keep everything too */
     static int no_stash = -1; /* HV_NO_STASH: a switch just drops the user entries */
     if (no_stash < 0) no_stash = getenv("HV_NO_STASH") != NULL;
-    if (!p || current_asid(cpu) < 0 || m->watch_va || m->watch_pa || no_stash) {
+    if (!p || m->watch_va || m->watch_pa || no_stash) {
         hv_tlb_flush_user(cpu);
         return;
     }
@@ -1218,13 +1218,17 @@ void hv_tlb_switch_user(HvCpu *cpu, uint64_t old, uint64_t now) {
     if (old && n <= HV_STASH_CAP) {
         for (int i = 0; i < HV_STASHES && !s; i++)
             if (p->stash[i].ttbr0 == old) s = &p->stash[i];
-        for (int i = 0; i < HV_STASHES && !s; i++)
+        /* Linux's empty TTBR0 between its two writes has nothing to keep: no slot taken from another process */
+        int keep = s || n || !((cpu->tcr_el1 >> 22) & 1);
+        for (int i = 0; i < HV_STASHES && !s && keep; i++)
             if (!p->stash[i].ttbr0) s = &p->stash[i];
-        if (!s) {
+        if (!s && keep) {
             s = &p->stash[0];
             for (int i = 1; i < HV_STASHES; i++)
                 if (p->stash[i].used < s->used) s = &p->stash[i];
         }
+    }
+    if (s) {
         __atomic_store_n(&s->ttbr0, old, __ATOMIC_SEQ_CST);
         s->saved_gen = __atomic_load_n(&s->gen, __ATOMIC_SEQ_CST);
         s->used = ++p->stash_clock;
@@ -1289,4 +1293,13 @@ void hv_tlb_switch_user(HvCpu *cpu, uint64_t old, uint64_t now) {
         break;
     }
     walk_end(cpu);
+}
+
+void hv_tlb_switch_user(HvCpu *cpu, uint64_t old_ttbr0, uint64_t new_ttbr0) {
+    switch_user(cpu, space_of(cpu, old_ttbr0, cpu->ttbr1_el1), space_of(cpu, new_ttbr0, cpu->ttbr1_el1));
+}
+
+void hv_tlb_switch_asid(HvCpu *cpu, uint64_t old_ttbr1) {
+    switch_user(cpu, space_of(cpu, cpu->ttbr0_el1, old_ttbr1), space_of(cpu, cpu->ttbr0_el1, cpu->ttbr1_el1));
+    hv_ijc_switch(cpu);
 }

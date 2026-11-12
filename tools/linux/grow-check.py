@@ -115,6 +115,9 @@ def main():
              lambda o: "Result=success" in o, "grow unit result")
         need(p, "sudo dmesg --level=err,crit,alert,emerg | grep -vE 'usb 1-2|usb1-port2' | wc -l",
              lambda o: o == "0", "dmesg errors")
+        need(p, "sudo journalctl -b -u henge-grow.service -o cat --no-pager",
+             lambda o: "disk unchanged" not in o, "first boot ran the grow tools")
+        need(p, "cat /var/lib/henge/grow-size", lambda o: o == str(args.size_gb << 21), "grow stamp after first boot")
         mid = need(p, "cat /etc/machine-id", lambda o: re.fullmatch(r"[0-9a-f]{32}", o), "machine id")
         need(p, "echo growcheck > /home/henge/keep; sync", lambda o: True, "write a file")
         p.sendline("sudo poweroff")
@@ -124,6 +127,8 @@ def main():
         p = boot(args, disk, scale)
         print(f"boot 2 (unchanged): login after {time.monotonic() - t0:.1f} s")
         grown(p, args.size_gb, "second boot")
+        need(p, "sudo journalctl -b -u henge-grow.service -o cat --no-pager",
+             lambda o: "disk unchanged" in o, "unchanged disk skips the grow tools")
         need(p, "systemctl show -p ConditionResult henge-firstboot.service",
              lambda o: o == "ConditionResult=no", "first-boot unit skipped")
         need(p, "cat /etc/machine-id", lambda o: o == mid, "machine id kept")
@@ -138,6 +143,9 @@ def main():
         p = boot(args, disk, scale)
         print(f"boot 3 (disk grown to {bigger} GiB): login after {time.monotonic() - t0:.1f} s")
         grown(p, bigger, "later boot")
+        need(p, "sudo journalctl -b -u henge-grow.service -o cat --no-pager",
+             lambda o: "disk unchanged" not in o and "resize2fs" in o, "a bigger disk runs the grow tools")
+        need(p, "cat /var/lib/henge/grow-size", lambda o: o == str(bigger << 21), "grow stamp after growing")
         need(p, "cat /etc/machine-id", lambda o: o == mid, "machine id kept")
         need(p, "cat /home/henge/keep", lambda o: o == "growcheck", "file kept")
         need(p, "systemctl is-system-running", lambda o: o == "running", "system state")

@@ -295,6 +295,12 @@ def poweroff(p, stderr, args, times, key, scale=1):
     stopped(p, 0, "guest shutdown", stderr, args)
 
 
+def stock_firmware(d):
+    """The build that keeps the autoboot countdown, for checks that stop at the prompt (u-boot.bin has none since P2)."""
+    f = os.path.join(d, "u-boot-stock.bin")
+    return f if os.path.exists(f) else os.path.join(d, "u-boot.bin")
+
+
 def uboot_boot(p, times, scale):
     """U-Boot from the banner to the kernel, unattended; times each step (the P2 baseline)."""
     t0 = time.monotonic()
@@ -302,11 +308,11 @@ def uboot_boot(p, times, scale):
     times["banner"] = time.monotonic() - t0
     # Read-only flash 1 holds no saved environment (risk row 1).
     expect(p, r"bad CRC, using default environment", UBOOT_LIMITS["uboot step"] * scale, "U-Boot environment")
-    steps = [("devices", r"Hit any key to stop autoboot"),
-             ("countdown", r"Scanning global bootmeth 'efi_mgr'"),
-             ("efi_mgr", r"Booting bootflow '\S+' with extlinux"),
-             ("extlinux", r"Starting kernel \.\.\.")]
-    for name, pattern in steps:
+    t = time.monotonic()
+    # The stock build counts down 2 s here; the build with the P2 fragment prints "autoboot: 0" and goes on.
+    expect(p, r"Hit any key to stop autoboot", UBOOT_LIMITS["uboot step"] * scale, "U-Boot devices")
+    times["devices"] = time.monotonic() - t
+    for name, pattern in [("countdown", r"Scanning for bootflows"), ("extlinux", r"Starting kernel \.\.\.")]:
         t = time.monotonic()
         expect(p, pattern, UBOOT_LIMITS["uboot step"] * scale, f"U-Boot {name}")
         times[name] = time.monotonic() - t
@@ -372,7 +378,9 @@ def disk(args, times):
                        f"{r.stderr.strip()}")
         stderr = lambda: open(os.path.join(tmp, "stderr"), errors="replace").read() if not args.qemu else ""
         for boot_no in (1, 2):
-            argv = command(args, kernel, initrd, tmp, append, clone, firmware)
+            # Boot 2 stops the countdown, so it needs the stock build.
+            fw = stock_firmware(d) if args.uboot and boot_no == 2 else firmware
+            argv = command(args, kernel, initrd, tmp, append, clone, fw)
             tail = Tail()
             t0 = time.monotonic()
             p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200))
