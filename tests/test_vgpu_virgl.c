@@ -9,6 +9,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "guest_ram.h"
 #include "virt.h"
 #include "vgpu_metal.h"
 #include "vgpu_virgl.h"
@@ -403,6 +404,18 @@ static void *rec_blit(void *r, uint32_t res, HvGpu3dBox src, uint32_t dw, uint32
 }
 static const HvGpu3dScanoutOps rec_ops = {rec_blit};
 
+// Fails the first fail_left blits (no texture yet), then passes through; counts every call.
+static int fail_left, blit_calls;
+static void *flaky_blit(void *r, uint32_t res, HvGpu3dBox src, uint32_t dw, uint32_t dh, uint64_t *serial) {
+    blit_calls++;
+    if (fail_left != 0) {
+        if (fail_left > 0) fail_left--;
+        return NULL;
+    }
+    return hv_vgpu_virgl_scanout_ops()->blit(r, res, src, dw, dh, serial);
+}
+static const HvGpu3dScanoutOps flaky_ops = {flaky_blit};
+
 static void test_scanout(void) {
     static const uint8_t GREEN[4] = {0x20, 0xc0, 0x40, 0xff};
     HvVgpuMetal *pm = hv_vgpu_metal_create(b.gpu);
@@ -481,6 +494,33 @@ static void test_scanout(void) {
     check("the blit kept the shape", blit_dw == blit_dh && blit_dw >= 2800, 1);
     check("unref the big resource", c_res_unref(30), OK);
     hv_vgpu_metal_set_3d(pm, hv_vgpu_virgl_scanout_ops(), rend);
+
+    // A blit that fails is tried again every 100 ms, up to 51 tries a scanout; a new scanout gets its own tries
+    hv_vgpu_metal_set_3d(pm, &flaky_ops, rend);
+    check("3D resource 31", c_res_create(31, 64, 64), OK);
+    check("attach 31 to the context", c_ctx_attach(0x202, 20, 31), OK);
+    c_clear(20, 31, GREEN);
+    fail_left = 3, blit_calls = 0;
+    check("SET_SCANOUT of 31", c_scanout(31, 64, 64), OK);
+    check("flush 31", c_flush(31, 64, 64), OK);
+    check("the picture shows after three failed blits", (uint64_t)shows(pm, GREEN, 0, 64), 0);
+    check("the blit was tried again", blit_calls >= 4, 1);
+    fail_left = -1, blit_calls = 0;
+    check("SET_SCANOUT of 31 again", c_scanout(31, 32, 32), OK);
+    check("flush 31 again", c_flush(31, 32, 32), OK);
+    usleep(7000000);
+    check("a blit that never works stops after 51 tries", blit_calls, 51);
+    int stopped = blit_calls;
+    usleep(500000);
+    check("and no more come", blit_calls, stopped);
+    check("SET_SCANOUT with a new rect", c_scanout(31, 48, 48), OK);
+    check("flush the new rect", c_flush(31, 48, 48), OK);
+    usleep(500000);
+    check("the new scanout gets its own tries", blit_calls > stopped + 2, 1);
+    fail_left = 0;
+    usleep(300000);
+    hv_vgpu_metal_set_3d(pm, hv_vgpu_virgl_scanout_ops(), rend);
+    check("unref 31", c_res_unref(31), OK);
 
     hv_vgpu_metal_set_3d(pm, NULL, NULL);
     hv_vgpu_metal_destroy(pm);
@@ -580,6 +620,17 @@ int main(void) {
     }
     check("a renderer starts after an abandon", next != NULL, 1);
     hv_vgpu_virgl_destroy(next);
+
+    // Leaving guest RAM behind closes its file but keeps the mapping readable
+    HvGuestRam lk;
+    check("guest RAM for the leak", hv_guest_ram_alloc(&lk, 1u << 20), 0);
+    lk.host[0] = 0x5a;
+    uint8_t *lh = lk.host;
+    int lfd = lk.fd;
+    hv_guest_ram_leak(&lk);
+    check("a leaked guest RAM forgets its fd", lk.fd, -1);
+    check("a leaked guest RAM closed its file", lfd < 0 || fcntl(lfd, F_GETFD) == -1, 1);
+    check("a leaked guest RAM stays mapped", lh[0], 0x5a);
 
     hv_disk_close(&root);
     char rm[300];

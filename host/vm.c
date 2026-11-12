@@ -456,7 +456,7 @@ static int create_virt(const HvVmConfig *c, uint64_t ram_size, char *err, size_t
             /* Before the guest runs: the driver must not have bound yet. */
             virgl = hv_vgpu_virgl_create();
             if (!virgl || hv_virtio_gpu_set_3d(virt.gpu, hv_vgpu_virgl_ops(), virgl) != 0)
-                return fail(err, errlen, "Graphics acceleration is unavailable (ANGLE or virglrenderer refused to start).");
+                return fail(err, errlen, "Graphics acceleration is unavailable (ANGLE or virglrenderer refused to start, or a renderer from an earlier machine is stuck).");
             hv_vgpu_metal_set_3d(vgpu.presenter, hv_vgpu_virgl_scanout_ops(), virgl);
 #else
             return fail(err, errlen, "This build has no graphics acceleration (build with GFX=1).");

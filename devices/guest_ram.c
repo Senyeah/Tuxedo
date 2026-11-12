@@ -116,6 +116,7 @@ void hv_guest_ram_free(HvGuestRam *r) {
 
 void hv_guest_ram_leak(HvGuestRam *r) {
     if (r->prefault_started) pthread_join(r->prefault_thread, NULL);
+    if (r->host && r->fd >= 0) close(r->fd); /* the mapping outlives its fd */
     memset(r, 0, sizeof *r);
     r->fd = -1;
 }

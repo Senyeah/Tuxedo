@@ -179,7 +179,7 @@ test-linux-input: $(B)/hengevm
 	uv run tools/linux/input-check.py $(INPUT_ARGS)
 .PHONY: test-linux-input
 
-# A8: the desktop image booted twice, with and without --gpu-accel: renderer string, frame time and glmark2 against the same run software numbers, no virtio_gpu error.
+# A8: the desktop image booted twice, with and without --gpu-accel: renderer string, virgl frame time (median <= 4 ms, p99 <= 16.7 ms), glmark2 against the same run software score, no virtio_gpu error.
 # Builds hengevm with GFX=1 in its own directory so the objects of a plain build are not mixed in. Skipped when GFX_DIR is missing.
 # ACCEL_ARGS="--full" runs the whole default glmark2 benchmark instead of the short scene set.
 ACCEL_B ?= build/accel

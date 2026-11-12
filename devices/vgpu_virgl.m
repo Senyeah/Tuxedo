@@ -849,7 +849,7 @@ void hv_vgpu_virgl_destroy(HvVgpuVirgl *r) {
 
 void hv_vgpu_virgl_abandon(HvVgpuVirgl *r) {
     if (!r) return;
-    pthread_detach(r->thread); /* nobody joins it: it must free itself when its job ends */
+    pthread_detach(r->thread); /* nobody joins it; it cleans up EGL and virgl, the struct leaks on purpose */
     pthread_mutex_lock(&r->mu);
     r->abandoned = 1, r->stop = 1; // the thread fails what is queued, then cleans up when its job ends
     pthread_cond_broadcast(&r->cv);

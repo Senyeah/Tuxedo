@@ -216,17 +216,20 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
     const HvGpu3dScanoutOps *ops = scan_ops;
     void *renderer = scan_r;
     os_unfair_lock_unlock(&layer_lock);
-    pthread_mutex_lock(&shadow_mu); /* snapshots read the surface under it */
     BOOL moved = !mode3d || res != res3d || s.x != rect3d_x || s.y != rect3d_y || s.width != src_w || s.height != src_h;
     BOOL failed = NO;
+    BOOL locked = NO;
     if (ops && (changed || moved)) {
+        locked = YES;
         uint64_t serial = 0;
         uint32_t dw = s.width, dh = s.height;
         if ((uint64_t)dw * dh > SHOW_MAX_PIXELS) { /* as the 2D shadow: a guest cannot ask for a 1 GB surface */
             double k = sqrt((double)SHOW_MAX_PIXELS / ((double)dw * dh));
             dw = (uint32_t)fmax(1, floor(dw * k)), dh = (uint32_t)fmax(1, floor(dh * k));
         }
+        /* Not under shadow_mu: the blit may wait BLIT_WAIT_MS and a snapshot must not wait with it. */
         IOSurfaceRef surf = ops->blit(renderer, res, (HvGpu3dBox){s.x, s.y, 0, s.width, s.height, 1}, dw, dh, &serial);
+        pthread_mutex_lock(&shadow_mu); /* snapshots read the surface under it */
         BOOL got = surf != NULL;
         if (surf && (!surf3d || serial != surf3d_serial || !tex3d)) {
             MTLTextureDescriptor *t = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
@@ -247,6 +250,7 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
         blit_retries = failed ? blit_retries + 1 : 0;
         if (blit_retries > 50) failed = NO; /* each try may wait BLIT_WAIT_MS: a stuck renderer holds this queue ~155 s, then we wait for fresh work */
     }
+    if (!locked) pthread_mutex_lock(&shadow_mu);
     if (failed) res3d = 0; /* res 0 is never a scanout, so the next present blits again */
     else res3d = res;
     mode3d = YES, rect3d_x = s.x, rect3d_y = s.y;
