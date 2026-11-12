@@ -41,6 +41,8 @@ struct SessionView: View {
     @AppStorage("henge.tips.stillWallpaperShown") private var stillWallpaperTipShown = false
     @State private var showWallpaperTip = false
     @State private var confirmStop = false
+    @State private var shutdownAsked: Date? // Linux: when the power button was pressed
+    @State private var shutdownOverdue = false
     @State private var zoomCentre = CGPoint(x: 0.5, y: 0.5) // where the zoomed view is, 0...1 of the Mac's screen
     @State private var map: UIImage?
     @State private var zoomFollowing: Task<Void, Never>?
@@ -119,7 +121,7 @@ struct SessionView: View {
                             .transition(.opacity)
                             .allowsHitTesting(false)
                     }
-                    if showWallpaperTip && !showRevealHint && !pointerRefused {
+                    if showWallpaperTip && mac.guest == .mac && !showRevealHint && !pointerRefused {
                         Label("For more speed, give this Mac a still wallpaper and set its screen saver to Never in System Settings.", systemImage: "speedometer")
                             .font(.system(size: 15, weight: .medium))
                             .foregroundStyle(.white)
@@ -139,6 +141,7 @@ struct SessionView: View {
                         .position(x: layout.touch.midX, y: layout.fillsPhone ? layout.touch.midY : layout.pad.midY)
                 }
                 if let error { errorCard(error, layout) }
+                if shutdownAsked != nil && state != 2 { shutdownCard(layout) }
                 KeyboardCatcher(active: $typing).frame(width: 0, height: 0)
             }
             .frame(width: full.width, height: full.height)
@@ -167,7 +170,9 @@ struct SessionView: View {
         .confirmationDialog("Shut down \(mac.name)?", isPresented: $confirmStop, titleVisibility: .visible) {
             Button("Shut Down", role: .destructive) { finish() }
         } message: {
-            Text("This turns the Mac off at once. Anything not saved on it is lost.")
+            Text(mac.guest == .linux
+                 ? "\(mac.name) is asked to shut down, as if you pressed its power button. It can take a few seconds."
+                 : "This turns the Mac off at once. Anything not saved on it is lost.")
         }
         .onChange(of: zoomed) { on in
             zoomFollowing?.cancel()
@@ -208,7 +213,7 @@ struct SessionView: View {
     }
 
     /// When there is something of the app's to point at, iPadOS gets its own pointer back.
-    private var pointerNeeded: Bool { state == 2 || showDetails || confirmStop || error != nil }
+    private var pointerNeeded: Bool { state == 2 || showDetails || confirmStop || error != nil || shutdownAsked != nil }
 
     // MARK: Layout
 
@@ -346,7 +351,7 @@ struct SessionView: View {
     /// The system's paste button: iOS asks no permission for it, as it would if the app read the clipboard itself.
     private var pasteTool: some View {
         PasteButton(payloadType: String.self) { texts in
-            if let text = texts.first { Sharing.paste(text) }
+            if let text = texts.first { Sharing.paste(text, guest: mac.guest) }
         }
         .labelStyle(.iconOnly)
         .buttonBorderShape(.circle)
@@ -456,9 +461,32 @@ struct SessionView: View {
 
     private func errorCard(_ text: String, _ layout: Layout) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("This Mac could not start").font(.system(size: 17, weight: .semibold))
+            Text(mac.guest == .linux ? "This machine could not start" : "This Mac could not start").font(.system(size: 17, weight: .semibold))
             Text(text).font(.system(size: 14)).foregroundStyle(Desk.dim)
             Button("Close") { close() }.font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.accentLight)
+        }
+        .padding(18)
+        .frame(width: min(layout.touch.width, 390) - 32, alignment: .leading)
+        .background(Desk.raised, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .position(x: (layout.fillsPhone ? layout.touch.midX : layout.pad.midX), y: layout.fillsPhone ? layout.touch.midY : layout.pad.midY)
+    }
+
+    /// Shown while the guest is asked to power off; "Turn off now" appears if it takes too long.
+    private func shutdownCard(_ layout: Layout) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                ProgressView()
+                Text("Shutting down…").font(.system(size: 17, weight: .semibold))
+            }
+            if shutdownOverdue {
+                Text("\(mac.name) is taking a while. You can turn it off now; anything not saved on it is lost.")
+                    .font(.system(size: 14)).foregroundStyle(Desk.dim)
+                Button("Turn off now") {
+                    henge_vm_stop()
+                    close()
+                }
+                .font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.bad)
+            }
         }
         .padding(18)
         .frame(width: min(layout.touch.width, 390) - 32, alignment: .leading)
@@ -469,7 +497,7 @@ struct SessionView: View {
     private var phase: String {
         switch state {
         case 0: return error == nil ? "Starting…" : "Not started"
-        case 1: return userCode ? "macOS is running" : "Booting"
+        case 1: return userCode ? (mac.guest == .linux ? "Debian is running" : "macOS is running") : "Booting"
         case 3: return "Finishing shutdown…"
         default: return "Stopped (\(String(cString: henge_vm_exit_reason())))"
         }
@@ -506,8 +534,8 @@ struct SessionView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Sharing") {
-                    LabeledContent("Clipboard and folder", value: helperRunning ? "On" : "Not set up")
-                    if !helperRunning {
+                    LabeledContent("Clipboard and folder", value: mac.guest == .linux ? "Not available" : helperRunning ? "On" : "Not set up")
+                    if mac.guest == .mac && !helperRunning {
                         Button("Type the Set Up Command") {
                             showDetails = false
                             Task {
@@ -516,11 +544,17 @@ struct SessionView: View {
                             }
                         }
                     }
+                    if mac.guest == .linux {
+                        Text("Sharing with a Debian machine is not set up yet. The paste button types the text into the guest.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    } else {
                     Text(helperRunning
                          ? "Put files in Files, Henge, Shared to see them in the Henge folder in this Mac's home folder. What you copy on the Mac is copied here too, and the paste button pastes from here into the Mac."
                          : "Once for each Mac: open Terminal on the Mac, tap this, then press Return. When macOS asks about henge-agent and local networks, choose Allow. It types \(Sharing.setUpCommand) and needs the Mac's keyboard layout to be U.S.")
                         .font(.footnote).foregroundStyle(.secondary)
+                    }
                 }
+                if mac.guest == .mac {
                 Section("Lighter macOS") {
                     Button("Type the Lighter macOS Command") {
                         showDetails = false
@@ -538,6 +572,7 @@ struct SessionView: View {
                     }
                     Text("Less drawing for the emulated CPUs: window and Dock animations, desktop widgets, the screen saver and a moving wallpaper go. Open Terminal on the Mac, tap the button and press Return, then log out and back in. Also turn on Reduce Motion and Reduce Transparency in the Mac's System Settings, Accessibility. Undo puts it back, apart from the wallpaper. Needs the Mac's keyboard layout to be U.S.")
                         .font(.footnote).foregroundStyle(.secondary)
+                }
                 }
                 Section("Log") {
                     VStack(alignment: .leading, spacing: 1) {
@@ -578,6 +613,8 @@ struct SessionView: View {
         zoomCentre = CGPoint(x: 0.5, y: 0.5)
         map = nil
         showWallpaperTip = false
+        shutdownAsked = nil
+        shutdownOverdue = false
         while henge_vm_state() == 3 && !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
@@ -587,7 +624,7 @@ struct SessionView: View {
         let ram = GuestMemory.prepare(mac)
         HengeLog.log("session", "available memory \(henge_available_memory() >> 20) MB")
         guard ram >= 1024 else {
-            error = "There is not room for this Mac's memory: it needs a few GB of free storage."
+            error = "There is not room for this \(mac.guest == .linux ? "machine" : "Mac")'s memory: it needs a few GB of free storage."
             return
         }
         var buffer = [CChar](repeating: 0, count: 256)
@@ -595,13 +632,20 @@ struct SessionView: View {
         Sharing.prepare()
         EngineTuning.apply()
         henge_vm_set_display(UInt32(mac.screen.width), UInt32(mac.screen.height))
-        if mac.isRetina {
-            henge_vm_set_display_mm(UInt32(Device.retinaMM.width), UInt32(Device.retinaMM.height))
-        } else {
-            henge_vm_set_display_mm(0, 0)
+        let rc: Int32
+        switch mac.guest {
+        case .mac:
+            if mac.isRetina {
+                henge_vm_set_display_mm(UInt32(Device.retinaMM.width), UInt32(Device.retinaMM.height))
+            } else {
+                henge_vm_set_display_mm(0, 0)
+            }
+            HengeLog.log("session", "screen \(mac.screen.width)x\(mac.screen.height) retina \(mac.isRetina)")
+            rc = henge_vm_boot(mac.rom.path, mac.disk.path, mac.aux.path, mac.ecid, mac.seed, ram, Int32(cpus), &buffer, buffer.count)
+        case .linux:
+            HengeLog.log("session", "linux screen \(mac.screen.width)x\(mac.screen.height)")
+            rc = henge_vm_boot_linux(mac.firmware.path, mac.disk.path, ram, Int32(cpus), &buffer, buffer.count)
         }
-        HengeLog.log("session", "screen \(mac.screen.width)x\(mac.screen.height) retina \(mac.isRetina)")
-        let rc = henge_vm_boot(mac.rom.path, mac.disk.path, mac.aux.path, mac.ecid, mac.seed, ram, Int32(cpus), &buffer, buffer.count)
         if rc != 0 {
             error = String(cString: buffer)
             return
@@ -620,6 +664,7 @@ struct SessionView: View {
                 try? await Task.sleep(nanoseconds: 100_000_000)
                 continue
             }
+            if let asked = shutdownAsked, Date().timeIntervalSince(asked) >= 30 { shutdownOverdue = true }
             cpusOn = henge_vm_cpus_on()
             userCode = userCode || henge_vm_guest_el0() != 0
             let now = Date(), blocks = henge_vm_blocks()
@@ -644,8 +689,13 @@ struct SessionView: View {
                 HardwareKeys.releaseAll()
                 HardwareMouse.shared.stop()
                 UIApplication.shared.isIdleTimerDisabled = false
-                HengeLog.log("session", "showing stopped Mac: \(String(cString: henge_vm_exit_reason()))")
-                if henge_vm_exit_outcome() == Int32(HENGE_VM_OUTCOME_RESTART.rawValue) && henge_vm_can_start() != 0 {
+                let outcome = henge_vm_exit_outcome()
+                if shutdownAsked != nil && outcome == Int32(HENGE_VM_OUTCOME_SHUTDOWN.rawValue) {
+                    close() // the person asked for it: no stopped card
+                    break
+                }
+                HengeLog.log("session", "showing stopped machine: \(String(cString: henge_vm_exit_reason()))")
+                if outcome == Int32(HENGE_VM_OUTCOME_RESTART.rawValue) && henge_vm_can_start() != 0 {
                     bootAttempt += 1
                 }
                 break
@@ -659,7 +709,7 @@ struct SessionView: View {
                 lastGPUFrames = gpuFrames
                 JITBootstrap.releaseLingeringDebugger()
             }
-            if tick == 60 && !stillWallpaperTipShown { // about when the desktop is up after a login
+            if tick == 60 && mac.guest == .mac && !stillWallpaperTipShown { // about when the desktop is up after a login
                 stillWallpaperTipShown = true
                 showWallpaperTip = true
                 DispatchQueue.main.asyncAfter(deadline: .now() + 10) { showWallpaperTip = false }
@@ -677,6 +727,12 @@ struct SessionView: View {
     private func finish() {
         if state == 1 {
             MacPreview.saveNow(for: mac)
+            if mac.guest == .linux {
+                henge_vm_power_button()
+                shutdownAsked = Date()
+                shutdownOverdue = false
+                return // the run loop closes the view when the guest is off
+            }
             henge_vm_stop()
         }
         close()

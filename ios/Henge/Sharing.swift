@@ -40,9 +40,17 @@ enum Sharing {
     }
 
     /// Text from this device, pasted at the Mac's cursor. Without the helper it is typed, as far as the keyboard can.
-    static func paste(_ text: String) {
+    /// A Linux guest has no helper yet (P7): its text is typed as keys, or written to the console while that shows.
+    static func paste(_ text: String, guest: GuestKind = .mac, console: Bool = false) {
         Task { @MainActor in
-            if helperRunning {
+            if guest == .linux {
+                if console {
+                    let bytes = Array(text.utf8)
+                    bytes.withUnsafeBufferPointer { henge_vm_console_write($0.baseAddress, $0.count) }
+                } else {
+                    await Keys.typeSlowly(text)
+                }
+            } else if helperRunning {
                 henge_share_set_clipboard(text)
                 try? await Task.sleep(nanoseconds: 800_000_000) // for the helper to put it on the Mac's clipboard
                 Keys.chord(Keys.command, "v")
