@@ -124,14 +124,22 @@ static void fair_turns(void) {
 /* The target of CPU_ON is off but not parked yet, and only gets there once it has the lock the
    caller holds. CPU_ON must hand the lock on while it waits, or both wait for ever. */
 static void *park_target(void *arg) {
-    if (arg) hv_big_lock(&machine);
+    int big = (int)((intptr_t)arg & 1), flush = (int)((intptr_t)arg >> 1);
+    if (big) hv_big_lock(&machine);
     else usleep(20000);
+    if (flush) { /* as stop_the_world: CPU 0 must be out of its block, then every translation goes */
+        for (int n = 0; n < 2000 && __atomic_load_n(&machine.percpu[0].active, __ATOMIC_SEQ_CST); n++) usleep(100);
+        check("CPU 0 left guest code while it waited", !__atomic_load_n(&machine.percpu[0].active, __ATOMIC_SEQ_CST));
+        pthread_mutex_lock(&machine.tr_mu);
+        hv_flush_blocks(&machine);
+        pthread_mutex_unlock(&machine.tr_mu);
+    }
     __atomic_store_n(&cpus[1].parked_off, 1, __ATOMIC_SEQ_CST);
-    if (arg) hv_big_unlock(&machine);
+    if (big) hv_big_unlock(&machine);
     return NULL;
 }
 
-static void cpu_on_waits(int big, const char *what) {
+static void cpu_on_waits(int big, int flush, const char *what) {
     if (hv_machine_init(&machine, 4 << 20)) exit(1);
     hv_machine_add_ram(&machine, 0x10000, 16384, code, 1);
     machine.big_lock_on = big;
@@ -144,7 +152,7 @@ static void cpu_on_waits(int big, const char *what) {
     pthread_create(&cpu0, NULL, run_cpu, &cpus[0]);
     if (big)
         while (__atomic_load_n(&machine.big_next, __ATOMIC_SEQ_CST) == __atomic_load_n(&machine.big_serving, __ATOMIC_SEQ_CST)) usleep(100);
-    pthread_create(&helper, NULL, park_target, (void *)(intptr_t)big);
+    pthread_create(&helper, NULL, park_target, (void *)(intptr_t)(big | flush << 1));
     for (int n = 0; n < 3000 && !atomic_load(&finished[0]); n++) usleep(1000);
     if (!atomic_load(&finished[0])) {
         check(what, 0);
@@ -158,14 +166,16 @@ static void cpu_on_waits(int big, const char *what) {
 
 int main(void) {
     alarm(15);
+    setenv("HV_JIT_POISON", "1", 1); /* a stale block faults */
     code = aligned_alloc(16384, 16384);
     if (!code) return 1;
     memcpy(code, prog, sizeof prog);
     memcpy(code + 16, cpu_on_prog, sizeof cpu_on_prog);
     tlbi_while_queued();
     fair_turns();
-    cpu_on_waits(1, "CPU_ON under the big lock finishes");
-    cpu_on_waits(0, "CPU_ON without the big lock finishes");
+    cpu_on_waits(1, 0, "CPU_ON under the big lock finishes");
+    cpu_on_waits(0, 0, "CPU_ON without the big lock finishes");
+    cpu_on_waits(1, 1, "CPU_ON survives a flush while it waits");
     free(code);
     printf("Big lock: %d failures\n", failures);
     return failures != 0;

@@ -97,7 +97,7 @@ static void notify(HvVirtio *v, int q) {
     if (any) hv_virtio_interrupt(v);
 }
 
-/* A restart or re-probe drops what piled up for the old driver; the first probe keeps early events. */
+/* A driver reset or re-probe drops what piled up for the old driver; the first probe keeps early events. */
 static void device_reset(HvVirtio *v) {
     HvVirtioInput *d = v->dev;
     if (!d) return;

@@ -83,6 +83,13 @@ void hv_jit_write(HvJitRegion *region, uint32_t *start, const void *src, size_t 
     memcpy(start, src, bytes);
 }
 
+void hv_jit_zero(HvJitRegion *region) {
+#if TARGET_OS_OSX
+    if (!region->rw_diff) pthread_jit_write_protect_np(0);
+#endif
+    memset((uint8_t *)region->base + region->rw_diff, 0, (size_t)region->capacity * 4);
+}
+
 void hv_jit_finish(HvJitRegion *region, uint32_t *start, size_t words) {
     (void)region;
 #if TARGET_OS_OSX

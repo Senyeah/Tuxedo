@@ -479,7 +479,7 @@ static void test_virtio_balloon(void) {
 }
 
 
-/* A driver reset (status 0) and a new probe, as after a guest restart: no device may keep state of the old driver. */
+/* A driver reset (status 0) and a new probe, as in a re-probe or a handoff to another driver: no device may keep state of the old driver. */
 static uint64_t reprobe(int slot, uint64_t bar, uint64_t ring) { return setup_virtio(slot, bar, ring); }
 
 static void test_reset_blk(void) {
@@ -513,6 +513,21 @@ static void test_reset_blk(void) {
     check("reset: a new request completes", used_idx(ring), 1);
     check("reset: and succeeds", ram(status)[0], 0);
     check("reset: one request counted", b->requests, requests_before + 1);
+    /* Reset with requests still in flight: it waits for them, and none of their completions survives. */
+    for (int i = 0; i < 50; i++) {
+        uint64_t before = b->requests;
+        ring = reprobe(slot, bar, ring);
+        put_desc(ring, 0, hdr, 16, 1, 1);
+        put_desc(ring, 1, data, 512, 1 | 2, 2);
+        put_desc(ring, 2, status, 1, 2, 0);
+        offer(ring, 0);
+        wr16(bar + 0x3000, 0);
+        ring = reprobe(slot, bar, ring); /* no wait: the worker may still be on it */
+        hv_virtio_blk_poll(b);
+        check("reset: in flight, nothing pushed to the new queue", used_idx(ring), 0);
+        check("reset: in flight, nothing left unpublished", b->published, b->submitted);
+        check("reset: in flight, not counted", b->requests, before);
+    }
     rd8(bar + 0x1000);
 }
 
@@ -633,7 +648,6 @@ static void test_reset_input(void) {
     check("reset: the new event's code", rd8(buf + 0x100 + 2), 31);
 }
 
-/* virtio-rng: a buffer split over two descriptors is filled whole, and an interrupt follows. */
 /* hv_phys_ptr: a length near 2^64 must not wrap back into RAM. */
 static void test_phys_ptr_bounds(void) {
     uint64_t base = VMAPPLE_MEM, end = VMAPPLE_MEM + RAM_SIZE;
@@ -652,6 +666,7 @@ static void test_phys_ptr_bounds(void) {
     hv_dma_written(&m, base, ~0ull);
 }
 
+/* virtio-rng: a buffer split over two descriptors is filled whole, and an interrupt follows. */
 static void test_virtio_rng(void) {
     HvVirtioRng *r = hv_virtio_rng_create(&m, board.pcie);
     int slot = (int)find_slot(0x1af4, 0x1044, 0);

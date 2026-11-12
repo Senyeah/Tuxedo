@@ -46,9 +46,7 @@ void hv_flush_blocks(HvMachine *m) {
     if (poison < 0) poison = getenv("HV_JIT_POISON") != NULL;
     m->gen_checks = poison;
     if (poison) {
-        size_t bytes = (size_t)m->jit.capacity * 4;
-        uint32_t *rw = (uint32_t *)((uint8_t *)m->jit.base + m->jit.rw_diff);
-        for (size_t i = 0; i < bytes / 4; i++) rw[i] = 0;
+        hv_jit_zero(&m->jit);
         hv_jit_finish(&m->jit, m->jit.base, m->jit.capacity);
     }
 }
@@ -886,20 +884,6 @@ static void stop_the_world(HvCpu *cpu) {
     } else {
         pthread_mutex_unlock(&m->stw_mu);
     }
-}
-
-/* A wait inside an exit handler. With the big lock, the target of the wait may need the lock to get ready. */
-void hv_cpu_spin_yield(HvCpu *cpu) {
-    HvMachine *m = cpu->m;
-    if (!m->big_lock_on) {
-        sched_yield();
-        return;
-    }
-    park(cpu); /* a TLBI or flush of the holder must not wait for a CPU that is queued */
-    hv_big_unlock(m);
-    sched_yield();
-    hv_big_lock(m);
-    unpark(cpu);
 }
 
 int hv_run(HvCpu *cpu) {
