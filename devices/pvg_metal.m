@@ -2551,7 +2551,7 @@ static NSString *const screen_shaders = @"#include <metal_stdlib>\n"
                 (void)done;
                 dispatch_async(self->worker, ^{
                     if (!self->frame || self->frame_w != W || self->frame_h != H) {
-                        self->frame = malloc((size_t)W * H * 4), self->frame_w = W, self->frame_h = H;
+                        free(self->frame), self->frame = malloc((size_t)W * H * 4), self->frame_w = W, self->frame_h = H;
                     }
                     memcpy(self->frame, rb.contents, (size_t)W * H * 4);
                     self->frames++;

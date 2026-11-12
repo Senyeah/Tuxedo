@@ -360,7 +360,7 @@ static void test_pixels(void) {
     check("its drawable is not below the layer's limit nor over it", CGSizeEqualToSize(tall.drawableSize, CGSizeMake(1080, 608)), 1);
 
     hv_vgpu_metal_destroy(p);
-    check("flush callback released",b.gpu->on_flush == NULL && b.gpu->opaque == NULL, 1);
+    check("flush callback released", b.gpu->on_flush == NULL && b.gpu->opaque == NULL, 1);
     hv_virt_destroy(&b);
     hv_machine_free(&m);
 }
