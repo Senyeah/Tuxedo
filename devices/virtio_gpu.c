@@ -1089,13 +1089,13 @@ int hv_virtio_gpu_take_dirty(HvVirtioGpu *g, HvVgpuRect *r) {
     return had;
 }
 
-void hv_virtio_gpu_destroy(HvVirtioGpu *g) {
-    if (!g) return;
+int hv_virtio_gpu_destroy(HvVirtioGpu *g) {
+    if (!g) return 1;
     int clean = reset_3d(g); /* the renderer drops its pointers into guest RAM; it must outlive this call */
     pthread_mutex_lock(&g->cmu);
     clean = clean && !g->norphan;
     pthread_mutex_unlock(&g->cmu);
-    if (!clean) return; /* a stuck renderer may still call done() with a request of ours (now or from an earlier reset): leak the device */
+    if (!clean) return 0; /* a stuck renderer may still call done() with a request of ours (now or from an earlier reset): leak the device */
     for (int i = 0; i < HV_VGPU_MAX_RESOURCES; i++) {
         free(g->res[i].pixels);
         free(g->res[i].backing);
@@ -1106,4 +1106,5 @@ void hv_virtio_gpu_destroy(HvVirtioGpu *g) {
     pthread_mutex_destroy(&g->cmu);
     pthread_cond_destroy(&g->ccv);
     free(g);
+    return 1;
 }

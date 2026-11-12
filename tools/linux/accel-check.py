@@ -8,7 +8,8 @@
 Boots a clone of debian-desktop.img by direct kernel boot, with the virgl renderer behind the virtio GPU. Checks, over the
 serial console: the session log says renderer=gles2, eglinfo names virgl and an OpenGL ES version of at least 3.0, a ten
 second glmark2 scene scores at least three times the saved software score, and dmesg has no virtio_gpu or DRM error. The
---screenshot PNG must show a desktop (not a black screen). The guest then powers off with status 0.
+--screenshot PNG must show the idle desktop (a large lit area: the foot window), both before glmark2 and a few seconds
+after it ends. The frame time must also beat the saved software frame time by the same factor. The guest then powers off with status 0.
 
 --save-baseline boots without --gpu-accel (labwc on pixman, glmark2 on llvmpipe), runs the same scene and writes the score
 to tools/linux/accel-baseline.json. The shared image never changes: the guest runs on an APFS clone.
@@ -57,10 +58,31 @@ def sh(p, cmd, limit=60):
     return re.sub(r"^henge@henge:[^\n$]*\$ ", "", out), int(p.match.group(1))
 
 
-def screenshot_ok(path):
+DESKTOP_LIT = 0.2  # the foot window alone lights about 0.4; fbcon text only about 0.012
+
+
+def lit_fraction(path):
     from PIL import Image
     im = Image.open(path).convert("L")
     return sum(im.histogram()[25:]) / (im.width * im.height)
+
+
+def desktop_shot(shot, keep, what, wait=6.0):
+    # the shot is rewritten every HV_SHOT_SECS: wait for a file newer than this call
+    start = time.time()
+    deadline = start + wait + 15
+    while time.time() < deadline:
+        if os.path.exists(shot) and os.path.getmtime(shot) >= start + wait:
+            break
+        time.sleep(0.5)
+    else:
+        raise Fail(f"no fresh screenshot ({what})")
+    lit = lit_fraction(shot)
+    if keep:
+        subprocess.run(["/bin/cp", shot, keep + "." + what.replace(" ", "-") + ".png"])
+    if lit < DESKTOP_LIT:
+        raise Fail(f"the screenshot {what} is not the desktop ({lit:.4f} of its pixels are lit, need {DESKTOP_LIT})")
+    print(f"ok   screenshot {what} shows the desktop ({lit:.3f} of its pixels are lit)")
 
 
 def main():
@@ -71,7 +93,7 @@ def main():
     ap.add_argument("--save-baseline", action="store_true", help="measure the software path and save its score")
     ap.add_argument("--factor", type=float, default=3.0, help="the least accelerated score over the saved one")
     ap.add_argument("--cpus", type=int, default=4)
-    ap.add_argument("--keep-shot", help="copy the screenshot here")
+    ap.add_argument("--keep-shot", help="copy the screenshots here (suffixed)")
     args = ap.parse_args()
     d = args.linux_dir or linux_dir()
     image = os.path.join(d, "debian-desktop.img")
@@ -139,6 +161,7 @@ def run(p, args, accel, shot, tmp, base):
         if (int(ver.group(1)), int(ver.group(2))) < (3, 0):
             raise Fail(f"the guest gets OpenGL ES {ver.group(1)}.{ver.group(2)}, expected at least 3.0")
         print("ok   eglinfo names virgl with OpenGL ES >= 3.0")
+    desktop_shot(shot, args.keep_shot, "before glmark2")
     out, rc = sh(p, f"{WAYLAND}; glmark2-es2-wayland -s {SIZE} -b {SCENE} 2>&1 | grep -E 'FPS|Score|Error|error'", 180)
     sc = re.search(r"glmark2 Score: (\d+)", out)
     if not sc:
@@ -156,22 +179,18 @@ def run(p, args, accel, shot, tmp, base):
         if score < need:
             raise Fail(f"glmark2 scored {score}, under {args.factor:g} times the saved software score {base['software_score']} ({need:g})")
         print(f"ok   glmark2 {score} >= {args.factor:g} x {base['software_score']} (software)")
+        if ft and base.get("frame_time_ms"):
+            limit = base["frame_time_ms"] / args.factor
+            if float(ft.group(1)) > limit:
+                raise Fail(f"frame time {ft.group(1)} ms, over {limit:.3f} ms ({args.factor:g} times under the software {base['frame_time_ms']} ms)")
+            print(f"ok   frame time {ft.group(1)} ms <= {limit:.3f} ms (software {base['frame_time_ms']} ms / {args.factor:g})")
+        elif base.get("frame_time_ms"):
+            raise Fail("glmark2 gave no frame time")
     out, _ = sh(p, "sudo dmesg | grep -i -E 'virtio_gpu.*(error|fail|timed? ?out)|\\[drm.*(error|fail)|\\*ERROR\\*'")
     if out.strip():
         raise Fail("the guest logged virtio_gpu or DRM errors:\n" + out.strip())
     print("ok   dmesg has no virtio_gpu or DRM error")
-    deadline = time.time() + 15
-    while not os.path.exists(shot) and time.time() < deadline:
-        time.sleep(0.5)
-    if not os.path.exists(shot):
-        raise Fail("no screenshot")
-    lit = screenshot_ok(shot)
-    if args.keep_shot:
-        subprocess.run(["/bin/cp", shot, args.keep_shot])
-    if lit < 0.01:
-        raise Fail(f"the screenshot is black ({lit:.4f} of its pixels are lit)")
-    print(f"ok   screenshot shows a desktop ({lit:.3f} of its pixels are lit)")
-
+    desktop_shot(shot, args.keep_shot, "after glmark2")
 
 if __name__ == "__main__":
     try:

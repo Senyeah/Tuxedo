@@ -43,16 +43,16 @@ $(B)/hengevm-ref: host/hvf_ref.c host/hvf_ref.entitlements $(ENGINE) $(DEV) $(B)
 # Mac-only graphics device (ParavirtualizedGraphics.framework, as QEMU uses it).
 # Built for an older deployment target: the framework's memory callbacks are
 # marked obsolete in macOS 27 without a documented replacement.
-$(B)/pvg_metal.o: devices/pvg_metal.m devices/*.h core/*.h host/*.h | $(B)
+$(B)/pvg_metal.o: devices/pvg_metal.m devices/*.h core/*.h host/*.h $(B)/.gfx-stamp | $(B)
 	$(CC) $(CFLAGS) -fobjc-arc -Wno-unused-parameter -Wno-deprecated-declarations -c $< -o $@
 # The virtio GPU's presenter (Metal, both platforms).
-$(B)/vgpu_metal.o: devices/vgpu_metal.m devices/*.h core/*.h host/*.h | $(B)
+$(B)/vgpu_metal.o: devices/vgpu_metal.m devices/*.h core/*.h host/*.h $(B)/.gfx-stamp | $(B)
 	$(CC) $(CFLAGS) -fobjc-arc -c $< -o $@
 # The virgl renderer (GFX=1, or the test below).
-$(B)/vgpu_virgl.o: devices/vgpu_virgl.m devices/*.h core/*.h host/*.h | $(B)
+$(B)/vgpu_virgl.o: devices/vgpu_virgl.m devices/*.h core/*.h host/*.h $(B)/.gfx-stamp | $(B)
 	$(call GFX_CHECK,$(GFX_DIR))
 	$(CC) $(CFLAGS) -fobjc-arc -Wno-unused-parameter -I$(GFX_DIR)/include -c $< -o $@
-$(B)/virt_window.o: host/virt_window.m host/*.h | $(B)
+$(B)/virt_window.o: host/virt_window.m host/*.h $(B)/.gfx-stamp | $(B)
 	$(CC) -fobjc-arc -O2 -g -Wall -Wextra -Icore -Ihost -Idevices -c $< -o $@
 $(B)/pvg_mac.o: devices/pvg_mac.m devices/*.h core/*.h host/*.h | $(B)
 	$(CC) -fobjc-arc -O2 -g -Wall -mmacosx-version-min=15.2 -Icore -Ihost -Idevices -c $< -o $@
@@ -94,15 +94,20 @@ $(B)/hengevm: host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/
 	    -framework AppKit -framework QuartzCore $(GFX_LDLIBS) -o $@
 
 # mmu.c: no SIMD (hv_tlb_refill runs with the guest's SIMD registers live).
-$(B)/mmu.o: core/mmu.c core/*.h host/*.h | $(B)
+$(B)/mmu.o: core/mmu.c core/*.h host/*.h $(B)/.gfx-stamp | $(B)
 	$(CC) $(CFLAGS) -mgeneral-regs-only -c $< -o $@
-$(B)/%.o: core/%.c core/*.h host/*.h | $(B)
+# -DHV_GFX changes host/vm.o: every object follows GFX through a stamp, so a GFX and a plain build never mix in one B or IB.
+$(B)/.gfx-stamp: FORCE | $(B)
+	@echo 'GFX=$(GFX)' | cmp -s - $@ || echo 'GFX=$(GFX)' > $@
+.PHONY: FORCE
+FORCE:
+$(B)/%.o: core/%.c core/*.h host/*.h $(B)/.gfx-stamp | $(B)
 	$(CC) $(CFLAGS) -c $< -o $@
-$(B)/%.o: host/%.c host/*.h core/*.h devices/*.h | $(B)
+$(B)/%.o: host/%.c host/*.h core/*.h devices/*.h $(B)/.gfx-stamp | $(B)
 	$(CC) $(CFLAGS) -c $< -o $@
 $(B)/%.o: host/%.S | $(B)
 	$(CC) -c $< -o $@
-$(B)/%.o: devices/%.c devices/*.h core/*.h host/*.h | $(B)
+$(B)/%.o: devices/%.c devices/*.h core/*.h host/*.h $(B)/.gfx-stamp | $(B)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(B)/test_classify: tests/test_classify.c tests/classify_cases.s $(B)/classify.o
@@ -232,26 +237,29 @@ IOS_SRC = $(wildcard core/*.c) host/prof_ios.c host/jit_region.c host/disk.c hos
           $(filter-out devices/pvg_mac.m,$(wildcard devices/*.c))
 IOS_OBJ = $(patsubst %.c,$(IB)/%.o,$(IOS_SRC)) $(IB)/host/enter.o $(IB)/devices/pvg_metal.o $(IB)/devices/vgpu_metal.o $(if $(GFX),$(IB)/devices/vgpu_virgl.o)
 
-$(IB)/core/mmu.o: core/mmu.c core/*.h host/*.h devices/*.h
+$(IB)/.gfx-stamp: FORCE
+	@mkdir -p $(IB)
+	@echo 'GFX=$(GFX)' | cmp -s - $@ || echo 'GFX=$(GFX)' > $@
+$(IB)/core/mmu.o: core/mmu.c core/*.h host/*.h devices/*.h $(IB)/.gfx-stamp
 	@mkdir -p $(dir $@)
 	$(IOS_CC) $(IOS_CFLAGS) -mgeneral-regs-only -c $< -o $@
-$(IB)/%.o: %.c core/*.h host/*.h devices/*.h
+$(IB)/%.o: %.c core/*.h host/*.h devices/*.h $(IB)/.gfx-stamp
 	@mkdir -p $(dir $@)
 	$(IOS_CC) $(IOS_CFLAGS) -c $< -o $@
-$(IB)/devices/pvg_metal.o: devices/pvg_metal.m devices/*.h core/*.h host/*.h
+$(IB)/devices/pvg_metal.o: devices/pvg_metal.m devices/*.h core/*.h host/*.h $(IB)/.gfx-stamp
 	@mkdir -p $(dir $@)
 	$(IOS_CC) $(IOS_CFLAGS) -fobjc-arc -Wno-unused-parameter -Wno-deprecated-declarations -c $< -o $@
-$(IB)/devices/vgpu_metal.o: devices/vgpu_metal.m devices/*.h core/*.h host/*.h
+$(IB)/devices/vgpu_metal.o: devices/vgpu_metal.m devices/*.h core/*.h host/*.h $(IB)/.gfx-stamp
 	@mkdir -p $(dir $@)
 	$(IOS_CC) $(IOS_CFLAGS) -fobjc-arc -c $< -o $@
-$(IB)/devices/vgpu_virgl.o: devices/vgpu_virgl.m devices/*.h core/*.h host/*.h
+$(IB)/devices/vgpu_virgl.o: devices/vgpu_virgl.m devices/*.h core/*.h host/*.h $(IB)/.gfx-stamp
 	$(call GFX_CHECK,$(IOS_GFX_DIR))
 	@mkdir -p $(dir $@)
 	$(IOS_CC) $(IOS_CFLAGS) -fobjc-arc -Wno-unused-parameter -I$(IOS_GFX_DIR)/include -c $< -o $@
 $(IB)/host/enter.o: host/enter.S
 	@mkdir -p $(dir $@)
 	$(IOS_CC) -c $< -o $@
-$(IB)/libhengevm.a: $(IOS_OBJ)
+$(IB)/libhengevm.a: $(IOS_OBJ) $(IB)/.gfx-stamp
 	rm -f $@
 	xcrun --sdk $(IOS_SDKNAME) libtool -static -o $@ $(IOS_OBJ)
 ios-lib: $(IB)/libhengevm.a

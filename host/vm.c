@@ -522,9 +522,9 @@ void hv_vm_destroy(void) {
     vgpu = (VgpuDisplay){0};
 #ifdef HV_GFX
     if (virgl) { /* the device drops its renderer objects first; the renderer goes before guest RAM */
-        hv_virtio_gpu_destroy(virt.gpu);
+        int freed = hv_virtio_gpu_destroy(virt.gpu);
         virt.gpu = NULL;
-        hv_vgpu_virgl_destroy(virgl);
+        if (freed) hv_vgpu_virgl_destroy(virgl); /* a stuck renderer is left too: its join has no time limit */
         virgl = NULL;
     }
 #endif

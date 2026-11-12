@@ -214,6 +214,7 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
     os_unfair_lock_unlock(&layer_lock);
     pthread_mutex_lock(&shadow_mu); /* snapshots read the surface under it */
     BOOL moved = !mode3d || res != res3d || s.x != rect3d_x || s.y != rect3d_y || s.width != src_w || s.height != src_h;
+    BOOL failed = NO;
     if (ops && (changed || moved)) {
         uint64_t serial = 0;
         uint32_t dw = s.width, dh = s.height;
@@ -233,12 +234,16 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
                 surf = NULL;
             }
         }
-        if (surf) CFRelease(surf);
+        if (!surf) failed = YES; /* the renderer has no texture yet; an idle guest sends no flush */
+        else CFRelease(surf);
     }
-    mode3d = YES, res3d = res, rect3d_x = s.x, rect3d_y = s.y;
+    if (failed) res3d = 0; /* res 0 is never a scanout, so the next present blits again */
+    else res3d = res;
+    mode3d = YES, rect3d_x = s.x, rect3d_y = s.y;
     src_w = s.width, src_h = s.height;
     if (surf3d) shown_once = YES;
     pthread_mutex_unlock(&shadow_mu);
+    if (failed) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), work, ^{ [self kick]; });
 }
 
 - (void)prepare:(CAMetalLayer *)target {
