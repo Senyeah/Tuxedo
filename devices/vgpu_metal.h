@@ -31,4 +31,14 @@ int hv_vgpu_metal_snapshot(HvVgpuMetal *p, uint8_t *bgra, uint32_t width, uint32
    when it is width x height. Returns how many drawables were captured; 0 for none. */
 uint64_t hv_vgpu_metal_drawn(HvVgpuMetal *p, uint8_t *bgra, uint32_t width, uint32_t height);
 
+/* Times of the 2D path, in ns: the device lock the presenter waited for and held (conversion happens under it),
+   the texture uploads, and the GPU. Counted from create. A BGRA or BGRX scanout of its resource's size is drawn in place:
+   no conversion, no upload. HV_VGPU_NO_DIRECT=1 turns that off. */
+typedef struct HvVgpuStats {
+    uint64_t pulls, pull_wait_ns, pull_hold_ns, pull_hold_max_ns, pull_bytes;
+    uint64_t uploads, upload_ns, upload_max_ns, upload_bytes;
+    uint64_t gpu_ns; /* the GPU's time on presented frames */
+} HvVgpuStats;
+void hv_vgpu_metal_stats(HvVgpuMetal *p, HvVgpuStats *out);
+
 #endif

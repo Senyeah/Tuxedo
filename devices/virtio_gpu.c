@@ -1,8 +1,11 @@
 #include "virtio_gpu.h"
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
 #include <time.h>
 
 #define CTRLQ 0
@@ -77,6 +80,46 @@ HvVgpuResource *hv_virtio_gpu_resource(HvVirtioGpu *g, uint32_t id) {
     return NULL;
 }
 
+struct HvVgpuPixels {
+    _Atomic uint32_t refs;
+    void *mem;
+    size_t len;
+};
+
+static HvVgpuPixels *pixels_new(uint64_t bytes) {
+    size_t page = (size_t)sysconf(_SC_PAGESIZE), len = (size_t)((bytes + page - 1) / page * page);
+    HvVgpuPixels *p = malloc(sizeof *p);
+    if (!p) return NULL;
+    p->mem = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0); /* zeroed, as calloc was */
+    if (p->mem == MAP_FAILED) {
+        free(p);
+        return NULL;
+    }
+    p->len = len;
+    atomic_init(&p->refs, 1);
+    return p;
+}
+
+HvVgpuPixels *hv_vgpu_pixels_retain(HvVgpuPixels *p) {
+    if (p) atomic_fetch_add_explicit(&p->refs, 1, memory_order_relaxed);
+    return p;
+}
+
+void hv_vgpu_pixels_release(HvVgpuPixels *p) {
+    if (p && atomic_fetch_sub_explicit(&p->refs, 1, memory_order_acq_rel) == 1) {
+        munmap(p->mem, p->len);
+        free(p);
+    }
+}
+
+void *hv_vgpu_pixels_data(const HvVgpuPixels *p) { return p->mem; }
+size_t hv_vgpu_pixels_len(const HvVgpuPixels *p) { return p->len; }
+
+static void free_pixels(HvVgpuResource *r) {
+    if (r->buf) hv_vgpu_pixels_release(r->buf);
+    else free(r->pixels);
+}
+
 static void drop_backing(HvVgpuResource *r) {
     free(r->backing);
     r->backing = NULL;
@@ -88,7 +131,7 @@ static void drop_resource(HvVirtioGpu *g, HvVgpuResource *r) {
     if (g->scanout_res == r->id) g->scanout_res = 0;
     g->hostmem -= (uint64_t)r->width * r->height * 4;
     drop_backing(r);
-    free(r->pixels);
+    free_pixels(r);
     memset(r, 0, sizeof *r);
 }
 
@@ -139,9 +182,9 @@ static uint32_t cmd_create(HvVirtioGpu *g, const uint8_t *req) {
     for (int i = 0; i < HV_VGPU_MAX_RESOURCES && !r; i++)
         if (!g->res[i].id) r = &g->res[i];
     if (!r) return RESP_ERR_OUT_OF_MEMORY;
-    uint8_t *pixels = calloc(1, bytes);
-    if (!pixels) return RESP_ERR_OUT_OF_MEMORY;
-    *r = (HvVgpuResource){.id = id, .format = format, .width = w, .height = h, .pixels = pixels};
+    HvVgpuPixels *buf = pixels_new(bytes);
+    if (!buf) return RESP_ERR_OUT_OF_MEMORY;
+    *r = (HvVgpuResource){.id = id, .format = format, .width = w, .height = h, .pixels = hv_vgpu_pixels_data(buf), .buf = buf};
     g->hostmem += bytes;
     return RESP_OK_NODATA;
 }
@@ -1097,7 +1140,7 @@ int hv_virtio_gpu_destroy(HvVirtioGpu *g) {
     pthread_mutex_unlock(&g->cmu);
     if (!clean) return 0; /* a stuck renderer may still call done() with a request of ours (now or from an earlier reset): leak the device */
     for (int i = 0; i < HV_VGPU_MAX_RESOURCES; i++) {
-        free(g->res[i].pixels);
+        free_pixels(&g->res[i]);
         free(g->res[i].backing);
     }
     for (int b = 0; b < HV_VGPU_RES3D_BUCKETS; b++)
