@@ -161,7 +161,7 @@ static uint64_t psci(HvCpu *cpu, uint64_t fn) {
         if (!t->off) return (uint64_t)-4;                    /* ALREADY_ON */
         while (!__atomic_load_n(&t->parked_off, __ATOMIC_SEQ_CST)) {
             if (cpu->halted || t->halted) return (uint64_t)-3; /* DENIED: machine is stopping */
-            sched_yield(); /* still on its way out of CPU_OFF */
+            hv_cpu_spin_yield(cpu); /* still on its way out of CPU_OFF */
         }
         uint64_t mpidr = t->mpidr, entry = cpu->x[2], context = cpu->x[3];
         if ((uint32_t)fn == 0x84000003) entry = (uint32_t)entry, context = (uint32_t)context;

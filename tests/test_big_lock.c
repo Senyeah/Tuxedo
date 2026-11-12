@@ -50,6 +50,21 @@ static const uint32_t prog[] = {
     0x17ffffff, /* b 0x10020 */
 };
 
+/* 0x10040: PSCI CPU_ON(mpidr 1, entry 0x10020, context 0), then SYSTEM_OFF */
+static const uint32_t cpu_on_prog[] = {
+    0x52800060, /* mov w0, #3 */
+    0x72b08000, /* movk w0, #0x8400, lsl #16 */
+    0xd2800021, /* mov x1, #1 */
+    0xd2800402, /* movz x2, #0x20 */
+    0xf2a00022, /* movk x2, #1, lsl #16 */
+    0xd2800003, /* mov x3, #0 */
+    0xd4000002, /* hvc #0 */
+    0x52800100, /* mov w0, #8 */
+    0x72b08000, /* movk w0, #0x8400, lsl #16 */
+    0xd4000002, /* hvc #0 */
+    0x14000000, /* b . */
+};
+
 static uint32_t *code;
 static pthread_t threads[2], kick_thread;
 
@@ -106,13 +121,51 @@ static void fair_turns(void) {
     hv_machine_free(&machine);
 }
 
+/* The target of CPU_ON is off but not parked yet, and only gets there once it has the lock the
+   caller holds. CPU_ON must hand the lock on while it waits, or both wait for ever. */
+static void *park_target(void *arg) {
+    if (arg) hv_big_lock(&machine);
+    else usleep(20000);
+    __atomic_store_n(&cpus[1].parked_off, 1, __ATOMIC_SEQ_CST);
+    if (arg) hv_big_unlock(&machine);
+    return NULL;
+}
+
+static void cpu_on_waits(int big, const char *what) {
+    if (hv_machine_init(&machine, 4 << 20)) exit(1);
+    hv_machine_add_ram(&machine, 0x10000, 16384, code, 1);
+    machine.big_lock_on = big;
+    atomic_store(&finished[0], 0);
+    for (int i = 0; i < 2; i++) hv_cpu_reset_index(&cpus[i], &machine, i);
+    cpus[0].pc = 0x10040;
+    cpus[1].mpidr = 1;
+    cpus[1].off = 1;
+    pthread_t cpu0, helper;
+    pthread_create(&cpu0, NULL, run_cpu, &cpus[0]);
+    if (big)
+        while (__atomic_load_n(&machine.big_next, __ATOMIC_SEQ_CST) == __atomic_load_n(&machine.big_serving, __ATOMIC_SEQ_CST)) usleep(100);
+    pthread_create(&helper, NULL, park_target, (void *)(intptr_t)big);
+    for (int n = 0; n < 3000 && !atomic_load(&finished[0]); n++) usleep(1000);
+    if (!atomic_load(&finished[0])) {
+        check(what, 0);
+        exit(1); /* CPU 0 cannot be released */
+    }
+    pthread_join(cpu0, NULL);
+    pthread_join(helper, NULL);
+    check("CPU_ON started the target", !cpus[1].off && cpus[1].pc == 0x10020);
+    hv_machine_free(&machine);
+}
+
 int main(void) {
     alarm(15);
     code = aligned_alloc(16384, 16384);
     if (!code) return 1;
     memcpy(code, prog, sizeof prog);
+    memcpy(code + 16, cpu_on_prog, sizeof cpu_on_prog);
     tlbi_while_queued();
     fair_turns();
+    cpu_on_waits(1, "CPU_ON under the big lock finishes");
+    cpu_on_waits(0, "CPU_ON without the big lock finishes");
     free(code);
     printf("Big lock: %d failures\n", failures);
     return failures != 0;

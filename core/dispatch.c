@@ -888,6 +888,20 @@ static void stop_the_world(HvCpu *cpu) {
     }
 }
 
+/* A wait inside an exit handler. With the big lock, the target of the wait may need the lock to get ready. */
+void hv_cpu_spin_yield(HvCpu *cpu) {
+    HvMachine *m = cpu->m;
+    if (!m->big_lock_on) {
+        sched_yield();
+        return;
+    }
+    park(cpu); /* a TLBI or flush of the holder must not wait for a CPU that is queued */
+    hv_big_unlock(m);
+    sched_yield();
+    hv_big_lock(m);
+    unpark(cpu);
+}
+
 int hv_run(HvCpu *cpu) {
     if (cpu->pc_state) cpu->pc_state->thread = mach_thread_self();
     hv_big_lock(cpu->m);

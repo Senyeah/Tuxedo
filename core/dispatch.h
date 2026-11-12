@@ -10,6 +10,10 @@ int hv_run(HvCpu *cpu);
 /* Runs a single block (after interrupt checks). */
 int hv_run_one(HvCpu *cpu);
 
+/* One wait step for a CPU that spins in an exit handler on another CPU (PSCI CPU_ON). Under the big
+   lock it hands the lock on, so the other CPU can get ready. */
+void hv_cpu_spin_yield(HvCpu *cpu);
+
 /* Drops every translated block (the JIT region is reused from the start). */
 void hv_flush_blocks(HvMachine *m);
 
