@@ -37,6 +37,15 @@ struct DisplayModePolicyTests {
         precondition(DisplayModePolicy.guestScale(shortSide: 1441, isPhone: false) == 2)
         precondition(DisplayModePolicy.guestScale(shortSide: 2160, isPhone: false) == 2)
 
+        // The phone's mode from the window in points.
+        let up = DisplayModePolicy.phoneMode(window: CGSize(width: 402, height: 874), insets: DisplayInsets(top: 62, left: 0, bottom: 34, right: 0), nativeScale: 3)
+        precondition(up == GuestMode(w: 1200, h: 2328))
+        let side = DisplayModePolicy.phoneMode(window: CGSize(width: 874, height: 402), insets: DisplayInsets(top: 0, left: 62, bottom: 20, right: 62), nativeScale: 3)
+        precondition(side == GuestMode(w: 2248, h: 1144))
+        // Drawn 1:1: at most 3 px (1 pt) short of the safe area.
+        let frame = DisplayModePolicy.framePoints(side, contentsScale: 3)
+        precondition(abs(frame.width - 749.33) < 0.01 && abs(frame.height - 381.33) < 0.01)
+
         let landscape = GuestMode(w: 2248, h: 1144), portrait = GuestMode(w: 1200, h: 2328)
         let tv = GuestMode(w: 3840, h: 2160)
 
@@ -89,6 +98,31 @@ struct DisplayModePolicyTests {
         // External with the same mode the guest already has: nothing is sent.
         f = ModeFollower(initial: tv)
         precondition(f.externalDisplay(tv, now: 0) == nil)
+
+        // Booted on an external screen: it holds the boot mode, rotation waits, unplugging returns the phone mode.
+        f = ModeFollower(initial: tv, phone: landscape, external: tv)
+        precondition(f.orientation(portrait, now: 0) == nil)
+        precondition(f.externalDisplay(tv, now: 1) == nil)
+        precondition(f.externalDisplay(nil, now: 2) == .init(mode: portrait, at: 3))
+
+        // External sizes: capped at 4K, rounded down to 8, insets taken off.
+        func ext(_ w: CGFloat, _ h: CGFloat) -> GuestMode { DisplayModePolicy.externalMode(pixels: CGSize(width: w, height: h)) }
+        precondition(ext(3840, 2160) == tv && ext(2560, 1440) == GuestMode(w: 2560, h: 1440))
+        precondition(ext(5120, 2880) == tv && ext(1366, 768) == GuestMode(w: 1360, h: 768))
+        precondition(DisplayModePolicy.externalMode(pixels: CGSize(width: 1920, height: 1080),
+                                                    insets: DisplayInsets(top: 20, left: 24, bottom: 20, right: 24)) == GuestMode(w: 1872, h: 1040))
+        precondition(DisplayModePolicy.guestScale(shortSide: 2160, isPhone: false) == 2 && DisplayModePolicy.guestScale(shortSide: 1440, isPhone: false) == 1)
+
+        // R9: a fixed choice wins, then a live screen, then the remembered one only if asked for.
+        let qhd = GuestMode(w: 2560, h: 1440), fhd = GuestMode(w: 1920, h: 1080)
+        let live = CGSize(width: 3840, height: 2160), mem = CGSize(width: 1920, height: 1080)
+        func target(_ fixed: GuestMode?, _ l: CGSize?, _ r: CGSize?, _ want: Bool) -> GuestMode? {
+            DisplayModePolicy.linuxTarget(fixed: fixed, live: l, remembered: r, wantsExternal: want)
+        }
+        precondition(target(qhd, live, mem, true) == qhd)
+        precondition(target(nil, live, mem, false) == tv && target(nil, live, mem, true) == tv)
+        precondition(target(nil, nil, mem, true) == fhd && target(nil, nil, mem, false) == nil)
+        precondition(target(nil, nil, nil, true) == nil)
 
         print("test_display_mode_policy: ok")
     }

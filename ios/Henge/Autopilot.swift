@@ -8,23 +8,25 @@ import UIKit
 /// Documents/henge-autopilot-once.txt is renamed to henge-autopilot.txt and followed, so the next
 /// launch runs nothing. Put the files there with devicectl device copy to. One command per line,
 /// picking up lines added later while it runs:
-///   mac [NAME]         start that Mac (the one used last without a name) once JIT is on
+///   start [NAME]       start that machine, a Mac or Linux (the one used last without a name) once JIT is on; mac is the same
 ///   wait SECONDS
-///   type TEXT          typed into the Mac (the log shows only how long it is)
+///   type TEXT          typed into the guest's keyboard (the log shows only how long it is)
+///   console TEXT       a line typed into a Linux machine's console, with Return (the log shows only how long it is)
+///   console-wait SECONDS TEXT   wait until TEXT is in the console's newest output, or SECONDS pass (the log says which)
 ///   key CODE           a Linux key code (28 is Return, 1 is Escape)
 ///   cmd KEY            KEY (a character, or space) with Command held
-///   move X Y, click X Y  the pointer to a spot on the Mac's screen (its pixels), and a click there
+///   move X Y, click X Y  the pointer to a spot on the guest's screen (its pixels), and a click there
 ///   pointer            where the pointer is now, into the log
 ///   knob NAME VALUE    a translation knob (core/machine.h)
-///   cpus N             the CPUs setting (1-6) for the next Mac started; it stays, so set it back afterwards
-///   env NAME [VALUE]   set (or unset) an engine environment setting for the next Mac started
-///   balloon MB         ask the Mac for that much of its memory back (HV_BALLOON set), log what it gave
+///   cpus N             the CPUs setting (1-6) for the next machine started; it stays, so set it back afterwards
+///   env NAME [VALUE]   set (or unset) an engine environment setting for the next machine started
+///   balloon MB         ask the guest for that much of its memory back (HV_BALLOON set), log what it gave
 ///   linux-catalogue URL   set the Linux catalogue URL and load it
 ///   linux-download ID  download that catalogue entry and wait; linux-delete ID removes it
 ///   linux-install ID NAME DISK_GB RAM_MB keep|delete  download, unpack and list a machine, then wait
-///   snap [NAME]        the Mac's screen (1920x1080) into Documents/NAME.jpg (snap.jpg)
+///   snap [NAME]        the guest's screen (1920x1080) into Documents/NAME.jpg (snap.jpg)
 ///   log TEXT           a marker in henge.log
-///   stop               stop the Mac
+///   stop               stop the machine
 ///   exit               quit Henge
 /// Each command is written to henge.log as it runs, so the log has the timeline.
 enum Autopilot {
@@ -54,7 +56,8 @@ enum Autopilot {
                 done += 1
                 if line.isEmpty || line.hasPrefix("#") { continue }
                 /* What is typed may be a password: the log gets its length only. */
-                HengeLog.log("autopilot", line.hasPrefix("type ") ? "type (\(line.count - 5) characters)" : line)
+                let typed = ["type ", "console "].first { line.hasPrefix($0) }
+                HengeLog.log("autopilot", typed.map { "\($0)(\(line.count - $0.count) characters)" } ?? line)
                 await perform(line, start: start)
             }
             try? await Task.sleep(nanoseconds: 500_000_000)
@@ -65,9 +68,9 @@ enum Autopilot {
         let parts = line.split(separator: " ", maxSplits: 1).map(String.init)
         let arg = parts.count > 1 ? parts[1] : ""
         switch parts[0] {
-        case "mac":
+        case "mac", "start":
             for _ in 0..<240 where !JITBootstrap.ready { try? await Task.sleep(nanoseconds: 500_000_000) }
-            guard JITBootstrap.ready else { HengeLog.log("autopilot", "JIT is not on; not starting a Mac"); return }
+            guard JITBootstrap.ready else { HengeLog.log("autopilot", "JIT is not on; not starting a machine"); return }
             let all: [VirtualMac] = Machines.shared.all
             var mac: VirtualMac?
             if arg.isEmpty {
@@ -76,7 +79,7 @@ enum Autopilot {
                 mac = all.first { $0.name.lowercased() == arg.lowercased() }
             }
             guard let mac else {
-                HengeLog.log("autopilot", "no Mac called \(arg); there are \(all.map(\.name))")
+                HengeLog.log("autopilot", "no machine called \(arg); there are \(all.map(\.name))")
                 return
             }
             start(mac)
@@ -84,6 +87,17 @@ enum Autopilot {
             try? await Task.sleep(nanoseconds: UInt64((Double(arg) ?? 0) * 1e9))
         case "type":
             await Keys.typeSlowly(arg)
+        case "console":
+            let bytes = Array((arg + "\r").utf8)
+            bytes.withUnsafeBufferPointer { henge_vm_console_write($0.baseAddress, $0.count) }
+        case "console-wait": // "console-wait 60 login:": the time limit first, as the text may hold spaces
+            let w = arg.split(separator: " ", maxSplits: 1).map(String.init)
+            guard w.count == 2, let seconds = Double(w[0]) else { HengeLog.log("autopilot", "console-wait wants SECONDS TEXT"); return }
+            let end = Date().addingTimeInterval(seconds)
+            while !Task.isCancelled, !(ConsoleModel.active?.tail.contains(w[1]) ?? false), Date() < end {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+            HengeLog.log("autopilot", "console-wait: \(ConsoleModel.active?.tail.contains(w[1]) == true ? "found" : "timed out")")
         case "key":
             if let code = UInt16(arg) { Keys.press(code) }
         case "move", "click": // guest display pixels: nudged there in small steps, as macOS accelerates big ones
@@ -112,7 +126,7 @@ enum Autopilot {
             let kv = arg.split(separator: " ")
             if kv.count == 2, let value = Int32(kv[1]) {
                 let found = henge_vm_knob(String(kv[0]), value)
-                HengeLog.log("autopilot", found != 0 ? "knob \(kv[0]) = \(value)" : "no knob \(kv[0]) (or no Mac running)")
+                HengeLog.log("autopilot", found != 0 ? "knob \(kv[0]) = \(value)" : "no knob \(kv[0]) (or no machine running)")
             }
         case "linux-catalogue": // "linux-catalogue URL": the catalogue setting, then load it
             UserDefaults.standard.set(arg, forKey: LinuxCatalogue.urlKey)
@@ -145,7 +159,7 @@ enum Autopilot {
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
             HengeLog.log("autopilot", "linux-install \(w[0]): \(LinuxInstaller.shared.phase)")
-        case "snap": // the Mac's screen, full size, into Documents/snap.jpg (or NAME.jpg): "snap", "snap safari"
+        case "snap": // the guest's screen, full size, into Documents/snap.jpg (or NAME.jpg): "snap", "snap safari"
             let name = arg.isEmpty ? "snap" : arg
             let url = docs.appendingPathComponent("\(name).jpg")
             if let image = MacPreview.capture(width: 1920, height: 1080),
@@ -154,14 +168,14 @@ enum Autopilot {
             } else {
                 HengeLog.log("autopilot", "snap: no screen to read")
             }
-        case "cpus": // "cpus 2": the CPU count the next Mac started gets (the CPUs setting, kept: put it back after a test)
+        case "cpus": // "cpus 2": the CPU count the next machine started gets (the CPUs setting, kept: put it back after a test)
             if let n = Int(arg), (1...6).contains(n) {
                 UserDefaults.standard.set(n, forKey: "henge.cpus")
                 HengeLog.log("autopilot", "cpus \(n) for the next start")
             } else {
                 HengeLog.log("autopilot", "cpus wants 1 to 6")
             }
-        case "env": // "env HV_QOS ui": an engine setting read when the next Mac starts (one not in henge-env.txt, which wins)
+        case "env": // "env HV_QOS ui": an engine setting read when the next machine starts (one not in henge-env.txt, which wins)
             let kv = arg.split(separator: " ", maxSplits: 1).map(String.init)
             if kv.count == 2 {
                 setenv(kv[0], kv[1], 1)
@@ -170,9 +184,9 @@ enum Autopilot {
                 unsetenv(kv[0])
                 HengeLog.log("autopilot", "env \(kv[0]) unset")
             }
-        case "balloon": // "balloon 2048": ask the Mac to hand 2 GB of its memory back (needs HV_BALLOON in henge-env.txt)
+        case "balloon": // "balloon 2048": ask the guest to hand 2 GB of its memory back (needs HV_BALLOON in henge-env.txt)
             let got = henge_vm_balloon(Int(arg) ?? -1)
-            HengeLog.log("autopilot", got < 0 ? "no balloon (set HV_BALLOON in henge-env.txt)" : "balloon: the Mac has handed over \(got) MB")
+            HengeLog.log("autopilot", got < 0 ? "no balloon (set HV_BALLOON in henge-env.txt)" : "balloon: the guest has handed over \(got) MB")
         case "log": // already in the log; the wall clock too, to line it up with things measured elsewhere
             HengeLog.log("autopilot", String(format: "at %.3f", Date().timeIntervalSince1970))
         case "stop":

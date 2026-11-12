@@ -15,10 +15,17 @@
 #import <TargetConditionals.h>
 #import <IOSurface/IOSurfaceRef.h>
 #include <string.h>
+#include <stdatomic.h>
 #include <sys/utsname.h>
+
+static _Atomic int cursor_scale_override;
+/* 0 returns to the saved size. An external monitor shows the guest 1:1, so 1 is right there. */
+void hv_pvg_set_cursor_scale(int scale) { atomic_store(&cursor_scale_override, scale); }
 
 /* 1080p shrunk onto a phone would make a normal pointer a few dots across; an iPad's screen needs less. */
 static int cursor_scale(void) {
+    int forced = atomic_load(&cursor_scale_override);
+    if (forced > 0) return forced;
 #if TARGET_OS_IPHONE
     NSInteger saved = [[NSUserDefaults standardUserDefaults] integerForKey:@"henge.cursor.scale"];
     if (saved >= 1 && saved <= 3) return (int)saved;

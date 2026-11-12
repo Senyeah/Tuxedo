@@ -11,6 +11,9 @@ final class ConsoleModel: NSObject, ObservableObject, TerminalViewDelegate {
     private(set) var cols = 80
     private(set) var rows = 24
     var accessory: UIView?
+    /// The newest output as text, for Autopilot's console-wait.
+    private(set) var tail = ""
+    static weak var active: ConsoleModel?
     private var timer: Timer?
     private var scratch = [UInt8](repeating: 0, count: 8192)
 
@@ -21,6 +24,8 @@ final class ConsoleModel: NSObject, ObservableObject, TerminalViewDelegate {
         view.nativeBackgroundColor = .black
         view.nativeForegroundColor = UIColor(white: 0.86, alpha: 1)
         view.contentInsetAdjustmentBehavior = .never
+        view.accessibilityLabel = "Console"
+        view.accessibilityHint = "Shows the machine's text output. Type to send keys to it."
         accessory = view.inputAccessoryView
         return view
     }
@@ -28,11 +33,13 @@ final class ConsoleModel: NSObject, ObservableObject, TerminalViewDelegate {
     /// A new machine starts with an empty terminal.
     func reset() {
         discardPending()
+        tail = ""
         terminal.feed(text: "\u{1b}c\u{1b}[3J")
     }
 
     func start() {
         stop()
+        Self.active = self
         let t = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.drain() }
         }
@@ -56,7 +63,10 @@ final class ConsoleModel: NSObject, ObservableObject, TerminalViewDelegate {
             if n == 0 { break }
             chunk.append(contentsOf: scratch[0..<n])
         }
-        if !chunk.isEmpty { terminal.feed(byteArray: chunk[...]) }
+        if !chunk.isEmpty {
+            terminal.feed(byteArray: chunk[...])
+            tail = String((tail + String(decoding: chunk, as: UTF8.self)).suffix(16384))
+        }
     }
 
     /// The serial line has no window size; this tells the guest ours. Only on request: it types into whatever runs.

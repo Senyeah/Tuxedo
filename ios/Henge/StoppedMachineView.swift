@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Terminal state after the engine has released the previous guest.
-struct StoppedMacView: View {
+/// Terminal state after the engine has released the previous guest (a Mac or a Linux machine).
+struct StoppedMachineView: View {
     var kind: GuestKind = .mac
     let outcome: Int32
     let reason: String
@@ -31,6 +31,6 @@ struct StoppedMacView: View {
         .padding(24)
         .frame(maxWidth: 360)
         .background(Color(white: 0.10), in: RoundedRectangle(cornerRadius: 22))
-        .accessibilityIdentifier("stopped-mac")
+        .accessibilityIdentifier("stopped-machine")
     }
 }

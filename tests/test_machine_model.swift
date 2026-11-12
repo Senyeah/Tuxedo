@@ -31,6 +31,14 @@ struct MachineModelTests {
         precondition(back[1].firmware.lastPathComponent == "u-boot.bin" && back[1].firmware.deletingLastPathComponent() == back[1].directory)
         precondition(String(decoding: data, as: UTF8.self).contains("\"kind\":\"linux\""))
 
+        // lastExternalScreen is optional: old JSON decodes without it, and a saved size round-trips.
+        precondition(old[0].lastExternalScreen == nil && back[1].lastExternalScreen == nil)
+        var withScreen = old[0]
+        withScreen.lastExternalScreen = PixelSize(width: 3840, height: 2160)
+        let screenData = try JSONEncoder().encode([withScreen])
+        precondition(MachineList.decode(screenData, diskExists: { _ in true })! == [withScreen])
+        precondition(String(decoding: screenData, as: UTF8.self).contains("\"lastExternalScreen\":{"))
+
         // A machine whose disk is gone is dropped; a damaged list is nil, not empty.
         precondition(MachineList.decode(data, diskExists: { $0.guest == .mac })!.map(\.name) == ["Sequoia"])
         precondition(MachineList.decode(Data("{".utf8)) == nil)
@@ -122,6 +130,21 @@ struct MachineModelTests {
         precondition(exported.kind == .linux && exported.name == "Deb")
         let macExp = MachineFolder.exportInfo(VirtualMac(name: "M", ecid: 7, seed: 9, ramMB: 2048, diskBytes: 0))
         precondition(macExp["kind"] == nil && macExp["ecid"] as? UInt64 == 7)
+
+        // R9: the screen choices are optional; old JSON decodes without them and saved ones round-trip.
+        precondition(old[0].screenFollowsExternal == nil && old[0].sharpText == nil && back[1].screenFollowsExternal == nil)
+        var chosen = linux
+        chosen.screenFollowsExternal = true
+        chosen.sharpText = true
+        chosen.screenWidth = ScreenPreset.qhd.width
+        chosen.screenHeight = ScreenPreset.qhd.height
+        let chosenData = try JSONEncoder().encode([chosen])
+        let chosenBack = MachineList.decode(chosenData, diskExists: { _ in true })!
+        precondition(chosenBack == [chosen] && chosenBack[0].screenFollowsExternal == true && chosenBack[0].sharpText == true)
+        precondition(String(decoding: chosenData, as: UTF8.self).contains("\"screenFollowsExternal\":true"))
+        // Without the fields they are left out of the JSON, so an older build reads the list.
+        precondition(!String(decoding: data, as: UTF8.self).contains("sharpText"))
+        precondition(ScreenPreset.fhd.denseMM == (width: 185, height: 104) && ScreenPreset.qhd.denseMM == (width: 246, height: 139))
 
         print("machine model: ok")
     }

@@ -58,6 +58,7 @@ struct LinuxInstallView: View {
                 ForEach(all) { r in
                     HStack(spacing: 0) {
                         Button { selected = r.id } label: { row(r) }.buttonStyle(.plain)
+                            .accessibilityAddTraits(image?.id == r.id ? .isSelected : [])
                         if LinuxDownload.present(r, in: LinuxInstaller.folder) > 0 {
                             Button { confirmDelete = r } label: {
                                 Image(systemName: "trash")

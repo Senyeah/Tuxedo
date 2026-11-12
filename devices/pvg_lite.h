@@ -39,6 +39,8 @@ void hv_pvg_metal_unmap(HvPvgMetal *m, uint32_t mapping);
 void hv_pvg_metal_cursor_moved(HvPvgMetal *m);
 /* Frames go to this CAMetalLayer from now on, drawn by the GPU. Any thread. */
 void hv_pvg_metal_set_layer(HvPvgMetal *m, void *layer);
+/* The pointer's enlargement for every display; 0 uses the saved setting. */
+void hv_pvg_set_cursor_scale(int scale);
 uint64_t hv_pvg_metal_gpu_frames(HvPvgMetal *m);
 void hv_pvg_lite_task_pages(HvPvgLite *p, uint32_t task, uint64_t first, uint64_t n, uint32_t *out);
 void hv_pvg_lite_set_layer(HvPvgLite *p, void *layer);
