@@ -7,7 +7,9 @@
 
 /* Shows a virtio GPU's scanout and cursor on a CAMetalLayer. A flush on the CPU thread only
    wakes the presenter; it copies the dirty rectangle and draws on its own queue, at most
-   60 times a second. The drawable is the scanout's size; the layer's contentsGravity fits it. */
+   60 times a second. The drawable has the scanout's shape, no larger than the display mode.
+   The presenter sets the layer's contentsGravity to resizeAspect, so the letterbox is the
+   layer's background, which the host sets. A scanout over 3840 x 2160 is kept scaled down. */
 typedef struct HvVgpuMetal HvVgpuMetal;
 
 /* Takes g's on_flush. NULL when there is no Metal device. */

@@ -168,6 +168,28 @@ static int black(void) {
     return 1;
 }
 
+/* Resource 5: 8192 x 4096, more pixels than the presenter keeps; black where not painted white. */
+#define BIG_W 8192
+#define BIG_H 4096
+static void paint_big(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    pthread_mutex_lock(&b.gpu->mu);
+    HvVgpuResource *r = hv_virtio_gpu_resource(b.gpu, 5);
+    for (uint32_t row = y; r && row < y + h; row++) memset(r->pixels + ((size_t)row * BIG_W + x) * 4, 0xff, w * 4ull);
+    pthread_mutex_unlock(&b.gpu->mu);
+}
+static int white_where(int (*in)(uint32_t x, uint32_t y)) {
+    for (uint32_t y = 0; y < H1; y++)
+        for (uint32_t x = 0; x < W1; x++) {
+            const uint8_t *px = shot + (y * W1 + x) * 4, v = in(x, y) ? 0xff : 0;
+            if (px[0] != v || px[1] != v || px[2] != v) return 0;
+        }
+    return 1;
+}
+static int in_right(uint32_t x, uint32_t y) { (void)y; return x >= W1 / 2; }
+static int in_three(uint32_t x, uint32_t y) { return x >= W1 / 2 || y < H1 / 2; }
+static int right_white(void) { return white_where(in_right); }
+static int three_white(void) { return white_where(in_three); }
+
 static int make_board(void) {
     return hv_machine_init(&m, 4 << 20) || hv_virt_create(&b, &m, cpus, 1, 64ull << 20, NULL, NULL);
 }
@@ -235,23 +257,24 @@ static void test_pixels(void) {
     uint64_t before = 0;
     for (double end = now() + 2; now() < end && !before; usleep(2000)) before = hv_vgpu_metal_drawn(p, drawn, W1, H1);
     check("drawables captured", before > 0, 1);
-    cursor(0x300, 20, 10, 4, 2, 3); /* the hot spot at (20, 10): the image from (18, 7) */
+    cursor(0x300, 20, 10, 4, 2, 3); /* Linux sends the image's top left; the hot spot does not move it */
     int ok = 0;
     for (double end = now() + 2; now() < end && !ok; usleep(2000)) {
         uint64_t n = hv_vgpu_metal_drawn(p, drawn, W1, H1);
-        ok = n > before && drawn[(7 * W1 + 18) * 4] == 0xff && drawn[(7 * W1 + 18) * 4 + 1] == 0xff;
+        ok = n > before && drawn[(10 * W1 + 20) * 4] == 0xff && drawn[(10 * W1 + 20) * 4 + 1] == 0xff;
     }
-    check("cursor drawn at its position less the hot spot", ok, 1);
-    check("cursor's last pixel", drawn[(14 * W1 + 25) * 4 + 2], 0xff);
-    check("left of the cursor: the screen", is1(drawn + (7 * W1 + 17) * 4, 17, 7, 1), 1);
-    check("right of the cursor: the screen", is1(drawn + (7 * W1 + 26) * 4, 26, 7, 1), 1);
-    check("below the cursor: the screen", is1(drawn + (15 * W1 + 18) * 4, 18, 15, 1), 1);
+    check("cursor image drawn at its position", ok, 1);
+    check("cursor's last pixel", drawn[(17 * W1 + 27) * 4 + 2], 0xff);
+    check("left of the cursor: the screen", is1(drawn + (10 * W1 + 19) * 4, 19, 10, 1), 1);
+    check("right of the cursor: the screen", is1(drawn + (10 * W1 + 28) * 4, 28, 10, 1), 1);
+    check("below the cursor: the screen", is1(drawn + (18 * W1 + 20) * 4, 20, 18, 1), 1);
+    check("not moved by the hot spot", is1(drawn + (7 * W1 + 18) * 4, 18, 7, 1), 1);
     check("the snapshot has no cursor", hv_vgpu_metal_snapshot(p, shot, W1, H1) == 0 && all1(), 1);
     cursor(0x301, 40, 20, 4, 0, 0); /* a move keeps the image and its hot spot */
     ok = 0;
     for (double end = now() + 2; now() < end && !ok; usleep(2000)) {
         hv_vgpu_metal_drawn(p, drawn, W1, H1);
-        ok = drawn[(17 * W1 + 38) * 4] == 0xff && is1(drawn + (7 * W1 + 18) * 4, 18, 7, 1);
+        ok = drawn[(20 * W1 + 40) * 4] == 0xff && is1(drawn + (10 * W1 + 20) * 4, 20, 10, 1);
     }
     check("cursor moved", ok, 1);
 
@@ -286,8 +309,25 @@ static void test_pixels(void) {
         ok = hv_vgpu_metal_drawn(p, drawn, W1, H1) && is1(drawn + (31 * W1 + 63) * 4, 63, 31, 2);
     check("the new layer shows what changed while there was none", ok, 1);
 
+    /* A scanout larger than the display mode (1920 x 1080) and the presenter's pixel limit. */
+    check("create a large resource", create(5, HV_VGPU_B8G8R8X8, BIG_W, BIG_H), OK);
+    paint_big(BIG_W / 2, 0, BIG_W / 2, BIG_H);
+    check("set a large scanout", scanout(5, BIG_W, BIG_H), OK);
+    check("large scanout shown scaled", wait_shot(p, W1, H1, right_white), 1);
+    ok = 0;
+    for (double end = now() + 2; now() < end && !ok; usleep(2000)) ok = hv_vgpu_metal_drawn(p, NULL, 1920, 960) > 0;
+    check("its drawable fits the display mode", ok, 1);
+    paint_big(0, 0, BIG_W / 2, BIG_H / 2);
+    flush(5, 0, 0, BIG_W / 2, BIG_H / 2);
+    check("a flushed part of a scaled scanout", wait_shot(p, W1, H1, three_white), 1);
+
     check("scanout off", scanout(0, 0, 0), OK);
     check("scanout off shows black", wait_shot(p, W1, H1, black), 1);
+    hv_virtio_gpu_set_mode(b.gpu, 800, 600);
+    hv_virtio_gpu_poll(b.gpu);
+    ok = 0;
+    for (double end = now() + 2; now() < end && !ok; usleep(2000)) ok = hv_vgpu_metal_drawn(p, NULL, 800, 600) > 0;
+    check("a mode change with the scanout off resizes the black screen", ok, 1);
 
     hv_vgpu_metal_destroy(p);
     check("flush callback released", b.gpu->on_flush == NULL && b.gpu->opaque == NULL, 1);
@@ -345,7 +385,12 @@ static void test_lifecycle(void) {
         flush(1, 0, 0, W1, H1); /* a present still queued at teardown */
         usleep(cycle * 3000);
         frames += hv_vgpu_metal_frames(swapping);
+        __weak id alive = (__bridge id)(void *)swapping;
+        if (!cycle) check("presenter tracked", alive != nil, 1);
         hv_vgpu_metal_destroy(swapping);
+        int freed = 0;
+        for (double end = now() + 2; now() < end && !freed; usleep(2000)) @autoreleasepool { freed = alive == nil; }
+        check("presenter freed after destroy", freed, 1);
         flush(1, 0, 0, W1, H1); /* the device outlives the presenter */
         hv_virt_destroy(&b);
         hv_machine_free(&m);

@@ -14,6 +14,7 @@
 #include "vgpu_metal.h"
 
 #define FRAME_NS (1000000000ull / 60)
+#define SHOW_MAX_PIXELS (3840u * 2160u) /* larger scanouts are shown scaled down, to bound host memory */
 #define CURSOR HV_VGPU_CURSOR
 
 static uint64_t now_ns(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
@@ -83,6 +84,8 @@ static NSString *const shaders = @"#include <metal_stdlib>\n"
     HvVgpuRect pending; /* shadow pixels not yet in tex */
     BOOL pending_set, cursor_stale, cursor_shown;
     int32_t cursor_x, cursor_y; /* the image's top left, in scanout pixels */
+    uint32_t src_w, src_h;      /* the scanout the shadow shows */
+    uint32_t mode_w, mode_h;    /* the drawable is no larger */
     uint64_t cursor_seen, retry_until, retry_generation;
     uint32_t cursor_px[CURSOR * CURSOR];
     id<MTLBuffer> readback;
@@ -127,25 +130,43 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
     d->dirty_set = 0;
     HvVgpuResource *r = hv_virtio_gpu_resource(d, d->scanout_res);
     HvVgpuRect s = d->scanout;
-    uint32_t W = r ? s.width : d->width, H = r ? s.height : d->height;
+    uint32_t SW = r ? s.width : d->width, SH = r ? s.height : d->height, W = SW, H = SH;
+    mode_w = d->width, mode_h = d->height;
+    if ((uint64_t)SW * SH > SHOW_MAX_PIXELS) {
+        double k = sqrt((double)SHOW_MAX_PIXELS / ((double)SW * SH));
+        W = (uint32_t)fmax(1, floor(SW * k)), H = (uint32_t)fmax(1, floor(SH * k));
+    }
     pthread_mutex_lock(&shadow_mu);
-    if (!shadow || W != shadow_w || H != shadow_h) {
+    if (!shadow || W != shadow_w || H != shadow_h || SW != src_w || SH != src_h) {
         uint8_t *fresh = calloc((size_t)W * H, 4);
         if (fresh) {
             free(shadow);
-            shadow = fresh, shadow_w = W, shadow_h = H;
-            dirty = (HvVgpuRect){0, 0, W, H}, had = YES;
+            shadow = fresh, shadow_w = W, shadow_h = H, src_w = SW, src_h = SH;
+            dirty = (HvVgpuRect){0, 0, SW, SH}, had = YES;
             pending_set = NO;
         } else {
             had = NO; /* keep the old picture */
         }
     }
-    if (had && shadow_w == W && shadow_h == H) {
-        dirty = clip(dirty, W, H);
+    if (had && src_w == SW && src_h == SH) {
+        dirty = clip(dirty, SW, SH);
+        if (W != SW || H != SH) { /* nearest pixel; the rectangle grows to whole shadow pixels */
+            uint32_t x0 = (uint32_t)((uint64_t)dirty.x * W / SW), y0 = (uint32_t)((uint64_t)dirty.y * H / SH);
+            uint32_t x1 = (uint32_t)(((uint64_t)(dirty.x + dirty.width) * W + SW - 1) / SW);
+            uint32_t y1 = (uint32_t)(((uint64_t)(dirty.y + dirty.height) * H + SH - 1) / SH);
+            dirty = dirty.width && dirty.height ? (HvVgpuRect){x0, y0, x1 - x0, y1 - y0} : (HvVgpuRect){0, 0, 0, 0};
+        }
         for (uint32_t y = 0; y < dirty.height; y++) {
             uint8_t *to = shadow + ((size_t)(dirty.y + y) * W + dirty.x) * 4;
-            if (r) to_bgra(to, r->pixels + ((uint64_t)(s.y + dirty.y + y) * r->width + s.x + dirty.x) * 4, dirty.width, r->format);
-            else memset(to, 0, dirty.width * 4ull); /* scanout off */
+            if (!r) {
+                memset(to, 0, dirty.width * 4ull); /* scanout off */
+            } else if (W == SW) {
+                to_bgra(to, r->pixels + ((uint64_t)(s.y + dirty.y + y) * r->width + s.x + dirty.x) * 4, dirty.width, r->format);
+            } else {
+                const uint8_t *row = r->pixels + ((uint64_t)s.y + (uint64_t)(dirty.y + y) * SH / H) * r->width * 4;
+                for (uint32_t x = 0; x < dirty.width; x++)
+                    to_bgra(to + x * 4ull, row + (s.x + (uint64_t)(dirty.x + x) * SW / W) * 4, 1, r->format);
+            }
         }
         if (r) shown_once = YES;
         if (dirty.width && dirty.height) pending = join(pending, pending_set, dirty), pending_set = YES;
@@ -154,8 +175,8 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
     if (d->cursor.updates != cursor_seen) {
         cursor_seen = d->cursor.updates;
         cursor_shown = d->cursor.resource != 0;
-        /* The guest's position is the hot spot's. */
-        cursor_x = d->cursor.x - (int32_t)d->cursor.hot_x, cursor_y = d->cursor.y - (int32_t)d->cursor.hot_y;
+        /* The image's top left, as Linux sends crtc_x; the pointer itself is at pos + hot. */
+        cursor_x = d->cursor.x, cursor_y = d->cursor.y;
         memset(cursor_px, 0, sizeof cursor_px);
         if (cursor_shown) {
             for (uint32_t y = 0; y < d->cursor.height; y++) {
@@ -179,6 +200,7 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
     target.framebufferOnly = !capture; /* a capture copies the drawable out */
     target.allowsNextDrawableTimeout = YES;
     target.maximumDrawableCount = 3;
+    target.contentsGravity = kCAGravityResizeAspect; /* the letterbox is the layer's: the drawable has the scanout's shape */
     [CATransaction commit];
     prepared = target;
 }
@@ -220,7 +242,8 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
         [cursor_tex replaceRegion:MTLRegionMake2D(0, 0, CURSOR, CURSOR) mipmapLevel:0 withBytes:cursor_px bytesPerRow:CURSOR * 4];
         cursor_stale = NO;
     }
-    CGSize want = CGSizeMake(W, H);
+    double SW = src_w, SH = src_h, fit = fmin(1, fmin(mode_w / SW, mode_h / SH)); /* no larger than the display */
+    CGSize want = CGSizeMake(fmax(1, round(SW * fit)), fmax(1, round(SH * fit)));
     if (!CGSizeEqualToSize(target.drawableSize, want)) {
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
@@ -235,11 +258,11 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
     retry_until = 0;
     id<MTLTexture> out = drawable.texture;
     double DW = out.width, DH = out.height;
-    double k = fmin(DW / W, DH / H), iw = W * k, ih = H * k, ox = floor((DW - iw) / 2), oy = floor((DH - ih) / 2);
+    double k = fmin(DW / SW, DH / SH), iw = SW * k, ih = SH * k, ox = floor((DW - iw) / 2), oy = floor((DH - ih) / 2);
     id<MTLCommandBuffer> cb = [queue commandBuffer];
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
     pass.colorAttachments[0].texture = out;
-    pass.colorAttachments[0].loadAction = MTLLoadActionClear; /* the letterbox */
+    pass.colorAttachments[0].loadAction = MTLLoadActionClear; /* rounding's edge */
     pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
     pass.colorAttachments[0].storeAction = MTLStoreActionStore;
     id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:pass];
@@ -247,12 +270,12 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
     [e setRenderPipelineState:screen_pipe];
     [e setVertexBytes:rect length:sizeof rect atIndex:0];
     [e setFragmentTexture:tex atIndex:0];
-    [e setFragmentSamplerState:k == 1 ? nearest : linear atIndex:0];
+    [e setFragmentSamplerState:iw == W && ih == H ? nearest : linear atIndex:0];
     [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
     if (cursor_shown) {
         NSUInteger sx = (NSUInteger)ox, sy = (NSUInteger)oy;
         NSUInteger sw = (NSUInteger)fmin(iw, DW - sx), sh = (NSUInteger)fmin(ih, DH - sy);
-        [e setScissorRect:(MTLScissorRect){sx, sy, sw, sh}]; /* not over the letterbox */
+        [e setScissorRect:(MTLScissorRect){sx, sy, sw, sh}]; /* not over the edge */
         double cx = ox + cursor_x * k, cy = oy + cursor_y * k, cs = CURSOR * k;
         float c[4] = {(float)(cx / DW * 2 - 1), (float)(1 - (cy + cs) / DH * 2), (float)(cs / DW * 2), (float)(cs / DH * 2)};
         [e setRenderPipelineState:cursor_pipe];
@@ -304,6 +327,7 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
     @autoreleasepool {
         [last_cb waitUntilCompleted]; /* the GPU must be done with tex before it is rewritten */
         last_cb = nil;
+        if (capture) dispatch_group_wait(completions, DISPATCH_TIME_FOREVER); /* and the last capture with readback */
         [self pull];
         os_unfair_lock_lock(&layer_lock);
         CAMetalLayer *target = layer;
