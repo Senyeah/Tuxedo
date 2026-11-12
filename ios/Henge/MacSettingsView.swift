@@ -137,6 +137,7 @@ struct MacSettingsView: View {
                     .padding(.vertical, 14)
                     .contentShape(Rectangle())
                 }
+                .accessibilityAddTraits(linuxChoice == row.0 ? .isSelected : [])
             }
         }
         .deskCard()
