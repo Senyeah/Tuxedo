@@ -59,7 +59,10 @@ if [ "$DIRECT" = 1 ]; then
     set -- "$@" -kernel "$OUT/Image" -initrd "$OUT/initrd.img" \
         -append "root=PARTUUID=$PARTUUID rw console=ttyAMA0 console=tty0"
 else
-    set -- "$@" -bios "$OUT/u-boot.bin"
+    # The stock build keeps the countdown that qemu-check.py stops (P2)
+    FW=$OUT/u-boot-stock.bin
+    [ -f "$FW" ] || FW=$OUT/u-boot.bin
+    set -- "$@" -bios "$FW"
 fi
 
 exec "$QEMU" "$@"

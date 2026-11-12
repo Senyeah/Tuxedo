@@ -201,7 +201,10 @@ def main():
     ap.add_argument("--json", default=None)
     a = ap.parse_args()
     a.dir = a.dir or linux_dir()
-    files = (os.path.join(a.dir, "Image"), os.path.join(a.dir, "initrd.img"), os.path.join(a.dir, "u-boot.bin"))
+    # The countdown is stopped to type commands, so use the stock build when there is one (P2)
+    fw = next((f for f in (os.path.join(a.dir, "u-boot-stock.bin"), os.path.join(a.dir, "u-boot.bin")) if os.path.exists(f)),
+              os.path.join(a.dir, "u-boot.bin"))
+    files = (os.path.join(a.dir, "Image"), os.path.join(a.dir, "initrd.img"), fw)
     for f in files + (a.hengevm,):
         if not os.path.exists(f):
             sys.exit(f"missing {f}")
