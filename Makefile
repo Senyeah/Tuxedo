@@ -105,6 +105,14 @@ $(B)/test_console: tests/test_console.c $(ENGINE) $(DEV) $(B)/vm.o $(B)/audio_ma
 $(B)/test_virt: tests/test_virt.c $(ENGINE) $(DEV) $(B)/vm.o $(B)/audio_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/usb_host.o
 	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -o $@
 
+$(B)/virt-dtb: tools/linux/virt-dtb.c $(ENGINE) $(DEV) $(B)/vm.o $(B)/audio_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/usb_host.o
+	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -o $@
+
+# Henge's virt device tree against QEMU's (needs qemu-system-aarch64, dtc and uv).
+test-linux-dtb: $(B)/virt-dtb
+	uv run tools/linux/dtb-compare.py
+.PHONY: test-linux-dtb
+
 test-vm-lifecycle: $(B)/test_vm_lifecycle
 	$(B)/test_vm_lifecycle
 .PHONY: test-vm-lifecycle
