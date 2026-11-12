@@ -11,6 +11,11 @@ struct BootDisplay: View {
     let role: DisplayTargetSelection.Role
     /// The id this view's layer connects to the router under.
     var surface = UUID()
+    /// A Linux guest has no Apple logo; its console shows over the screen while `showConsole` is set.
+    var guest: GuestKind = .mac
+    var console: ConsoleModel?
+    var showConsole = false
+    var typing: Binding<Bool> = .constant(false)
 
     @State private var image: CGImage?
     @State private var gpuLive = false
@@ -22,7 +27,7 @@ struct BootDisplay: View {
         ZStack {
             Color.black
             if !stopped {
-                if !gpuLive {
+                if !gpuLive && guest == .mac {
                     if let image {
                         Image(decorative: image, scale: 1).resizable().interpolation(.medium).aspectRatio(contentMode: .fit)
                         if image.height > image.width {
@@ -40,6 +45,7 @@ struct BootDisplay: View {
                           matchScreenColors: matchScreenColors, brightness: screenBrightness)
                     .allowsHitTesting(false)
             }
+            if let console, showConsole { ConsoleView(model: console, typing: typing) }
         }
         .task {
             var generation = henge_vm_generation()
@@ -62,7 +68,7 @@ struct BootDisplay: View {
                         gpuLive = true
                         image = nil
                     }
-                    if !gpuLive { image = Self.snapshot() ?? image }
+                    if !gpuLive && guest == .mac { image = Self.snapshot() ?? image }
                 }
                 try? await Task.sleep(nanoseconds: gpuLive ? 250_000_000 : 100_000_000)
             }

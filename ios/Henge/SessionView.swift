@@ -49,6 +49,13 @@ struct SessionView: View {
     @State private var helperRunning = false
     @State private var shown = CGSize(width: 0.5, height: 0.5) // how much of the Mac's screen the zoomed view shows
     @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var console = ConsoleModel()
+    // Linux starts on the console: U-Boot draws on the GPU at once, so "until the GPU draws" would never show it.
+    @State private var consoleChoice = ConsoleChoice.console
+
+    private enum ConsoleChoice { case screen, console }
+
+    private var consoleShown: Bool { mac.guest == .linux && consoleChoice == .console }
 
 
     var body: some View {
@@ -57,11 +64,13 @@ struct SessionView: View {
             let full = CGSize(width: geo.size.width + insets.leading + insets.trailing,
                               height: geo.size.height + insets.top + insets.bottom)
             let landscape = full.width > full.height
-            let layout = Layout(full: full, insets: insets, landscape: landscape, zoomed: zoomed, typing: typing, centre: zoomCentre, aspect: mac.aspect)
+            let layout = Layout(full: full, insets: insets, landscape: landscape, zoomed: zoomed && !consoleShown, typing: typing,
+                                centre: zoomCentre, aspect: mac.aspect, console: consoleShown)
             ZStack(alignment: .topLeading) {
                 (landscape || zoomed ? Color.black : Desk.page)
                 // One view in every layout: it holds the layer the engine draws into.
-                BootDisplay(display: display, role: .device)
+                BootDisplay(display: display, role: .device, guest: mac.guest, console: console,
+                            showConsole: consoleShown, typing: $typing)
                     .opacity(display.isExternal ? 0 : 1)
                     .overlay {
                         if display.isExternal && state != 2 {
@@ -86,15 +95,17 @@ struct SessionView: View {
                     }
                     .position(x: layout.screen.midX, y: layout.screen.midY)
                 if state != 2 {
-                    Trackpad()
-                        .frame(width: layout.touch.width, height: layout.touch.height)
-                        .position(x: layout.touch.midX, y: layout.touch.midY)
-                    if inputMode == .volumeButtons && volumeMode == .intercept {
-                        // The capture interaction must live in the SwiftUI hierarchy to receive
-                        // the volume-button events; it passes touches through to the trackpad.
-                        CaptureInteractionView()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .allowsHitTesting(false)
+                    if !consoleShown { // the console takes touches itself
+                        Trackpad()
+                            .frame(width: layout.touch.width, height: layout.touch.height)
+                            .position(x: layout.touch.midX, y: layout.touch.midY)
+                        if inputMode == .volumeButtons && volumeMode == .intercept {
+                            // The capture interaction must live in the SwiftUI hierarchy to receive
+                            // the volume-button events; it passes touches through to the trackpad.
+                            CaptureInteractionView()
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .allowsHitTesting(false)
+                        }
                     }
                     if !layout.fillsPhone {
                         uprightControls(layout)
@@ -142,7 +153,7 @@ struct SessionView: View {
                 }
                 if let error { errorCard(error, layout) }
                 if shutdownAsked != nil && state != 2 { shutdownCard(layout) }
-                KeyboardCatcher(active: $typing).frame(width: 0, height: 0)
+                KeyboardCatcher(active: $typing, suspended: consoleShown).frame(width: 0, height: 0)
             }
             .frame(width: full.width, height: full.height)
             .ignoresSafeArea()
@@ -202,6 +213,7 @@ struct SessionView: View {
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
             zoomFollowing?.cancel()
+            console.stop()
             StickyKeys.shared.releaseAll()
             HardwareKeys.releaseAll()
             HardwareMouse.shared.stop()
@@ -231,10 +243,29 @@ struct SessionView: View {
             CGSize(width: min(touch.width / max(screen.width, 1), 1), height: min(touch.height / max(screen.height, 1), 1))
         }
 
-        init(full: CGSize, insets: EdgeInsets, landscape: Bool, zoomed: Bool, typing: Bool, centre: CGPoint, aspect: CGFloat) {
+        init(full: CGSize, insets: EdgeInsets, landscape: Bool, zoomed: Bool, typing: Bool, centre: CGPoint, aspect: CGFloat,
+             console: Bool) {
             self.insets = insets
             let big = full.height >= 600 // an iPad on its side, or a window on one
-            if zoomed {
+            if console && landscape {
+                // Below the control pill; insets.bottom holds the keyboard while it is up.
+                let top = insets.top + 58
+                screen = CGRect(x: insets.leading, y: top, width: full.width - insets.leading - insets.trailing,
+                                height: max(full.height - insets.bottom - top, 100))
+                touch = CGRect(origin: .zero, size: full)
+                fillsPhone = true
+                toolsY = 0
+                pad = .zero
+            } else if console {
+                // The console takes the room the trackpad has; the bar sits under it, above the keyboard.
+                let top = insets.top + 6
+                let height = max(full.height - insets.bottom - top - 54 - 20, 100)
+                screen = CGRect(x: 8, y: top, width: full.width - 16, height: height)
+                touch = screen
+                fillsPhone = false
+                toolsY = screen.maxY + 10
+                pad = screen
+            } else if zoomed {
                 // Upright, as tall as the device. On its side, bigger than it fits: a big screen needs less.
                 let height = landscape ? full.height * (big ? 1.5 : 2) : max(full.height - insets.bottom, full.width / aspect)
                 let width = height * aspect
@@ -287,15 +318,27 @@ struct SessionView: View {
     // MARK: Upright
 
     @ViewBuilder private func uprightControls(_ layout: Layout) -> some View {
-        if !typing && !controlsHidden {
+        if (!typing || consoleShown) && !controlsHidden {
             HStack {
-                tool("eye.slash", "Hide controls") { hideControls() }
-                Spacer()
-                tool("keyboard", "Keyboard") { typing = true }
+                if consoleShown {
+                    viewSwitch()
+                } else {
+                    tool("eye.slash", "Hide controls") { hideControls() }
+                    Spacer()
+                    if mac.guest == .linux {
+                        viewSwitch()
+                        Spacer()
+                    }
+                }
+                tool("keyboard", "Keyboard") { typing.toggle() }
                 Spacer()
                 pasteTool
                 Spacer()
-                tool("plus.magnifyingglass", "Zoom in") { zoomed = true }
+                if consoleShown {
+                    fitTool()
+                } else {
+                    tool("plus.magnifyingglass", "Zoom in") { zoomed = true }
+                }
                 Spacer()
                 tool("info.circle", "Details") { showDetails = true }
                 Spacer()
@@ -308,7 +351,7 @@ struct SessionView: View {
             .position(x: layout.pad.midX, y: layout.toolsY + 27)
             .transition(.opacity)
         }
-        trackpadPanel(layout)
+        if !consoleShown { trackpadPanel(layout) }
     }
 
     private func trackpadPanel(_ layout: Layout) -> some View {
@@ -351,7 +394,7 @@ struct SessionView: View {
     /// The system's paste button: iOS asks no permission for it, as it would if the app read the clipboard itself.
     private var pasteTool: some View {
         PasteButton(payloadType: String.self) { texts in
-            if let text = texts.first { Sharing.paste(text, guest: mac.guest) }
+            if let text = texts.first { Sharing.paste(text, guest: mac.guest, console: consoleShown) }
         }
         .labelStyle(.iconOnly)
         .buttonBorderShape(.circle)
@@ -366,6 +409,27 @@ struct SessionView: View {
         revealHintsShown += 1
         showRevealHint = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { showRevealHint = false }
+    }
+
+    /// Linux: the screen and the serial console are both always there; this shows the other one.
+    private func viewSwitch(tint: Color = Desk.text) -> some View {
+        tool(consoleShown ? "display" : "terminal", consoleShown ? "Show the screen" : "Show the console", tint: tint) {
+            zoomed = false
+            controlsHidden = false
+            consoleChoice = consoleShown ? .screen : .console
+        }
+    }
+
+    /// Tells the guest the console's size, on request only.
+    private func fitTool(tint: Color = Desk.text) -> some View {
+        Button { console.fit() } label: {
+            Text("Fit")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Fit the console to the view")
     }
 
     private func tool(_ symbol: String, _ label: String, tint: Color = Desk.text, action: @escaping () -> Void) -> some View {
@@ -385,10 +449,19 @@ struct SessionView: View {
         let landscape = layout.touch.width > layout.touch.height
         let top = layout.insets.top + (landscape ? 8 : 6)
         let pill = HStack(spacing: 4) {
-            tool("eye.slash", "Hide controls", tint: .white) { hideControls() }
+            if consoleShown {
+                viewSwitch(tint: .white)
+            } else {
+                tool("eye.slash", "Hide controls", tint: .white) { hideControls() }
+                if mac.guest == .linux { viewSwitch(tint: .white) }
+            }
             tool("keyboard", "Keyboard", tint: .white) { typing.toggle() }
             pasteTool
-            tool(zoomed ? "minus.magnifyingglass" : "plus.magnifyingglass", zoomed ? "Zoom out" : "Zoom in", tint: zoomed ? Desk.accentLight : .white) { zoomed.toggle() }
+            if consoleShown {
+                fitTool(tint: .white)
+            } else {
+                tool(zoomed ? "minus.magnifyingglass" : "plus.magnifyingglass", zoomed ? "Zoom out" : "Zoom in", tint: zoomed ? Desk.accentLight : .white) { zoomed.toggle() }
+            }
             tool("info.circle", "Details", tint: .white) { showDetails = true }
             Rectangle().fill(Color.white.opacity(0.3)).frame(width: 1, height: 22).padding(.horizontal, 4)
             tool("power", "Shut down", tint: Desk.bad) { stopTapped() }
@@ -615,6 +688,11 @@ struct SessionView: View {
         showWallpaperTip = false
         shutdownAsked = nil
         shutdownOverdue = false
+        consoleChoice = .console
+        if mac.guest == .linux {
+            console.reset()
+            console.start()
+        }
         while henge_vm_state() == 3 && !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }

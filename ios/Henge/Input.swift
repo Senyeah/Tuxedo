@@ -6,12 +6,15 @@ import UIKit
 /// hardware keyboard works whether or not that is open.
 struct KeyboardCatcher: UIViewRepresentable {
     @Binding var active: Bool
+    /// The console view holds the keyboard instead.
+    var suspended = false
 
     func makeUIView(context: Context) -> Holder { Holder() }
 
     func updateUIView(_ view: Holder, context: Context) {
         view.typer.onHide = { active = false }
         view.typing = active
+        view.suspended = suspended
         DispatchQueue.main.async { view.takeKeyboard() }
     }
 
@@ -19,6 +22,7 @@ struct KeyboardCatcher: UIViewRepresentable {
         let listener = KeyListener()
         let typer = CatcherView()
         var typing = false
+        var suspended = false
         private var hiding: NSObjectProtocol?
 
         override init(frame: CGRect) {
@@ -53,6 +57,11 @@ struct KeyboardCatcher: UIViewRepresentable {
         /// Called often, which also takes the keyboard back after a sheet has had it.
         func takeKeyboard() {
             guard let window, window.rootViewController?.presentedViewController == nil else { return }
+            if suspended {
+                if typer.isFirstResponder { typer.resignFirstResponder() }
+                if listener.isFirstResponder { listener.resignFirstResponder() }
+                return
+            }
             let holder: UIView = typing ? typer : listener
             if !holder.isFirstResponder { holder.becomeFirstResponder() }
         }
