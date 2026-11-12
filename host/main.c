@@ -1191,7 +1191,7 @@ int main(int argc, char **argv) {
     setvbuf(stderr, NULL, _IONBF, 0);
 
     HvVmConfig vc = {.rom = virt ? (dump_dtb ? NULL : firmware) : rom, .disk = disk_path, .aux = aux_path,
-                     .kernel = dump_dtb ? NULL : kernel, .initrd = initrd, .cmdline = append,
+                     .kernel = dump_dtb ? NULL : kernel, .initrd = dump_dtb ? NULL : initrd, .cmdline = dump_dtb ? NULL : append,
                      .aux_offset = aux_offset, .ecid = ecid, .seed = seed,
                      .ram_mb = ram_mb, .ncpus = ncpus, .log = log, .no_net = dump_dtb || getenv("HV_NO_NET") != NULL,
                      .no_sound = dump_dtb != NULL, .installer = install_ipsw != NULL};
