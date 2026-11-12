@@ -164,6 +164,45 @@ static void test_xhci(void) {
     check("ep0 halted", rd32(&m, out + 32) & 7, 2);
     /* xhci_hcd skips the stalled TD from here; a stale pointer sent it back to the one before. */
     check("ep0 dequeue at the stalled TRB", rd64(&m, out + 32 + 8), (ep0 + 48) | 1);
+
+    /* U-Boot's keyboard poll waits 5 s for each report unless the keyboard keeps SET_IDLE. */
+    uint64_t intr = mem + 0x7800;
+    put_trb(cmd + 32, 0, 0, 14u << 10 | 1u << 16 | 1u << 24);             /* Reset Endpoint, ep0 */
+    put_trb(cmd + 48, (ep0 + 96) | 1, 0, 16u << 10 | 1u << 16 | 1u << 24); /* Set TR Dequeue past the stall */
+    wr32(&m, in, 0);
+    wr32(&m, in + 4, 1u << 3 | 1);                 /* add the slot and EP1 IN (DCI 3) */
+    wr32(&m, in + 128 + 4, 8u << 16 | 7u << 3);    /* interrupt IN, 8 bytes */
+    wr64(&m, in + 128 + 8, intr | 1);
+    put_trb(cmd + 64, in, 0, 12u << 10 | 1u << 24); /* Configure Endpoint */
+    wr32(&m, bar + DB, 0);
+    put_trb(intr, buf + 0x100, 8, 1u << 10 | 1u << 5);
+    memset(hv_phys_ptr(&m, buf + 0x100, 8), 0xee, 8);
+    wr32(&m, bar + DB + 4, 3);
+    hv_xhci_poll(b.usb);
+    check("no report without a change or an idle rate", rd32(&m, buf + 0x100), 0xeeeeeeee);
+    const uint64_t set_idle = 0x000000000a000a21ull, get_idle = 0x00010000000002a1ull; /* 40 ms */
+    put_trb(ep0 + 96, set_idle, 8, 2u << 10 | 1u << 6);
+    put_trb(ep0 + 112, 0, 0, 4u << 10 | 1u << 16 | 1u << 5);
+    put_trb(ep0 + 128, get_idle, 8, 2u << 10 | 1u << 6 | 3u << 16);
+    put_trb(ep0 + 144, buf + 0x200, 1, 3u << 10 | 1u << 16);
+    put_trb(ep0 + 160, 0, 0, 4u << 10 | 1u << 5);
+    wr32(&m, bar + DB + 4, 1);
+    check("GET_IDLE gives SET_IDLE's rate", rd32(&m, buf + 0x200) & 0xff, 0x0a);
+    hv_xhci_poll(b.usb);
+    check("an idle report carries the current state", rd32(&m, buf + 0x100), 0);
+    put_trb(intr + 16, buf + 0x108, 8, 1u << 10 | 1u << 5);
+    memset(hv_phys_ptr(&m, buf + 0x108, 8), 0xee, 8);
+    wr32(&m, bar + DB + 4, 3);
+    hv_xhci_poll(b.usb);
+    check("no second report inside the idle time", rd32(&m, buf + 0x108), 0xeeeeeeee);
+    usleep(60 * 1000);
+    hv_xhci_poll(b.usb);
+    check("a report again after the idle time", rd32(&m, buf + 0x108), 0);
+    int done = 0;
+    for (int i = 0; i < 64 && (rd32(&m, ev + 16u * i + 12) & 1); i++)
+        if ((rd32(&m, ev + 16u * i + 12) >> 10 & 0x3f) == 32 && rd32(&m, ev + 16u * i + 8) >> 24 == 1)
+            done += rd64(&m, ev + 16u * i) == intr || rd64(&m, ev + 16u * i) == intr + 16;
+    check("both idle reports complete their transfers", done, 2);
     wr32(&m, bar + OP, 0);
     wr32(&m, cfg + 0x04, 0);
 }

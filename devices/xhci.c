@@ -405,8 +405,11 @@ static int control(HvXhci *x, int slot, const uint8_t setup[8], uint8_t *out, in
             }
         }
     } else if (type == 0xa1 && (req == 2 || req == 3)) { /* GET_IDLE, GET_PROTOCOL */
-        tmp[0] = req == 3 ? 1 : 0;
+        tmp[0] = req == 3 ? 1 : x->slots[slot].dev == 0 ? (uint8_t)(x->kbd_idle_ms / 4) : 0;
         src = tmp, len = 1;
+    } else if (type == 0x21 && req == 0x0a && x->slots[slot].dev == 0) { /* SET_IDLE, in 4 ms units */
+        x->kbd_idle_ms = (uint32_t)(value >> 8) * 4;
+        return 0;
     } else if ((type & 0x60) == 0x20 || (type == 0x00 && (req == 1 || req == 3)) || (type == 0x01 && req == 11) ||
                (type == 0x02 && (req == 1 || req == 3)) ||
                ((type & 0x60) == 0x40 && x->slots[slot].dev == 1)) {
@@ -487,6 +490,8 @@ static void run_ep0(HvXhci *x, int slot) {
     }
 }
 
+static uint32_t tp_now_ms(void);
+
 /* Give the device's waiting reports to the interrupt IN endpoint's posted transfers. */
 static void run_ep_in(HvXhci *x, int slot) {
     struct HvXhciSlot *s = &x->slots[slot];
@@ -498,15 +503,24 @@ static void run_ep_in(HvXhci *x, int slot) {
     uint64_t at;
     pthread_mutex_lock(&x->mu);
     if (s->dev == 0) {
-        while (x->rhead != x->rtail && ring_peek(x, r, trb, &at)) {
+        /* U-Boot's keyboard poll waits 5 s for a report, so the idle rate it sets must be kept. */
+        uint32_t now = x->kbd_idle_ms ? tp_now_ms() : 0;
+        int resend = x->kbd_idle_ms && now - x->kbd_sent_ms >= x->kbd_idle_ms;
+        while ((x->rhead != x->rtail || resend) && ring_peek(x, r, trb, &at)) {
             int type = (trb[3] >> 10) & 0x3f;
             ring_advance(r);
             if (type != TRB_NORMAL) continue;
             uint64_t buf = (uint64_t)trb[1] << 32 | trb[0];
             uint32_t want = trb[2] & 0x1ffff;
             uint32_t n = want < 8 ? want : 8;
-            wr(x, buf, x->reports[x->rhead % HV_XHCI_REPORTS], n);
-            x->rhead++;
+            if (x->rhead != x->rtail) {
+                wr(x, buf, x->reports[x->rhead % HV_XHCI_REPORTS], n);
+                x->rhead++;
+            } else {
+                wr(x, buf, x->state, n);
+            }
+            resend = 0;
+            x->kbd_sent_ms = now;
             x->delivered++;
             transfer_event(x, at, n < want ? CC_SHORT_PACKET : CC_SUCCESS, want - n, slot, dci);
         }
@@ -562,6 +576,7 @@ static int address_device(HvXhci *x, int slot, uint64_t input, int bsr) {
     int dev = port - 1;
     if (dev < 0 || dev >= HV_XHCI_DEVICES) return CC_TRB_ERROR;
     x->slots[slot].dev = dev;
+    if (dev == 0) x->kbd_idle_ms = 0; /* a new address follows a bus reset */
     uint32_t dw3 = (uint32_t)(bsr ? 1 : 2) << 27 | (uint32_t)(bsr ? 0 : slot); /* default or addressed; address = slot */
     memcpy(slot_ctx + 12, &dw3, 4);
     uint32_t e0 = 0;
@@ -753,6 +768,7 @@ static void reset(HvXhci *x) {
     memset(x->reports, 0, sizeof x->reports);
     x->rhead = x->rtail = 0;
     memset(x->state, 0, sizeof x->state);
+    x->kbd_idle_ms = 0;
     memset(x->tp_fingers, 0, sizeof x->tp_fingers);
     x->tp_button = 0;
     x->tp_ts = 0;
