@@ -238,6 +238,19 @@ test-display-routing: $(B)/test_display_targets $(B)/test_display_router $(B)/te
 	$(B)/test_scene_manifest ios/Henge/Info.plist ios/Henge/ExternalDisplaySceneDelegate.swift
 .PHONY: test-display-routing
 
+# Host renderer smoke test: virglrenderer on ANGLE (Metal) with an IOSurface. Not part of make test.
+# Libraries come from tools/gfx/build-deps.sh; skipped (exit 0) when GFX_DIR is missing.
+GFX_DIR ?= $HOME/Repos/Henge/build/gfx/macos
+GFX_LIBS = $(GFX_DIR)/lib/libvirglrenderer.a $(GFX_DIR)/lib/libepoxy.a $(GFX_DIR)/lib/libEGL.a $(GFX_DIR)/lib/libGLESv2.a
+GFX_FRAMEWORKS = -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework CoreFoundation -framework IOKit -framework AppKit -lc++
+$(B)/test_virgl_host: tests/test_virgl_host.m $(GFX_LIBS) | $(B)
+	$(CC) $(CFLAGS) -fobjc-arc -Wno-unused-parameter -I$(GFX_DIR)/include tests/test_virgl_host.m $(GFX_LIBS) $(GFX_FRAMEWORKS) -o $@
+
+test-virgl-host:
+	@if [ -d "$(GFX_DIR)" ]; then $(MAKE) --no-print-directory $(B)/test_virgl_host GFX_DIR="$(GFX_DIR)" && $(B)/test_virgl_host; \
+	else echo "test-virgl-host: skipped: no graphics libraries in $(GFX_DIR)"; fi
+.PHONY: test-virgl-host
+
 # What the JIT setup tells the user and when it retries by itself, for each kind of network path and helper error.
 $(B)/test_jit_advice: ios/Henge/JIT/JITNetworkAdvice.swift tests/test_jit_advice.swift | $(B)
 	xcrun --sdk macosx swiftc $^ -o $@

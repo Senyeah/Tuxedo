@@ -1,0 +1,8 @@
+
+# Appended to ANGLE's BUILD.gn by build-deps.sh. ANGLE's static targets leave libANGLE
+# as loose objects, so this one archive holds libANGLE, the translator and the Metal backend.
+static_library("henge_angle_archive") {
+  complete_static_lib = true
+  output_name = "henge_angle_archive"
+  deps = [ ":libGLESv2_static" ]
+}
