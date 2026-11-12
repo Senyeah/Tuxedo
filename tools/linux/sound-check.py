@@ -213,18 +213,23 @@ def basic(vm):
             lambda o: True, "one playback stream and no capture stream")
 
 
+def paths(out):
+    return sum(1 for line in out.splitlines() if line.startswith("/"))
+
+
 def install(vm, args):
     pkgs = "alsa-utils sox"
     need = "speaker-test aplay sox"
     if args.pipewire:
         pkgs += " pipewire pipewire-bin pipewire-alsa wireplumber libpam-systemd dbus-user-session"
         need += " pw-play wpctl"
-    _, rc = vm.sh(f"command -v {need} >/dev/null")
-    if rc != 0:
+    # command -v succeeds when some names are found, so count one path for each tool
+    found, _ = vm.sh(f"command -v {need}")
+    if paths(found) < len(need.split()):
         vm.need("sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive "
                 f"apt-get -y -qq install {pkgs} >/var/tmp/apt.log 2>&1; tail -3 /var/tmp/apt.log",
                 lambda o: True, "install audio packages", 900)
-        vm.need(f"command -v {need}", lambda o: o.count("/") >= len(need.split()), "audio tools installed")
+        vm.need(f"command -v {need}", lambda o: paths(o) >= len(need.split()), "audio tools installed")
     # /dev/snd is group audio; an image built before the group was added needs it and a new login
     vm.need("sudo usermod -aG audio henge && id henge", lambda o: "audio" in o, "audio group")
     vm.p.sendline("sudo reboot")
