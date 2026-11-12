@@ -48,6 +48,17 @@ enum DisplayModePolicy {
     }
 }
 
+extension DisplayModePolicy {
+    /// What pins or sets a Linux guest's size, in order: a fixed choice, a screen that is connected, then the
+    /// remembered screen if the machine asked for the external display. Nil: the phone's own mode.
+    static func linuxTarget(fixed: GuestMode?, live: CGSize?, remembered: CGSize?, wantsExternal: Bool) -> GuestMode? {
+        if let fixed { return fixed }
+        if let live { return externalMode(pixels: live) }
+        if wantsExternal, let remembered { return externalMode(pixels: remembered) }
+        return nil
+    }
+}
+
 /// Decides which mode to send the guest and when, from timestamped inputs. The caller sets a timer
 /// for `pending.at` and calls `take`. A newer input replaces the pending send.
 struct ModeFollower {

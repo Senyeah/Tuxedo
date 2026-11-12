@@ -131,6 +131,21 @@ struct MachineModelTests {
         let macExp = MachineFolder.exportInfo(VirtualMac(name: "M", ecid: 7, seed: 9, ramMB: 2048, diskBytes: 0))
         precondition(macExp["kind"] == nil && macExp["ecid"] as? UInt64 == 7)
 
+        // R9: the screen choices are optional; old JSON decodes without them and saved ones round-trip.
+        precondition(old[0].screenFollowsExternal == nil && old[0].sharpText == nil && back[1].screenFollowsExternal == nil)
+        var chosen = linux
+        chosen.screenFollowsExternal = true
+        chosen.sharpText = true
+        chosen.screenWidth = ScreenPreset.qhd.width
+        chosen.screenHeight = ScreenPreset.qhd.height
+        let chosenData = try JSONEncoder().encode([chosen])
+        let chosenBack = MachineList.decode(chosenData, diskExists: { _ in true })!
+        precondition(chosenBack == [chosen] && chosenBack[0].screenFollowsExternal == true && chosenBack[0].sharpText == true)
+        precondition(String(decoding: chosenData, as: UTF8.self).contains("\"screenFollowsExternal\":true"))
+        // Without the fields they are left out of the JSON, so an older build reads the list.
+        precondition(!String(decoding: data, as: UTF8.self).contains("sharpText"))
+        precondition(ScreenPreset.fhd.denseMM == (width: 185, height: 104) && ScreenPreset.qhd.denseMM == (width: 246, height: 139))
+
         print("machine model: ok")
     }
 }

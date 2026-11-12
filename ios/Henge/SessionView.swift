@@ -8,6 +8,7 @@ struct SessionView: View {
     let mac: VirtualMac
     let close: () -> Void
 
+    @ObservedObject private var machines = Machines.shared
     @StateObject private var display = DisplayRouter()
     @State private var error: String?
     @State private var state: Int32 = 0
@@ -57,10 +58,17 @@ struct SessionView: View {
     // An external screen sets the guest's mode (R7): externalMode is Linux's, macBootMode the size a Mac booted at.
     @State private var externalMode: GuestMode?
     @State private var macBootMode: GuestMode?
+    @State private var lastWindow: WindowKey?
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var console = ConsoleModel()
     // Linux starts on the console: U-Boot draws on the GPU at once, so "until the GPU draws" would never show it.
     @State private var consoleChoice = ConsoleChoice.console
+
+    /// What in the saved machine decides a Linux guest's size.
+    private struct ScreenChoiceKey: Equatable {
+        var width: Int?, height: Int?, external: Bool?
+        init(_ m: VirtualMac) { (width, height, external) = (m.screenWidth, m.screenHeight, m.screenFollowsExternal) }
+    }
 
     private enum ConsoleChoice { case screen, console }
 
@@ -70,12 +78,21 @@ struct SessionView: View {
         var insets: DisplayInsets
     }
 
+    /// The machine as saved now: the screen choice in settings can change while it runs (R9).
+    private var current: VirtualMac { machines.all.first { $0.id == mac.id } ?? mac }
+
+    /// A fixed Linux size (R9 choices, or an older saved size); nil follows the phone or an external screen.
+    private func fixedMode(_ m: VirtualMac) -> GuestMode? {
+        guard m.guest == .linux, !Device.isPad, m.screenWidth != nil else { return nil } // an iPad's saved size has always yielded to a screen
+        return GuestMode(w: m.screen.width, h: m.screen.height)
+    }
+
     private var consoleShown: Bool { mac.guest == .linux && consoleChoice == .console }
 
     /// The guest's shape now: the phone's own screen for phone Linux, else the machine's fixed size.
     private var layoutAspect: CGFloat {
-        if let m = externalMode ?? macBootMode ?? (mac.followsPhoneScreen ? windowMode : nil) { return CGFloat(m.w) / CGFloat(m.h) }
-        return mac.aspect
+        if let m = externalMode ?? macBootMode ?? (current.followsPhoneScreen ? windowMode : nil) { return CGFloat(m.w) / CGFloat(m.h) }
+        return current.aspect
     }
     /// The size the guest really has, for the pointer's pixels.
     private var guestScreen: (width: Int, height: Int) {
@@ -93,7 +110,7 @@ struct SessionView: View {
             let window = WindowKey(size: full, insets: DisplayInsets(top: insets.top, left: insets.leading, bottom: insets.bottom, right: insets.trailing))
             let layout = Layout(full: full, insets: insets, landscape: landscape, zoomed: zoomed && !consoleShown, typing: typing,
                                 centre: zoomCentre, aspect: layoutAspect, console: consoleShown,
-                                native: mac.followsPhoneScreen ? windowMode.map { DisplayModePolicy.framePoints($0, contentsScale: Device.nativeScale) } : nil)
+                                native: current.followsPhoneScreen ? windowMode.map { DisplayModePolicy.framePoints($0, contentsScale: Device.nativeScale) } : nil)
             ZStack(alignment: .topLeading) {
                 (landscape || zoomed || layout.native != nil ? Color.black : Desk.page)
                 // One view in every layout: it holds the layer the engine draws into.
@@ -207,6 +224,7 @@ struct SessionView: View {
             .onChange(of: layout.shown) { shown = $0 }
             .onChange(of: window) { windowChanged($0) } // the new value: the closure's captures are from the old body
             .onChange(of: display.externalPixels) { externalChanged($0) }
+            .onChange(of: ScreenChoiceKey(current)) { _ in screenChoiceChanged() }
             .onChange(of: display.isExternal) { henge_vm_set_pointer_scale($0 ? 1 : 0) } // 1:1 on a big screen
         }
         .statusBarHidden(zoomed || Device.isPad)
@@ -570,7 +588,8 @@ struct SessionView: View {
     /// The window changed (rotation): the frame moves at once, the guest's mode follows after the debounce.
     private func windowChanged(_ window: WindowKey) {
         let full = window.size, insets = window.insets
-        guard mac.followsPhoneScreen, full.width > 0 else { return }
+        lastWindow = window
+        guard current.followsPhoneScreen, full.width > 0 else { return }
         // The keyboard raises SwiftUI's bottom inset; the window's own inset does not hold it.
         let bottom = typing ? (UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.safeAreaInsets.bottom ?? insets.bottom) : insets.bottom
         let mode = DisplayModePolicy.phoneMode(window: full,
@@ -592,9 +611,25 @@ struct SessionView: View {
             saveExternalScreen(pixels)
             return
         }
-        let mode = pixels.map { DisplayModePolicy.externalMode(pixels: $0) }
+        HengeLog.log("display", "external screen \(pixels.map { "\(Int($0.width))x\(Int($0.height))" } ?? "gone")")
+        applyLinuxScreen()
+    }
+
+    /// The screen choice changed in settings: Linux takes it at once.
+    private func screenChoiceChanged() {
+        guard mac.guest == .linux else { return }
+        if let lastWindow { windowChanged(lastWindow) } // the phone mode may be stale after a fixed size
+        applyLinuxScreen()
+    }
+
+    /// The target for the saved choice and the screens there now, sent through the follower.
+    private func applyLinuxScreen() {
+        let m = current
+        let mode = DisplayModePolicy.linuxTarget(fixed: fixedMode(m), live: display.externalPixels,
+                                                 remembered: m.lastExternalScreen.map { CGSize(width: $0.width, height: $0.height) },
+                                                 wantsExternal: m.screenFollowsExternal == true)
         externalMode = mode
-        HengeLog.log("display", "external screen \(pixels.map { "\(Int($0.width))x\(Int($0.height))" } ?? "gone") -> guest \(mode.map { "\($0.w)x\($0.h)" } ?? "phone mode")")
+        HengeLog.log("display", "linux screen choice -> guest \(mode.map { "\($0.w)x\($0.h)" } ?? "phone mode")")
         guard var f = follower else { return } // before boot, run() reads it
         let pending = f.externalDisplay(mode, now: ProcessInfo.processInfo.systemUptime)
         follower = f
@@ -604,7 +639,7 @@ struct SessionView: View {
     /// The scale the guest is told with `mode`: 2 on the phone, by height on an external screen.
     private func guestScale(for mode: GuestMode) -> Double {
         if externalMode != nil { return DisplayModePolicy.guestScale(shortSide: min(mode.w, mode.h), isPhone: false) }
-        return mac.followsPhoneScreen ? 2 : 1
+        return current.followsPhoneScreen ? 2 : 1
     }
 
     private func schedule(_ pending: ModeFollower.Pending?) {
@@ -843,17 +878,22 @@ struct SessionView: View {
         JITBootstrap.releaseLingeringDebugger()
         Sharing.prepare()
         EngineTuning.apply()
-        var macMM: (width: Int, height: Int) = mac.isRetina ? Device.retinaMM : (0, 0)
-        if mac.guest == .linux {
-            var phone = GuestMode(w: mac.screen.width, h: mac.screen.height)
-            if mac.followsPhoneScreen {
+        let saved = current
+        var macMM: (width: Int, height: Int) = saved.isRetina ? Device.retinaMM : (0, 0)
+        if saved.guest == .linux {
+            var phone = GuestMode(w: saved.screen.width, h: saved.screen.height)
+            if saved.followsPhoneScreen {
                 while windowMode == nil && !Task.isCancelled { try? await Task.sleep(nanoseconds: 50_000_000) }
                 guard !Task.isCancelled, let mode = windowMode else { return }
                 phone = mode
             }
-            let external = await bootExternalMode()
+            let fixed = fixedMode(saved)
+            let live = fixed == nil ? await bootExternalMode() : nil // a fixed size ignores screens
             guard !Task.isCancelled else { return }
-            if mac.followsPhoneScreen, let latest = windowMode { phone = latest } // rotation during the wait
+            if current.followsPhoneScreen, let latest = windowMode { phone = latest } // rotation during the wait
+            let remembered = saved.lastExternalScreen.map { CGSize(width: $0.width, height: $0.height) }
+            let external = DisplayModePolicy.linuxTarget(fixed: fixed, live: live.map { CGSize(width: $0.w, height: $0.h) },
+                                                         remembered: remembered, wantsExternal: saved.screenFollowsExternal == true)
             let boot = external ?? phone
             externalMode = external
             liveMode = boot
@@ -861,16 +901,24 @@ struct SessionView: View {
             henge_vm_set_display_scale(guestScale(for: boot))
             henge_vm_set_display(UInt32(boot.w), UInt32(boot.h))
         } else {
-            var screen = mac.screen
+            var screen = saved.screen
             macBootMode = nil // a restart must not keep the last external size
+            var external: GuestMode?
             // macOS reads its size once, so a screen it ran on before gets a short wait to show up.
-            if mac.lastExternalScreen != nil, mac.screenWidth == nil, !mac.isRetina, let ext = await bootExternalMode() {
+            if saved.lastExternalScreen != nil, saved.screenFollowsExternal == true || saved.screenWidth == nil, !saved.isRetina {
+                external = await bootExternalMode()
                 guard !Task.isCancelled else { return }
-                screen = (ext.w, ext.h)
-                macBootMode = ext
-                if DisplayModePolicy.guestScale(shortSide: min(ext.w, ext.h), isPhone: false) == 2 {
-                    macMM = (Int((Double(ext.w) / 264 * 25.4).rounded()), Int((Double(ext.h) / 264 * 25.4).rounded())) // dense: HiDPI
+                if let ext = external { screen = (ext.w, ext.h); macBootMode = ext }
+                else if saved.screenFollowsExternal == true, let r = saved.lastExternalScreen { // asked for it, but not connected
+                    let ext = DisplayModePolicy.externalMode(pixels: CGSize(width: r.width, height: r.height))
+                    screen = (ext.w, ext.h)
+                    macBootMode = ext
+                    external = ext
                 }
+            }
+            if !saved.isRetina {
+                let auto = external.map { DisplayModePolicy.guestScale(shortSide: min($0.w, $0.h), isPhone: false) == 2 } ?? false
+                if saved.sharpText ?? auto { macMM = PixelSize(width: screen.width, height: screen.height).denseMM }
             }
             henge_vm_set_display(UInt32(screen.width), UInt32(screen.height))
         }
@@ -881,7 +929,7 @@ struct SessionView: View {
             HengeLog.log("session", "screen \(guestScreen.width)x\(guestScreen.height) retina \(mac.isRetina) mm \(macMM.width)x\(macMM.height)")
             rc = henge_vm_boot(mac.rom.path, mac.disk.path, mac.aux.path, mac.ecid, mac.seed, ram, Int32(cpus), &buffer, buffer.count)
         case .linux:
-            HengeLog.log("session", "linux screen \(guestScreen.width)x\(guestScreen.height)\(mac.followsPhoneScreen ? " (phone native, scale 2)" : "")")
+            HengeLog.log("session", "linux screen \(guestScreen.width)x\(guestScreen.height)\(current.followsPhoneScreen ? " (phone native, scale 2)" : "")")
             rc = henge_vm_boot_linux(mac.firmware.path, mac.disk.path, ram, Int32(cpus), &buffer, buffer.count)
         }
         if rc != 0 {

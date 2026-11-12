@@ -55,46 +55,9 @@ struct MacSettingsView: View {
                 .padding(.vertical, 10)
                 .deskCard()
 
-                if Device.fittingScreen.height != 1080 {
-                    DeskHeading("Screen")
-                    VStack(alignment: .leading, spacing: 12) {
-                        Picker("Screen", selection: Binding(get: {
-                            if mac.isRetina { return "retina" }
-                            if mac.screen.width == Device.performanceScreen.width,
-                               mac.screen.height == Device.performanceScreen.height { return "performance" }
-                            if mac.screen.width == 1920, mac.screen.height == 1080 { return "wide" }
-                            return "fit"
-                        }, set: { choice in
-                            mac.retina = choice == "retina"
-                            switch choice {
-                            case "retina": break
-                            case "performance": (mac.screenWidth, mac.screenHeight) = Device.performanceScreen
-                            case "wide": (mac.screenWidth, mac.screenHeight) = (1920, 1080)
-                            default: (mac.screenWidth, mac.screenHeight) = Device.fittingScreen
-                            }
-                            save()
-                        })) {
-                            if Device.isPad {
-                                if mac.guest == .mac { Text("Retina").tag("retina") }
-                                Text("Performance").tag("performance")
-                            }
-                            Text("Fit this \(Device.name)").tag("fit")
-                            Text("16:9").tag("wide")
-                        }
-                        .pickerStyle(.segmented)
-                        Text("\(mac.screen.width) × \(mac.screen.height). \(Device.isPad ? "Performance renders about 30% fewer pixels. " : "")Changes apply the next time this \(mac.noun) starts.")
-                            .font(.system(size: 13)).foregroundStyle(Desk.dim)
-                    }
-                    .padding(17)
-                    .deskCard()
-                } else if mac.guest == .linux { // nothing to pick on this shape, but the size is still worth showing
-                    DeskHeading("Screen")
-                    Text("\(mac.screen.width) × \(mac.screen.height)").font(.system(size: 16))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 17)
-                        .padding(.vertical, 14)
-                        .deskCard()
-                }
+                DeskHeading("Screen")
+                if mac.guest == .linux && !Device.isPad { linuxScreen } else { macScreen }
+                if mac.guest == .mac && !mac.isRetina { sharpText }
 
                 DeskHeading(mac.guest == .linux ? "Disk size" : "Storage")
                 VStack(alignment: .leading, spacing: 11) {
@@ -134,6 +97,120 @@ struct MacSettingsView: View {
         } message: {
             Text("Its disk is removed from this \(Device.name).")
         }
+    }
+
+    /// What a Linux machine on an iPhone can pick; changes apply at once.
+    private enum LinuxScreen: Hashable { case phone, external, qhd, fhd }
+
+    private var linuxChoice: LinuxScreen? {
+        if mac.screenWidth == nil { return mac.screenFollowsExternal == true ? .external : .phone }
+        switch PixelSize(width: mac.screenWidth ?? 0, height: mac.screenHeight ?? 0) {
+        case ScreenPreset.qhd: return .qhd
+        case ScreenPreset.fhd: return .fhd
+        default: return nil
+        }
+    }
+
+    private func pickLinux(_ choice: LinuxScreen) {
+        mac.screenFollowsExternal = choice == .external ? true : nil
+        switch choice {
+        case .phone, .external: (mac.screenWidth, mac.screenHeight) = (nil, nil)
+        case .qhd: (mac.screenWidth, mac.screenHeight) = (ScreenPreset.qhd.width, ScreenPreset.qhd.height)
+        case .fhd: (mac.screenWidth, mac.screenHeight) = (ScreenPreset.fhd.width, ScreenPreset.fhd.height)
+        }
+        save()
+    }
+
+    @ViewBuilder private var linuxScreen: some View {
+        let rows: [(LinuxScreen, String)] = [(.phone, "This iPhone"), (.external, "External display"),
+                                              (.qhd, "2560 × 1440"), (.fhd, "1920 × 1080")]
+        VStack(spacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { i, row in
+                if i > 0 { divider }
+                Button { pickLinux(row.0) } label: {
+                    HStack {
+                        Text(row.1).font(.system(size: 16)).foregroundStyle(Desk.text)
+                        Spacer()
+                        if linuxChoice == row.0 { Image(systemName: "checkmark").foregroundStyle(Desk.accentLight) }
+                    }
+                    .padding(.horizontal, 17)
+                    .padding(.vertical, 14)
+                    .contentShape(Rectangle())
+                }
+            }
+        }
+        .deskCard()
+        Text(linuxScreenNote).font(.system(size: 13)).foregroundStyle(Desk.dim)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 17)
+            .padding(.top, 8)
+    }
+
+    private var linuxScreenNote: String {
+        switch linuxChoice {
+        case .phone?: return "The size of this iPhone's screen, in either orientation. A connected external display takes over. Applies at once."
+        case .external?: return mac.lastExternalScreen.map { "The external display's size, \($0.width) × \($0.height) when it was last connected. Applies at once." }
+            ?? "The external display's size. Connect one once and this machine remembers it. Applies at once."
+        default: return "\(mac.screen.width) × \(mac.screen.height), whatever screen is connected. Applies at once."
+        }
+    }
+
+    private var macScreenChoice: String {
+        if mac.screenFollowsExternal == true && !mac.isRetina { return "external" }
+        if mac.isRetina { return "retina" }
+        if mac.screen.width == Device.performanceScreen.width, mac.screen.height == Device.performanceScreen.height { return "performance" }
+        if mac.screen.width == 1920, mac.screen.height == 1080, Device.fittingScreen.height != 1080 { return "wide" }
+        return "fit"
+    }
+
+    @ViewBuilder private var macScreen: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Picker("Screen", selection: Binding(get: { macScreenChoice }, set: { choice in
+                mac.retina = choice == "retina"
+                mac.screenFollowsExternal = choice == "external" ? true : nil
+                switch choice {
+                case "retina": break
+                case "external": (mac.screenWidth, mac.screenHeight) = (nil, nil)
+                case "performance": (mac.screenWidth, mac.screenHeight) = Device.performanceScreen
+                case "wide": (mac.screenWidth, mac.screenHeight) = (1920, 1080)
+                default: (mac.screenWidth, mac.screenHeight) = Device.fittingScreen
+                }
+                save()
+            })) {
+                if Device.isPad {
+                    if mac.guest == .mac { Text("Retina").tag("retina") }
+                    Text("Performance").tag("performance")
+                }
+                Text("Fit this \(Device.name)").tag("fit")
+                if Device.fittingScreen.height != 1080 { Text("16:9").tag("wide") }
+                Text("External display").tag("external")
+            }
+            .pickerStyle(.segmented)
+            Text(macScreenNote).font(.system(size: 13)).foregroundStyle(Desk.dim)
+        }
+        .padding(17)
+        .deskCard()
+    }
+
+    private var macScreenNote: String {
+        let later = mac.guest == .mac ? "Changes apply the next time this Mac starts." : "Changes apply the next time this machine starts."
+        if macScreenChoice == "external" {
+            let size = mac.lastExternalScreen.map { "\($0.width) × \($0.height) when it was last connected" } ?? "none remembered yet: connect one once"
+            return "The external display's size (\(size)). Without it, \(mac.screen.width) × \(mac.screen.height). \(later)"
+        }
+        return "\(mac.screen.width) × \(mac.screen.height). \(Device.isPad ? "Performance renders about 30% fewer pixels. " : "")\(later)"
+    }
+
+    private var sharpText: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("Sharp text (HiDPI)", isOn: Binding(get: { mac.sharpText ?? false }, set: { mac.sharpText = $0; save() }))
+                .font(.system(size: 16))
+            Text("macOS draws at twice the density, so text is sharp and everything looks half as big. It is on by itself for an external display taller than 1440 pixels until you set it here. Applies the next time this Mac starts.")
+                .font(.system(size: 13)).foregroundStyle(Desk.dim)
+        }
+        .padding(17)
+        .deskCard()
+        .padding(.top, 12)
     }
 
     private var diskBytes: Int64 { mac.guest == .linux ? mac.logicalDiskBytes : mac.diskBytes }

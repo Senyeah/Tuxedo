@@ -113,6 +113,17 @@ struct DisplayModePolicyTests {
                                                     insets: DisplayInsets(top: 20, left: 24, bottom: 20, right: 24)) == GuestMode(w: 1872, h: 1040))
         precondition(DisplayModePolicy.guestScale(shortSide: 2160, isPhone: false) == 2 && DisplayModePolicy.guestScale(shortSide: 1440, isPhone: false) == 1)
 
+        // R9: a fixed choice wins, then a live screen, then the remembered one only if asked for.
+        let qhd = GuestMode(w: 2560, h: 1440), fhd = GuestMode(w: 1920, h: 1080)
+        let live = CGSize(width: 3840, height: 2160), mem = CGSize(width: 1920, height: 1080)
+        func target(_ fixed: GuestMode?, _ l: CGSize?, _ r: CGSize?, _ want: Bool) -> GuestMode? {
+            DisplayModePolicy.linuxTarget(fixed: fixed, live: l, remembered: r, wantsExternal: want)
+        }
+        precondition(target(qhd, live, mem, true) == qhd)
+        precondition(target(nil, live, mem, false) == tv && target(nil, live, mem, true) == tv)
+        precondition(target(nil, nil, mem, true) == fhd && target(nil, nil, mem, false) == nil)
+        precondition(target(nil, nil, nil, true) == nil)
+
         print("test_display_mode_policy: ok")
     }
 }
