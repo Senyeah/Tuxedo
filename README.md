@@ -83,7 +83,7 @@ The Mac tool (`build/hengevm --board virt`) runs all of this under `make test-li
 ### Known limits
 
 - The guest kernel must use 16 KB or 64 KB pages. A 4 KB distribution kernel does not run.
-- The iPhone checklist is not done: JIT, the download over Wi-Fi, the shared folder, sound, the external display, acceleration and the memory figures are all unchecked on a device. The macOS regression check on the iPhone is also pending, because the engine changed.
+- The iPhone checklist ([docs/iphone-checklist.md](docs/iphone-checklist.md)) is not done: JIT, the download over Wi-Fi, the shared folder, sound, the external display, acceleration and the memory figures are all unchecked on a device. The macOS regression check on the iPhone is also pending, because the engine changed.
 - The iPad layout and a hardware keyboard and mouse have not been tried with Linux.
 - Debuggers in the guest cannot single-step or set hardware breakpoints. There are no performance counters, and no KVM inside the guest.
 - 3D stops at OpenGL ES 3.0. There is no Vulkan.

@@ -74,7 +74,7 @@ A machine has a kind, `GuestKind` (`mac` or `linux`, in `MachineModel.swift`). A
 - **Screen**: a Linux machine on the phone follows the phone's safe area at scale 2 and the device's rotation (`DisplayModePolicy.swift`). Settings also offers an external display, 2560x1440 and 1920x1080. The guest follows a mode change through `/.henge/display` and `henge-display`.
 - **Graphics acceleration**: see below. **Sharing**: the shared folder is `~/Henge` in the guest, and the desktop image shares the clipboard.
 - **SwiftTerm**: the console's terminal, a Swift package (MIT) in `project.yml`, pinned to 1.99.1. It is the app's only Swift package. Its build plugin needs `-skipPackagePluginValidation`, and `xcodebuild` must not get `-sdk`. Its licence is in `Henge/Resources/legal/LICENSE-SwiftTerm-MIT.txt`. `ios/scripts/check_display.sh` clones it over the network on its first run.
-- **iPad and hardware keyboards** have not been tried with Linux. The iPhone checklist (`LINUX-PLAN-07-testing.md`, section T5) is not done.
+- **iPad and hardware keyboards** have not been tried with Linux. The iPhone checklist ([docs/iphone-checklist.md](../docs/iphone-checklist.md)) is not done.
 
 ## iOS Simulator
 
