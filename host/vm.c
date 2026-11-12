@@ -719,6 +719,9 @@ static void button_now(void *ctx) {
     if (button == 0) {
         left_user = down;
         left_update();
+    } else if (button == 1 && board_kind == HV_BOARD_VIRT) {
+        hv_virtio_input_send(devs.mouse, HV_EV_KEY, HV_BTN_RIGHT, down);
+        hv_virtio_input_send(devs.mouse, HV_EV_SYN, 0, 0);
     } else if (button == 1 && down != left_click) {
         if (down) {
             rctrl_hold(&rctrl_click, 1);

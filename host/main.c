@@ -251,6 +251,12 @@ static void pointer_to(int x, int y) {
 }
 
 static void click_here(void) {
+    if (hv_vm_virt()) {
+        hv_vm_mouse_button(0, 1);
+        usleep(120000);
+        hv_vm_mouse_button(0, 0);
+        return;
+    }
     if (!hv_vm_board()) return;
     hv_virtio_input_send(board.mouse, HV_EV_KEY, HV_BTN_LEFT, 1);
     hv_virtio_input_send(board.mouse, HV_EV_SYN, 0, 0);
@@ -260,6 +266,12 @@ static void click_here(void) {
 }
 
 static void key_event(int code, int down) {
+    if (hv_vm_virt()) {
+        hv_virt_machine_lock();
+        hv_vm_key((uint16_t)code, down);
+        hv_virt_machine_unlock();
+        return;
+    }
     if (!hv_vm_board()) return;
     hv_xhci_key_linux(board.usb, (uint16_t)code, down);
     hv_virtio_input_send(board.keyboard, HV_EV_KEY, (uint16_t)code, down);
@@ -527,6 +539,49 @@ static void hid_locked(uint8_t usage, int down) {
     hv_virt_machine_unlock();
 }
 
+/* HV_INPUT_FILE lines for the virt board: rel DX DY, rclick, msleep MS, tpframe (ends a touch batch), and btn, tp, tpclick as on vmapple. */
+static int virt_input(const char *line) {
+    int a, b;
+    unsigned code;
+    if (sscanf(line, "rel %d %d", &a, &b) == 2) {
+        hv_virt_machine_lock();
+        hv_vm_mouse_move(a, b);
+        hv_virt_machine_unlock();
+    } else if (sscanf(line, "msleep %d", &a) == 1) {
+        usleep((useconds_t)a * 1000);
+    } else if (!strncmp(line, "rclick", 6)) {
+        hv_vm_mouse_button(1, 1);
+        usleep(120000);
+        hv_vm_mouse_button(1, 0);
+    } else if (sscanf(line, "btn %i %d", &code, &b) == 2) {
+        hv_virt_machine_lock();
+        hv_virtio_input_send(hv_vm_virt()->mouse, HV_EV_KEY, (uint16_t)code, b);
+        hv_virtio_input_send(hv_vm_virt()->mouse, HV_EV_SYN, 0, 0);
+        hv_virt_machine_unlock();
+    } else if (!strncmp(line, "tp ", 3)) {
+        int id, phase, px, py;
+        if (sscanf(line + 3, "%d %d %d %d", &id, &phase, &px, &py) != 4) return 1;
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        uint32_t ms = (uint32_t)((uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000);
+        hv_virt_machine_lock();
+        hv_vm_touch(id, phase, px, py, ms);
+        hv_virt_machine_unlock();
+    } else if (!strncmp(line, "tpframe", 7)) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        hv_virt_machine_lock();
+        hv_vm_touch_frame((uint32_t)((uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000));
+        hv_virt_machine_unlock();
+    } else if (!strncmp(line, "tpclick ", 8)) {
+        hv_virt_machine_lock();
+        hv_vm_touch_button(atoi(line + 8));
+        hv_virt_machine_unlock();
+    } else
+        return 0;
+    return 1;
+}
+
 static void *input_thread(void *unused) {
     (void)unused;
     FILE *f = fopen(getenv("HV_INPUT_FILE"), "a+");
@@ -543,11 +598,12 @@ static void *input_thread(void *unused) {
         at = ftell(f);
         line[strcspn(line, "\n")] = 0;
         int x, y;
-        static const char *const mac_only[] = {"btn ", "tp ", "tpclick ", "press", "release", "kdump ", "hooksha ", "find ", "grep ", "grepall ", "vdump ", "page "};
+        static const char *const mac_only[] = {"press", "release", "kdump ", "hooksha ", "find ", "grep ", "grepall ", "vdump ", "page "};
         int skip = 0;
         for (size_t k = 0; !hv_vm_board() && k < sizeof mac_only / sizeof *mac_only; k++)
             if (!strncmp(line, mac_only[k], strlen(mac_only[k]))) skip = 1;
         if (skip) fprintf(stderr, "hengevm: input: %s: needs the vmapple board\n", line);
+        else if (hv_vm_virt() && virt_input(line)) {}
         else if (sscanf(line, "click %d %d", &x, &y) == 2) pointer_to(x, y), click_here();
         else if (sscanf(line, "move %d %d", &x, &y) == 2) pointer_to(x, y);
         else if (sscanf(line, "scroll %d %d", &x, &y) == 2) {

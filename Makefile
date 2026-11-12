@@ -148,6 +148,11 @@ test-linux-smoke: $(B)/hengevm
 	uv run tools/linux/smoke.py --uboot --power $(SMOKE_ARGS)
 .PHONY: test-linux-smoke
 
+# D5: keys, pointer, buttons, wheel and trackpad reach the desktop image (libinput debug-events in the guest). INPUT_ARGS="--image FILE" skips the apt install.
+test-linux-input: $(B)/hengevm
+	uv run tools/linux/input-check.py $(INPUT_ARGS)
+.PHONY: test-linux-input
+
 test-vm-lifecycle: $(B)/test_vm_lifecycle
 	$(B)/test_vm_lifecycle
 .PHONY: test-vm-lifecycle

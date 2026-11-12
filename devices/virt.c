@@ -63,6 +63,7 @@ int hv_virt_create(HvVirt *b, HvMachine *m, HvCpu *cpus, int ncpus, uint64_t ram
     if (mac) b->net = hv_virtio_net_create(m, b->pcie, mac);
     b->rng = hv_virtio_rng_create(m, b->pcie);
     b->usb = hv_xhci_create(m, b->pcie);
+    if (b->usb) hv_xhci_set_linux_speeds(b->usb);
     b->keyboard = hv_virtio_input_create(m, b->pcie, HV_VINPUT_KEYBOARD);
     b->mouse = hv_virtio_input_create(m, b->pcie, HV_VINPUT_MOUSE);
     b->gpu = hv_virtio_gpu_create(m, b->pcie, 1920, 1080);

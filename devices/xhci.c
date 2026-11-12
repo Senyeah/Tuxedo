@@ -43,7 +43,8 @@ enum { CC_SUCCESS = 1, CC_TRB_ERROR = 5, CC_STALL = 6, CC_SLOTS_FULL = 9, CC_SLO
 #define PORT_CEC (1u << 23)
 #define PORT_CHANGES (PORT_CSC | PORT_PEC | PORT_WRC | PORT_OCC | PORT_PRC | PORT_PLC | PORT_CEC)
 #define SPEED_FULL 1
-#define SPEED_HIGH 2
+#define SPEED_HIGH 2 /* vmapple keeps this value; xHCI numbers it as low speed */
+#define XHCI_SPEED_HIGH 3
 
 /* ---- the devices' descriptors ---- */
 
@@ -722,7 +723,7 @@ static void run_commands(HvXhci *x) {
    Magic Trackpad 2 is. */
 static void port_connect(HvXhci *x) {
     for (int p = 0; p < HV_XHCI_PORTS; p++) {
-        x->portsc[p] = PORT_PP | PORT_CCS | PORT_CSC | (uint32_t)(p ? SPEED_HIGH : SPEED_FULL) << PORT_SPEED_SHIFT | 7u << PORT_PLS_SHIFT;
+        x->portsc[p] = PORT_PP | PORT_CCS | PORT_CSC | (uint32_t)(p ? x->tp_speed : SPEED_FULL) << PORT_SPEED_SHIFT | 7u << PORT_PLS_SHIFT;
         port_event(x, p);
     }
 }
@@ -780,7 +781,7 @@ static void reset(HvXhci *x) {
     x->tp_multi_logs = 0;
     x->tp_f1_len = 0;
     for (int p = 0; p < HV_XHCI_PORTS; p++)
-        x->portsc[p] = PORT_PP | PORT_CCS | PORT_CSC | (uint32_t)(p ? SPEED_HIGH : SPEED_FULL) << PORT_SPEED_SHIFT | 7u << PORT_PLS_SHIFT;
+        x->portsc[p] = PORT_PP | PORT_CCS | PORT_CSC | (uint32_t)(p ? x->tp_speed : SPEED_FULL) << PORT_SPEED_SHIFT | 7u << PORT_PLS_SHIFT;
     update_irq(x);
 }
 
@@ -1137,9 +1138,15 @@ void hv_xhci_poll(HvXhci *x) {
         if (x->slots[slot].dev >= 0) run_ep_in(x, slot);
 }
 
+void hv_xhci_set_linux_speeds(HvXhci *x) {
+    x->tp_speed = XHCI_SPEED_HIGH;
+    reset(x);
+}
+
 HvXhci *hv_xhci_create(HvMachine *m, HvPcie *bus) {
     HvXhci *x = calloc(1, sizeof *x);
     x->m = m;
+    x->tp_speed = SPEED_HIGH;
     pthread_mutex_init(&x->mu, NULL);
     /* QEMU's xHCI IDs. Class 0x0c0330 with revision 0: macOS's IOPCIClassMatch compares all 32 bits. */
     hv_pci_init(&x->pci, 0x1b36, 0x000d, 0x0c033000, 0x1af4, 0x1100);
