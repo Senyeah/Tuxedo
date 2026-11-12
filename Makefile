@@ -31,6 +31,8 @@ $(B)/pvg_metal.o: devices/pvg_metal.m devices/*.h core/*.h host/*.h | $(B)
 # The virtio GPU's presenter (Metal, both platforms).
 $(B)/vgpu_metal.o: devices/vgpu_metal.m devices/*.h core/*.h host/*.h | $(B)
 	$(CC) $(CFLAGS) -fobjc-arc -c $< -o $@
+$(B)/virt_window.o: host/virt_window.m host/*.h | $(B)
+	$(CC) -fobjc-arc -O2 -g -Wall -Wextra -Icore -Ihost -Idevices -c $< -o $@
 $(B)/pvg_mac.o: devices/pvg_mac.m devices/*.h core/*.h host/*.h | $(B)
 	$(CC) -fobjc-arc -O2 -g -Wall -mmacosx-version-min=15.2 -Icore -Ihost -Idevices -c $< -o $@
 
@@ -65,8 +67,8 @@ $(B)/henge-agent.gz: $(B)/henge-agent
 $(B)/share.o: host/share.c host/share.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(B)/hengevm: host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/mac-restore/libhengerestore.a
-	$(CC) $(CFLAGS) host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/mac-restore/libhengerestore.a -lz -framework Foundation -framework CFNetwork -framework Security -framework SystemConfiguration -framework IOKit $(SLIRP_LIBS) -framework AudioToolbox -framework ParavirtualizedGraphics -framework Metal -framework IOSurface \
+$(B)/hengevm: host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(B)/mac-restore/libhengerestore.a
+	$(CC) $(CFLAGS) host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(B)/mac-restore/libhengerestore.a -lz -framework Foundation -framework CFNetwork -framework Security -framework SystemConfiguration -framework IOKit $(SLIRP_LIBS) -framework AudioToolbox -framework ParavirtualizedGraphics -framework Metal -framework IOSurface \
 	    -framework Foundation -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers -framework CoreFoundation \
 	    -framework AppKit -framework QuartzCore -o $@
 

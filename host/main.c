@@ -24,6 +24,8 @@
 #include "pvg_lite.h"
 #include "vm.h"
 #include "install.h"
+#include "virt_window.h"
+#include <ImageIO/ImageIO.h>
 
 /* Set here because the macro below would take the field name. */
 static void set_board_kind(HvVmConfig *c, int kind) { c->board = kind; }
@@ -858,6 +860,45 @@ static HvVmConfig boot_cfg;
 static struct { int trace, chain_ok; uint64_t watch, watch_pa; int stats, profile; } boot_opts;
 enum { EXIT_RESTART = 3, EXIT_FAULT = 4 };
 
+/* --screenshot on the virt board: the guest's display as a PNG, rewritten every HV_SHOT_SECS (2) once it shows one. */
+static const char *virt_shot_path;
+static unsigned virt_w = 1920, virt_h = 1080; /* the mode hv_virt_create offers unless --display says otherwise */
+
+static int write_png(const char *path, uint8_t *bgra, unsigned w, unsigned h) {
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGDataProviderRef dp = CGDataProviderCreateWithData(NULL, bgra, (size_t)w * h * 4, NULL);
+    CGImageRef img = CGImageCreate(w, h, 8, 32, (size_t)w * 4, cs, kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst, dp, NULL, false, kCGRenderingIntentDefault);
+    CFStringRef cfp = CFStringCreateWithCString(NULL, path, kCFStringEncodingUTF8);
+    CFURLRef url = CFURLCreateWithFileSystemPath(NULL, cfp, kCFURLPOSIXPathStyle, false);
+    CGImageDestinationRef dst = img ? CGImageDestinationCreateWithURL(url, CFSTR("public.png"), 1, NULL) : NULL;
+    int ok = 0;
+    if (dst) {
+        CGImageDestinationAddImage(dst, img, NULL);
+        ok = CGImageDestinationFinalize(dst);
+        CFRelease(dst);
+    }
+    CFRelease(url), CFRelease(cfp);
+    if (img) CGImageRelease(img);
+    CGDataProviderRelease(dp), CGColorSpaceRelease(cs);
+    return ok ? 0 : -1;
+}
+
+static void *virt_shot_thread(void *unused) {
+    (void)unused;
+    const char *e = getenv("HV_SHOT_SECS");
+    double every = e && atof(e) > 0 ? atof(e) : 2.0;
+    size_t bytes = (size_t)virt_w * virt_h * 4;
+    uint8_t *px = malloc(bytes);
+    char tmp[1100];
+    snprintf(tmp, sizeof tmp, "%s.tmp.png", virt_shot_path);
+    while (px) {
+        usleep((useconds_t)(every * 1e6));
+        if (hv_vm_snapshot(px, (int)virt_w, (int)virt_h) != 0) continue;
+        if (write_png(tmp, px, virt_w, virt_h) == 0) rename(tmp, virt_shot_path); /* a reader never sees half a file */
+    }
+    return NULL;
+}
+
 static void tty_restore(void) {
     if (tio_saved) tcsetattr(0, TCSANOW, &saved_tio), tio_saved = 0;
 }
@@ -1086,7 +1127,7 @@ static void *cpu_thread(void *unused) {
 }
 
 static void usage(void) {
-    fprintf(stderr, "usage: hengevm --board virt (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N]\n"
+    fprintf(stderr, "usage: hengevm --board virt (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N] [--display WxH] [--screenshot PNG] [--window]\n"
                     "       (virt: Ctrl-A x quits; exit status 0 shutdown, 3 restart with --no-reboot, 4 panic or engine error)\n");
     fprintf(stderr, "usage: hengevm [--board vmapple] --rom FILE --disk FILE --aux FILE --ecid N [--seed N] [--ram MB] [--log N] [--trace 1] [--screenshot PNG] [--watch VA] [--stats SECONDS [--profile 1]] [--cpus N] [--window] [--no-pvg] [--no-chain] [--break PC [--break-hits N]] [--dump PA LEN FILE] [--aux-offset BYTES] [--install IPSW]\n");
     exit(2);
@@ -1163,7 +1204,7 @@ int main(int argc, char **argv) {
         }
         else if (!strcmp(argv[i], "--display")) { /* WxH: virt, or vmapple in --phone mode */
             unsigned w = 0, h = 0;
-            if (sscanf(argv[++i], "%ux%u", &w, &h) == 2 && w && h) hv_vm_set_display_mode(w, h);
+            if (sscanf(argv[++i], "%ux%u", &w, &h) == 2 && w && h) hv_vm_set_display_mode(w, h), virt_w = w, virt_h = h;
         }
         else if (!strcmp(argv[i], "--disk")) disk_path = argv[++i];
         else if (!strcmp(argv[i], "--aux")) aux_path = argv[++i];
@@ -1203,8 +1244,8 @@ int main(int argc, char **argv) {
             fprintf(stderr, "hengevm: %s\n", bad);
             usage();
         }
-        use_pvg = 0; /* no display on this board yet */
-        window = 0;
+        use_pvg = 0; /* the virtio GPU is the display; pvg is for vmapple */
+        virt_shot_path = screenshot;
     } else {
         if (!rom || !disk_path || !aux_path) usage();
         if (firmware || kernel || initrd || append || dump_dtb || no_reboot) {
@@ -1317,7 +1358,12 @@ int main(int argc, char **argv) {
         pthread_t ty;
         pthread_create(&ty, NULL, type_thread, NULL);
     }
+    if (virt && screenshot) {
+        pthread_t st;
+        pthread_create(&st, NULL, virt_shot_thread, NULL);
+    }
     if (window && use_pvg) hv_pvg_window_run();
+    if (window && virt) hv_virt_window_run(virt_w, virt_h);
     CFRunLoopRun();
     return 0;
 }
