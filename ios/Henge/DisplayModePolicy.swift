@@ -21,6 +21,18 @@ enum DisplayModePolicy {
         return (max(Int(w) / 8 * 8, 8), max(Int(h) / 8 * 8, 8))
     }
 
+    /// The phone's own mode for a window of `window` points (insets in points, nativeScale pixels per point).
+    static func phoneMode(window: CGSize, insets: DisplayInsets, nativeScale: CGFloat) -> GuestMode {
+        let pixels = CGSize(width: window.width * nativeScale, height: window.height * nativeScale)
+        let m = guestMode(pixels: pixels, insets: insets, scale: nativeScale, cap: pixels)
+        return GuestMode(w: m.w, h: m.h)
+    }
+
+    /// The guest's size in points: one guest pixel per `contentsScale` layer pixel, so it is drawn 1:1.
+    static func framePoints(_ mode: GuestMode, contentsScale: CGFloat) -> CGSize {
+        CGSize(width: CGFloat(mode.w) / contentsScale, height: CGFloat(mode.h) / contentsScale)
+    }
+
     /// 2 on the phone; elsewhere 1 up to 1440 px high, else 2.
     static func guestScale(shortSide: Int, isPhone: Bool) -> Double {
         isPhone || shortSide > 1440 ? 2 : 1

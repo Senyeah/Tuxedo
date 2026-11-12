@@ -49,6 +49,11 @@ struct SessionView: View {
     @State private var zoomFollowing: Task<Void, Never>?
     @State private var helperRunning = false
     @State private var shown = CGSize(width: 0.5, height: 0.5) // how much of the Mac's screen the zoomed view shows
+    // Phone Linux follows the screen (R8): windowMode is what this orientation wants, liveMode what the guest was sent.
+    @State private var windowMode: GuestMode?
+    @State private var liveMode: GuestMode?
+    @State private var follower: ModeFollower?
+    @State private var modeTask: Task<Void, Never>?
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var console = ConsoleModel()
     // Linux starts on the console: U-Boot draws on the GPU at once, so "until the GPU draws" would never show it.
@@ -56,7 +61,24 @@ struct SessionView: View {
 
     private enum ConsoleChoice { case screen, console }
 
+    /// What the guest's size depends on: the window and its safe area, in points.
+    private struct WindowKey: Equatable {
+        var size: CGSize
+        var insets: DisplayInsets
+    }
+
     private var consoleShown: Bool { mac.guest == .linux && consoleChoice == .console }
+
+    /// The guest's shape now: the phone's own screen for phone Linux, else the machine's fixed size.
+    private var layoutAspect: CGFloat {
+        guard mac.followsPhoneScreen, let m = windowMode else { return mac.aspect }
+        return CGFloat(m.w) / CGFloat(m.h)
+    }
+    /// The size the guest really has, for the pointer's pixels.
+    private var guestScreen: (width: Int, height: Int) {
+        guard mac.followsPhoneScreen, let m = liveMode else { return mac.screen }
+        return (m.w, m.h)
+    }
 
 
     var body: some View {
@@ -65,10 +87,12 @@ struct SessionView: View {
             let full = CGSize(width: geo.size.width + insets.leading + insets.trailing,
                               height: geo.size.height + insets.top + insets.bottom)
             let landscape = full.width > full.height
+            let window = WindowKey(size: full, insets: DisplayInsets(top: insets.top, left: insets.leading, bottom: insets.bottom, right: insets.trailing))
             let layout = Layout(full: full, insets: insets, landscape: landscape, zoomed: zoomed && !consoleShown, typing: typing,
-                                centre: zoomCentre, aspect: mac.aspect, console: consoleShown)
+                                centre: zoomCentre, aspect: layoutAspect, console: consoleShown,
+                                native: mac.followsPhoneScreen ? windowMode.map { DisplayModePolicy.framePoints($0, contentsScale: Device.nativeScale) } : nil)
             ZStack(alignment: .topLeading) {
-                (landscape || zoomed ? Color.black : Desk.page)
+                (landscape || zoomed || layout.native != nil ? Color.black : Desk.page)
                 // One view in every layout: it holds the layer the engine draws into.
                 BootDisplay(display: display, role: .device, guest: mac.guest, console: console,
                             showConsole: consoleShown, typing: $typing)
@@ -173,8 +197,12 @@ struct SessionView: View {
                 controlsHidden = false
                 showRevealHint = false
             }
-            .onAppear { shown = layout.shown }
+            .onAppear {
+                shown = layout.shown
+                windowChanged(window)
+            }
             .onChange(of: layout.shown) { shown = $0 }
+            .onChange(of: window) { windowChanged($0) } // the new value: the closure's captures are from the old body
         }
         .statusBarHidden(zoomed || Device.isPad)
         .persistentSystemOverlays(.hidden)
@@ -214,13 +242,14 @@ struct SessionView: View {
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
             zoomFollowing?.cancel()
+            modeTask?.cancel()
             console.stop()
             StickyKeys.shared.releaseAll()
             HardwareKeys.releaseAll()
             HardwareMouse.shared.stop()
             VolumeClicks.shared.stop()
         }
-        .modifier(ExternalMacDisplayModifier(presentation: MacPresentation(display: display, aspect: mac.aspect)))
+        .modifier(ExternalMacDisplayModifier(presentation: MacPresentation(display: display, aspect: layoutAspect)))
         .task(id: bootAttempt) { await run() }
         .task { await Sharing.followMacClipboard() }
     }
@@ -239,14 +268,16 @@ struct SessionView: View {
         let pad: CGRect
         let insets: EdgeInsets
         var barY: CGFloat?    // where the controls go in the space beside the screen, if it has room for them
+        let native: CGSize?   // phone Linux: the guest's size in points, drawn 1:1 inside the safe area
 
         var shown: CGSize {
             CGSize(width: min(touch.width / max(screen.width, 1), 1), height: min(touch.height / max(screen.height, 1), 1))
         }
 
         init(full: CGSize, insets: EdgeInsets, landscape: Bool, zoomed: Bool, typing: Bool, centre: CGPoint, aspect: CGFloat,
-             console: Bool) {
+             console: Bool, native: CGSize?) {
             self.insets = insets
+            self.native = native
             let big = full.height >= 600 // an iPad on its side, or a window on one
             if console && landscape {
                 // Below the control pill; insets.bottom holds the keyboard while it is up.
@@ -273,6 +304,18 @@ struct SessionView: View {
                 let x = min(0, max(full.width - width, full.width / 2 - centre.x * width))
                 let y = min(0, max(full.height - height, full.height / 2 - centre.y * height))
                 screen = CGRect(x: x, y: y, width: width, height: height)
+                touch = CGRect(origin: .zero, size: full)
+                fillsPhone = true
+                toolsY = 0
+                pad = .zero
+            } else if let native {
+                // Whole pixels, so a guest pixel is a layer pixel. The home bar keeps its room; a keyboard's inset does not.
+                let px = Device.nativeScale
+                let safeW = full.width - insets.leading - insets.trailing
+                let safeH = full.height - insets.top - min(insets.bottom, 40)
+                screen = CGRect(x: ((insets.leading + (safeW - native.width) / 2) * px).rounded() / px,
+                                y: ((insets.top + (safeH - native.height) / 2) * px).rounded() / px,
+                                width: native.width, height: native.height)
                 touch = CGRect(origin: .zero, size: full)
                 fillsPhone = true
                 toolsY = 0
@@ -484,7 +527,7 @@ struct SessionView: View {
 
     /// The whole screen, small, with where the zoomed view is on it.
     private func zoomMap(_ layout: Layout) -> some View {
-        let width: CGFloat = 112, height = width / mac.aspect
+        let width: CGFloat = 112, height = width / layoutAspect
         let viewW = min(layout.touch.width / layout.screen.width, 1) * width
         let viewH = min(layout.touch.height / layout.screen.height, 1) * height
         let left = (-layout.screen.minX / layout.screen.width) * width
@@ -510,11 +553,47 @@ struct SessionView: View {
         while !Task.isCancelled {
             var x: Int32 = 0, y: Int32 = 0
             if henge_vm_pointer(&x, &y) == 0 {
-                moveZoom(toward: CGPoint(x: CGFloat(x) / CGFloat(mac.screen.width), y: CGFloat(y) / CGFloat(mac.screen.height)))
+                moveZoom(toward: CGPoint(x: CGFloat(x) / CGFloat(guestScreen.width), y: CGFloat(y) / CGFloat(guestScreen.height)))
             }
-            if tick % 60 == 0, let image = MacPreview.capture(width: 224, height: Int(224 / mac.aspect)) { map = UIImage(cgImage: image) }
+            if tick % 60 == 0, let image = MacPreview.capture(width: 224, height: Int(224 / layoutAspect)) { map = UIImage(cgImage: image) }
             tick += 1
             try? await Task.sleep(nanoseconds: 33_000_000)
+        }
+    }
+
+    /// The window changed (rotation): the frame moves at once, the guest's mode follows after the debounce.
+    private func windowChanged(_ window: WindowKey) {
+        let full = window.size, insets = window.insets
+        guard mac.followsPhoneScreen, full.width > 0 else { return }
+        // The keyboard raises SwiftUI's bottom inset; the window's own inset does not hold it.
+        let bottom = typing ? (UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.safeAreaInsets.bottom ?? insets.bottom) : insets.bottom
+        let mode = DisplayModePolicy.phoneMode(window: full,
+                                               insets: DisplayInsets(top: insets.top, left: insets.left, bottom: bottom, right: insets.right),
+                                               nativeScale: Device.nativeScale)
+        guard mode != windowMode else { return }
+        HengeLog.log("display", "window \(Int(full.width))x\(Int(full.height)) pt, safe insets t\(insets.top) l\(insets.left) b\(insets.bottom) (used \(bottom)) r\(insets.right), typing \(typing), "
+                   + "scale \(Device.nativeScale) -> \(mode.w)x\(mode.h)")
+        windowMode = mode
+        guard var f = follower else { return }
+        let pending = f.orientation(mode, now: ProcessInfo.processInfo.systemUptime)
+        follower = f
+        modeTask?.cancel()
+        guard let pending else { return }
+        modeTask = Task {
+            while !Task.isCancelled {
+                let wait = pending.at - ProcessInfo.processInfo.systemUptime
+                if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1e9) + 1_000_000) }
+                guard !Task.isCancelled else { return }
+                var f = follower
+                if let m = f?.take(now: ProcessInfo.processInfo.systemUptime) {
+                    follower = f
+                    liveMode = m
+                    henge_vm_set_display(UInt32(m.w), UInt32(m.h))
+                    HengeLog.log("session", "linux screen \(m.w)x\(m.h) (rotated)")
+                    return
+                }
+                if f?.pending == nil { return }
+            }
         }
     }
 
@@ -710,7 +789,16 @@ struct SessionView: View {
         JITBootstrap.releaseLingeringDebugger()
         Sharing.prepare()
         EngineTuning.apply()
-        henge_vm_set_display(UInt32(mac.screen.width), UInt32(mac.screen.height))
+        if mac.followsPhoneScreen {
+            while windowMode == nil && !Task.isCancelled { try? await Task.sleep(nanoseconds: 50_000_000) }
+            guard !Task.isCancelled, let mode = windowMode else { return }
+            liveMode = mode
+            follower = ModeFollower(initial: mode)
+            henge_vm_set_display_scale(2)
+            henge_vm_set_display(UInt32(mode.w), UInt32(mode.h))
+        } else {
+            henge_vm_set_display(UInt32(mac.screen.width), UInt32(mac.screen.height))
+        }
         let rc: Int32
         switch mac.guest {
         case .mac:
@@ -722,7 +810,7 @@ struct SessionView: View {
             HengeLog.log("session", "screen \(mac.screen.width)x\(mac.screen.height) retina \(mac.isRetina)")
             rc = henge_vm_boot(mac.rom.path, mac.disk.path, mac.aux.path, mac.ecid, mac.seed, ram, Int32(cpus), &buffer, buffer.count)
         case .linux:
-            HengeLog.log("session", "linux screen \(mac.screen.width)x\(mac.screen.height)")
+            HengeLog.log("session", "linux screen \(guestScreen.width)x\(guestScreen.height)\(mac.followsPhoneScreen ? " (phone native, scale 2)" : "")")
             rc = henge_vm_boot_linux(mac.firmware.path, mac.disk.path, ram, Int32(cpus), &buffer, buffer.count)
         }
         if rc != 0 {

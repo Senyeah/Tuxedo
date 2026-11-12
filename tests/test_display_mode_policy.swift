@@ -37,6 +37,15 @@ struct DisplayModePolicyTests {
         precondition(DisplayModePolicy.guestScale(shortSide: 1441, isPhone: false) == 2)
         precondition(DisplayModePolicy.guestScale(shortSide: 2160, isPhone: false) == 2)
 
+        // The phone's mode from the window in points.
+        let up = DisplayModePolicy.phoneMode(window: CGSize(width: 402, height: 874), insets: DisplayInsets(top: 62, left: 0, bottom: 34, right: 0), nativeScale: 3)
+        precondition(up == GuestMode(w: 1200, h: 2328))
+        let side = DisplayModePolicy.phoneMode(window: CGSize(width: 874, height: 402), insets: DisplayInsets(top: 0, left: 62, bottom: 20, right: 62), nativeScale: 3)
+        precondition(side == GuestMode(w: 2248, h: 1144))
+        // Drawn 1:1: at most 3 px (1 pt) short of the safe area.
+        let frame = DisplayModePolicy.framePoints(side, contentsScale: 3)
+        precondition(abs(frame.width - 749.33) < 0.01 && abs(frame.height - 381.33) < 0.01)
+
         let landscape = GuestMode(w: 2248, h: 1144), portrait = GuestMode(w: 1200, h: 2328)
         let tv = GuestMode(w: 3840, h: 2160)
 

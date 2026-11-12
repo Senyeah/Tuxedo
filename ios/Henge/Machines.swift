@@ -4,6 +4,8 @@ import UIKit
 extension VirtualMac {
     var isRetina: Bool { Device.isPad && (retina ?? false) }
     var screen: (width: Int, height: Int) { isRetina ? Device.retinaScreen : (screenWidth ?? 1920, screenHeight ?? 1080) }
+    /// A phone's Linux machine with no chosen size takes the phone's safe area at scale 2; rotation changes it.
+    var followsPhoneScreen: Bool { guest == .linux && !Device.isPad && screenWidth == nil }
     var aspect: CGFloat { CGFloat(screen.width) / CGFloat(screen.height) }
 }
 
@@ -291,4 +293,9 @@ final class Machines: ObservableObject {
     private func message(_ text: String) -> NSError {
         NSError(domain: "Henge", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
     }
+}
+
+extension Device {
+    /// Pixels per point of the panel: the scale the display layer draws at.
+    static var nativeScale: CGFloat { UIScreen.main.nativeScale }
 }
