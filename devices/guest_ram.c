@@ -114,6 +114,12 @@ void hv_guest_ram_free(HvGuestRam *r) {
     r->fd = -1;
 }
 
+void hv_guest_ram_leak(HvGuestRam *r) {
+    if (r->prefault_started) pthread_join(r->prefault_thread, NULL);
+    memset(r, 0, sizeof *r);
+    r->fd = -1;
+}
+
 uint8_t *hv_host_mem_alloc(uint64_t size) {
     uint8_t *p = getenv("HV_RAM_NO_LEDGER") ? NULL : alloc_no_footprint(size, NULL);
     if (p) return p;

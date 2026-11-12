@@ -524,7 +524,11 @@ void hv_vm_destroy(void) {
     if (virgl) { /* the device drops its renderer objects first; the renderer goes before guest RAM */
         int freed = hv_virtio_gpu_destroy(virt.gpu);
         virt.gpu = NULL;
-        if (freed) hv_vgpu_virgl_destroy(virgl); /* a stuck renderer is left too: its join has no time limit */
+        if (freed) hv_vgpu_virgl_destroy(virgl);
+        else { /* stuck: stop it, and keep the device and guest RAM mapped for its job */
+            hv_vgpu_virgl_abandon(virgl);
+            hv_guest_ram_leak(&virt.mem);
+        }
         virgl = NULL;
     }
 #endif

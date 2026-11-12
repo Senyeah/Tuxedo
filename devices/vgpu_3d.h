@@ -77,8 +77,9 @@ typedef struct HvGpu3dOps {
 typedef struct HvGpu3dScanoutOps {
     /* Blocks until the renderer thread has copied the box (x, y, w, h) of resource res_id into a BGRA IOSurface of w x h
        (top row first, as the guest sees it) and finished the GPU work. The IOSurface is dst_w x dst_h, nearest-pixel scaled down
-   from the box (dst_w <= w, dst_h <= h; the presenter caps a huge scanout this way). Returns the IOSurfaceRef retained, which the caller
-       releases, and a serial that changes with every new surface. NULL when the resource is gone or the renderer stopped. */
+       from the box (dst_w <= w, dst_h <= h; the presenter caps a huge scanout this way). Returns the IOSurfaceRef retained, which the
+       caller releases, and a serial that changes with every new surface. NULL when the resource is gone, the renderer stopped,
+       or it took over 3 s. */
     void *(*blit)(void *r, uint32_t res_id, HvGpu3dBox src, uint32_t dst_w, uint32_t dst_h, uint64_t *serial);
 } HvGpu3dScanoutOps;
 

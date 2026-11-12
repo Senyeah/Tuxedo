@@ -90,6 +90,7 @@ static NSString *const shaders = @"#include <metal_stdlib>\n"
     uint32_t src_w, src_h;      /* the scanout the shadow shows */
     uint32_t mode_w, mode_h;    /* the drawable is no larger */
     uint64_t cursor_seen, retry_until, retry_generation;
+    int blit_retries;
     uint32_t cursor_px[CURSOR * CURSOR];
     id<MTLBuffer> readback;
     /* The work queue writes these under shadow_mu; snapshots read them under it. */
@@ -223,6 +224,7 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
             dw = (uint32_t)fmax(1, floor(dw * k)), dh = (uint32_t)fmax(1, floor(dh * k));
         }
         IOSurfaceRef surf = ops->blit(renderer, res, (HvGpu3dBox){s.x, s.y, 0, s.width, s.height, 1}, dw, dh, &serial);
+        BOOL got = surf != NULL;
         if (surf && (!surf3d || serial != surf3d_serial || !tex3d)) {
             MTLTextureDescriptor *t = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
                                                                                          width:IOSurfaceGetWidth(surf) height:IOSurfaceGetHeight(surf) mipmapped:NO];
@@ -234,8 +236,11 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
                 surf = NULL;
             }
         }
-        if (!surf) failed = YES; /* the renderer has no texture yet; an idle guest sends no flush */
-        else CFRelease(surf);
+        if (got && (!tex3d || serial != surf3d_serial)) got = NO; /* the texture could not be made */
+        if (surf) CFRelease(surf);
+        failed = !got; /* the renderer has no texture yet; an idle guest sends no flush */
+        blit_retries = failed ? blit_retries + 1 : 0;
+        if (blit_retries > 50) failed = NO; /* 5 s: wait for fresh work instead */
     }
     if (failed) res3d = 0; /* res 0 is never a scanout, so the next present blits again */
     else res3d = res;

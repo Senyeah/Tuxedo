@@ -39,6 +39,7 @@
 #define VIRGL_LOG_LINES 32
 #define MAX_CAPSETS 2 /* VIRGL and VIRGL2 */
 #define MAX_CAPVER 4
+#define BLIT_WAIT_MS 3000
 
 // A6: a blit request from the presenter, run on the renderer thread; the presenter waits on cv.
 typedef struct ScanJob {
@@ -49,7 +50,7 @@ typedef struct ScanJob {
     uint64_t serial;
     pthread_mutex_t mu;
     pthread_cond_t cv;
-    int done;
+    int done, gone, refs; // gone: the presenter gave up waiting; refs: it and the renderer
 } ScanJob;
 
 typedef struct Job {
@@ -94,7 +95,7 @@ struct HvVgpuVirgl {
     pthread_mutex_t mu;
     pthread_cond_t cv;
     Job *head, *tail;
-    int stop, ready, ok;
+    int stop, ready, ok, abandoned;
 
     // Owned by the renderer thread from here on.
     EGLDisplay dpy;
@@ -526,11 +527,20 @@ static void scan_free(HvVgpuVirgl *r) {
     memset(s, 0, sizeof *s);
 }
 
-static void scan_finish(ScanJob *j) {
+static void scan_unref(ScanJob *j, int finished) {
     pthread_mutex_lock(&j->mu);
-    j->done = 1;
-    pthread_cond_signal(&j->cv);
+    if (finished) {
+        j->done = 1;
+        if (j->gone && j->surf) CFRelease(j->surf), j->surf = NULL;
+        pthread_cond_signal(&j->cv);
+    }
+    int last = --j->refs == 0;
     pthread_mutex_unlock(&j->mu);
+    if (last) {
+        pthread_mutex_destroy(&j->mu);
+        pthread_cond_destroy(&j->cv);
+        free(j);
+    }
 }
 
 /* ---- thread ---- */
@@ -681,7 +691,7 @@ static void *thread_main(void *arg) {
         @autoreleasepool {
             if (j && j->scan) {
                 if (!stopping) scan_blit(r, j->scan);
-                scan_finish(j->scan); // the ScanJob is the presenter's stack: last touch
+                scan_unref(j->scan, 1); // last touch: the presenter may have left
             } else if (j && stopping) finish(j->cookie, HV_GPU3D_ERR_UNSPEC); // a stop does not run guest requests
             else if (j) execute(r, j);
             free(j);
@@ -693,6 +703,7 @@ static void *thread_main(void *arg) {
         if (stopping && !j) break;
     }
     @autoreleasepool { renderer_stop(r); }
+    if (r->abandoned) atomic_store(&active, NULL); // the struct stays: late callers may still read it
     return NULL;
 }
 
@@ -742,14 +753,23 @@ static void op_submit(void *rp, const HvGpu3dReq *req, void *cookie) {
 static void *op_blit(void *rp, uint32_t res_id, HvGpu3dBox src, uint32_t dw, uint32_t dh, uint64_t *serial) {
     HvVgpuVirgl *r = rp;
     if (!dw || !dh || dw > src.w || dh > src.h) return NULL;
-    ScanJob sj = {.res = res_id, .src = src, .dw = dw, .dh = dh, .mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER};
+    ScanJob *sj = calloc(1, sizeof *sj);
     Job *j = calloc(1, sizeof *j);
-    if (!j) return NULL;
-    j->scan = &sj;
+    if (!sj || !j) {
+        free(sj);
+        free(j);
+        return NULL;
+    }
+    sj->res = res_id, sj->src = src, sj->dw = dw, sj->dh = dh, sj->refs = 2;
+    pthread_mutex_init(&sj->mu, NULL);
+    pthread_cond_init(&sj->cv, NULL);
+    j->scan = sj;
     pthread_mutex_lock(&r->mu);
     if (r->stop) {
         pthread_mutex_unlock(&r->mu);
         free(j);
+        sj->refs = 1;
+        scan_unref(sj, 0);
         return NULL;
     }
     if (r->tail) r->tail->next = j;
@@ -757,11 +777,22 @@ static void *op_blit(void *rp, uint32_t res_id, HvGpu3dBox src, uint32_t dw, uin
     r->tail = j;
     pthread_cond_signal(&r->cv);
     pthread_mutex_unlock(&r->mu);
-    pthread_mutex_lock(&sj.mu);
-    while (!sj.done) pthread_cond_wait(&sj.cv, &sj.mu);
-    pthread_mutex_unlock(&sj.mu);
-    if (serial) *serial = sj.serial;
-    return sj.surf;
+    void *surf = NULL;
+    pthread_mutex_lock(&sj->mu);
+    struct timespec dl;
+    clock_gettime(CLOCK_REALTIME, &dl);
+    dl.tv_sec += BLIT_WAIT_MS / 1000;
+    while (!sj->done)
+        if (pthread_cond_timedwait(&sj->cv, &sj->mu, &dl) != 0) break; // a stuck renderer must not hang the presenter
+    if (sj->done) {
+        surf = sj->surf;
+        if (serial) *serial = sj->serial;
+    } else {
+        sj->gone = 1;
+    }
+    pthread_mutex_unlock(&sj->mu);
+    scan_unref(sj, 0);
+    return surf;
 }
 
 static const HvGpu3dOps ops = {op_capset_info, op_capset, op_submit};
@@ -814,6 +845,14 @@ void hv_vgpu_virgl_destroy(HvVgpuVirgl *r) {
     pthread_cond_destroy(&r->cv);
     atomic_store(&active, NULL);
     free(r);
+}
+
+void hv_vgpu_virgl_abandon(HvVgpuVirgl *r) {
+    if (!r) return;
+    pthread_mutex_lock(&r->mu);
+    r->abandoned = 1, r->stop = 1; // the thread fails what is queued, then cleans up when its job ends
+    pthread_cond_broadcast(&r->cv);
+    pthread_mutex_unlock(&r->mu);
 }
 
 void hv_vgpu_virgl_stats(HvVgpuVirgl *r, HvVgpuVirglStats *out) {

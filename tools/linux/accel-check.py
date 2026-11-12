@@ -9,7 +9,9 @@ Boots a clone of debian-desktop.img by direct kernel boot, with the virgl render
 serial console: the session log says renderer=gles2, eglinfo names virgl and an OpenGL ES version of at least 3.0, a ten
 second glmark2 scene scores at least three times the saved software score, and dmesg has no virtio_gpu or DRM error. The
 --screenshot PNG must show the idle desktop (a large lit area: the foot window), both before glmark2 and a few seconds
-after it ends. The frame time must also beat the saved software frame time by the same factor. The guest then powers off with status 0.
+after it ends. The desktop path is timed too: foot printing 3000000 lines under labwc (median of three runs, window startup
+included) must take no more than 1.25 times the saved pixman time, as the plan's rule that virgl is no slower than pixman.
+The guest then powers off with status 0. glmark2's frame time is 1000/score for one scene, so it is not a second check.
 
 --save-baseline boots without --gpu-accel (labwc on pixman, glmark2 on llvmpipe), runs the same scene and writes the score
 to tools/linux/accel-baseline.json. The shared image never changes: the guest runs on an APFS clone.
@@ -33,6 +35,8 @@ SHELL = r"henge@henge:[^\n]*\$ "
 WAYLAND = "export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0"
 SCENE = "build:duration=10.0"
 SIZE = "1280x720"
+TERM_CMD = "foot -e sh -c 'seq 1 3000000'"
+TERM_RUNS = 3
 
 
 class Fail(Exception):
@@ -67,6 +71,21 @@ def lit_fraction(path):
     return sum(im.histogram()[25:]) / (im.width * im.height)
 
 
+def term_ms(p):
+    runs = []
+    for _ in range(TERM_RUNS):
+        out, rc = sh(p, f"{WAYLAND}; s=$(date +%s%N); {TERM_CMD}; e=$(date +%s%N); echo T=$(( (e-s)/1000000 ))", 180)
+        m = re.search(r"T=(\d+)", out)
+        if rc or not m:
+            raise Fail(f"the terminal run gave no time: {out.strip()}")
+        runs.append(int(m.group(1)))
+    return statistics.median(runs), runs
+
+
+def load_note():
+    return f"host load average {os.getloadavg()[0]:.1f} on {os.cpu_count()} CPUs"
+
+
 def desktop_shot(shot, keep, what, wait=6.0):
     # the shot is rewritten every HV_SHOT_SECS: wait for a file newer than this call
     start = time.time()
@@ -92,6 +111,7 @@ def main():
     ap.add_argument("--work-dir", help="where the clone goes (the image's APFS volume)")
     ap.add_argument("--save-baseline", action="store_true", help="measure the software path and save its score")
     ap.add_argument("--factor", type=float, default=3.0, help="the least accelerated score over the saved one")
+    ap.add_argument("--term-slack", type=float, default=1.25, help="the most accelerated terminal time over the saved one")
     ap.add_argument("--cpus", type=int, default=4)
     ap.add_argument("--keep-shot", help="copy the screenshots here (suffixed)")
     args = ap.parse_args()
@@ -168,24 +188,26 @@ def run(p, args, accel, shot, tmp, base):
         raise Fail(f"glmark2 gave no score: {out.strip()}")
     score = int(sc.group(1))
     ft = re.search(r"FrameTime: ([\d.]+) ms", out)
-    print(f"     glmark2 {SCENE} at {SIZE}: score {score}" + (f", frame time {ft.group(1)} ms" if ft else ""))
+    print(f"     glmark2 {SCENE} at {SIZE}: score {score}" + (f", frame time {ft.group(1)} ms" if ft else "") + f" ({load_note()})")
+    tms, truns = term_ms(p)
+    print(f"     terminal ({TERM_CMD}): median {tms:g} ms of {truns}")
     if not accel:
         json.dump({"scene": SCENE, "size": SIZE, "software_score": score, "frame_time_ms": float(ft.group(1)) if ft else None,
+                   "terminal_cmd": TERM_CMD, "terminal_ms": tms,
                    "measured": time.strftime("%d/%m/%Y"), "renderer": rend.group(1).strip()}, open(BASELINE, "w"), indent=2)
         open(BASELINE, "a").write("\n")
         print(f"ok   saved the software score {score} to {BASELINE}")
     else:
         need = args.factor * base["software_score"]
         if score < need:
-            raise Fail(f"glmark2 scored {score}, under {args.factor:g} times the saved software score {base['software_score']} ({need:g})")
+            raise Fail(f"glmark2 scored {score}, under {args.factor:g} times the saved software score {base['software_score']} ({need:g}); {load_note()}")
         print(f"ok   glmark2 {score} >= {args.factor:g} x {base['software_score']} (software)")
-        if ft and base.get("frame_time_ms"):
-            limit = base["frame_time_ms"] / args.factor
-            if float(ft.group(1)) > limit:
-                raise Fail(f"frame time {ft.group(1)} ms, over {limit:.3f} ms ({args.factor:g} times under the software {base['frame_time_ms']} ms)")
-            print(f"ok   frame time {ft.group(1)} ms <= {limit:.3f} ms (software {base['frame_time_ms']} ms / {args.factor:g})")
-        elif base.get("frame_time_ms"):
-            raise Fail("glmark2 gave no frame time")
+        if not base.get("terminal_ms"):
+            raise Fail("the baseline has no terminal time: run with --save-baseline")
+        limit = base["terminal_ms"] * args.term_slack
+        if tms > limit:
+            raise Fail(f"terminal run took {tms:g} ms, over {limit:g} ms ({args.term_slack:g} x the software {base['terminal_ms']} ms); {load_note()}")
+        print(f"ok   terminal {tms:g} ms <= {limit:g} ms (software {base['terminal_ms']} ms x {args.term_slack:g})")
     out, _ = sh(p, "sudo dmesg | grep -i -E 'virtio_gpu.*(error|fail|timed? ?out)|\\[drm.*(error|fail)|\\*ERROR\\*'")
     if out.strip():
         raise Fail("the guest logged virtio_gpu or DRM errors:\n" + out.strip())

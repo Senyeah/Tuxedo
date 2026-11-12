@@ -568,6 +568,19 @@ int main(void) {
     check("a renderer starts again after destroy", again != NULL, 1);
     hv_vgpu_virgl_destroy(again);
 
+    // An abandoned renderer fails new blits at once, cleans up, and frees the process for the next one.
+    HvVgpuVirgl *gone = hv_vgpu_virgl_create();
+    check("a renderer starts for the abandon", gone != NULL, 1);
+    hv_vgpu_virgl_abandon(gone);
+    uint64_t serial = 0;
+    check("a blit after the abandon fails", hv_vgpu_virgl_scanout_ops()->blit(gone, 1, (HvGpu3dBox){0, 0, 0, 8, 8, 1}, 8, 8, &serial) == NULL, 1);
+    HvVgpuVirgl *next = NULL;
+    for (int i = 0; i < 100 && !next; i++) {
+        if (!(next = hv_vgpu_virgl_create())) usleep(100000);
+    }
+    check("a renderer starts after an abandon", next != NULL, 1);
+    hv_vgpu_virgl_destroy(next);
+
     hv_disk_close(&root);
     char rm[300];
     snprintf(rm, sizeof rm, "rm -rf %s", dir);

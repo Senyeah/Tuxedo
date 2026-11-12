@@ -1,8 +1,10 @@
 {
   "scene": "build:duration=10.0",
   "size": "1280x720",
-  "software_score": 206,
-  "frame_time_ms": 4.848,
+  "software_score": 218,
+  "frame_time_ms": 4.581,
+  "terminal_cmd": "foot -e sh -c 'seq 1 3000000'",
+  "terminal_ms": 1328,
   "measured": "13/11/2026",
   "renderer": "llvmpipe (LLVM 19.1.7, 128 bits)"
 }
