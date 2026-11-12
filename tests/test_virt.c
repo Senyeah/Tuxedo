@@ -101,6 +101,73 @@ static void test_pci_intx(void) {
     hv_pci_set_intx(b.pcie->dev[3], 0);
 }
 
+static void wr64(HvMachine *mm, uint64_t pa, uint64_t v) { hv_phys_write(mm, pa, &v, 8); }
+static uint64_t rd64(HvMachine *mm, uint64_t pa) {
+    uint64_t v = 0;
+    hv_phys_read(mm, pa, &v, 8);
+    return v;
+}
+static void put_trb(uint64_t pa, uint64_t param, uint32_t status, uint32_t control) {
+    wr64(&m, pa, param);
+    wr32(&m, pa + 8, status);
+    wr32(&m, pa + 12, control | 1); /* cycle 1 */
+}
+
+/* The xHCI as Linux's xhci_hcd drives it on the keyboard's port. */
+static void test_xhci(void) {
+    enum { XECP = 0x800, OP = 0x40, RT = 0x1000, DB = 0x2000 };
+    uint64_t cfg = VIRT_PCIE_ECAM + (4ull << 15), bar = VIRT_PCIE_MMIO + 0x100000;
+    wr32(&m, cfg + 0x10, (uint32_t)bar);
+    wr32(&m, cfg + 0x14, 0);
+    wr32(&m, cfg + 0x04, 0x6);
+    /* xhci_hcd gives up ("No ports on the roothubs?") if a protocol's ports run past the last. */
+    uint32_t ports = rd32(&m, bar + 4) >> 24, proto = rd32(&m, bar + XECP + 8);
+    check("xHCI USB 2 protocol starts at port 1", proto & 0xff, 1);
+    check("xHCI USB 2 protocol covers every port", (proto >> 8) & 0xff, ports);
+
+    uint64_t mem = VIRT_MEM + 0x200000, dcbaa = mem, cmd = mem + 0x1000, erst = mem + 0x2000, ev = mem + 0x3000;
+    uint64_t out = mem + 0x4000, in = mem + 0x5000, ep0 = mem + 0x6000, buf = mem + 0x7000;
+    memset(hv_phys_ptr(&m, mem, 0x8000), 0, 0x8000);
+    wr32(&m, bar + OP, 2); /* HCRST */
+    wr64(&m, bar + OP + 0x30, dcbaa);
+    wr64(&m, bar + OP + 0x18, cmd | 1);
+    wr64(&m, erst, ev);
+    wr32(&m, erst + 8, 64);
+    wr32(&m, bar + RT + 0x28, 1);
+    wr32(&m, bar + RT + 0x30, (uint32_t)erst);
+    wr32(&m, bar + RT + 0x34, 0);
+    wr32(&m, bar + OP, 1); /* run */
+    put_trb(cmd, 0, 0, 9u << 10); /* Enable Slot */
+    wr32(&m, bar + DB, 0);
+    wr64(&m, dcbaa + 8, out);
+    wr32(&m, in + 4, 3);                 /* add the slot and ep0 */
+    wr32(&m, in + 32 + 4, 1u << 16);     /* root port 1: the keyboard */
+    wr32(&m, in + 64 + 4, 64u << 16 | 4u << 3); /* control endpoint, 64 bytes */
+    wr64(&m, in + 64 + 8, ep0 | 1);
+    put_trb(cmd + 16, in, 0, 11u << 10 | 1u << 24); /* Address Device, slot 1 */
+    wr32(&m, bar + DB, 0);
+    /* GET_DESCRIPTOR (device), then (device qualifier), which a full-speed device stalls */
+    const uint64_t dev = 0x0012000001000680ull, qual = 0x000a000006000680ull;
+    put_trb(ep0, dev, 8, 2u << 10 | 1u << 6 | 3u << 16);
+    put_trb(ep0 + 16, buf, 18, 3u << 10 | 1u << 16);
+    put_trb(ep0 + 32, 0, 0, 4u << 10 | 1u << 5);
+    put_trb(ep0 + 48, qual, 8, 2u << 10 | 1u << 6 | 3u << 16);
+    put_trb(ep0 + 64, buf, 10, 3u << 10 | 1u << 16);
+    put_trb(ep0 + 80, 0, 0, 4u << 10 | 1u << 5);
+    wr32(&m, bar + DB + 4, 1);
+    check("device descriptor read", rd32(&m, buf) & 0xffff, 0x0112);
+    int stall = 0;
+    for (int i = 0; i < 64 && (rd32(&m, ev + 16u * i + 12) & 1); i++)
+        if ((rd32(&m, ev + 16u * i + 12) >> 10 & 0x3f) == 32 && rd32(&m, ev + 16u * i + 8) >> 24 == 6)
+            stall = rd64(&m, ev + 16u * i) == ep0 + 48;
+    check("the qualifier's setup stage stalls", stall, 1);
+    check("ep0 halted", rd32(&m, out + 32) & 7, 2);
+    /* xhci_hcd skips the stalled TD from here; a stale pointer sent it back to the one before. */
+    check("ep0 dequeue at the stalled TRB", rd64(&m, out + 32 + 8), (ep0 + 48) | 1);
+    wr32(&m, bar + OP, 0);
+    wr32(&m, cfg + 0x04, 0);
+}
+
 static int have_dtc(void) { return system("dtc --version >/dev/null 2>&1") == 0; }
 
 /* dtc's text for a tree (warnings included), or NULL. */
@@ -396,6 +463,7 @@ int main(void) {
     test_memory_map();
     test_flash();
     test_pci_intx();
+    test_xhci();
     test_reset();
     hv_virt_destroy(&b);
     test_linux_boot();
