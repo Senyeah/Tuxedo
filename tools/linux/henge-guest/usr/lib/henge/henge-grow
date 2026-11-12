@@ -1,5 +1,6 @@
 #!/bin/sh
 # Grow the root partition and filesystem to fill the disk. Safe to run on every boot.
+# The disk size at the last run is kept, so a boot with an unchanged disk skips the tools (2 s at 1 CPU).
 set -eu
 
 mm=$(findmnt -n -r -o MAJ:MIN /)
@@ -12,6 +13,13 @@ part=${link##*/}
 disk=/dev/$(basename "$(dirname "$link")")
 num=$(cat "$link/partition")
 
+stamp=/var/lib/henge/grow-size
+size=$(cat "/sys/class/block/${disk##*/}/size")
+if [ "$(cat "$stamp" 2>/dev/null || true)" = "$size" ]; then
+    echo "henge-grow: disk unchanged"
+    exit 0
+fi
+
 # Move the backup GPT header to the new end first, so growpart sees the free space
 sgdisk -e "$disk" >/dev/null
 
@@ -21,3 +29,6 @@ growpart "$disk" "$num" || rc=$?
 [ "$rc" -le 1 ] || exit "$rc"
 
 resize2fs "/dev/$part"
+
+mkdir -p /var/lib/henge
+echo "$size" > "$stamp"
