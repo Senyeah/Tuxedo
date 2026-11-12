@@ -19,8 +19,9 @@ VENV=$GFX_WORK/venv
 
 usage() {
 	cat <<EOF
-Usage: $(basename "$0") [--target macos|ios|sim|all] [--check] [-h]
+Usage: $(basename "$0") [--target macos|ios|sim|all] [--only angle|epoxy|virgl] [--check] [-h]
   --target T   Build one target, or all three (default). With all, a simulator failure is a warning.
+  --only L     Build one library: epoxy or virgl rebuild in minutes and skip the ANGLE sync. Default: all three.
   --check      Build nothing. Verify the libraries with vtool and exit 0 only if macos and ios are right.
 Env: GFX_ROOT ($GFX_ROOT), GFX_SRC, GFX_WORK, JOBS.
 EOF
@@ -245,6 +246,11 @@ meson_build() { # target name srcdir meson-options...
 build_epoxy() {
 	local t=$1 O=$GFX_ROOT/$1
 	git_pin "$GFX_SRC/libepoxy" "$LIBEPOXY_REPO" "$LIBEPOXY_COMMIT"
+	# ANGLE is static, so libepoxy must not dlopen EGL and GLES (see README). Idempotent.
+	local patch=$HERE/libepoxy-static-gl.patch
+	if ! git -C "$GFX_SRC/libepoxy" apply --reverse --check "$patch" 2>/dev/null; then
+		git -C "$GFX_SRC/libepoxy" apply "$patch"
+	fi
 	meson_build "$t" epoxy "$GFX_SRC/libepoxy" -Dtests=false -Dglx=no -Degl=yes -Dx11=false -Ddocs=false
 	mkdir -p "$O/share/licenses/libepoxy"
 	cp "$GFX_SRC/libepoxy/COPYING" "$O/share/licenses/libepoxy/COPYING"
@@ -266,6 +272,7 @@ write_manifest() {
 		echo "target $t"
 		echo "angle $ANGLE_COMMIT"
 		echo "libepoxy $LIBEPOXY_COMMIT"
+		echo "libepoxy-patch $(shasum -a 256 "$HERE/libepoxy-static-gl.patch" | cut -d' ' -f1)"
 		echo "virglrenderer $VIRGLRENDERER_COMMIT"
 		for f in libvirglrenderer.a libepoxy.a libEGL.a libGLESv2.a; do
 			echo "$f $(fsize "$O/lib/$f") $(shasum -a 256 "$O/lib/$f" | cut -d' ' -f1)"
@@ -278,25 +285,28 @@ build_target() {
 	target_info "$t"
 	say "target $t"
 	mkdir -p "$GFX_ROOT/$t"
-	build_angle "$t"
-	build_epoxy "$t"
-	build_virgl "$t"
+	case $ONLY in all | angle) build_angle "$t" ;; esac
+	case $ONLY in all | epoxy) build_epoxy "$t" ;; esac
+	case $ONLY in all | virgl) build_virgl "$t" ;; esac
 	write_manifest "$t"
 }
 
 # ---- main ----
 
 TARGET=all
+ONLY=all
 CHECK=0
 while [ $# -gt 0 ]; do
 	case $1 in
 	--target) TARGET=${2:?--target needs a value}; shift 2 ;;
+	--only) ONLY=${2:?--only needs a value}; shift 2 ;;
 	--check) CHECK=1; shift ;;
 	-h | --help) usage; exit 0 ;;
 	*) usage >&2; die "unknown option $1" ;;
 	esac
 done
 case $TARGET in macos | ios | sim | all) ;; *) die "bad --target $TARGET" ;; esac
+case $ONLY in angle | epoxy | virgl | all) ;; *) die "bad --only $ONLY" ;; esac
 
 if [ $CHECK -eq 1 ]; then
 	do_check
@@ -304,12 +314,12 @@ if [ $CHECK -eq 1 ]; then
 fi
 
 ensure_tools
-ensure_angle_src
+case $ONLY in all | angle) ensure_angle_src ;; esac
 if [ "$TARGET" = all ]; then
 	build_target macos
 	build_target ios
 	# Own process: set -e is off inside "||", and a half-built sim must not stop the rest.
-	"$0" --target sim || say "WARNING: sim build failed. The simulator is not a gate."
+	"$0" --target sim --only "$ONLY" || say "WARNING: sim build failed. The simulator is not a gate."
 else
 	build_target "$TARGET"
 fi

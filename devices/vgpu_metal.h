@@ -16,6 +16,10 @@ typedef struct HvVgpuMetal HvVgpuMetal;
 HvVgpuMetal *hv_vgpu_metal_create(HvVirtioGpu *g);
 /* After the CPUs stop and before g is freed: finishes queued uploads and GPU work. */
 void hv_vgpu_metal_destroy(HvVgpuMetal *p);
+/* Shows a 3D scanout (the device's scanout3d_res) from `ops`' IOSurface; a 2D scanout keeps the upload path. Any thread
+   but the presenter's; waits for a present in flight, so after set_3d(p, NULL, NULL) the renderer may be destroyed.
+   Without it a 3D scanout shows black. snapshot reads the surface while the scanout is 3D. */
+void hv_vgpu_metal_set_3d(HvVgpuMetal *p, const HvGpu3dScanoutOps *ops, void *renderer);
 /* Any thread, at any time; NULL stops drawing. The layer is retained until the next call. */
 void hv_vgpu_metal_set_layer(HvVgpuMetal *p, void *layer);
 /* Frames presented to a layer. */

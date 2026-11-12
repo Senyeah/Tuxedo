@@ -1,4 +1,5 @@
 #import <Foundation/Foundation.h>
+#import <IOSurface/IOSurfaceRef.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <QuartzCore/CATransaction.h>
@@ -77,6 +78,8 @@ static NSString *const shaders = @"#include <metal_stdlib>\n"
     os_unfair_lock layer_lock; /* the target and its generation */
     CAMetalLayer *layer;
     uint64_t generation;
+    const HvGpu3dScanoutOps *scan_ops; /* A6; under layer_lock */
+    void *scan_r;
     /* The work queue only. */
     __weak CAMetalLayer *prepared;
     id<MTLTexture> tex, cursor_tex;
@@ -94,6 +97,11 @@ static NSString *const shaders = @"#include <metal_stdlib>\n"
     uint8_t *shadow;
     uint32_t shadow_w, shadow_h;
     BOOL shown_once;
+    BOOL mode3d; /* the scanout is a 3D resource: surf3d, not shadow */
+    uint32_t res3d, rect3d_x, rect3d_y;
+    IOSurfaceRef surf3d;
+    uint64_t surf3d_serial;
+    id<MTLTexture> tex3d; /* work queue only; wraps surf3d */
     pthread_mutex_t drawn_mu; /* HV_VGPU_CAPTURE */
     uint8_t *drawn;
     uint32_t drawn_w, drawn_h;
@@ -107,6 +115,7 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
 @implementation HvVgpuPresenter
 
 - (void)dealloc {
+    if (surf3d) CFRelease(surf3d);
     free(shadow);
     free(drawn);
     pthread_mutex_destroy(&shadow_mu);
@@ -128,6 +137,8 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
     HvVgpuRect dirty = d->dirty;
     BOOL had = d->dirty_set;
     d->dirty_set = 0;
+    uint32_t r3 = d->scanout3d_res;
+    HvVgpuRect s3 = d->scanout3d;
     HvVgpuResource *r = hv_virtio_gpu_resource(d, d->scanout_res);
     HvVgpuRect s = d->scanout;
     uint32_t SW = r ? s.width : d->width, SH = r ? s.height : d->height, W = SW, H = SH;
@@ -137,7 +148,10 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
         W = (uint32_t)fmax(1, floor(SW * k)), H = (uint32_t)fmax(1, floor(SH * k));
     }
     pthread_mutex_lock(&shadow_mu);
-    if (!shadow || W != shadow_w || H != shadow_h || SW != src_w || SH != src_h) {
+    if (!r3) mode3d = NO;
+    if (r3) {
+        /* the blit runs below, without the device lock */
+    } else if (!shadow || W != shadow_w || H != shadow_h || SW != src_w || SH != src_h) {
         uint8_t *fresh = calloc((size_t)W * H, 4);
         if (fresh) {
             free(shadow);
@@ -148,7 +162,7 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
             had = NO; /* keep the old picture */
         }
     }
-    if (had && src_w == SW && src_h == SH) {
+    if (!r3 && had && src_w == SW && src_h == SH) {
         dirty = clip(dirty, SW, SH);
         if (W != SW || H != SH) { /* nearest pixel; the rectangle grows to whole shadow pixels */
             uint32_t x0 = (uint32_t)((uint64_t)dirty.x * W / SW), y0 = (uint32_t)((uint64_t)dirty.y * H / SH);
@@ -189,6 +203,37 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
         cursor_stale = YES;
     }
     pthread_mutex_unlock(&d->mu);
+    if (r3) [self pull3d:r3 rect:s3 changed:had];
+}
+
+/* A 3D scanout: the renderer copies the resource into an IOSurface; the GPU draws that where tex was drawn. */
+- (void)pull3d:(uint32_t)res rect:(HvVgpuRect)s changed:(BOOL)changed {
+    os_unfair_lock_lock(&layer_lock);
+    const HvGpu3dScanoutOps *ops = scan_ops;
+    void *renderer = scan_r;
+    os_unfair_lock_unlock(&layer_lock);
+    pthread_mutex_lock(&shadow_mu); /* snapshots read the surface under it */
+    BOOL moved = !mode3d || res != res3d || s.x != rect3d_x || s.y != rect3d_y || s.width != src_w || s.height != src_h;
+    if (ops && (changed || moved)) {
+        uint64_t serial = 0;
+        IOSurfaceRef surf = ops->blit(renderer, res, (HvGpu3dBox){s.x, s.y, 0, s.width, s.height, 1}, &serial);
+        if (surf && (!surf3d || serial != surf3d_serial || !tex3d)) {
+            MTLTextureDescriptor *t = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                         width:IOSurfaceGetWidth(surf) height:IOSurfaceGetHeight(surf) mipmapped:NO];
+            t.usage = MTLTextureUsageShaderRead;
+            id<MTLTexture> fresh = [device newTextureWithDescriptor:t iosurface:surf plane:0];
+            if (fresh) {
+                if (surf3d) CFRelease(surf3d);
+                surf3d = surf, surf3d_serial = serial, tex3d = fresh;
+                surf = NULL;
+            }
+        }
+        if (surf) CFRelease(surf);
+    }
+    mode3d = YES, res3d = res, rect3d_x = s.x, rect3d_y = s.y;
+    src_w = s.width, src_h = s.height;
+    if (surf3d) shown_once = YES;
+    pthread_mutex_unlock(&shadow_mu);
 }
 
 - (void)prepare:(CAMetalLayer *)target {
@@ -221,17 +266,24 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
 
 - (void)draw:(CAMetalLayer *)target generation:(uint64_t)gen {
     uint32_t W = shadow_w, H = shadow_h;
-    if (!shadow || !W || !H) return;
+    if (mode3d) {
+        if (!tex3d) return;
+        W = (uint32_t)tex3d.width, H = (uint32_t)tex3d.height;
+    } else if (!shadow || !W || !H) {
+        return;
+    }
     [self prepare:target];
-    if (!tex || tex.width != W || tex.height != H) {
+    id<MTLTexture> shown = mode3d ? tex3d : tex;
+    if (!mode3d && (!tex || tex.width != W || tex.height != H)) {
         MTLTextureDescriptor *t = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:W height:H mipmapped:NO];
         t.usage = MTLTextureUsageShaderRead;
         t.storageMode = MTLStorageModeShared;
         tex = [device newTextureWithDescriptor:t];
         if (!tex) return;
         pending = (HvVgpuRect){0, 0, W, H}, pending_set = YES;
+        shown = tex;
     }
-    if (pending_set) {
+    if (!mode3d && pending_set) {
         HvVgpuRect u = clip(pending, W, H);
         if (u.width && u.height)
             [tex replaceRegion:MTLRegionMake2D(u.x, u.y, u.width, u.height) mipmapLevel:0
@@ -269,7 +321,7 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
     float rect[4] = {(float)(ox / DW * 2 - 1), (float)(1 - (oy + ih) / DH * 2), (float)(iw / DW * 2), (float)(ih / DH * 2)};
     [e setRenderPipelineState:screen_pipe];
     [e setVertexBytes:rect length:sizeof rect atIndex:0];
-    [e setFragmentTexture:tex atIndex:0];
+    [e setFragmentTexture:shown atIndex:0];
     [e setFragmentSamplerState:iw == W && ih == H ? nearest : linear atIndex:0];
     [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
     if (cursor_shown) {
@@ -432,11 +484,23 @@ int hv_vgpu_metal_snapshot(HvVgpuMetal *m, uint8_t *bgra, uint32_t w, uint32_t h
     if (!m || !bgra || !w || !h) return -1;
     HvVgpuPresenter *p = (__bridge HvVgpuPresenter *)m;
     pthread_mutex_lock(&p->shadow_mu);
-    if (!p->shadow || !p->shown_once) {
+    if ((!p->mode3d && !p->shadow) || !p->shown_once) {
         pthread_mutex_unlock(&p->shadow_mu);
         return -1;
     }
     uint32_t W = p->shadow_w, H = p->shadow_h;
+    const uint8_t *base = p->shadow;
+    size_t stride = (size_t)W * 4;
+    IOSurfaceRef surf = p->mode3d ? p->surf3d : NULL;
+    if (p->mode3d && !surf) {
+        pthread_mutex_unlock(&p->shadow_mu);
+        return -1;
+    }
+    if (surf) {
+        IOSurfaceLock(surf, kIOSurfaceLockReadOnly, NULL);
+        W = (uint32_t)IOSurfaceGetWidth(surf), H = (uint32_t)IOSurfaceGetHeight(surf);
+        base = IOSurfaceGetBaseAddress(surf), stride = IOSurfaceGetBytesPerRow(surf);
+    }
     /* Four samples a pixel, as pvg's snapshot: one makes small text look broken. */
     for (uint32_t y = 0; y < h; y++) {
         uint8_t *out = bgra + (size_t)y * w * 4;
@@ -444,15 +508,26 @@ int hv_vgpu_metal_snapshot(HvVgpuMetal *m, uint8_t *bgra, uint32_t w, uint32_t h
             uint32_t sum[3] = {0, 0, 0};
             for (uint32_t k = 0; k < 4; k++) {
                 size_t sx = (2 * x + (k & 1)) * (uint64_t)W / (2 * w), sy = (2 * y + (k >> 1)) * (uint64_t)H / (2 * h);
-                const uint8_t *src = p->shadow + (sy * W + sx) * 4;
+                const uint8_t *src = base + sy * stride + sx * 4;
                 for (int c = 0; c < 3; c++) sum[c] += src[c];
             }
             for (int c = 0; c < 3; c++) out[c] = (uint8_t)((sum[c] + 2) / 4);
             out[3] = 255;
         }
     }
+    if (surf) IOSurfaceUnlock(surf, kIOSurfaceLockReadOnly, NULL);
     pthread_mutex_unlock(&p->shadow_mu);
     return 0;
+}
+
+void hv_vgpu_metal_set_3d(HvVgpuMetal *m, const HvGpu3dScanoutOps *ops, void *renderer) {
+    if (!m) return;
+    HvVgpuPresenter *p = (__bridge HvVgpuPresenter *)m;
+    os_unfair_lock_lock(&p->layer_lock);
+    p->scan_ops = ops, p->scan_r = renderer;
+    os_unfair_lock_unlock(&p->layer_lock);
+    dispatch_sync(p->work, ^{}); /* a present that already took the old renderer is done */
+    [p kick];
 }
 
 uint64_t hv_vgpu_metal_drawn(HvVgpuMetal *m, uint8_t *bgra, uint32_t w, uint32_t h) {

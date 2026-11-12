@@ -1,7 +1,9 @@
 #include "virtio_gpu.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define CTRLQ 0
 #define CURSORQ 1
@@ -14,16 +16,36 @@
 #define CMD_TRANSFER_TO_HOST_2D 0x105
 #define CMD_RESOURCE_ATTACH_BACKING 0x106
 #define CMD_RESOURCE_DETACH_BACKING 0x107
+#define CMD_GET_CAPSET_INFO 0x108
+#define CMD_GET_CAPSET 0x109
+#define CMD_CTX_CREATE 0x200
+#define CMD_CTX_DESTROY 0x201
+#define CMD_CTX_ATTACH 0x202
+#define CMD_CTX_DETACH 0x203
+#define CMD_RESOURCE_CREATE_3D 0x204
+#define CMD_TRANSFER_TO_HOST_3D 0x205
+#define CMD_TRANSFER_FROM_HOST_3D 0x206
+#define CMD_SUBMIT_3D 0x207
 #define CMD_UPDATE_CURSOR 0x300
 #define CMD_MOVE_CURSOR 0x301
 
 #define RESP_OK_NODATA 0x1100
 #define RESP_OK_DISPLAY_INFO 0x1101
+#define RESP_OK_CAPSET_INFO 0x1102
+#define RESP_OK_CAPSET 0x1103
 #define RESP_ERR_UNSPEC 0x1200
 #define RESP_ERR_OUT_OF_MEMORY 0x1201
 #define RESP_ERR_INVALID_SCANOUT_ID 0x1202
 #define RESP_ERR_INVALID_RESOURCE_ID 0x1203
+#define RESP_ERR_INVALID_CONTEXT_ID 0x1204
 #define RESP_ERR_INVALID_PARAMETER 0x1205
+
+#define F_VIRGL 1ull
+#define CFG_NUM_CAPSETS 12
+#define QUEUED 0                  /* internal: the command went to the renderer, the answer comes later */
+#define DEFERRED UINT32_MAX       /* internal: control() wrote no answer */
+#define CTX_NAME_MAX 64
+#define DRAIN_MS 5000
 
 #define FLAG_FENCE 1
 #define HDR_LEN 24
@@ -109,7 +131,7 @@ static void copy_from_backing(HvVirtioGpu *g, const HvVgpuResource *r, uint64_t 
 
 static uint32_t cmd_create(HvVirtioGpu *g, const uint8_t *req) {
     uint32_t id = get32(req + 24), format = get32(req + 28), w = get32(req + 32), h = get32(req + 36);
-    if (!id || hv_virtio_gpu_resource(g, id)) return RESP_ERR_INVALID_RESOURCE_ID;
+    if (!id || hv_virtio_gpu_resource(g, id) || hv_virtio_gpu_res3d(g, id)) return RESP_ERR_INVALID_RESOURCE_ID;
     if (!format_ok(format) || !w || !h || w > HV_VGPU_MAX_DIM || h > HV_VGPU_MAX_DIM) return RESP_ERR_INVALID_PARAMETER;
     uint64_t bytes = (uint64_t)w * h * 4;
     if (bytes > HV_VGPU_MAX_HOSTMEM - g->hostmem) return RESP_ERR_OUT_OF_MEMORY;
@@ -139,6 +161,7 @@ static uint32_t cmd_set_scanout(HvVirtioGpu *g, const uint8_t *req) {
     if (scanout != 0) return RESP_ERR_INVALID_SCANOUT_ID;
     if (!id) {
         g->scanout_res = 0;
+        g->scanout3d_res = 0;
         scanout_all_dirty(g);
         return RESP_OK_NODATA;
     }
@@ -146,6 +169,7 @@ static uint32_t cmd_set_scanout(HvVirtioGpu *g, const uint8_t *req) {
     if (!r) return RESP_ERR_INVALID_RESOURCE_ID;
     if (!rect_inside(rect, r->width, r->height) || rect.width < 16 || rect.height < 16) return RESP_ERR_INVALID_PARAMETER;
     g->scanout_res = id;
+    g->scanout3d_res = 0;
     g->scanout = rect;
     scanout_all_dirty(g);
     return RESP_OK_NODATA;
@@ -226,8 +250,598 @@ static uint32_t cmd_detach(HvVirtioGpu *g, const uint8_t *req) {
     return RESP_OK_NODATA;
 }
 
-/* Request length for each command, header included; 0 for one we do not know. */
-static uint32_t request_len(uint32_t type) {
+/* ---- 3D: commands that go to a renderer on another thread ---- */
+
+struct HvVgpuPend {
+    HvGpu3dReq req;
+    HvVirtioGpu *g;
+    HvVirtqElem *e;                /* NULL for a request of our own (a reset's): nothing to answer */
+    uint8_t hdr[HDR_LEN];          /* the guest's header, for the fence echo */
+    HvGpu3dRange *ranges;
+    uint8_t *data;
+    uint32_t nwritten;             /* ranges in ranges[] a TRANSFER_FROM_HOST may write (gpa and len only) */
+    uint32_t order;                /* the header's context: answers on one context go out in order */
+    uint32_t resp;                 /* RESP_* once done */
+    uint32_t bytes;                /* counted against HV_VGPU_MAX_PEND_BYTES */
+    uint64_t gen;                  /* of the table entry a create or attach made: a rollback must not hit a later one */
+    int done, orphan, sent;        /* sent: the renderer has it (a request answered by us alone is not) */
+    HvVgpuPend *next, *prev;
+};
+
+static int virgl_active(const HvVirtioGpu *g) { return g->ops3d && (g->vio.driver_features & F_VIRGL); }
+
+static uint32_t resp_for(uint32_t st) {
+    switch (st) {
+    case HV_GPU3D_OK: return RESP_OK_NODATA;
+    case HV_GPU3D_ERR_NOMEM: return RESP_ERR_OUT_OF_MEMORY;
+    case HV_GPU3D_ERR_CTX: return RESP_ERR_INVALID_CONTEXT_ID;
+    case HV_GPU3D_ERR_RESOURCE: return RESP_ERR_INVALID_RESOURCE_ID;
+    case HV_GPU3D_ERR_PARAM: return RESP_ERR_INVALID_PARAMETER;
+    default: return RESP_ERR_UNSPEC;
+    }
+}
+
+static void pend_free(HvVgpuPend *p) {
+    free(p->e);
+    free(p->ranges);
+    free(p->data);
+    free(p);
+}
+
+/* A request for the renderer. bytes: what its copied buffers cost; own: a reset's, past the limits. NULL when over them. */
+static HvVgpuPend *pend_new(HvVirtioGpu *g, const uint8_t *hdr, const HvVirtqElem *e, uint32_t type, uint64_t bytes, int own) {
+    if (!own && (g->npend >= HV_VGPU_MAX_PEND || bytes > HV_VGPU_MAX_PEND_BYTES - g->pend_bytes)) return NULL;
+    HvVgpuPend *p = calloc(1, sizeof *p);
+    if (!p) return NULL;
+    p->g = g;
+    p->bytes = (uint32_t)bytes;
+    p->req.type = type;
+    if (e) {
+        p->e = malloc(sizeof *e);
+        if (!p->e) {
+            free(p);
+            return NULL;
+        }
+        *p->e = *e;
+        memcpy(p->hdr, hdr, HDR_LEN);
+        p->req.fenced = (get32(hdr + 4) & FLAG_FENCE) != 0;
+        p->req.fence_id = get64(hdr + 8);
+        p->req.ctx_id = p->order = get32(hdr + 16);
+    }
+    return p;
+}
+
+/* In the list before the renderer can answer, so a done() that runs inside submit() finds it. */
+static void pend_enqueue(HvVirtioGpu *g, HvVgpuPend *p, int submit) {
+    pthread_mutex_lock(&g->cmu);
+    p->prev = g->ptail, p->next = NULL;
+    if (g->ptail) g->ptail->next = p;
+    else g->phead = p;
+    g->ptail = p;
+    g->npend++;
+    g->pend_bytes += p->bytes;
+    if (submit) g->nopen++, g->sent3d++, p->sent = 1;
+    else __atomic_store_n(&g->kick, 1, __ATOMIC_RELEASE);
+    pthread_mutex_unlock(&g->cmu);
+    if (submit) g->ops3d->submit(g->renderer, &p->req, p);
+}
+
+void hv_virtio_gpu_3d_done(void *cookie, uint32_t status) {
+    HvVgpuPend *p = cookie;
+    if (!p) return;
+    HvVirtioGpu *g = p->g;
+    pthread_mutex_lock(&g->cmu);
+    if (p->orphan) { /* a reset gave up on it */
+        g->norphan--;
+        pthread_mutex_unlock(&g->cmu);
+        pend_free(p);
+        return;
+    }
+    if (!p->done) {
+        p->done = 1;
+        p->resp = resp_for(status);
+        g->nopen--, g->done3d++;
+        __atomic_store_n(&g->kick, 1, __ATOMIC_RELEASE);
+        pthread_cond_broadcast(&g->ccv);
+        hv_machine_wake(g->vio.m); /* under cmu: a destroy waits for it, then may free g and the machine */
+    }
+    pthread_mutex_unlock(&g->cmu);
+}
+
+HvVgpuRes3d *hv_virtio_gpu_res3d(HvVirtioGpu *g, uint32_t id) {
+    if (!id) return NULL;
+    for (HvVgpuRes3d *r = g->res3d[(id * 2654435761u) >> 22]; r; r = r->next)
+        if (r->id == id) return r;
+    return NULL;
+}
+
+static void res3d_drop_backing(HvVirtioGpu *g, HvVgpuRes3d *r) {
+    if (r->has_backing) g->backing3d -= r->npieces;
+    free(r->pieces);
+    r->pieces = NULL, r->has_backing = 0, r->npieces = 0, r->backing_len = 0;
+}
+
+static void res3d_remove(HvVirtioGpu *g, uint32_t id) {
+    for (HvVgpuRes3d **pp = &g->res3d[(id * 2654435761u) >> 22]; *pp; pp = &(*pp)->next) {
+        HvVgpuRes3d *r = *pp;
+        if (r->id != id) continue;
+        *pp = r->next;
+        res3d_drop_backing(g, r);
+        if (g->scanout3d_res == id) g->scanout3d_res = 0, scanout_all_dirty(g); /* the screen goes black */
+        g->nres3d--;
+        free(r);
+        return;
+    }
+}
+
+static int ctx_slot(const HvVirtioGpu *g, uint32_t id) {
+    if (!id) return -1;
+    for (int i = 0; i < HV_VGPU_MAX_CTX; i++)
+        if (g->ctx[i] == id) return i;
+    return -1;
+}
+
+static void ctx_remove(HvVirtioGpu *g, uint32_t id) {
+    int i = ctx_slot(g, id);
+    if (i < 0) return;
+    g->ctx[i] = 0;
+    g->nctx--;
+}
+
+/* The guest's context in a header: one it made. */
+static int ctx_ok(const HvVirtioGpu *g, uint32_t id) { return ctx_slot(g, id) >= 0; }
+
+/* For a command the guest may send outside a context (id 0). */
+static int ctx_or_none(const HvVirtioGpu *g, uint32_t id) { return !id || ctx_slot(g, id) >= 0; }
+
+static uint64_t readable_len(const HvVirtqElem *e) {
+    uint64_t n = 0;
+    for (int s = 0; s < e->nseg; s++)
+        if (!e->seg[s].write) n += e->seg[s].len;
+    return n;
+}
+
+static uint64_t mip(uint32_t v, uint32_t level) { return level > 31 || !(v >> level) ? 1 : v >> level; }
+
+/* Gallium's pipe_texture_target numbers */
+enum { T_BUFFER, T_1D, T_2D, T_3D, T_CUBE, T_RECT, T_1D_ARRAY, T_2D_ARRAY, T_CUBE_ARRAY, T_COUNT };
+
+static int shape_ok(const HvGpu3dReq *c) {
+    uint32_t t = c->target, w = c->width, h = c->height, d = c->depth, a = c->array_size;
+    if (t >= T_COUNT || !w || !h || !d || !a) return 0;
+    if (t == T_BUFFER) return w <= (1u << 28) && h == 1 && d == 1 && a == 1 && !c->last_level;
+    if (w > HV_VGPU_MAX_DIM || h > HV_VGPU_MAX_DIM || d > 2048 || a > 2048 || c->last_level > 14 || c->nr_samples > 16) return 0;
+    if (!c->format || c->format > 511) return 0;
+    if ((t == T_1D || t == T_1D_ARRAY) && h != 1) return 0;
+    if (t != T_3D && d != 1) return 0;
+    if ((t == T_1D || t == T_2D || t == T_3D || t == T_RECT) && a != 1) return 0;
+    if ((t == T_CUBE || t == T_CUBE_ARRAY) && (w != h || a % 6)) return 0;
+    if (t == T_CUBE && a != 6) return 0;
+    return (uint64_t)w * h * d * a <= (1ull << 32);
+}
+
+/* A box inside the resource's level. A buffer counts bytes in x and w. */
+static int box_ok(const HvVgpuRes3d *r, const HvGpu3dBox *b, uint32_t level) {
+    if (level > r->last_level) return 0;
+    uint64_t w = mip(r->width, level), h = r->target == T_BUFFER ? 1 : mip(r->height, level), z = 1;
+    if (r->target == T_3D) z = mip(r->depth, level);
+    else if (r->target == T_1D_ARRAY || r->target == T_2D_ARRAY || r->target == T_CUBE || r->target == T_CUBE_ARRAY) z = r->array_size;
+    return (uint64_t)b->x + b->w <= w && (uint64_t)b->y + b->h <= h && (uint64_t)b->z + b->d <= z;
+}
+
+static uint32_t cmd_ctx_create(HvVirtioGpu *g, const HvVirtqElem *e, const uint8_t *req, HvVgpuPend **out) {
+    uint32_t id = get32(req + 16), nlen = get32(req + 24);
+    if (!id || ctx_slot(g, id) >= 0) return RESP_ERR_INVALID_CONTEXT_ID;
+    if (g->nctx >= HV_VGPU_MAX_CTX) return RESP_ERR_OUT_OF_MEMORY;
+    if (nlen > CTX_NAME_MAX) return RESP_ERR_INVALID_PARAMETER;
+    HvVgpuPend *p = pend_new(g, req, e, CMD_CTX_CREATE, CTX_NAME_MAX + 1, 0);
+    if (!p) return RESP_ERR_OUT_OF_MEMORY;
+    p->data = calloc(1, CTX_NAME_MAX + 1);
+    if (!p->data) {
+        pend_free(p);
+        return RESP_ERR_OUT_OF_MEMORY;
+    }
+    memcpy(p->data, req + 32, nlen);
+    p->req.data = p->data, p->req.len = nlen;
+    for (int i = 0; i < HV_VGPU_MAX_CTX; i++)
+        if (!g->ctx[i]) {
+            g->ctx[i] = id;
+            g->ctxgen[i] = p->gen = ++g->gen3d;
+            break;
+        }
+    g->nctx++;
+    *out = p;
+    return QUEUED;
+}
+
+static uint32_t cmd_ctx_destroy(HvVirtioGpu *g, const HvVirtqElem *e, const uint8_t *req, HvVgpuPend **out) {
+    uint32_t id = get32(req + 16);
+    if (!ctx_ok(g, id)) return RESP_ERR_INVALID_CONTEXT_ID;
+    HvVgpuPend *p = pend_new(g, req, e, CMD_CTX_DESTROY, 0, 0);
+    if (!p) return RESP_ERR_OUT_OF_MEMORY;
+    ctx_remove(g, id);
+    *out = p;
+    return QUEUED;
+}
+
+static uint32_t cmd_ctx_attach(HvVirtioGpu *g, const HvVirtqElem *e, const uint8_t *req, uint32_t type, HvVgpuPend **out) {
+    if (!ctx_ok(g, get32(req + 16))) return RESP_ERR_INVALID_CONTEXT_ID;
+    uint32_t res = get32(req + 24);
+    if (!hv_virtio_gpu_res3d(g, res)) return RESP_ERR_INVALID_RESOURCE_ID;
+    HvVgpuPend *p = pend_new(g, req, e, type, 0, 0);
+    if (!p) return RESP_ERR_OUT_OF_MEMORY;
+    p->req.res_id = res;
+    *out = p;
+    return QUEUED;
+}
+
+static uint32_t cmd_create_3d(HvVirtioGpu *g, const HvVirtqElem *e, const uint8_t *req, HvVgpuPend **out) {
+    if (!ctx_or_none(g, get32(req + 16))) return RESP_ERR_INVALID_CONTEXT_ID;
+    uint32_t id = get32(req + 24);
+    if (!id || hv_virtio_gpu_resource(g, id) || hv_virtio_gpu_res3d(g, id)) return RESP_ERR_INVALID_RESOURCE_ID;
+    HvGpu3dReq c = {.res_id = id, .target = get32(req + 28), .format = get32(req + 32), .bind = get32(req + 36),
+                    .width = get32(req + 40), .height = get32(req + 44), .depth = get32(req + 48),
+                    .array_size = get32(req + 52), .last_level = get32(req + 56), .nr_samples = get32(req + 60),
+                    .flags = get32(req + 64)};
+    if (!shape_ok(&c)) return RESP_ERR_INVALID_PARAMETER;
+    if (g->nres3d >= HV_VGPU_MAX_RES3D) return RESP_ERR_OUT_OF_MEMORY;
+    HvVgpuRes3d *r = calloc(1, sizeof *r);
+    HvVgpuPend *p = r ? pend_new(g, req, e, CMD_RESOURCE_CREATE_3D, 0, 0) : NULL;
+    if (!p) {
+        free(r);
+        return RESP_ERR_OUT_OF_MEMORY;
+    }
+    c.type = p->req.type, c.ctx_id = p->req.ctx_id, c.fenced = p->req.fenced, c.fence_id = p->req.fence_id;
+    p->req = c;
+    p->gen = ++g->gen3d;
+    *r = (HvVgpuRes3d){.gen = p->gen, .id = id, .target = c.target, .format = c.format, .bind = c.bind, .width = c.width, .height = c.height,
+                       .depth = c.depth, .array_size = c.array_size, .last_level = c.last_level, .nr_samples = c.nr_samples,
+                       .flags = c.flags};
+    HvVgpuRes3d **head = &g->res3d[(id * 2654435761u) >> 22];
+    r->next = *head;
+    *head = r;
+    g->nres3d++;
+    *out = p;
+    return QUEUED;
+}
+
+/* box in level `level` of r3, `offset` into its backing; strides are the guest's (0: the renderer works them out). */
+static uint32_t queue_transfer(HvVirtioGpu *g, const HvVirtqElem *e, const uint8_t *req, uint32_t type, const HvVgpuRes3d *r3,
+                               HvGpu3dBox b, uint64_t offset, uint32_t level, uint32_t stride, uint32_t layer_stride,
+                               HvVgpuPend **out) {
+    if (!r3->has_backing) return RESP_ERR_UNSPEC;
+    if (!box_ok(r3, &b, level)) return RESP_ERR_INVALID_PARAMETER;
+    if (offset > r3->backing_len) return RESP_ERR_INVALID_PARAMETER;
+    if (b.w && b.h && b.d) { /* the first byte of the last row must be in the backing; the renderer checks the rest */
+        uint64_t last = offset + (uint64_t)(b.h - 1) * stride + (uint64_t)(b.d - 1) * layer_stride;
+        if (last >= r3->backing_len) return RESP_ERR_INVALID_PARAMETER;
+    }
+    int from = type == HV_GPU3D_TRANSFER_FROM_HOST;
+    HvVgpuPend *p = pend_new(g, req, e, type, from ? (uint64_t)r3->npieces * sizeof(HvGpu3dRange) : 0, 0);
+    if (!p) return RESP_ERR_OUT_OF_MEMORY;
+    if (from) { /* the renderer writes guest RAM: the JIT must hear of it (hv_dma_written) */
+        p->ranges = calloc(r3->npieces, sizeof *p->ranges);
+        if (!p->ranges) {
+            pend_free(p);
+            return RESP_ERR_OUT_OF_MEMORY;
+        }
+        for (uint32_t i = 0; i < r3->npieces; i++) p->ranges[i] = (HvGpu3dRange){NULL, r3->pieces[i].len, r3->pieces[i].addr};
+        p->nwritten = r3->npieces;
+    }
+    p->req.res_id = r3->id, p->req.box = b, p->req.offset = offset;
+    p->req.level = level, p->req.stride = stride, p->req.layer_stride = layer_stride;
+    *out = p;
+    return QUEUED;
+}
+
+static uint32_t cmd_transfer_3d(HvVirtioGpu *g, const HvVirtqElem *e, const uint8_t *req, uint32_t type, HvVgpuPend **out) {
+    if (!ctx_or_none(g, get32(req + 16))) return RESP_ERR_INVALID_CONTEXT_ID;
+    HvVgpuRes3d *r = hv_virtio_gpu_res3d(g, get32(req + 56));
+    if (!r) return RESP_ERR_INVALID_RESOURCE_ID;
+    HvGpu3dBox b = {get32(req + 24), get32(req + 28), get32(req + 32), get32(req + 36), get32(req + 40), get32(req + 44)};
+    return queue_transfer(g, e, req, type, r, b, get64(req + 48), get32(req + 60), get32(req + 64), get32(req + 68), out);
+}
+
+static uint32_t cmd_submit_3d(HvVirtioGpu *g, const HvVirtqElem *e, const uint8_t *req, HvVgpuPend **out) {
+    if (!ctx_ok(g, get32(req + 16))) return RESP_ERR_INVALID_CONTEXT_ID;
+    uint32_t size = get32(req + 24);
+    if (size > HV_VGPU_MAX_SUBMIT || size % 4) return RESP_ERR_INVALID_PARAMETER;
+    if (readable_len(e) < 32 + (uint64_t)size) return RESP_ERR_UNSPEC;
+    HvVgpuPend *p = pend_new(g, req, e, CMD_SUBMIT_3D, size, 0);
+    if (!p) return RESP_ERR_OUT_OF_MEMORY;
+    p->data = malloc(size ? size : 1);
+    if (!p->data || hv_virtq_read(&g->vio, e, 32, p->data, size) != size) {
+        uint32_t st = p->data ? RESP_ERR_UNSPEC : RESP_ERR_OUT_OF_MEMORY;
+        pend_free(p);
+        return st;
+    }
+    p->req.data = p->data, p->req.len = size;
+    *out = p;
+    return QUEUED;
+}
+
+static uint32_t attach_3d(HvVirtioGpu *g, const HvVirtqElem *e, const uint8_t *req, HvVgpuRes3d *r, HvVgpuPend **out) {
+    uint32_t n = get32(req + 28);
+    if (r->has_backing) return RESP_ERR_UNSPEC;
+    if (!n || n > HV_VGPU_MAX_ENTRIES) return RESP_ERR_INVALID_PARAMETER;
+    if (n > HV_VGPU_MAX_BACKING3D - g->backing3d) return RESP_ERR_OUT_OF_MEMORY;
+    if (readable_len(e) < 32 + (uint64_t)n * 16) return RESP_ERR_UNSPEC;
+    HvVgpuPend *p = pend_new(g, req, e, HV_GPU3D_ATTACH_BACKING, (uint64_t)n * sizeof(HvGpu3dRange), 0);
+    if (!p) return RESP_ERR_OUT_OF_MEMORY;
+    uint8_t *list = malloc((size_t)n * 16);
+    p->ranges = calloc(n, sizeof *p->ranges);
+    uint32_t status = RESP_OK_NODATA;
+    if (!list || !p->ranges) status = RESP_ERR_OUT_OF_MEMORY;
+    else if (hv_virtq_read(&g->vio, e, 32, list, n * 16) != n * 16) status = RESP_ERR_UNSPEC;
+    uint64_t total = 0;
+    HvVgpuPiece *pieces = status == RESP_OK_NODATA ? calloc(n, sizeof *pieces) : NULL;
+    if (status == RESP_OK_NODATA && !pieces) status = RESP_ERR_OUT_OF_MEMORY;
+    for (uint32_t i = 0; status == RESP_OK_NODATA && i < n; i++) {
+        uint64_t addr = get64(list + 16 * i);
+        uint32_t len = get32(list + 16 * i + 8);
+        void *ptr = NULL;
+        if (!len || addr > UINT64_MAX - len) status = RESP_ERR_INVALID_PARAMETER;
+        else if (!(ptr = hv_phys_ptr(g->vio.m, addr, len)) || hv_ram_lookup(g->vio.m, addr)->readonly) status = RESP_ERR_UNSPEC;
+        else p->ranges[i] = (HvGpu3dRange){ptr, len, addr}, pieces[i] = (HvVgpuPiece){addr, total, len}, total += len;
+    }
+    free(list);
+    if (status != RESP_OK_NODATA) {
+        free(pieces);
+        pend_free(p);
+        return status;
+    }
+    p->gen = r->attach_gen = ++g->gen3d;
+    r->pieces = pieces;
+    p->req.res_id = r->id, p->req.ctx_id = 0, p->req.ranges = p->ranges, p->req.nranges = n;
+    r->has_backing = 1, r->npieces = n, r->backing_len = total;
+    g->backing3d += n;
+    *out = p;
+    return QUEUED;
+}
+
+/* The commands that are 3D or name a 3D resource. 1 if handled: status is QUEUED (*out is set) or an error. */
+static int try_3d(HvVirtioGpu *g, const HvVirtqElem *e, const uint8_t *req, uint32_t type, uint32_t *status, int *wake,
+                  HvVgpuPend **out) {
+    HvVgpuRes3d *r;
+    switch (type) {
+    case CMD_CTX_CREATE: *status = cmd_ctx_create(g, e, req, out); return 1;
+    case CMD_CTX_DESTROY: *status = cmd_ctx_destroy(g, e, req, out); return 1;
+    case CMD_CTX_ATTACH:
+    case CMD_CTX_DETACH: *status = cmd_ctx_attach(g, e, req, type, out); return 1;
+    case CMD_RESOURCE_CREATE_3D: *status = cmd_create_3d(g, e, req, out); return 1;
+    case CMD_TRANSFER_TO_HOST_3D:
+    case CMD_TRANSFER_FROM_HOST_3D: *status = cmd_transfer_3d(g, e, req, type, out); return 1;
+    case CMD_SUBMIT_3D: *status = cmd_submit_3d(g, e, req, out); return 1;
+    case CMD_RESOURCE_UNREF:
+        if (!(r = hv_virtio_gpu_res3d(g, get32(req + 24)))) return 0;
+        if (!(*out = pend_new(g, req, e, HV_GPU3D_RESOURCE_UNREF, 0, 0))) {
+            *status = RESP_ERR_OUT_OF_MEMORY;
+            return 1;
+        }
+        (*out)->req.res_id = r->id, (*out)->req.ctx_id = 0;
+        if (g->scanout3d_res == r->id) *wake = 1;
+        res3d_remove(g, r->id);
+        *status = QUEUED;
+        return 1;
+    case CMD_RESOURCE_ATTACH_BACKING:
+        if (!(r = hv_virtio_gpu_res3d(g, get32(req + 24)))) return 0;
+        *status = attach_3d(g, e, req, r, out);
+        return 1;
+    case CMD_RESOURCE_DETACH_BACKING:
+        if (!(r = hv_virtio_gpu_res3d(g, get32(req + 24)))) return 0;
+        if (!(*out = pend_new(g, req, e, HV_GPU3D_DETACH_BACKING, 0, 0))) {
+            *status = RESP_ERR_OUT_OF_MEMORY;
+            return 1;
+        }
+        (*out)->req.res_id = r->id, (*out)->req.ctx_id = 0;
+        res3d_drop_backing(g, r);
+        *status = QUEUED;
+        return 1;
+    case CMD_SET_SCANOUT: {
+        HvVgpuRect rect = get_rect(req + 24);
+        if (!(r = hv_virtio_gpu_res3d(g, get32(req + 44)))) return 0;
+        if (get32(req + 40) != 0) *status = RESP_ERR_INVALID_SCANOUT_ID;
+        else if ((r->target != T_2D && r->target != T_RECT) || !rect_inside(rect, r->width, r->height) || rect.width < 16 ||
+                 rect.height < 16)
+            *status = RESP_ERR_INVALID_PARAMETER;
+        else {
+            g->scanout_res = 0; /* the presenter shows the 3D one instead */
+            g->scanout3d_res = r->id, g->scanout3d = rect;
+            scanout_all_dirty(g);
+            *wake = 1;
+            *status = RESP_OK_NODATA;
+        }
+        return 1;
+    }
+    case CMD_RESOURCE_FLUSH:
+        if (!(r = hv_virtio_gpu_res3d(g, get32(req + 40)))) return 0;
+        if (!rect_inside(get_rect(req + 24), r->width, r->height)) *status = RESP_ERR_INVALID_PARAMETER;
+        else {
+            if (r->id == g->scanout3d_res) g->flushes++, scanout_all_dirty(g), *wake = 1;
+            *status = RESP_OK_NODATA;
+        }
+        return 1;
+    case CMD_TRANSFER_TO_HOST_2D: {
+        if (!(r = hv_virtio_gpu_res3d(g, get32(req + 48)))) return 0;
+        HvVgpuRect t = get_rect(req + 24);
+        *status = queue_transfer(g, e, req, HV_GPU3D_TRANSFER_TO_HOST, r, (HvGpu3dBox){t.x, t.y, 0, t.width, t.height, 1},
+                                 get64(req + 40), 0, 0, 0, out);
+        if (*out) (*out)->req.ctx_id = 0; /* the 2D command has none */
+        return 1;
+    }
+    default: return 0;
+    }
+}
+
+/* Must an answer for this context wait? True if a request on it, or (for a fenced answer) any fenced one, is still in the list. */
+static int answer_must_wait(HvVirtioGpu *g, uint32_t ctx, int fenced) {
+    pthread_mutex_lock(&g->cmu);
+    int any = 0;
+    for (HvVgpuPend *p = g->phead; p && !any; p = p->next) any = p->order == ctx || (fenced && p->req.fenced);
+    pthread_mutex_unlock(&g->cmu);
+    return any;
+}
+
+/* CPU thread, under the device lock (the board's tick): answer what the renderer has finished. Order: within a context,
+   and fenced answers in global request order (the guest signals every lower fence with the one it gets). */
+#define HOLD_SLOTS (2 * HV_VGPU_MAX_PEND)
+static void complete_3d(HvVirtioGpu *g) {
+    if (!__atomic_exchange_n(&g->kick, 0, __ATOMIC_ACQ_REL)) return;
+    HvVgpuPend *ready = NULL, *tail = NULL;
+    uint64_t held[HOLD_SLOTS]; /* contexts with an earlier unanswered request, as ctx + 1; open addressing */
+    memset(held, 0, sizeof held);
+    int fence_held = 0, nheld = 0, full = 0;
+    pthread_mutex_lock(&g->cmu);
+    for (HvVgpuPend *p = g->phead, *nx; p; p = nx) {
+        nx = p->next;
+        uint32_t h = (p->order * 2654435761u) % HOLD_SLOTS;
+        while (held[h] && held[h] != (uint64_t)p->order + 1) h = (h + 1) % HOLD_SLOTS;
+        int ctx_held = held[h] != 0;
+        if (!ctx_held && nheld >= HOLD_SLOTS - 1) { /* table full: keep the rest in order for the next tick */
+            full = 1;
+            break;
+        }
+        if (p->done && !ctx_held && !(p->req.fenced && fence_held)) {
+            if (p->prev) p->prev->next = p->next;
+            else g->phead = p->next;
+            if (p->next) p->next->prev = p->prev;
+            else g->ptail = p->prev;
+            p->next = NULL;
+            if (tail) tail->next = p;
+            else ready = p;
+            tail = p;
+            g->npend--;
+            g->pend_bytes -= p->bytes;
+        } else {
+            if (!held[h]) nheld++;
+            held[h] = (uint64_t)p->order + 1;
+            if (p->req.fenced) fence_held = 1;
+        }
+    }
+    if (full) __atomic_store_n(&g->kick, 1, __ATOMIC_RELEASE);
+    pthread_mutex_unlock(&g->cmu);
+    int pushed = 0;
+    for (HvVgpuPend *p = ready, *nx; p; p = nx) {
+        nx = p->next;
+        if (p->sent && p->resp >= RESP_ERR_UNSPEC) {
+            pthread_mutex_lock(&g->mu);
+            g->errors++;
+            if (p->req.type == HV_GPU3D_RESOURCE_CREATE) { /* the renderer refused it; by generation, the id may be reused */
+                HvVgpuRes3d *r = hv_virtio_gpu_res3d(g, p->req.res_id);
+                if (r && r->gen == p->gen) res3d_remove(g, p->req.res_id);
+            } else if (p->req.type == HV_GPU3D_CTX_CREATE) {
+                int i = ctx_slot(g, p->req.ctx_id);
+                if (i >= 0 && g->ctxgen[i] == p->gen) ctx_remove(g, p->req.ctx_id);
+            }
+            else if (p->req.type == HV_GPU3D_ATTACH_BACKING) {
+                HvVgpuRes3d *r = hv_virtio_gpu_res3d(g, p->req.res_id);
+                if (r && r->attach_gen == p->gen && r->has_backing) res3d_drop_backing(g, r);
+            }
+            pthread_mutex_unlock(&g->mu);
+        }
+        if (p->nwritten && p->resp == RESP_OK_NODATA)
+            for (uint32_t i = 0; i < p->nwritten; i++) hv_dma_written(g->vio.m, p->ranges[i].gpa, p->ranges[i].len);
+        if (p->e) {
+            uint8_t resp[HDR_LEN] = {0};
+            put32(resp, p->resp);
+            if (p->req.fenced) {
+                put32(resp + 4, FLAG_FENCE);
+                memcpy(resp + 8, p->hdr + 8, 12);
+            }
+            uint32_t written = hv_virtq_write(&g->vio, p->e, 0, resp, HDR_LEN);
+            hv_virtq_push(&g->vio, CTRLQ, p->e, written);
+            pushed = 1;
+        }
+        pend_free(p);
+    }
+    if (pushed) hv_virtio_interrupt(&g->vio);
+}
+
+/* Wait for the renderer to finish every request, then drop them all. A stuck one is kept alive for its late done().
+   Returns 1 if none was stuck. */
+static int drain_3d(HvVirtioGpu *g) {
+    struct timespec ts;
+    int ms = g->drain_ms > 0 ? g->drain_ms : DRAIN_MS;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += ms / 1000, ts.tv_nsec += (ms % 1000) * 1000000L;
+    if (ts.tv_nsec >= 1000000000L) ts.tv_sec++, ts.tv_nsec -= 1000000000L;
+    pthread_mutex_lock(&g->cmu);
+    int rc = 0;
+    while (g->nopen && !rc) rc = pthread_cond_timedwait(&g->ccv, &g->cmu, &ts);
+    int clean = g->nopen == 0;
+    for (HvVgpuPend *p = g->phead, *nx; p; p = nx) {
+        nx = p->next;
+        if (p->done) pend_free(p);
+        else p->orphan = 1, g->norphan++;
+    }
+    g->phead = g->ptail = NULL;
+    g->npend = g->nopen = 0;
+    g->pend_bytes = 0;
+    __atomic_store_n(&g->kick, 0, __ATOMIC_RELEASE);
+    pthread_mutex_unlock(&g->cmu);
+    if (!clean) fprintf(stderr, "virtio-gpu: the renderer did not finish its requests in %d ms; abandoned\n", ms);
+    return clean;
+}
+
+/* Every context and resource goes to the renderer to destroy, and the tables empty. Not for a running guest. */
+static int reset_3d(HvVirtioGpu *g) {
+    uint32_t nres = 0, nctx = 0;
+    uint32_t *res = NULL, *ctx = NULL;
+    pthread_mutex_lock(&g->mu);
+    if (g->ops3d && (g->nres3d || g->nctx)) {
+        res = malloc((g->nres3d + 1) * sizeof *res);
+        ctx = malloc((g->nctx + 1) * sizeof *ctx);
+    }
+    for (int b = 0; b < HV_VGPU_RES3D_BUCKETS; b++)
+        while (g->res3d[b]) {
+            uint32_t id = g->res3d[b]->id;
+            if (res) res[nres++] = id;
+            res3d_remove(g, id);
+        }
+    for (int i = 0; i < HV_VGPU_MAX_CTX; i++)
+        if (g->ctx[i]) {
+            if (ctx) ctx[nctx++] = g->ctx[i];
+            g->ctx[i] = 0;
+        }
+    g->nctx = 0, g->backing3d = 0, g->scanout3d_res = 0;
+    pthread_mutex_unlock(&g->mu);
+    for (uint32_t i = 0; res && ctx && i < nres + nctx; i++) {
+        HvVgpuPend *p = pend_new(g, NULL, NULL, i < nres ? HV_GPU3D_RESOURCE_UNREF : HV_GPU3D_CTX_DESTROY, 0, 1);
+        if (!p) break;
+        if (i < nres) p->req.res_id = res[i];
+        else p->req.ctx_id = p->order = ctx[i - nres];
+        pend_enqueue(g, p, 1);
+    }
+    free(res);
+    free(ctx);
+    return drain_3d(g);
+}
+
+int hv_virtio_gpu_set_3d(HvVirtioGpu *g, const HvGpu3dOps *ops, void *renderer) {
+    if (!g || (g->vio.status & (4 | 8))) return -1; /* DRIVER_OK or FEATURES_OK: the guest may be using ops3d */
+    if (ops && (!ops->capset_info || !ops->capset || !ops->submit)) return -1;
+    reset_3d(g);
+    g->ops3d = NULL, g->ncaps = 0;
+    g->vio.features &= ~F_VIRGL;
+    g->vio.driver_features &= g->vio.features;
+    put32(g->vio.config + CFG_NUM_CAPSETS, 0);
+    if (!ops) return 0;
+    for (uint32_t i = 0; i < HV_VGPU_MAX_CAPSETS; i++) {
+        uint32_t id, version, size;
+        if (ops->capset_info(renderer, i, &id, &version, &size)) break;
+        if (!id || !version || !size || size > HV_VGPU_MAX_CAPSET_SIZE) return -1;
+        g->caps[g->ncaps].id = id, g->caps[g->ncaps].version = version, g->caps[g->ncaps].size = size;
+        g->ncaps++;
+    }
+    if (!g->ncaps) return -1;
+    g->ops3d = ops, g->renderer = renderer;
+    g->vio.features |= F_VIRGL;
+    put32(g->vio.config + CFG_NUM_CAPSETS, g->ncaps);
+    return 0;
+}
+
+/* Request length for each command, header included; 0 for one we do not know (or a 3D one without 3D). */
+static uint32_t request_len(const HvVirtioGpu *g, uint32_t type) {
     switch (type) {
     case CMD_GET_DISPLAY_INFO: return HDR_LEN;
     case CMD_RESOURCE_CREATE_2D: return 40;
@@ -237,27 +851,70 @@ static uint32_t request_len(uint32_t type) {
     case CMD_TRANSFER_TO_HOST_2D: return 56;
     case CMD_RESOURCE_ATTACH_BACKING: return 32;
     case CMD_RESOURCE_DETACH_BACKING: return 32;
+    default: break;
+    }
+    if (!virgl_active(g)) return 0;
+    switch (type) {
+    case CMD_GET_CAPSET_INFO: return 32;
+    case CMD_GET_CAPSET: return 32;
+    case CMD_CTX_CREATE: return 96;
+    case CMD_CTX_DESTROY: return HDR_LEN;
+    case CMD_CTX_ATTACH: return 32;
+    case CMD_CTX_DETACH: return 32;
+    case CMD_RESOURCE_CREATE_3D: return 72;
+    case CMD_TRANSFER_TO_HOST_3D: return 72;
+    case CMD_TRANSFER_FROM_HOST_3D: return 72;
+    case CMD_SUBMIT_3D: return 32;
     default: return 0;
     }
 }
 
-/* One control request; returns the bytes written back. */
+/* GET_CAPSET_INFO and GET_CAPSET, which answer with data; the renderer's calls are not queued. Under mu. */
+static uint32_t capset_answer(HvVirtioGpu *g, uint32_t type, const uint8_t *req, uint8_t *resp, uint8_t **heap, uint32_t *resp_len) {
+    if (type == CMD_GET_CAPSET_INFO) {
+        uint32_t i = get32(req + 24);
+        if (i >= g->ncaps) return RESP_ERR_INVALID_PARAMETER;
+        put32(resp + HDR_LEN, g->caps[i].id);
+        put32(resp + HDR_LEN + 4, g->caps[i].version);
+        put32(resp + HDR_LEN + 8, g->caps[i].size);
+        *resp_len = HDR_LEN + 16;
+        return RESP_OK_CAPSET_INFO;
+    }
+    uint32_t id = get32(req + 24), version = get32(req + 28), i = 0;
+    while (i < g->ncaps && g->caps[i].id != id) i++;
+    if (i == g->ncaps || !version || version > g->caps[i].version) return RESP_ERR_INVALID_PARAMETER;
+    uint32_t size = g->caps[i].size;
+    *heap = calloc(1, HDR_LEN + (size_t)size);
+    if (!*heap) return RESP_ERR_OUT_OF_MEMORY;
+    if (g->ops3d->capset(g->renderer, id, version, *heap + HDR_LEN, size)) return RESP_ERR_UNSPEC;
+    *resp_len = HDR_LEN + size;
+    return RESP_OK_CAPSET;
+}
+
+/* One control request; returns the bytes written back, or DEFERRED when the renderer will answer it. */
 static uint32_t control(HvVirtioGpu *g, const HvVirtqElem *e, int *wake) {
-    uint8_t req[56] = {0};
+    uint8_t req[96] = {0};
     uint32_t got = hv_virtq_read(&g->vio, e, 0, req, sizeof req);
-    uint32_t type = get32(req), need = request_len(type), status;
-    uint8_t resp[HDR_LEN + MAX_SCANOUTS * 24] = {0};
+    uint32_t type = get32(req), need = request_len(g, type), status;
+    uint8_t resp_buf[HDR_LEN + MAX_SCANOUTS * 24] = {0}, *resp = resp_buf, *heap = NULL;
     uint32_t resp_len = HDR_LEN;
+    HvVgpuPend *pend = NULL;
+    int valid = got >= HDR_LEN && need && got >= need;
     pthread_mutex_lock(&g->mu);
-    if (got < HDR_LEN || !need || got < need) {
+    if (!valid) {
         status = RESP_ERR_UNSPEC;
+    } else if (type == CMD_GET_CAPSET_INFO || type == CMD_GET_CAPSET) {
+        status = capset_answer(g, type, req, resp_buf, &heap, &resp_len);
+        if (heap) resp = heap;
+    } else if (virgl_active(g) && try_3d(g, e, req, type, &status, wake, &pend)) {
+        /* status is QUEUED or an error */
     } else {
         switch (type) {
         case CMD_GET_DISPLAY_INFO:
             put32(resp + HDR_LEN + 8, g->width);
             put32(resp + HDR_LEN + 12, g->height);
             put32(resp + HDR_LEN + 16, 1); /* enabled */
-            resp_len = sizeof resp;
+            resp_len = sizeof resp_buf;
             status = RESP_OK_DISPLAY_INFO;
             break;
         case CMD_RESOURCE_CREATE_2D: status = cmd_create(g, req); break;
@@ -269,16 +926,34 @@ static uint32_t control(HvVirtioGpu *g, const HvVirtqElem *e, int *wake) {
         case CMD_RESOURCE_DETACH_BACKING: status = cmd_detach(g, req); break;
         default: status = RESP_ERR_UNSPEC; break;
         }
-        if ((type == CMD_SET_SCANOUT || type == CMD_RESOURCE_UNREF) && g->dirty_set) *wake = 1; /* a new picture with no flush */
     }
+    if (valid && (type == CMD_SET_SCANOUT || type == CMD_RESOURCE_UNREF) && g->dirty_set) *wake = 1; /* a new picture with no flush */
     if (status >= RESP_ERR_UNSPEC) g->errors++;
     pthread_mutex_unlock(&g->mu);
+    if (pend) { /* the renderer answers; the guest hears of it from poll */
+        pend_enqueue(g, pend, 1);
+        return DEFERRED;
+    }
+    int fenced = (get32(req + 4) & FLAG_FENCE) != 0;
+    if (g->ops3d && resp_len == HDR_LEN && answer_must_wait(g, get32(req + 16), fenced)) {
+        /* Linux puts every fence on one timeline: an answer signals all lower fences. Queue behind earlier fenced requests
+           of any context, and earlier requests of this one. Counted against the limit: past it, answer at once. */
+        HvVgpuPend *p = pend_new(g, req, e, type, 0, 0);
+        if (p) {
+            p->done = 1, p->resp = status;
+            pend_enqueue(g, p, 0);
+            free(heap);
+            return DEFERRED;
+        }
+    }
     put32(resp, status);
-    if (get32(req + 4) & FLAG_FENCE) { /* the driver waits on this fence: hand it back */
+    if (fenced) { /* the driver waits on this fence: hand it back */
         put32(resp + 4, FLAG_FENCE);
         memcpy(resp + 8, req + 8, 12); /* fence_id, ctx_id */
     }
-    return hv_virtq_write(&g->vio, e, 0, resp, resp_len);
+    uint32_t written = hv_virtq_write(&g->vio, e, 0, resp, resp_len);
+    free(heap);
+    return written;
 }
 
 static void cursor(HvVirtioGpu *g, const HvVirtqElem *e, int *wake) {
@@ -315,11 +990,19 @@ static void notify(HvVirtio *v, int q) {
     HvVirtioGpu *g = v->dev;
     if (q != CTRLQ && q != CURSORQ) return;
     static HvVirtqElem e;
-    int any = 0, wake = 0;
-    while (hv_virtq_pop(v, q, &e) > 0) {
+    int any = 0, wake = 0, got;
+    while ((got = hv_virtq_pop(v, q, &e)) != 0) {
         uint32_t written = 0;
-        if (q == CTRLQ) written = control(g, &e, &wake);
-        else cursor(g, &e, &wake);
+        if (got < 0) { /* a chain this model cannot follow: still hand it back, or the guest loses the slot for good */
+            uint8_t resp[HDR_LEN] = {0};
+            put32(resp, RESP_ERR_UNSPEC);
+            if (q == CTRLQ) written = hv_virtq_write(v, &e, 0, resp, HDR_LEN);
+        } else if (q == CTRLQ) {
+            written = control(g, &e, &wake);
+            if (written == DEFERRED) continue;
+        } else {
+            cursor(g, &e, &wake);
+        }
         hv_virtq_push(v, q, &e, written);
         any = 1;
     }
@@ -338,6 +1021,7 @@ static void config_write(HvVirtio *v, uint32_t off, uint64_t val, unsigned size)
 static void device_reset(HvVirtio *v) {
     HvVirtioGpu *g = v->dev;
     if (!g) return;
+    reset_3d(g);
     pthread_mutex_lock(&g->mu);
     for (int i = 0; i < HV_VGPU_MAX_RESOURCES; i++)
         if (g->res[i].id) drop_resource(g, &g->res[i]);
@@ -363,6 +1047,8 @@ HvVirtioGpu *hv_virtio_gpu_create(HvMachine *m, HvPcie *bus, uint32_t width, uin
     put32(v->config + 8, 1); /* num_scanouts; num_capsets stays 0 */
     v->config_len = 16;
     pthread_mutex_init(&g->mu, NULL);
+    pthread_mutex_init(&g->cmu, NULL);
+    pthread_cond_init(&g->ccv, NULL);
     g->width = clamp_dim(width), g->height = clamp_dim(height);
     g->mode_request = (uint64_t)g->width << 32 | g->height;
     hv_pcie_attach(bus, &v->pci);
@@ -376,6 +1062,7 @@ void hv_virtio_gpu_set_mode(HvVirtioGpu *g, uint32_t width, uint32_t height) {
 
 void hv_virtio_gpu_poll(HvVirtioGpu *g) {
     if (!g) return;
+    complete_3d(g);
     uint64_t want = __atomic_load_n(&g->mode_request, __ATOMIC_ACQUIRE);
     if (want == ((uint64_t)g->width << 32 | g->height)) return;
     pthread_mutex_lock(&g->mu);
@@ -401,10 +1088,19 @@ int hv_virtio_gpu_take_dirty(HvVirtioGpu *g, HvVgpuRect *r) {
 
 void hv_virtio_gpu_destroy(HvVirtioGpu *g) {
     if (!g) return;
+    int clean = reset_3d(g); /* the renderer drops its pointers into guest RAM; it must outlive this call */
+    pthread_mutex_lock(&g->cmu);
+    clean = clean && !g->norphan;
+    pthread_mutex_unlock(&g->cmu);
+    if (!clean) return; /* a stuck renderer may still call done() with a request of ours (now or from an earlier reset): leak the device */
     for (int i = 0; i < HV_VGPU_MAX_RESOURCES; i++) {
         free(g->res[i].pixels);
         free(g->res[i].backing);
     }
+    for (int b = 0; b < HV_VGPU_RES3D_BUCKETS; b++)
+        while (g->res3d[b]) res3d_remove(g, g->res3d[b]->id);
     pthread_mutex_destroy(&g->mu);
+    pthread_mutex_destroy(&g->cmu);
+    pthread_cond_destroy(&g->ccv);
     free(g);
 }
