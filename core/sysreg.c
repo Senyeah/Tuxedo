@@ -281,7 +281,11 @@ static int is_pauth_key(uint32_t reg) {
 int hv_sysreg_mrs(HvCpu *cpu, uint32_t insn, uint64_t pc) {
     uint32_t reg = (insn >> 5) & 0xffff;
     int rt = insn & 0x1f;
-    if (cpu->el == 0 && !el0_allowed(cpu, reg, 0)) return undefined(cpu, pc);
+    if (cpu->el == 0 && !el0_allowed(cpu, reg, 0)) {
+        /* ID registers (op0 3, op1 0, CRn 0): Linux emulates EL0 reads, so do not log them */
+        if (reg >> 7 == 0x180) return hv_raise_sync(cpu, HV_EC_UNKNOWN, 0, 0, pc), 1;
+        return undefined(cpu, pc);
+    }
     uint64_t v;
     if (is_pauth_key(reg)) v = 0;
     else if (read_reg(cpu, reg, &v) != 0) return undefined(cpu, pc);

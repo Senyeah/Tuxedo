@@ -2,6 +2,9 @@
 
 #include <mach/mach_time.h>
 #include <stdlib.h>
+#include <unistd.h>
+
+#include "sysreg.h"
 
 DECLARE_PROGRAM(p_svc);
 DECLARE_PROGRAM(p_brk_undef);
@@ -46,6 +49,42 @@ static int run(const TestProgram *p, HvCpu *cpu, uint64_t x9) {
 }
 
 #define ADDR(sym) ((uint64_t)(uintptr_t)(sym))
+
+/* EL0 MRS of an ID register: undefined (Linux emulates it), with no log line; others still log. */
+static size_t mrs_el0(uint32_t insn, HvCpu *c) {
+    memset(c, 0, sizeof *c);
+    c->m = &m;
+    c->vbar_el1 = 0x10000;
+    fflush(stderr);
+    FILE *tmp = tmpfile();
+    int saved = dup(2);
+    dup2(fileno(tmp), 2);
+    hv_sysreg_mrs(c, insn, 0x4000);
+    fflush(stderr);
+    dup2(saved, 2);
+    close(saved);
+    fseek(tmp, 0, SEEK_END);
+    size_t n = (size_t)ftell(tmp);
+    fclose(tmp);
+    return n;
+}
+
+static void test_el0_id_reads(void) {
+    static HvCpu c;
+    int log = m.log;
+    m.log = 1;
+    size_t quiet = mrs_el0(0xd5380000, &c); /* mrs x0, midr_el1 */
+    check("el0 id", "MIDR_EL1: ESR", c.esr_el1, 0x02000000);
+    check("el0 id", "MIDR_EL1: ELR", c.elr_el1, 0x4000);
+    check("el0 id", "MIDR_EL1: vector", c.pc, 0x10400);
+    check("el0 id", "MIDR_EL1: no log line", quiet, 0);
+    quiet = mrs_el0(0xd5380400, &c); /* mrs x0, id_aa64pfr0_el1 */
+    check("el0 id", "ID_AA64PFR0_EL1: no log line", quiet, 0);
+    size_t loud = mrs_el0(0xd5381000, &c); /* mrs x0, sctlr_el1 */
+    check("el0 id", "SCTLR_EL1: ESR", c.esr_el1, 0x02000000);
+    check("el0 id", "SCTLR_EL1: logged", loud > 0, 1);
+    m.log = log;
+}
 
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -168,6 +207,8 @@ int main(void) {
         TestProgram copy = {p->name, NULL, code, code + ((const char *)p->end - (const char *)p->start)};
         if (!run(&copy, &c, 0)) check(p->name, "1 then 2 after patching", c.x[1], 3);
     }
+
+    test_el0_id_reads();
 
     printf("%d checks, %d failures\n", checks, failures);
     return failures != 0;
