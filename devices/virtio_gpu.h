@@ -57,6 +57,7 @@ typedef struct HvVgpuResource {
 
 /* A resource the renderer owns: no host pixels here. */
 typedef struct HvVgpuRes3d {
+    uint64_t gen;
     uint32_t id;
     uint32_t target, format, bind, width, height, depth, array_size, last_level, nr_samples, flags;
     int has_backing;
@@ -94,6 +95,8 @@ typedef struct HvVirtioGpu {
     uint32_t ncaps;
     struct { uint32_t id, version, size; } caps[HV_VGPU_MAX_CAPSETS];
     uint32_t ctx[HV_VGPU_MAX_CTX];                 /* 0: a free slot */
+    uint64_t ctxgen[HV_VGPU_MAX_CTX];
+    uint64_t gen3d;                                /* for create rollbacks */
     HvVgpuRes3d *res3d[HV_VGPU_RES3D_BUCKETS];
     uint32_t nres3d, nctx;
     uint64_t backing3d;                            /* pieces attached to 3D resources */
@@ -102,6 +105,7 @@ typedef struct HvVirtioGpu {
     pthread_mutex_t cmu;
     pthread_cond_t ccv;
     HvVgpuPend *phead, *ptail;                     /* in submission order */
+    uint32_t norphan;                              /* abandoned by a reset, still with the renderer: their done() needs the device alive */
     uint32_t npend, nopen;                         /* in the list; of those, not yet done */
     uint64_t pend_bytes;
     int kick;                                      /* a request finished since the last poll */

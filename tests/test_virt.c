@@ -1872,9 +1872,7 @@ static void test_gpu3d_fences(HvVirtioGpu *g) {
     check("B is held back by A, on the same context", g3_nreaped, 0);
     fk_release(2);
     g3_poll();
-    check("C, on another context, is answered", g3_nreaped == 1 && g3_done(h[2]) && g3_status(h[2]) == OK, 1);
-    check("C's fence is echoed", rd32(&m, G3_RESP(h[2]) + 4) == 1 && rd32(&m, G3_RESP(h[2]) + 8) == 12 && rd32(&m, G3_RESP(h[2]) + 12) == 0 &&
-          rd32(&m, G3_RESP(h[2]) + 16) == 2, 1);
+    check("C, on another context, still waits: fences are one timeline", g3_nreaped == 0 && !g3_done(h[2]), 1);
     /* more requests behind A: a refused fenced one, an unfenced one, and one outside any context */
     q_hdr(0x205, 1), q32(56, 5555), q_fence(13);
     h[3] = g3_post(72, NULL, 0, 24); /* D: refused by the device, fenced */
@@ -1885,20 +1883,37 @@ static void test_gpu3d_fences(HvVirtioGpu *g) {
     g3_nreaped = 0;
     g3_kick();
     g3_poll();
-    check("only the request outside the context is answered", g3_nreaped == 1 && g3_done(h[5]) && g3_status(h[5]) == OK, 1);
+    check("only the unfenced request outside the context is answered", g3_nreaped == 1 && g3_done(h[5]) && g3_status(h[5]) == OK, 1);
     check("D, refused but fenced, waits for A", g3_done(h[3]), 0);
     check("E, unfenced, waits for A too", g3_done(h[4]), 0);
     g3_nreaped = 0;
     fk_release(0);
     g3_poll();
-    check("A frees the rest: four answers", g3_nreaped, 4);
-    check("in order: A, B, D, E", g3_reaped[0].head == h[0] && g3_reaped[1].head == h[1] && g3_reaped[2].head == h[3] && g3_reaped[3].head == h[4], 1);
+    check("A frees the rest: five answers", g3_nreaped, 5);
+    check("in order: A, B, C, D, E", g3_reaped[0].head == h[0] && g3_reaped[1].head == h[1] && g3_reaped[2].head == h[2] &&
+          g3_reaped[3].head == h[3] && g3_reaped[4].head == h[4], 1);
+    check("C's fence is echoed", rd32(&m, G3_RESP(h[2]) + 4) == 1 && rd32(&m, G3_RESP(h[2]) + 8) == 12 && rd32(&m, G3_RESP(h[2]) + 12) == 0 &&
+          rd32(&m, G3_RESP(h[2]) + 16) == 2, 1);
     check("A's fence is echoed", rd32(&m, G3_RESP(h[0]) + 4) == 1 && rd32(&m, G3_RESP(h[0]) + 8) == 10 && rd32(&m, G3_RESP(h[0]) + 16) == 1, 1);
     check("B's 64-bit fence is echoed", rd32(&m, G3_RESP(h[1]) + 8) == 0x11 && rd32(&m, G3_RESP(h[1]) + 12) == 0x11, 1);
     check("D's error and fence", g3_status(h[3]) == BAD_ID && rd32(&m, G3_RESP(h[3]) + 4) == 1 && rd32(&m, G3_RESP(h[3]) + 8) == 13, 1);
     check("E made its resource", g3_status(h[4]) == OK && hv_virtio_gpu_res3d(g, 300) != NULL, 1);
     check("nothing pending", g->npend == 0 && g->nopen == 0, 1);
     check("the interrupt line was raised", rd8(GPU_BAR + 0x1000) & 1, 1);
+
+    /* a fenced 2D-style command on ctx 0 waits for a fenced SUBMIT on ctx 1 */
+    fk.hold_fenced = 1, fk.nheld = 0;
+    q_hdr(0x207, 1), q32(24, 8), q_fence(20);
+    h[0] = g3_post(32, &s, 1, 24);
+    q_hdr(0x205, 0), q32(56, 5555), q_fence(21);
+    h[1] = g3_post(72, NULL, 0, 24);
+    g3_nreaped = 0;
+    g3_kick();
+    g3_poll();
+    check("a fenced answer on ctx 0 waits for an earlier fenced request on ctx 1", g3_nreaped, 0);
+    fk_release(0);
+    g3_poll();
+    check("then both go, in order", g3_nreaped == 2 && g3_reaped[0].head == h[0] && g3_reaped[1].head == h[1], 1);
 
     /* a fenced request with nothing before it is answered at once, as it was */
     fk.hold_fenced = 0;

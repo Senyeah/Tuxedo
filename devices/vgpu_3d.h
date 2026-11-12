@@ -44,7 +44,7 @@ typedef struct HvGpu3dReq {
     uint32_t type;
     uint32_t ctx_id;   /* 0 for the commands the guest sends outside a context */
     uint32_t res_id;   /* the resource; for CTX_ATTACH/DETACH the one attached */
-    uint32_t fenced;   /* 1: done only once the fence is reached (the renderer signals fence_id on ctx_id) */
+    uint32_t fenced;   /* 1: done only once the fence is reached (signal fence_id; fences are one global timeline, not per context) */
     uint64_t fence_id;
     /* RESOURCE_CREATE */
     uint32_t target, format, bind, width, height, depth, array_size, last_level, nr_samples, flags;
