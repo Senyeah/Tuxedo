@@ -118,6 +118,11 @@ test-linux-direct: $(B)/hengevm
 	uv run tools/linux/smoke.py --direct --fatal $(SMOKE_ARGS)
 .PHONY: test-linux-direct
 
+# The same kernel on a clone of debian-console.img: disk, network, entropy, and a write kept over a power off.
+test-linux-disk: $(B)/hengevm
+	uv run tools/linux/smoke.py --direct --disk $(SMOKE_ARGS)
+.PHONY: test-linux-disk
+
 test-vm-lifecycle: $(B)/test_vm_lifecycle
 	$(B)/test_vm_lifecycle
 .PHONY: test-vm-lifecycle
