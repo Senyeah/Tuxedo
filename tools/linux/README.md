@@ -9,6 +9,7 @@ Every script runs inside the builder container, so no cross compiler is needed.
 - `Dockerfile`: the builder image (`debian:trixie` with the build tools).
 - `build-uboot.sh`, `build-image.sh`, `customize.sh`, `rootfs/`: see Order.
 - `customize-desktop.sh`, `rootfs-desktop/`: extra files for the desktop image (`build-image.sh --desktop`).
+- `rootfs/usr/local/lib/henge/`, `rootfs/etc/systemd/system/henge-*.service` (G8): the grow and first-boot units, in both images. `grow-check.py` tests them.
 - `run.sh`: runs a command in the builder image. `build/linux/` is mounted at `/out`, the repo's `tools/linux/` at `/tools` (read only), and a named volume at `/work` for source trees.
 
 `run.sh` builds the image on first use. Set `HENGE_LINUX_OUT` to change the artefact directory. The default is the shared `$HOME/Repos/Henge/build/linux`, so all worktrees see the same files.
@@ -26,6 +27,12 @@ Keep source trees in `/work`, not on the Mac filesystem. It is case-insensitive 
 Options of `qemu-ref.sh`: `--accel hvf|tcg` (default `tcg`), `--its-off`, `--dtb FILE`, `--gpu`, `--direct` (boot `Image` and `initrd.img` with `-kernel`). `hvf` works only with `--direct`, because U-Boot aborts under `hvf`; `hvf` also forces the ITS off. The disk opens with `snapshot=on`, so the shared image never changes.
 
 `qemu-check.py` drives it with pexpect (`uv run`): it checks page size, CPU count, network, run-time VA size and power off, and saves the reference output to `build/linux/ref/`. Use `--direct --accel hvf` for the fast check and the default for the full U-Boot path.
+
+## First boot and disk growth (G8)
+
+- `henge-grow.service` runs on every boot. `henge-grow` finds the root partition from sysfs, moves the backup GPT header to the end of the disk (`sgdisk -e`), runs `growpart` and then `resize2fs` on the mounted root. When the disk has not grown it changes nothing. The app grows the disk file, and the next boot grows the guest.
+- `henge-firstboot.service` runs once, while `/var/lib/henge/firstboot-done` is missing. It runs `systemd-machine-id-setup` if `/etc/machine-id` is empty, then writes the marker.
+- `grow-check.py` (`uv run`) clones an image, grows the clone to 16 GB (sparse), boots it through U-Boot, checks the grown partition, filesystem and GPT, boots it again unchanged, grows it by 4 GB more and boots a third time. `--qemu` uses QEMU TCG. Otherwise it uses `build/hengevm`. `--image`, `--firmware` and `--work-dir` choose files.
 
 ## Checks on the Mac
 
