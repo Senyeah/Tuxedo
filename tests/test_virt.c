@@ -1,6 +1,9 @@
 #include "vm.h"
 
 #include <fcntl.h>
+#include <pthread.h>
+#include <sched.h>
+#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1718,6 +1721,1426 @@ static void test_create_limits(void) {
     }
 }
 
+
+/* ---- The 3D commands (A4), against a fake renderer. ---- */
+#define G3_Q 256 /* queue size: a 1 MB submission from a 16 KB kernel is 66 descriptors */
+#define G3_REQ(h) (GPU_REQ + (uint64_t)(h) * 0x80)
+#define G3_RESP(h) (GPU_RESP + (uint64_t)(h) * 0x100)
+#define G3_LISTBUF (VIRT_MEM + 0x1200000) /* a backing list: up to 16384 entries */
+#define G3_DATA (VIRT_MEM + 0x1400000)    /* submit payloads, 2 MB */
+#define G3_BK (GPU_FB + 0x100000)         /* backing pieces for the resources below */
+#define G3_BAD_CTX 0x1204
+#define G3_FENCE 1
+
+
+static uint8_t rq[128];
+static void q_hdr(uint32_t type, uint32_t ctx) {
+    memset(rq, 0, sizeof rq);
+    memcpy(rq, &type, 4);
+    memcpy(rq + 16, &ctx, 4);
+}
+static void q32(unsigned off, uint32_t v) { memcpy(rq + off, &v, 4); }
+static void q64(unsigned off, uint64_t v) { memcpy(rq + off, &v, 8); }
+static void q_fence(uint64_t id) { q32(4, G3_FENCE), q64(8, id); }
+
+/* ---- the fake renderer ---- */
+#define FK_LOG 64
+typedef struct FakeCall {
+    HvGpu3dReq req;
+    uint8_t *data;
+    HvGpu3dRange *ranges;
+    void *cookie;
+} FakeCall;
+typedef struct FakeHeld { void *cookie; uint32_t status; } FakeHeld;
+typedef struct FakeRes { uint32_t id, target, w, h, d, a, last_level; uint64_t backing; } FakeRes;
+
+static struct Fake {
+    pthread_mutex_t mu;
+    pthread_cond_t cv;
+    FakeCall log[FK_LOG];
+    uint64_t n, counts[0x210];
+    int hold, hold_fenced;
+    uint32_t fail;                 /* HV_GPU3D_* status for the next request, then 0 */
+    FakeHeld held[8192];
+    int nheld;
+    int thread, stop, started;     /* complete from another thread, in random order */
+    FakeHeld q[8192];
+    int nq;
+    pthread_t tid;
+    int model;                     /* check what the device sends against a model of live ids */
+    uint32_t mctx[128];
+    int nmctx;
+    FakeRes mres[4200];
+    int nmres;
+    uint64_t violations;
+    uint64_t ram_lo, ram_hi;
+    uint64_t caps_calls;
+} fk;
+
+static FakeCall *fk_last(void) { return &fk.log[(fk.n - 1) % FK_LOG]; }
+
+static int fk_capset_info(void *r, uint32_t index, uint32_t *id, uint32_t *version, uint32_t *size) {
+    (void)r;
+    static const uint32_t caps[2][3] = {{1, 1, 16}, {2, 2, 64}};
+    if (index >= 2) return 1;
+    *id = caps[index][0], *version = caps[index][1], *size = caps[index][2];
+    return 0;
+}
+static uint8_t fk_cap_byte(uint32_t id, uint32_t version, uint32_t i) { return (uint8_t)(id * 31 + version * 7 + i); }
+static int fk_capset(void *r, uint32_t id, uint32_t version, void *out, uint32_t size) {
+    (void)r;
+    fk.caps_calls++;
+    for (uint32_t i = 0; i < size; i++) ((uint8_t *)out)[i] = fk_cap_byte(id, version, i);
+    return 0;
+}
+
+static void fk_bad(const char *what, const HvGpu3dReq *q) {
+    if (fk.violations++ < 5) printf("  fake renderer: bad request: %s (type %x ctx %u res %u)\n", what, q->type, q->ctx_id, q->res_id);
+}
+static int fk_find_ctx(uint32_t id) {
+    for (int i = 0; i < fk.nmctx; i++)
+        if (fk.mctx[i] == id) return i;
+    return -1;
+}
+static FakeRes *fk_find_res(uint32_t id) {
+    for (int i = 0; i < fk.nmres; i++)
+        if (fk.mres[i].id == id) return &fk.mres[i];
+    return NULL;
+}
+static uint64_t fk_mip(uint32_t v, uint32_t l) { return l > 31 || !(v >> l) ? 1 : v >> l; }
+
+/* Everything the device promises a renderer: live ids, boxes inside the level, buffers inside guest RAM. */
+static void fk_model(const HvGpu3dReq *q) {
+    FakeRes *r;
+    if (q->ctx_id && fk_find_ctx(q->ctx_id) < 0 && q->type != HV_GPU3D_CTX_CREATE && q->type != HV_GPU3D_RESOURCE_UNREF &&
+        q->type != HV_GPU3D_ATTACH_BACKING && q->type != HV_GPU3D_DETACH_BACKING)
+        fk_bad("a context that is not live", q);
+    switch (q->type) {
+    case HV_GPU3D_CTX_CREATE:
+        if (!q->ctx_id || fk_find_ctx(q->ctx_id) >= 0 || q->len > 64 || !q->data || ((const char *)q->data)[q->len]) fk_bad("ctx create", q);
+        else if (fk.nmctx < 128) fk.mctx[fk.nmctx++] = q->ctx_id;
+        break;
+    case HV_GPU3D_CTX_DESTROY:
+        if (fk_find_ctx(q->ctx_id) < 0) fk_bad("ctx destroy", q);
+        else fk.mctx[fk_find_ctx(q->ctx_id)] = fk.mctx[--fk.nmctx];
+        break;
+    case HV_GPU3D_CTX_ATTACH:
+    case HV_GPU3D_CTX_DETACH:
+        if (!q->ctx_id || !fk_find_res(q->res_id)) fk_bad("ctx attach", q);
+        break;
+    case HV_GPU3D_RESOURCE_CREATE:
+        if (!q->res_id || fk_find_res(q->res_id) || !q->width || !q->height || !q->depth || !q->array_size ||
+            q->width > (1u << 28) || q->height > 16384 || q->depth > 2048 || q->array_size > 2048 || q->last_level > 14 || q->target > 8)
+            fk_bad("resource create", q);
+        else if (fk.nmres < 4200)
+            fk.mres[fk.nmres++] = (FakeRes){q->res_id, q->target, q->width, q->height, q->depth, q->array_size, q->last_level, 0};
+        break;
+    case HV_GPU3D_RESOURCE_UNREF:
+        if (!(r = fk_find_res(q->res_id))) fk_bad("unref", q);
+        else *r = fk.mres[--fk.nmres];
+        break;
+    case HV_GPU3D_ATTACH_BACKING: {
+        uint64_t total = 0;
+        if (!(r = fk_find_res(q->res_id)) || !q->nranges || !q->ranges || r->backing) fk_bad("attach", q);
+        for (uint32_t i = 0; q->ranges && i < q->nranges; i++) {
+            uint64_t p = (uint64_t)(uintptr_t)q->ranges[i].ptr;
+            if (!q->ranges[i].len || p < fk.ram_lo || p + q->ranges[i].len > fk.ram_hi) fk_bad("backing piece outside RAM", q);
+            total += q->ranges[i].len;
+        }
+        if (r) r->backing = total;
+        break;
+    }
+    case HV_GPU3D_DETACH_BACKING:
+        if (!(r = fk_find_res(q->res_id))) fk_bad("detach", q);
+        else r->backing = 0;
+        break;
+    case HV_GPU3D_TRANSFER_TO_HOST:
+    case HV_GPU3D_TRANSFER_FROM_HOST: {
+        if (!(r = fk_find_res(q->res_id)) || !r->backing || q->level > r->last_level || q->offset > r->backing) {
+            fk_bad("transfer: resource, backing, level or offset", q);
+            break;
+        }
+        uint64_t w = fk_mip(r->w, q->level), h = r->target == 0 ? 1 : fk_mip(r->h, q->level), z = 1;
+        if (r->target == 3) z = fk_mip(r->d, q->level);
+        else if (r->target == 6 || r->target == 7 || r->target == 4 || r->target == 8) z = r->a;
+        if ((uint64_t)q->box.x + q->box.w > w || (uint64_t)q->box.y + q->box.h > h || (uint64_t)q->box.z + q->box.d > z)
+            fk_bad("transfer: box outside the level", q);
+        break;
+    }
+    case HV_GPU3D_SUBMIT:
+        if (q->len % 4 || q->len > (1u << 20) || (q->len && !q->data) || fk_find_ctx(q->ctx_id) < 0) fk_bad("submit", q);
+        break;
+    default: fk_bad("unknown type", q);
+    }
+}
+
+static void fk_submit(void *r, const HvGpu3dReq *req, void *cookie) {
+    (void)r;
+    pthread_mutex_lock(&fk.mu);
+    FakeCall *c = &fk.log[fk.n % FK_LOG];
+    free(c->data), free(c->ranges);
+    c->req = *req;
+    c->data = req->data ? malloc(req->len + 1) : NULL;
+    if (c->data) memcpy(c->data, req->data, req->len), c->data[req->len] = 0;
+    c->req.data = c->data;
+    c->ranges = req->ranges ? malloc(req->nranges * sizeof *req->ranges) : NULL;
+    if (c->ranges) memcpy(c->ranges, req->ranges, req->nranges * sizeof *req->ranges);
+    c->req.ranges = c->ranges;
+    c->cookie = cookie;
+    fk.counts[req->type]++;
+    fk.n++;
+    if (fk.model) fk_model(req);
+    uint32_t st = fk.fail;
+    fk.fail = 0;
+    if (fk.hold || (fk.hold_fenced && req->fenced)) {
+        fk.held[fk.nheld++] = (FakeHeld){cookie, st};
+        pthread_mutex_unlock(&fk.mu);
+    } else if (fk.thread) {
+        fk.q[fk.nq++] = (FakeHeld){cookie, st};
+        pthread_cond_signal(&fk.cv);
+        pthread_mutex_unlock(&fk.mu);
+    } else {
+        pthread_mutex_unlock(&fk.mu);
+        hv_virtio_gpu_3d_done(cookie, st);
+    }
+}
+
+/* the renderer's own thread: finishes requests in a random order, as fences of different contexts may */
+static void *fk_worker(void *arg) {
+    (void)arg;
+    uint64_t seed = 12345;
+    pthread_mutex_lock(&fk.mu);
+    for (;;) {
+        while (!fk.nq && !fk.stop) pthread_cond_wait(&fk.cv, &fk.mu);
+        if (fk.stop && !fk.nq) break;
+        seed ^= seed << 13, seed ^= seed >> 7, seed ^= seed << 17;
+        int i = (int)(seed % (uint64_t)fk.nq);
+        FakeHeld h = fk.q[i];
+        fk.q[i] = fk.q[--fk.nq];
+        pthread_mutex_unlock(&fk.mu);
+        if ((seed >> 20) % 64 == 0) usleep(200);
+        hv_virtio_gpu_3d_done(h.cookie, h.status);
+        pthread_mutex_lock(&fk.mu);
+    }
+    pthread_mutex_unlock(&fk.mu);
+    return NULL;
+}
+static void fk_thread(int on) {
+    if (on && !fk.started) {
+        fk.stop = 0, fk.thread = 1, fk.started = 1;
+        pthread_create(&fk.tid, NULL, fk_worker, NULL);
+    } else if (!on && fk.started) {
+        pthread_mutex_lock(&fk.mu);
+        fk.stop = 1;
+        pthread_cond_signal(&fk.cv);
+        pthread_mutex_unlock(&fk.mu);
+        pthread_join(fk.tid, NULL);
+        fk.started = 0, fk.thread = 0;
+    }
+}
+static void fk_release(int i) {
+    FakeHeld h = fk.held[i];
+    hv_virtio_gpu_3d_done(h.cookie, h.status);
+}
+static void fk_release_all(void) {
+    int n = fk.nheld;
+    fk.nheld = 0;
+    for (int i = 0; i < n; i++) hv_virtio_gpu_3d_done(fk.held[i].cookie, fk.held[i].status);
+}
+static const HvGpu3dOps fk_ops = {fk_capset_info, fk_capset, fk_submit};
+
+/* ---- a driver that can keep several requests outstanding ---- */
+static HvVirtioGpu *g3dev;
+static uint16_t g3_next, g3_seen;
+static int g3_lost, g3_last_head;
+static struct { int head; uint32_t written; } g3_reaped[G3_Q * 2];
+static int g3_nreaped;
+
+static void gpu3d_setup(int virgl) {
+    wr32(&m, GPU_CFG + 0x20, (uint32_t)GPU_BAR);
+    wr32(&m, GPU_CFG + 0x24, 0);
+    wr16(GPU_CFG + 0x04, 0x6);
+    wr8(GPU_BAR + 0x14, 0);
+    wr8(GPU_BAR + 0x14, 1 | 2);
+    wr32(&m, GPU_BAR + 0x08, 0);
+    wr32(&m, GPU_BAR + 0x0c, virgl ? 1 : 0);
+    wr32(&m, GPU_BAR + 0x08, 1);
+    wr32(&m, GPU_BAR + 0x0c, 1);
+    wr8(GPU_BAR + 0x14, 1 | 2 | 8);
+    for (int q = 0; q < 2; q++) {
+        uint64_t qr = GPU_RING + (uint64_t)q * 0x4000;
+        memset(ram(qr), 0, 0x4000);
+        wr16(GPU_BAR + 0x16, (uint16_t)q);
+        wr16(GPU_BAR + 0x18, G3_Q);
+        gwr64(GPU_BAR + 0x20, qr);
+        gwr64(GPU_BAR + 0x28, qr + 0x1000);
+        gwr64(GPU_BAR + 0x30, qr + 0x2000);
+        wr16(GPU_BAR + 0x1c, 1);
+    }
+    wr8(GPU_BAR + 0x14, 1 | 2 | 8 | 4);
+    g3_next = g3_seen = 0, g3_nreaped = 0;
+}
+
+/* Descriptors for one request: it, `extra` readable pieces, a response buffer. Returns the head. */
+static int g3_post(uint32_t len, const Seg *extra, int nextra, uint32_t resp_len) {
+    int n = 1 + nextra + (resp_len ? 1 : 0);
+    if (g3_next + n > G3_Q) g3_next = 0;
+    int head = g3_next;
+    g3_next = (uint16_t)(g3_next + n);
+    memcpy(ram(G3_REQ(head)), rq, len < sizeof rq ? len : sizeof rq);
+    memset(ram(G3_RESP(head)), 0, 0x100);
+    int d = head;
+    put_desc(GPU_RING, d, G3_REQ(head), len, n > 1 ? 1 : 0, (uint16_t)(d + 1)), d++;
+    for (int i = 0; i < nextra; i++, d++) put_desc(GPU_RING, d, extra[i].addr, extra[i].len, (n > d - head + 1 ? 1 : 0) | (extra[i].write ? 2 : 0), (uint16_t)(d + 1));
+    if (resp_len) put_desc(GPU_RING, d, G3_RESP(head), resp_len, 2, 0);
+    uint16_t *avail = (uint16_t *)ram(GPU_RING + 0x1000);
+    avail[2 + avail[1] % G3_Q] = (uint16_t)head;
+    __atomic_store_n(&avail[1], (uint16_t)(avail[1] + 1), __ATOMIC_RELEASE);
+    return head;
+}
+static void g3_reap(void) {
+    uint16_t *used = (uint16_t *)ram(GPU_RING + 0x2000);
+    while (g3_seen != __atomic_load_n(&used[1], __ATOMIC_ACQUIRE)) {
+        uint8_t *e = ram(GPU_RING + 0x2000 + 4 + 8u * (g3_seen % G3_Q));
+        uint32_t id, len;
+        memcpy(&id, e, 4), memcpy(&len, e + 4, 4);
+        if (g3_nreaped < G3_Q * 2) g3_reaped[g3_nreaped].head = (int)id, g3_reaped[g3_nreaped++].written = len;
+        g3_seen++;
+    }
+}
+static void g3_kick(void) { wr16(GPU_BAR + 0x3000, 0); } /* ring the queue 0 doorbell */
+static void g3_poll(void) {
+    hv_virtio_gpu_poll(g3dev);
+    g3_reap();
+}
+static int g3_done(int head) {
+    for (int i = 0; i < g3_nreaped; i++)
+        if (g3_reaped[i].head == head) return 1;
+    return 0;
+}
+static uint32_t g3_status(int head) { return rd32(&m, G3_RESP(head)); }
+
+/* One request, answered before it returns (the fake finishes at once): its status, or 0xdead when it never came back. */
+static uint32_t g3_cmd(uint32_t len, const Seg *extra, int nextra, uint32_t resp_len) {
+    g3_nreaped = 0;
+    int head = g3_post(len, extra, nextra, resp_len);
+    g3_last_head = head;
+    g3_kick();
+    g3_poll();
+    if (!g3_done(head)) {
+        g3_lost++;
+        return 0xdead;
+    }
+    resp_written = 0;
+    for (int i = 0; i < g3_nreaped; i++)
+        if (g3_reaped[i].head == head) resp_written = g3_reaped[i].written;
+    return resp_len >= 4 ? g3_status(head) : 0;
+}
+#define G3(len) g3_cmd(len, NULL, 0, 24)
+
+
+static uint32_t c_create2d(uint32_t id, uint32_t format, uint32_t w, uint32_t h) {
+    q_hdr(0x101, 0), q32(24, id), q32(28, format), q32(32, w), q32(36, h);
+    return G3(40);
+}
+static uint32_t c_transfer_2d(uint32_t id, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint64_t off) {
+    q_hdr(0x105, 0), q32(24, x), q32(28, y), q32(32, w), q32(36, h), q64(40, off), q32(48, id);
+    return G3(56);
+}
+
+static uint32_t c_ctx_create(uint32_t ctx, uint32_t nlen, const char *name) {
+    q_hdr(0x200, ctx), q32(24, nlen);
+    memcpy(rq + 32, name, strlen(name) < 64 ? strlen(name) : 64);
+    return G3(96);
+}
+static uint32_t c_ctx_destroy(uint32_t ctx) { q_hdr(0x201, ctx); return G3(24); }
+static uint32_t c_ctx_attach(uint32_t type, uint32_t ctx, uint32_t res) { q_hdr(type, ctx), q32(24, res); return G3(32); }
+static uint32_t c_create(uint32_t ctx, uint32_t id, uint32_t target, uint32_t format, uint32_t w, uint32_t h, uint32_t d,
+                         uint32_t a, uint32_t last, uint32_t ns) {
+    q_hdr(0x204, ctx);
+    q32(24, id), q32(28, target), q32(32, format), q32(36, 0x11), q32(40, w), q32(44, h), q32(48, d), q32(52, a), q32(56, last), q32(60, ns);
+    return G3(72);
+}
+static uint32_t c_unref(uint32_t id) { q_hdr(0x102, 0), q32(24, id); return G3(32); }
+static uint32_t c_detach(uint32_t id) { q_hdr(0x107, 0), q32(24, id); return G3(32); }
+static uint32_t c_transfer(uint32_t type, uint32_t ctx, uint32_t res, HvGpu3dBox b, uint64_t off, uint32_t level, uint32_t stride,
+                           uint32_t lstride) {
+    q_hdr(type, ctx);
+    q32(24, b.x), q32(28, b.y), q32(32, b.z), q32(36, b.w), q32(40, b.h), q32(44, b.d);
+    q64(48, off), q32(56, res), q32(60, level), q32(64, stride), q32(68, lstride);
+    return G3(72);
+}
+static uint32_t c_submit(uint32_t ctx, uint32_t size, uint32_t given) {
+    q_hdr(0x207, ctx), q32(24, size);
+    Seg s = {G3_DATA, given, 0};
+    return g3_cmd(32, given ? &s : NULL, given ? 1 : 0, 24);
+}
+/* n pieces told, `given` of them sent; piece i is addr[i % na] */
+static uint32_t c_attach(uint32_t res, uint32_t n, uint32_t given, const uint64_t *addr, const uint32_t *len, int na) {
+    q_hdr(0x106, 0), q32(24, res), q32(28, n);
+    uint8_t *e = ram(G3_LISTBUF);
+    for (uint32_t i = 0; i < given; i++) {
+        uint64_t a = addr[i % na];
+        uint32_t l = len[i % na];
+        memcpy(e + 16 * i, &a, 8), memcpy(e + 16 * i + 8, &l, 4), memset(e + 16 * i + 12, 0, 4);
+    }
+    Seg s = {G3_LISTBUF, given * 16, 0};
+    return g3_cmd(32, given ? &s : NULL, given ? 1 : 0, 24);
+}
+static const uint64_t bk_addr[2] = {G3_BK, G3_BK + 0x20000};
+static const uint32_t bk_len[2] = {0x8000, 0x8000};
+
+static uint64_t fk_count(uint32_t type) { return fk.counts[type]; }
+
+static void test_gpu3d_basic(HvVirtioGpu *g) {
+    pthread_mutex_init(&fk.mu, NULL);
+    pthread_cond_init(&fk.cv, NULL);
+    fk.ram_lo = (uint64_t)(uintptr_t)ram(VIRT_MEM);
+    fk.ram_hi = fk.ram_lo + b.mem.size;
+    g3dev = g;
+    wr8(GPU_BAR + 0x14, 0);
+
+    /* the feature bit follows the ops pointer */
+    wr32(&m, GPU_BAR + 0x00, 0);
+    check("no VIRGL without ops", rd32(&m, GPU_BAR + 0x04), 0);
+    check("no capsets without ops", rd32(&m, GPU_BAR + 0x200c), 0);
+    HvGpu3dOps half = {fk_capset_info, fk_capset, NULL};
+    check("ops with no submit are refused", hv_virtio_gpu_set_3d(g, &half, &fk), (uint64_t)-1);
+    check("and leave the feature off", rd32(&m, GPU_BAR + 0x04), 0);
+    check("set_3d", hv_virtio_gpu_set_3d(g, &fk_ops, &fk), 0);
+    wr32(&m, GPU_BAR + 0x00, 0);
+    check("VIRGL offered", rd32(&m, GPU_BAR + 0x04), 1);
+    wr32(&m, GPU_BAR + 0x00, 1);
+    check("VERSION_1 still offered", rd32(&m, GPU_BAR + 0x04), 1);
+    check("num_capsets from the renderer", rd32(&m, GPU_BAR + 0x200c), 2);
+    check("num_scanouts unchanged", rd32(&m, GPU_BAR + 0x2008), 1);
+    wr32(&m, GPU_BAR + 0x200c, 9);
+    check("num_capsets is read only", rd32(&m, GPU_BAR + 0x200c), 2);
+
+    /* offered but not accepted: still the plain device */
+    gpu3d_setup(0);
+    uint64_t calls = fk.n;
+    q_hdr(0x200, 1);
+    check("3D command without the driver accepting VIRGL", G3(96), UNSPEC);
+    check("nothing reached the renderer", fk.n, calls);
+    check("no ctx made", g->nctx, 0);
+    check("set_3d while the driver runs is refused", hv_virtio_gpu_set_3d(g, NULL, NULL), (uint64_t)-1);
+    wr8(GPU_BAR + 0x14, 0);
+    wr8(GPU_BAR + 0x14, 1 | 2 | 8);
+    check("set_3d after FEATURES_OK is refused too", hv_virtio_gpu_set_3d(g, NULL, NULL), (uint64_t)-1);
+    check("and the renderer stays", g->ops3d != NULL, 1);
+    gpu3d_setup(1);
+
+    /* capsets */
+    q_hdr(0x108, 0), q32(24, 0);
+    check("capset info 0", g3_cmd(32, NULL, 0, 40), 0x1102);
+    check("capset 0 id, version, size", rd32(&m, G3_RESP(g3_last_head) + 24) == 1 && rd32(&m, G3_RESP(g3_last_head) + 28) == 1 && rd32(&m, G3_RESP(g3_last_head) + 32) == 16, 1);
+    q_hdr(0x108, 0), q32(24, 1);
+    check("capset info 1", g3_cmd(32, NULL, 0, 40), 0x1102);
+    check("capset 1 id, version, size", rd32(&m, G3_RESP(g3_last_head) + 24) == 2 && rd32(&m, G3_RESP(g3_last_head) + 28) == 2 && rd32(&m, G3_RESP(g3_last_head) + 32) == 64, 1);
+    check("capset info answer is 40 bytes", resp_written, 40);
+    q_hdr(0x108, 0), q32(24, 2);
+    check("capset info past the last", G3(32), BAD_PARAM);
+    q_hdr(0x108, 0), q32(24, 0xffffffffu);
+    check("capset info index 2^32-1", G3(32), BAD_PARAM);
+    q_hdr(0x108, 0);
+    check("capset info cut short", g3_cmd(31, NULL, 0, 24), UNSPEC);
+    q_hdr(0x109, 0), q32(24, 2), q32(28, 2);
+    check("capset 2 v2", g3_cmd(32, NULL, 0, 24 + 64), 0x1103);
+    {
+        int same = 1;
+        for (uint32_t i = 0; i < 64; i++) same &= rd8(G3_RESP(g3_last_head) + 24 + i) == fk_cap_byte(2, 2, i);
+        check("capset bytes are the renderer's", same, 1);
+    }
+    check("capset answer is header and data", resp_written, 24 + 64);
+    q_hdr(0x109, 0), q32(24, 1), q32(28, 1);
+    check("capset into a short buffer", g3_cmd(32, NULL, 0, 24 + 4), 0x1103);
+    check("written as far as it fits", resp_written, 28);
+    q_hdr(0x109, 0), q32(24, 99), q32(28, 1);
+    check("capset: unknown id", G3(32), BAD_PARAM);
+    q_hdr(0x109, 0), q32(24, 2), q32(28, 0);
+    check("capset: version 0", G3(32), BAD_PARAM);
+    q_hdr(0x109, 0), q32(24, 2), q32(28, 3);
+    check("capset: version past the max", G3(32), BAD_PARAM);
+    q_hdr(0x109, 0), q32(24, 1), q32(28, 2);
+    check("capset: version past this one's max", G3(32), BAD_PARAM);
+    q_hdr(0x109, 0), q32(24, 0xffffffffu), q32(28, 0xffffffffu);
+    check("capset: ids 2^32-1", G3(32), BAD_PARAM);
+
+    /* contexts */
+    calls = fk.n;
+    check("ctx create", c_ctx_create(1, 5, "hello"), OK);
+    check("the renderer got it", fk.n, calls + 1);
+    FakeCall *c = fk_last();
+    check("ctx create: type, ctx and name", c->req.type == 0x200 && c->req.ctx_id == 1 && c->req.len == 5 && !memcmp(c->data, "hello", 6), 1);
+    check("ctx create: not fenced", c->req.fenced, 0);
+    check("ctx made", g->nctx, 1);
+    check("ctx create: id 0", c_ctx_create(0, 0, ""), G3_BAD_CTX);
+    check("ctx create: id taken", c_ctx_create(1, 0, ""), G3_BAD_CTX);
+    check("ctx create: name length 65", c_ctx_create(2, 65, "x"), BAD_PARAM);
+    check("ctx create: name length 2^32-1", c_ctx_create(2, 0xffffffffu, "x"), BAD_PARAM);
+    check("ctx create: 64-byte name", c_ctx_create(2, 64, "a very long name indeed that fills the whole space it has"), OK);
+    check("ctx create: ids near 2^32", c_ctx_create(0xffffffffu, 0, ""), OK);
+    check("ctx create: empty name", c_ctx_create(3, 0, ""), OK);
+    q_hdr(0x200, 9);
+    check("ctx create cut short", g3_cmd(95, NULL, 0, 24), UNSPEC);
+    check("a refused create made nothing", g->nctx, 4);
+    check("ctx destroy: unknown", c_ctx_destroy(77), G3_BAD_CTX);
+    check("ctx destroy: id 0", c_ctx_destroy(0), G3_BAD_CTX);
+    check("ctx destroy", c_ctx_destroy(0xffffffffu), OK);
+    check("ctx destroy twice", c_ctx_destroy(0xffffffffu), G3_BAD_CTX);
+    check("destroyed", g->nctx, 3);
+    check("ctx destroy: the renderer got it", fk_count(0x201), 1);
+    c_ctx_destroy(2), c_ctx_destroy(3);
+    {
+        int made = 0;
+        for (uint32_t i = 0; i < 70; i++) made += c_ctx_create(100 + i, 0, "") == OK;
+        check("64 contexts in all", made, 63);
+        check("the 65th context", c_ctx_create(999, 0, ""), NOMEM);
+        for (uint32_t i = 0; i < 70; i++) c_ctx_destroy(100 + i);
+    }
+    check("a context again", c_ctx_create(2, 0, ""), OK);
+    check("only 1 and 2 are left", g->nctx, 2);
+
+    /* resources */
+    calls = fk.n;
+    check("create a 2D texture", c_create(1, 100, 2, 1, 64, 64, 1, 1, 3, 0), OK);
+    c = fk_last();
+    check("create: the renderer's fields", c->req.type == 0x204 && c->req.res_id == 100 && c->req.target == 2 && c->req.format == 1 &&
+          c->req.bind == 0x11 && c->req.width == 64 && c->req.height == 64 && c->req.depth == 1 && c->req.array_size == 1 && c->req.last_level == 3 &&
+          c->req.ctx_id == 1, 1);
+    check("a 3D texture", c_create(0, 101, 3, 1, 32, 32, 16, 1, 2, 0), OK);
+    check("an array texture, no context", c_create(0, 102, 7, 1, 16, 16, 1, 4, 0, 0), OK);
+    check("a buffer", c_create(0, 103, 0, 0, 4096, 1, 1, 1, 0, 0), OK);
+    check("a texture with no backing", c_create(0, 104, 2, 1, 16, 16, 1, 1, 0, 0), OK);
+    check("a cube", c_create(0, 105, 4, 1, 8, 8, 1, 6, 0, 0), OK);
+    check("a cube array", c_create(0, 106, 8, 1, 8, 8, 1, 12, 0, 0), OK);
+    check("a 1D texture", c_create(0, 107, 1, 1, 100, 1, 1, 1, 0, 0), OK);
+    check("a rectangle texture", c_create(0, 108, 5, 1, 100, 50, 1, 1, 0, 0), OK);
+    check("a 1D array", c_create(0, 109, 6, 1, 100, 1, 1, 8, 0, 0), OK);
+    check("a multisample texture", c_create(0, 110, 2, 1, 16, 16, 1, 1, 0, 4), OK);
+    check("the biggest texture", c_create(0, 111, 2, 1, 16384, 16384, 1, 1, 14, 0), OK);
+    check("a 256 MB buffer", c_create(0, 112, 0, 0, 1u << 28, 1, 1, 1, 0, 0), OK);
+    check("counted", g->nres3d, 13);
+    {
+        static const struct { const char *what; uint32_t ctx, id, t, f, w, h, d, a, l, ns, want; } bad[] = {
+            {"id 0", 0, 0, 2, 1, 8, 8, 1, 1, 0, 0, BAD_ID},
+            {"id taken", 0, 100, 2, 1, 8, 8, 1, 1, 0, 0, BAD_ID},
+            {"id of a 2D resource", 0, 7777, 2, 1, 8, 8, 1, 1, 0, 0, BAD_ID}, /* made below: see the check after the table */
+            {"unknown context", 55, 200, 2, 1, 8, 8, 1, 1, 0, 0, G3_BAD_CTX},
+            {"context 2^32-1", 0xffffffffu, 200, 2, 1, 8, 8, 1, 1, 0, 0, G3_BAD_CTX},
+            {"target 9", 0, 200, 9, 1, 8, 8, 1, 1, 0, 0, BAD_PARAM},
+            {"target 2^32-1", 0, 200, 0xffffffffu, 1, 8, 8, 1, 1, 0, 0, BAD_PARAM},
+            {"format 0", 0, 200, 2, 0, 8, 8, 1, 1, 0, 0, BAD_PARAM},
+            {"format 512", 0, 200, 2, 512, 8, 8, 1, 1, 0, 0, BAD_PARAM},
+            {"format 2^32-1", 0, 200, 2, 0xffffffffu, 8, 8, 1, 1, 0, 0, BAD_PARAM},
+            {"width 0", 0, 200, 2, 1, 0, 8, 1, 1, 0, 0, BAD_PARAM},
+            {"height 0", 0, 200, 2, 1, 8, 0, 1, 1, 0, 0, BAD_PARAM},
+            {"depth 0", 0, 200, 2, 1, 8, 8, 0, 1, 0, 0, BAD_PARAM},
+            {"array size 0", 0, 200, 2, 1, 8, 8, 1, 0, 0, 0, BAD_PARAM},
+            {"width 16385", 0, 200, 2, 1, 16385, 8, 1, 1, 0, 0, BAD_PARAM},
+            {"height 16385", 0, 200, 2, 1, 8, 16385, 1, 1, 0, 0, BAD_PARAM},
+            {"width 2^32-1", 0, 200, 2, 1, 0xffffffffu, 0xffffffffu, 1, 1, 0, 0, BAD_PARAM},
+            {"2D with depth", 0, 200, 2, 1, 8, 8, 2, 1, 0, 0, BAD_PARAM},
+            {"3D depth 2049", 0, 200, 3, 1, 8, 8, 2049, 1, 0, 0, BAD_PARAM},
+            {"3D over 2^32 texels", 0, 200, 3, 1, 2048, 2048, 2048, 1, 0, 0, BAD_PARAM},
+            {"2D with layers", 0, 200, 2, 1, 8, 8, 1, 2, 0, 0, BAD_PARAM},
+            {"array of 2049", 0, 200, 7, 1, 8, 8, 1, 2049, 0, 0, BAD_PARAM},
+            {"array of 2^32-1", 0, 200, 7, 1, 8, 8, 1, 0xffffffffu, 0, 0, BAD_PARAM},
+            {"last level 15", 0, 200, 2, 1, 8, 8, 1, 1, 15, 0, BAD_PARAM},
+            {"last level 2^32-1", 0, 200, 2, 1, 8, 8, 1, 1, 0xffffffffu, 0, BAD_PARAM},
+            {"17 samples", 0, 200, 2, 1, 8, 8, 1, 1, 0, 17, BAD_PARAM},
+            {"1D with height", 0, 200, 1, 1, 8, 2, 1, 1, 0, 0, BAD_PARAM},
+            {"cube not square", 0, 200, 4, 1, 8, 4, 1, 6, 0, 0, BAD_PARAM},
+            {"cube of 5 faces", 0, 200, 4, 1, 8, 8, 1, 5, 0, 0, BAD_PARAM},
+            {"cube array of 7", 0, 200, 8, 1, 8, 8, 1, 7, 0, 0, BAD_PARAM},
+            {"buffer of 2^28+1", 0, 200, 0, 0, (1u << 28) + 1, 1, 1, 1, 0, 0, BAD_PARAM},
+            {"buffer with height", 0, 200, 0, 0, 64, 2, 1, 1, 0, 0, BAD_PARAM},
+            {"buffer with levels", 0, 200, 0, 0, 64, 1, 1, 1, 1, 0, BAD_PARAM},
+        };
+        check("create a 2D resource with a 3D-style id range", c_create2d(7777, 1, 4, 4), OK);
+        uint64_t before = fk.n;
+        for (unsigned i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+            char what[80];
+            snprintf(what, sizeof what, "create: %s", bad[i].what);
+            check(what, c_create(bad[i].ctx, bad[i].id, bad[i].t, bad[i].f, bad[i].w, bad[i].h, bad[i].d, bad[i].a, bad[i].l, bad[i].ns), bad[i].want);
+        }
+        check("refused creates did not reach the renderer", fk.n, before);
+        check("and made nothing", g->nres3d, 13);
+        check("2D create with a 3D id", c_create2d(100, 1, 4, 4), BAD_ID);
+        check("unref the 2D resource", c_unref(7777), OK);
+    }
+    q_hdr(0x204, 0);
+    check("create cut short", g3_cmd(71, NULL, 0, 24), UNSPEC);
+
+    /* ctx attach and detach */
+    check("ctx attach", c_ctx_attach(0x202, 1, 100), OK);
+    c = fk_last();
+    check("attach: ctx and resource", c->req.type == 0x202 && c->req.ctx_id == 1 && c->req.res_id == 100, 1);
+    check("ctx detach", c_ctx_attach(0x203, 1, 100), OK);
+    check("ctx attach: unknown ctx", c_ctx_attach(0x202, 55, 100), G3_BAD_CTX);
+    check("ctx attach: ctx 0", c_ctx_attach(0x202, 0, 100), G3_BAD_CTX);
+    check("ctx attach: unknown resource", c_ctx_attach(0x202, 1, 5555), BAD_ID);
+    check("ctx attach: resource 0", c_ctx_attach(0x203, 1, 0), BAD_ID);
+    c_create2d(7778, 1, 4, 4);
+    check("ctx attach: a 2D resource", c_ctx_attach(0x202, 1, 7778), BAD_ID);
+    c_unref(7778);
+
+    /* backing */
+    check("attach: unknown resource", c_attach(5555, 2, 2, bk_addr, bk_len, 2), BAD_ID);
+    check("attach: no entries", c_attach(100, 0, 0, bk_addr, bk_len, 2), BAD_PARAM);
+    check("attach: 16385 entries", c_attach(100, 16385, 2, bk_addr, bk_len, 2), BAD_PARAM);
+    check("attach: 2^32-1 entries", c_attach(100, 0xffffffffu, 2, bk_addr, bk_len, 2), BAD_PARAM);
+    check("attach: fewer entries than it says", c_attach(100, 3, 2, bk_addr, bk_len, 2), UNSPEC);
+    {
+        uint64_t a[2] = {bk_addr[0], VIRT_MEM + b.mem.size - 8};
+        uint32_t l[2] = {0x100, 64};
+        check("attach: a piece past the end of RAM", c_attach(100, 2, 2, a, l, 2), UNSPEC);
+        a[1] = ~0ull - 4, l[1] = 64;
+        check("attach: a piece that wraps", c_attach(100, 2, 2, a, l, 2), BAD_PARAM);
+        a[1] = VIRT_UART, l[1] = 64;
+        check("attach: a piece on a device", c_attach(100, 2, 2, a, l, 2), UNSPEC);
+        a[1] = bk_addr[1], l[1] = 0;
+        check("attach: an empty piece", c_attach(100, 2, 2, a, l, 2), BAD_PARAM);
+        a[1] = bk_addr[1], l[1] = 0xffffffffu;
+        check("attach: a 4 GB piece", c_attach(100, 2, 2, a, l, 2), UNSPEC);
+    }
+    check("refused attaches left no backing", hv_virtio_gpu_res3d(g, 100)->has_backing, 0);
+    check("a transfer with no backing", c_transfer(0x205, 1, 100, (HvGpu3dBox){0, 0, 0, 8, 8, 1}, 0, 0, 0, 0), UNSPEC);
+    calls = fk.n;
+    check("attach", c_attach(100, 2, 2, bk_addr, bk_len, 2), OK);
+    c = fk_last();
+    check("attach: the renderer got host pointers for both pieces", fk.n == calls + 1 && c->req.type == 0x106 && c->req.nranges == 2 &&
+          c->ranges[0].ptr == ram(bk_addr[0]) && c->ranges[0].len == 0x8000 && c->ranges[1].ptr == ram(bk_addr[1]) && c->ranges[1].len == 0x8000, 1);
+    check("backing counted", hv_virtio_gpu_res3d(g, 100)->backing_len, 0x10000);
+    check("attach twice", c_attach(100, 2, 2, bk_addr, bk_len, 2), UNSPEC);
+    for (uint32_t id = 101; id <= 103; id++) check("attach the others", c_attach(id, 2, 2, bk_addr, bk_len, 2), OK);
+    check("backing pieces counted", g->backing3d, 8);
+
+    /* transfers */
+    {
+        HvGpu3dBox full = {0, 0, 0, 64, 64, 1};
+        calls = fk.n;
+        check("transfer to host", c_transfer(0x205, 1, 100, full, 0, 0, 0, 0), OK);
+        c = fk_last();
+        check("transfer: what the renderer got", c->req.type == 0x205 && c->req.res_id == 100 && c->req.ctx_id == 1 && !memcmp(&c->req.box, &full, 24) &&
+              c->req.offset == 0 && c->req.level == 0 && c->req.stride == 0, 1);
+        check("transfer from host", c_transfer(0x206, 1, 100, (HvGpu3dBox){4, 8, 0, 20, 10, 1}, 0x40, 0, 256, 0), OK);
+        c = fk_last();
+        check("transfer from: box, offset and stride", c->req.type == 0x206 && c->req.box.x == 4 && c->req.box.y == 8 && c->req.box.w == 20 &&
+              c->req.box.h == 10 && c->req.offset == 0x40 && c->req.stride == 256, 1);
+        check("transfer outside a context", c_transfer(0x205, 0, 100, full, 0, 0, 0, 0), OK);
+        check("transfer at level 1", c_transfer(0x205, 1, 100, (HvGpu3dBox){0, 0, 0, 32, 32, 1}, 0, 1, 0, 0), OK);
+        check("transfer at level 3", c_transfer(0x205, 1, 100, (HvGpu3dBox){0, 0, 0, 8, 8, 1}, 0, 3, 0, 0), OK);
+        check("transfer of a 3D level", c_transfer(0x206, 1, 101, (HvGpu3dBox){0, 0, 4, 16, 16, 4}, 0, 1, 64, 1024), OK);
+        check("transfer of array layers", c_transfer(0x206, 1, 102, (HvGpu3dBox){0, 0, 1, 16, 16, 3}, 0, 0, 64, 1024), OK);
+        check("transfer of buffer bytes", c_transfer(0x205, 1, 103, (HvGpu3dBox){100, 0, 0, 3996, 1, 1}, 100, 0, 0, 0), OK);
+        check("transfer of nothing", c_transfer(0x205, 1, 100, (HvGpu3dBox){0, 0, 0, 0, 0, 0}, 0, 0, 0, 0), OK);
+        check("transfer of nothing at a wild place", c_transfer(0x205, 1, 100, (HvGpu3dBox){0xffffffffu, 0, 0, 0, 5, 1}, 0x10000, 0, 0, 0), BAD_PARAM);
+        check("transfer to the last byte of the backing", c_transfer(0x205, 1, 100, (HvGpu3dBox){0, 0, 0, 1, 1, 1}, 0xffff, 0, 0, 0), OK);
+
+        static const struct { const char *what; uint32_t res; HvGpu3dBox b; uint64_t off; uint32_t level, stride, lstride, want; } bad[] = {
+            {"unknown resource", 5555, {0, 0, 0, 1, 1, 1}, 0, 0, 0, 0, BAD_ID},
+            {"resource 0", 0, {0, 0, 0, 1, 1, 1}, 0, 0, 0, 0, BAD_ID},
+            {"no backing", 104, {0, 0, 0, 1, 1, 1}, 0, 0, 0, 0, UNSPEC},
+            {"too wide", 100, {1, 0, 0, 64, 1, 1}, 0, 0, 0, 0, BAD_PARAM},
+            {"too tall", 100, {0, 1, 0, 1, 64, 1}, 0, 0, 0, 0, BAD_PARAM},
+            {"x + w wraps", 100, {0xffffffffu, 0, 0, 2, 1, 1}, 0, 0, 0, 0, BAD_PARAM},
+            {"y + h wraps", 100, {0, 0xfffffff0u, 0, 1, 0x20, 1}, 0, 0, 0, 0, BAD_PARAM},
+            {"z on a 2D texture", 100, {0, 0, 1, 1, 1, 1}, 0, 0, 0, 0, BAD_PARAM},
+            {"depth on a 2D texture", 100, {0, 0, 0, 1, 1, 2}, 0, 0, 0, 0, BAD_PARAM},
+            {"z + d wraps", 101, {0, 0, 0xffffffffu, 1, 1, 2}, 0, 0, 0, 0, BAD_PARAM},
+            {"past the last layer", 102, {0, 0, 2, 16, 16, 3}, 0, 0, 0, 0, BAD_PARAM},
+            {"past the 3D level's depth", 101, {0, 0, 5, 16, 16, 4}, 0, 1, 0, 0, BAD_PARAM},
+            {"level past the last", 100, {0, 0, 0, 1, 1, 1}, 0, 4, 0, 0, BAD_PARAM},
+            {"level 2^32-1", 100, {0, 0, 0, 1, 1, 1}, 0, 0xffffffffu, 0, 0, BAD_PARAM},
+            {"too wide for the level", 100, {0, 0, 0, 33, 1, 1}, 0, 1, 0, 0, BAD_PARAM},
+            {"buffer past its end", 103, {4000, 0, 0, 97, 1, 1}, 0, 0, 0, 0, BAD_PARAM},
+            {"buffer with a row", 103, {0, 1, 0, 1, 1, 1}, 0, 0, 0, 0, BAD_PARAM},
+            {"offset past the backing", 100, {0, 0, 0, 1, 1, 1}, 0x10001, 0, 0, 0, BAD_PARAM},
+            {"offset at the end of the backing", 100, {0, 0, 0, 1, 1, 1}, 0x10000, 0, 0, 0, BAD_PARAM},
+            {"offset 2^64-1", 100, {0, 0, 0, 1, 1, 1}, ~0ull, 0, 0, 0, BAD_PARAM},
+            {"offset 2^63", 100, {0, 0, 0, 1, 1, 1}, 1ull << 63, 0, 0, 0, BAD_PARAM},
+            {"stride 2^32-1", 100, {0, 0, 0, 1, 2, 1}, 0, 0, 0xffffffffu, 0, BAD_PARAM},
+            {"stride past the backing", 100, {0, 0, 0, 1, 64, 1}, 0, 0, 0x10000, 0, BAD_PARAM},
+            {"layer stride 2^32-1", 101, {0, 0, 0, 1, 1, 2}, 0, 0, 0, 0xffffffffu, BAD_PARAM},
+            {"stride and offset together", 100, {0, 0, 0, 1, 3, 1}, 0xff00, 0, 0x100, 0, BAD_PARAM},
+        };
+        uint64_t before = fk.n;
+        for (unsigned i = 0; i < sizeof bad / sizeof bad[0]; i++)
+            for (uint32_t type = 0x205; type <= 0x206; type++) {
+                char what[80];
+                snprintf(what, sizeof what, "transfer %s: %s", type == 0x205 ? "to" : "from", bad[i].what);
+                check(what, c_transfer(type, 1, bad[i].res, bad[i].b, bad[i].off, bad[i].level, bad[i].stride, bad[i].lstride), bad[i].want);
+            }
+        check("refused transfers did not reach the renderer", fk.n, before);
+        check("transfer: unknown context", c_transfer(0x205, 55, 100, full, 0, 0, 0, 0), G3_BAD_CTX);
+        check("transfer: context 2^32-1", c_transfer(0x206, 0xffffffffu, 100, full, 0, 0, 0, 0), G3_BAD_CTX);
+        q_hdr(0x205, 1);
+        check("transfer cut short", g3_cmd(71, NULL, 0, 24), UNSPEC);
+        /* the 2D command on a 3D resource */
+        calls = fk.n;
+        check("2D transfer of a 3D resource", c_transfer_2d(100, 8, 8, 16, 16, 0x40), OK);
+        c = fk_last();
+        check("is a transfer to host of a box", c->req.type == 0x205 && c->req.box.x == 8 && c->req.box.y == 8 && c->req.box.z == 0 &&
+              c->req.box.w == 16 && c->req.box.h == 16 && c->req.box.d == 1 && c->req.offset == 0x40 && c->req.level == 0, 1);
+        check("2D transfer: past the edge", c_transfer_2d(100, 60, 0, 8, 1, 0), BAD_PARAM);
+        check("2D transfer: wraps", c_transfer_2d(100, 0xfffffff0u, 0, 0x20, 1, 0), BAD_PARAM);
+        check("2D transfer: no backing", c_transfer_2d(104, 0, 0, 1, 1, 0), UNSPEC);
+    }
+}
+
+static uint32_t c_scanout(uint32_t scanout, uint32_t id, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    q_hdr(0x103, 0), q32(24, x), q32(28, y), q32(32, w), q32(36, h), q32(40, scanout), q32(44, id);
+    return G3(48);
+}
+static uint32_t c_flush(uint32_t id, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    q_hdr(0x104, 0), q32(24, x), q32(28, y), q32(32, w), q32(36, h), q32(40, id);
+    return G3(48);
+}
+
+static void fill_data(void) {
+    uint8_t *d = ram(G3_DATA);
+    for (uint32_t i = 0; i < 0x200000; i++) d[i] = (uint8_t)((i * 2654435761u) >> 24);
+}
+
+static void test_gpu3d_submit(HvVirtioGpu *g) {
+    fill_data();
+    g3_next = 0;
+    uint64_t calls = fk.n;
+    check("submit 64 bytes", c_submit(1, 64, 64), OK);
+    FakeCall *c = fk_last();
+    check("submit: the same bytes reach the renderer", fk.n == calls + 1 && c->req.type == 0x207 && c->req.ctx_id == 1 && c->req.len == 64 &&
+          !memcmp(c->data, ram(G3_DATA), 64), 1);
+    check("submit of nothing", c_submit(1, 0, 0), OK);
+    check("submit of 4 bytes", c_submit(1, 4, 4), OK);
+    check("submit of 1 MB", c_submit(1, 1u << 20, 1u << 20), OK);
+    c = fk_last();
+    check("1 MB: all of it", c->req.len == (1u << 20) && !memcmp(c->data, ram(G3_DATA), 1u << 20), 1);
+    calls = fk.n;
+    check("submit of 1 MB + 4", c_submit(1, (1u << 20) + 4, (1u << 20) + 4), BAD_PARAM);
+    check("submit of 2^32-4", c_submit(1, 0xfffffffcu, 0x1000), BAD_PARAM);
+    check("submit of 2^32-1", c_submit(1, 0xffffffffu, 0x1000), BAD_PARAM);
+    check("submit of 7 bytes", c_submit(1, 7, 8), BAD_PARAM);
+    check("submit of 2 bytes", c_submit(1, 2, 2), BAD_PARAM);
+    check("submit says more than it sends", c_submit(1, 64, 32), UNSPEC);
+    check("submit with no data piece", c_submit(1, 64, 0), UNSPEC);
+    check("submit with a 2^32-8 claim and 1 MB sent", c_submit(1, 0xfffffff8u, 1u << 20), BAD_PARAM);
+    check("submit: context 0", c_submit(0, 64, 64), G3_BAD_CTX);
+    check("submit: unknown context", c_submit(77, 64, 64), G3_BAD_CTX);
+    check("submit: context 2^32-1", c_submit(0xffffffffu, 64, 64), G3_BAD_CTX);
+    q_hdr(0x207, 1);
+    check("submit cut short", g3_cmd(31, NULL, 0, 24), UNSPEC);
+    check("refused submits did not reach the renderer", fk.n, calls);
+
+    /* a 1 MB submission from a 16 KB kernel is one descriptor a page: 64 + header + response */
+    Seg segs[130];
+    for (int i = 0; i < 64; i++) segs[i] = (Seg){G3_DATA + (uint64_t)i * 16384, 16384, 0};
+    q_hdr(0x207, 1), q32(24, 1u << 20);
+    check("1 MB in 66 descriptors", g3_cmd(32, segs, 64, 24), OK);
+    c = fk_last();
+    check("and all of it arrived", c->req.len == (1u << 20) && !memcmp(c->data, ram(G3_DATA), 1u << 20), 1);
+    for (int i = 0; i < 126; i++) segs[i] = (Seg){G3_DATA + (uint64_t)i * 64, 64, 0};
+    q_hdr(0x207, 1), q32(24, 126 * 64);
+    check("a chain of exactly 128 descriptors", g3_cmd(32, segs, 126, 24), OK);
+    calls = fk.n;
+    for (int i = 0; i < 127; i++) segs[i] = (Seg){G3_DATA + (uint64_t)i * 64, 64, 0};
+    q_hdr(0x207, 1), q32(24, 127 * 64);
+    g3_cmd(32, segs, 127, 24);
+    check("a chain of 129 is answered, with nothing written", resp_written, 0);
+    check("and does not reach the renderer", fk.n, calls);
+    check("nothing lost", g3_lost, 0);
+
+    /* the bytes a held submission costs are bounded */
+    g3_next = 0; /* nothing is outstanding: the 65 chains below must not wrap onto each other */
+    fk.hold = 1, fk.nheld = 0;
+    int heads[70], n = 0;
+    Seg s = {G3_DATA, 1u << 20, 0};
+    g3_nreaped = 0;
+    for (int i = 0; i < 65; i++) {
+        q_hdr(0x207, 1), q32(24, 1u << 20);
+        heads[n++] = g3_post(32, &s, 1, 24);
+    }
+    g3_kick();
+    g3_poll();
+    check("64 MB of held submits wait", fk.nheld, 64);
+    check("the 65th is refused, but its answer waits behind the others on its context", g3_nreaped, 0);
+    check("pending bytes", g->pend_bytes, 64u << 20);
+    fk.hold = 0;
+    g3_nreaped = 0;
+    fk_release_all();
+    g3_poll();
+    check("released: 65 answers", g3_nreaped, 65);
+    check("the 65th's answer is the refusal, last", g3_status(heads[64]) == NOMEM && g3_reaped[64].head == heads[64], 1);
+    int all_ok = 1;
+    for (int i = 0; i < 64; i++) all_ok &= g3_done(heads[i]) && g3_status(heads[i]) == OK;
+    check("all of them OK", all_ok, 1);
+    check("nothing pending", g->npend == 0 && g->nopen == 0 && g->pend_bytes == 0, 1);
+}
+
+static void test_gpu3d_fences(HvVirtioGpu *g) {
+    fill_data();
+    g3_next = 0;
+    fk.hold_fenced = 1, fk.nheld = 0;
+    Seg s = {G3_DATA, 8, 0};
+    int h[8];
+    q_hdr(0x207, 1), q32(24, 8), q_fence(10);
+    h[0] = g3_post(32, &s, 1, 24); /* A: ctx 1 */
+    q_hdr(0x207, 1), q32(24, 8), q_fence(0x1100000011ull);
+    h[1] = g3_post(32, &s, 1, 24); /* B: ctx 1 */
+    q_hdr(0x207, 2), q32(24, 8), q_fence(12);
+    h[2] = g3_post(32, &s, 1, 24); /* C: ctx 2 */
+    g3_nreaped = 0;
+    g3_kick();
+    g3_poll();
+    check("fenced requests wait for the renderer", g3_nreaped, 0);
+    check("the renderer holds three", fk.nheld, 3);
+    uint64_t sent = g->sent3d;
+    check("fences are passed on", fk.log[(fk.n - 3) % FK_LOG].req.fenced == 1 && fk.log[(fk.n - 3) % FK_LOG].req.fence_id == 10 &&
+          fk.log[(fk.n - 2) % FK_LOG].req.fence_id == 0x1100000011ull && fk.log[(fk.n - 1) % FK_LOG].req.ctx_id == 2, 1);
+    (void)sent;
+    fk_release(1); /* B first */
+    g3_poll();
+    check("B is held back by A, on the same context", g3_nreaped, 0);
+    fk_release(2);
+    g3_poll();
+    check("C, on another context, still waits: fences are one timeline", g3_nreaped == 0 && !g3_done(h[2]), 1);
+    /* more requests behind A: a refused fenced one, an unfenced one, and one outside any context */
+    q_hdr(0x205, 1), q32(56, 5555), q_fence(13);
+    h[3] = g3_post(72, NULL, 0, 24); /* D: refused by the device, fenced */
+    q_hdr(0x204, 1), q32(24, 300), q32(28, 2), q32(32, 1), q32(40, 8), q32(44, 8), q32(48, 1), q32(52, 1);
+    h[4] = g3_post(72, NULL, 0, 24); /* E: unfenced, ctx 1 */
+    q_hdr(0x204, 0), q32(24, 301), q32(28, 2), q32(32, 1), q32(40, 8), q32(44, 8), q32(48, 1), q32(52, 1);
+    h[5] = g3_post(72, NULL, 0, 24); /* F: unfenced, ctx 0 */
+    g3_nreaped = 0;
+    g3_kick();
+    g3_poll();
+    check("only the unfenced request outside the context is answered", g3_nreaped == 1 && g3_done(h[5]) && g3_status(h[5]) == OK, 1);
+    check("D, refused but fenced, waits for A", g3_done(h[3]), 0);
+    check("E, unfenced, waits for A too", g3_done(h[4]), 0);
+    g3_nreaped = 0;
+    fk_release(0);
+    g3_poll();
+    check("A frees the rest: five answers", g3_nreaped, 5);
+    check("in order: A, B, C, D, E", g3_reaped[0].head == h[0] && g3_reaped[1].head == h[1] && g3_reaped[2].head == h[2] &&
+          g3_reaped[3].head == h[3] && g3_reaped[4].head == h[4], 1);
+    check("C's fence is echoed", rd32(&m, G3_RESP(h[2]) + 4) == 1 && rd32(&m, G3_RESP(h[2]) + 8) == 12 && rd32(&m, G3_RESP(h[2]) + 12) == 0 &&
+          rd32(&m, G3_RESP(h[2]) + 16) == 2, 1);
+    check("A's fence is echoed", rd32(&m, G3_RESP(h[0]) + 4) == 1 && rd32(&m, G3_RESP(h[0]) + 8) == 10 && rd32(&m, G3_RESP(h[0]) + 16) == 1, 1);
+    check("B's 64-bit fence is echoed", rd32(&m, G3_RESP(h[1]) + 8) == 0x11 && rd32(&m, G3_RESP(h[1]) + 12) == 0x11, 1);
+    check("D's error and fence", g3_status(h[3]) == BAD_ID && rd32(&m, G3_RESP(h[3]) + 4) == 1 && rd32(&m, G3_RESP(h[3]) + 8) == 13, 1);
+    check("E made its resource", g3_status(h[4]) == OK && hv_virtio_gpu_res3d(g, 300) != NULL, 1);
+    check("nothing pending", g->npend == 0 && g->nopen == 0, 1);
+    check("the interrupt line was raised", rd8(GPU_BAR + 0x1000) & 1, 1);
+
+    /* a fenced 2D-style command on ctx 0 waits for a fenced SUBMIT on ctx 1 */
+    fk.hold_fenced = 1, fk.nheld = 0;
+    q_hdr(0x207, 1), q32(24, 8), q_fence(20);
+    h[0] = g3_post(32, &s, 1, 24);
+    q_hdr(0x205, 0), q32(56, 5555), q_fence(21);
+    h[1] = g3_post(72, NULL, 0, 24);
+    g3_nreaped = 0;
+    g3_kick();
+    g3_poll();
+    check("a fenced answer on ctx 0 waits for an earlier fenced request on ctx 1", g3_nreaped, 0);
+    fk_release(0);
+    g3_poll();
+    check("then both go, in order", g3_nreaped == 2 && g3_reaped[0].head == h[0] && g3_reaped[1].head == h[1], 1);
+
+    /* a fenced request with nothing before it is answered at once, as it was */
+    fk.hold_fenced = 0;
+    q_hdr(0x205, 1), q32(56, 5555), q_fence(77);
+    check("a fenced error with nothing before it", G3(72), BAD_ID);
+    check("fence echoed at once", rd32(&m, G3_RESP(g3_last_head) + 8), 77);
+    c_unref(300), c_unref(301);
+
+    /* a flood of deferred fenced answers, each on its own context, stays inside the limit and cannot hang the tick */
+    fk.hold_fenced = 1, fk.nheld = 0;
+    g3_next = 0;
+    q_hdr(0x207, 1), q32(24, 8), q_fence(30);
+    h[0] = g3_post(32, &s, 1, 24);
+    g3_nreaped = 0;
+    g3_kick();
+    g3_poll();
+    for (int b = 0; b < 30; b++) {
+        g3_next = 0;
+        for (int i = 0; i < 100; i++) {
+            q_hdr(0x205, 100000 + b * 100 + i), q32(56, 5555), q_fence(31 + b * 100 + i);
+            g3_post(72, NULL, 0, 24);
+        }
+        g3_kick();
+        g3_poll();
+    }
+    check("3000 distinct contexts: the pending list stays inside the limit", g->npend <= HV_VGPU_MAX_PEND, 1);
+    check("the held request is still held", g->nopen == 1 && fk.nheld == 1, 1);
+    fk_release(0);
+    g3_poll();
+    check("released: nothing pending", g->npend == 0 && g->nopen == 0, 1);
+    fk.hold_fenced = 0;
+
+    /* a refused attach must not undo the attach of a later resource that reuses the id */
+    uint8_t *lst = ram(G3_LISTBUF);
+    uint64_t ba = G3_BK;
+    uint32_t bl = 0x1000;
+    memcpy(lst, &ba, 8), memcpy(lst + 8, &bl, 4), memset(lst + 12, 0, 4);
+    Seg ls = {G3_LISTBUF, 16, 0};
+    check("create 900", c_create(0, 900, 2, 1, 8, 8, 1, 1, 0, 0), OK);
+    fk.hold = 1, fk.nheld = 0;
+    g3_next = 0;
+    g3_nreaped = 0;
+    q_hdr(0x106, 0), q32(24, 900), q32(28, 1);
+    g3_post(32, &ls, 1, 24); /* the renderer refuses this one */
+    q_hdr(0x102, 0), q32(24, 900);
+    g3_post(32, NULL, 0, 24);
+    q_hdr(0x204, 0), q32(24, 900), q32(28, 2), q32(32, 1), q32(36, 0x11), q32(40, 8), q32(44, 8), q32(48, 1), q32(52, 1);
+    g3_post(72, NULL, 0, 24);
+    q_hdr(0x106, 0), q32(24, 900), q32(28, 1);
+    g3_post(32, &ls, 1, 24);
+    fk.fail = HV_GPU3D_ERR_PARAM;
+    g3_kick();
+    g3_poll();
+    fk.hold = 0;
+    fk_release_all();
+    g3_poll();
+    HvVgpuRes3d *r9 = hv_virtio_gpu_res3d(g, 900);
+    check("the new resource 900 keeps its backing", r9 && r9->has_backing && r9->npieces == 1, 1);
+    c_unref(900);
+
+    /* a refused attach must not undo a later attach on the same resource (detach, attach again) */
+    check("create 902", c_create(0, 902, 2, 1, 8, 8, 1, 1, 0, 0), OK);
+    fk.hold = 1, fk.nheld = 0;
+    g3_next = 0;
+    g3_nreaped = 0;
+    q_hdr(0x106, 0), q32(24, 902), q32(28, 1);
+    g3_post(32, &ls, 1, 24); /* A1: the renderer refuses it */
+    q_hdr(0x107, 0), q32(24, 902);
+    g3_post(32, NULL, 0, 24);
+    q_hdr(0x106, 0), q32(24, 902), q32(28, 1);
+    int h2 = g3_post(32, &ls, 1, 24); /* A2: the renderer takes it */
+    fk.fail = HV_GPU3D_ERR_PARAM;
+    g3_kick();
+    g3_poll();
+    fk.hold = 0;
+    fk_release_all();
+    g3_poll();
+    HvVgpuRes3d *r2 = hv_virtio_gpu_res3d(g, 902);
+    check("A2 was answered OK", g3_status(h2), OK);
+    check("902 keeps the backing of A2", r2 && r2->has_backing && r2->npieces == 1 && g->backing3d >= 1, 1);
+    check("a transfer on 902 works", c_transfer(0x205, 0, 902, (HvGpu3dBox){0, 0, 0, 8, 8, 1}, 0, 0, 0, 0), OK);
+    c_unref(902);
+
+    /* a transfer from the host tells the JIT about the backing; one to the host does not */
+    HvRam *bkram = hv_ram_lookup(&m, G3_BK);
+    if (bkram) {
+        uint64_t pg = (G3_BK - bkram->pa) >> HV_TLB_PAGE_BITS, other = (G3_BK + 0x20000 - bkram->pa) >> HV_TLB_PAGE_BITS;
+        uint64_t a = G3_BK;
+        uint32_t l = 0x4000;
+        check("create 903", c_create(0, 903, 2, 1, 8, 8, 1, 1, 0, 0), OK);
+        check("attach 903", c_attach(903, 1, 1, &a, &l, 1), OK);
+        bkram->code_pages[pg] = 1, bkram->code_pages[other] = 1;
+        check("transfer to host", c_transfer(0x205, 0, 903, (HvGpu3dBox){0, 0, 0, 8, 8, 1}, 0, 0, 0, 0), OK);
+        check("to host: code in the backing stays", bkram->code_pages[pg], 1);
+        check("transfer from host", c_transfer(0x206, 0, 903, (HvGpu3dBox){0, 0, 0, 8, 8, 1}, 0, 0, 0, 0), OK);
+        check("from host: code in the backing is invalidated", bkram->code_pages[pg], 0);
+        check("from host: code elsewhere stays", bkram->code_pages[other], 1);
+        bkram->code_pages[other] = 0;
+        c_unref(903);
+    } else {
+        check("RAM of the backing found", 0, 1);
+    }
+
+    /* the backing may not sit in read-only RAM */
+    void *ro = NULL;
+    if (posix_memalign(&ro, 0x4000, 0x10000) == 0) {
+        memset(ro, 0, 0x10000);
+        uint64_t ro_pa = 0x7000000000ull;
+        int added = hv_machine_add_ram(&m, ro_pa, 0x10000, ro, 1);
+        check("read-only RAM added", added, 0);
+        if (added == 0) {
+            check("create 901", c_create(0, 901, 2, 1, 8, 8, 1, 1, 0, 0), OK);
+            uint64_t a = ro_pa;
+            uint32_t l = 0x1000;
+            check("attach: a piece in read-only RAM", c_attach(901, 1, 1, &a, &l, 1), UNSPEC);
+            check("and 901 has no backing", hv_virtio_gpu_res3d(g, 901)->has_backing, 0);
+            c_unref(901);
+        }
+    }
+}
+
+static void test_gpu3d_errors(HvVirtioGpu *g) {
+    uint64_t errors = g->errors;
+    fk.fail = HV_GPU3D_ERR_PARAM;
+    check("the renderer refuses a create", c_create(0, 400, 2, 1, 8, 8, 1, 1, 0, 0), BAD_PARAM);
+    check("so the resource does not exist", hv_virtio_gpu_res3d(g, 400) == NULL, 1);
+    check("and the id is free", c_create(0, 400, 2, 1, 8, 8, 1, 1, 0, 0), OK);
+    fk.fail = HV_GPU3D_ERR_NOMEM;
+    check("the renderer refuses a context", c_ctx_create(50, 0, "x"), NOMEM);
+    check("so there is none", c_ctx_destroy(50), G3_BAD_CTX);
+    uint32_t nctx = g->nctx;
+    fk.fail = HV_GPU3D_ERR_CTX;
+    check("a submit refused for its context", c_submit(1, 8, 8), G3_BAD_CTX);
+    fk.fail = HV_GPU3D_ERR_RESOURCE;
+    check("a transfer refused for its resource", c_transfer(0x205, 1, 100, (HvGpu3dBox){0, 0, 0, 1, 1, 1}, 0, 0, 0, 0), BAD_ID);
+    fk.fail = HV_GPU3D_ERR_UNSPEC;
+    check("an unspecified refusal", c_submit(1, 8, 8), UNSPEC);
+    fk.fail = 99;
+    check("a status the device does not know", c_submit(1, 8, 8), UNSPEC);
+    fk.fail = HV_GPU3D_ERR_PARAM;
+    check("a refused destroy changes nothing", c_ctx_attach(0x202, 1, 100), BAD_PARAM);
+    check("the context is still there", g->nctx, nctx);
+    check("errors counted", g->errors >= errors + 7, 1);
+    check("create for the backing case", c_create(0, 401, 0, 0, 64, 1, 1, 1, 0, 0), OK);
+    uint64_t pieces = g->backing3d;
+    fk.fail = HV_GPU3D_ERR_UNSPEC;
+    check("the renderer refuses a backing", c_attach(401, 2, 2, bk_addr, bk_len, 2), UNSPEC);
+    check("so it has none", hv_virtio_gpu_res3d(g, 401)->has_backing == 0 && g->backing3d == pieces, 1);
+    check("and can take one", c_attach(401, 2, 2, bk_addr, bk_len, 2), OK);
+    check("detach", c_detach(401), OK);
+    check("detach counted", hv_virtio_gpu_res3d(g, 401)->has_backing == 0 && g->backing3d == pieces, 1);
+    check("detach with no backing", c_detach(401), OK);
+    check("detach: unknown", c_detach(55555), BAD_ID);
+    uint64_t calls = fk.n;
+    check("unref", c_unref(401), OK);
+    check("unref: the renderer got it, with no context", fk.n == calls + 1 && fk_last()->req.type == 0x102 && fk_last()->req.res_id == 401 &&
+          fk_last()->req.ctx_id == 0, 1);
+    check("unref twice", c_unref(401), BAD_ID);
+    check("unref 0", c_unref(0), BAD_ID);
+    c_unref(400);
+}
+
+static void test_gpu3d_scanout(HvVirtioGpu *g) {
+    HvVgpuRect d;
+    check("a 2D resource", c_create2d(8000, 2, 64, 64), OK);
+    check("a 3D resource", c_create(0, 500, 2, 2, 64, 64, 1, 1, 0, 0), OK);
+    check("scanout the 2D one", c_scanout(0, 8000, 0, 0, 64, 64), OK);
+    check("2D scanout bound", g->scanout_res == 8000 && g->scanout3d_res == 0, 1);
+    hv_virtio_gpu_take_dirty(g, &d);
+    int wk = woke;
+    check("scanout the 3D one", c_scanout(0, 500, 0, 0, 64, 64), OK);
+    check("3D scanout is remembered, the 2D one is off", g->scanout_res == 0 && g->scanout3d_res == 500 && g->scanout3d.width == 64, 1);
+    check("the presenter is woken", woke, wk + 1);
+    check("and sees a black frame", hv_virtio_gpu_take_dirty(g, &d), 1);
+    uint64_t flushes = g->flushes;
+    check("flush the 3D one", c_flush(500, 0, 0, 64, 64), OK);
+    check("flush counted", g->flushes, flushes + 1);
+    check("flush: past the edge", c_flush(500, 60, 0, 8, 1), BAD_PARAM);
+    check("flush: wraps", c_flush(500, 0, 0xfffffff8u, 1, 16), BAD_PARAM);
+    check("scanout: rectangle too wide", c_scanout(0, 500, 1, 0, 64, 64), BAD_PARAM);
+    check("scanout: rectangle wraps", c_scanout(0, 500, 0xffffff00u, 0, 0x200, 16), BAD_PARAM);
+    check("scanout: under 16 pixels", c_scanout(0, 500, 0, 0, 8, 8), BAD_PARAM);
+    check("scanout: id 1", c_scanout(1, 500, 0, 0, 64, 64), 0x1202);
+    check("scanout: a 3D texture", c_scanout(0, 101, 0, 0, 16, 16), BAD_PARAM);
+    check("refused scanouts changed nothing", g->scanout3d_res, 500);
+    check("scanout the 2D one again", c_scanout(0, 8000, 0, 0, 64, 64), OK);
+    check("the 3D scanout is gone", g->scanout3d_res == 0 && g->scanout_res == 8000, 1);
+    c_scanout(0, 500, 0, 0, 64, 64);
+    check("scanout off", c_scanout(0, 0, 0, 0, 0, 0), OK);
+    check("both off", g->scanout3d_res == 0 && g->scanout_res == 0, 1);
+    c_scanout(0, 500, 0, 0, 64, 64);
+    check("unref the 3D scanout", c_unref(500), OK);
+    check("scanout off after the unref", g->scanout3d_res, 0);
+    check("flush of it after the unref", c_flush(500, 0, 0, 1, 1), BAD_ID);
+    check("unref the 2D resource", c_unref(8000), OK);
+}
+
+static void test_gpu3d_limits(HvVirtioGpu *g) {
+    uint32_t before = g->nres3d;
+    int made = 0;
+    for (uint32_t i = 0; i < 4200; i++) made += c_create(0, 10000 + i * 7, 2, 1, 1, 1, 1, 1, 0, 0) == OK;
+    check("4096 resources in all", made, HV_VGPU_MAX_RES3D - before);
+    check("the next one", c_create(0, 99999, 2, 1, 1, 1, 1, 1, 0, 0), NOMEM);
+    int found = 1;
+    for (uint32_t i = 0; i < 4200; i++) found &= (hv_virtio_gpu_res3d(g, 10000 + i * 7) != NULL) == (i < (uint32_t)made);
+    check("every one is found", found, 1);
+    for (uint32_t i = 0; i < 4200; i++) c_unref(10000 + i * 7);
+    check("all unref'd", g->nres3d, before);
+    check("room again", c_create(0, 99999, 2, 1, 1, 1, 1, 1, 0, 0), OK);
+    c_unref(99999);
+
+    /* backing pieces over all resources */
+    uint64_t base = g->backing3d;
+    int attached = 0;
+    for (uint32_t i = 0; i < 66; i++) {
+        c_create(0, 20000 + i, 0, 0, 4096, 1, 1, 1, 0, 0);
+        attached += c_attach(20000 + i, 16384, 16384, bk_addr, bk_len, 2) == OK;
+    }
+    check("backing pieces are limited in all", attached, (int)((HV_VGPU_MAX_BACKING3D - base) / HV_VGPU_MAX_ENTRIES));
+    check("the next attach", c_attach(20065, 16384, 16384, bk_addr, bk_len, 2), NOMEM);
+    uint32_t room = HV_VGPU_MAX_BACKING3D - (uint32_t)g->backing3d;
+    check("an attach that fills the rest", c_attach(20063, room, room, bk_addr, bk_len, 2), OK);
+    check("the limit is exact", g->backing3d, HV_VGPU_MAX_BACKING3D);
+    check("one more piece", c_attach(20064, 1, 1, bk_addr, bk_len, 2), NOMEM);
+    check("detach gives pieces back", c_detach(20000), OK);
+    check("and an attach fits again", c_attach(20064, 1, 1, bk_addr, bk_len, 2), OK);
+    for (uint32_t i = 0; i < 66; i++) c_unref(20000 + i);
+    check("unref gives them all back", g->backing3d, base);
+}
+
+static void test_gpu3d_reset(HvVirtioGpu *g) {
+    /* with a renderer on its own thread: a reset destroys everything, and waits */
+    c_create(0, 600, 0, 0, 64, 1, 1, 1, 0, 0);
+    c_attach(600, 2, 2, bk_addr, bk_len, 2);
+    c_ctx_create(7, 0, "r");
+    c_create(0, 500, 2, 2, 64, 64, 1, 1, 0, 0);
+    c_scanout(0, 500, 0, 0, 64, 64);
+    uint64_t unrefs = fk_count(0x102), destroys = fk_count(0x201);
+    uint32_t nres = g->nres3d, nctx = g->nctx;
+    fk_thread(1);
+    gpu3d_setup(1);
+    fk_thread(0);
+    check("reset: every resource destroyed", fk_count(0x102) - unrefs, nres);
+    check("reset: every context destroyed", fk_count(0x201) - destroys, nctx);
+    check("reset: tables empty", g->nres3d == 0 && g->nctx == 0 && g->backing3d == 0 && g->scanout3d_res == 0, 1);
+    check("reset: nothing pending", g->npend == 0 && g->nopen == 0 && g->pend_bytes == 0, 1);
+    check("reset: contexts are gone", c_ctx_destroy(7), G3_BAD_CTX);
+
+    /* a renderer that never finishes: the reset gives up, and a late answer is harmless */
+    c_create(0, 601, 0, 0, 64, 1, 1, 1, 0, 0);
+    c_ctx_create(8, 0, "late");
+    fk.hold = 1, fk.nheld = 0;
+    q_hdr(0x207, 8), q32(24, 8);
+    Seg s = {G3_DATA, 8, 0};
+    int head = g3_post(32, &s, 1, 24);
+    g3_kick();
+    g3_poll();
+    check("a submit is with the renderer", fk.nheld, 1);
+    g->drain_ms = 50;
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    gpu3d_setup(1);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    double ms = (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6;
+    check("reset gives up after its timeout", ms >= 40 && ms < 3000, 1);
+    check("reset: tables empty anyway", g->nres3d == 0 && g->nctx == 0 && g->npend == 0 && g->nopen == 0, 1);
+    check("the reset's own requests are with the renderer too", fk.nheld, 3);
+    fk.hold = 0;
+    fk_release_all(); /* late answers: the device must neither answer the guest nor touch freed memory */
+    g3_poll();
+    check("a late answer is not delivered", g3_done(head), 0);
+    g->drain_ms = 0;
+    check("the device works after", c_ctx_create(9, 0, "after"), OK);
+    check("late answers did not disturb it", g->nctx, 1);
+    check("pending is empty", g->npend, 0);
+    c_ctx_destroy(9);
+}
+
+static void test_gpu3d_off(HvVirtioGpu *g) {
+    wr8(GPU_BAR + 0x14, 0);
+    check("set_3d off", hv_virtio_gpu_set_3d(g, NULL, NULL), 0);
+    wr32(&m, GPU_BAR + 0x00, 0);
+    check("VIRGL not offered again", rd32(&m, GPU_BAR + 0x04), 0);
+    check("no capsets again", rd32(&m, GPU_BAR + 0x200c), 0);
+    gpu3d_setup(1); /* the driver tries to take it */
+    check("a context with no renderer", c_ctx_create(1, 0, ""), UNSPEC);
+    check("a submit with no renderer", c_submit(1, 8, 8), UNSPEC);
+    q_hdr(0x108, 0);
+    check("capset info with no renderer", g3_cmd(32, NULL, 0, 40), UNSPEC);
+    check("2D works", c_create2d(1, 2, 16, 16), OK);
+    check("2D unref works", c_unref(1), OK);
+    check("nothing pending", g->npend, 0);
+    /* a chain this model cannot follow is still handed back, 2D or not */
+    Seg segs[130];
+    for (int i = 0; i < 127; i++) segs[i] = (Seg){G3_DATA + (uint64_t)i * 64, 64, 0};
+    q_hdr(0x101, 0);
+    g3_cmd(40, segs, 127, 24);
+    check("a chain of 129 is answered", resp_written, 0);
+    check("2D still works after it", c_create2d(1, 2, 16, 16), OK);
+    check("nothing lost", g3_lost, 0);
+    c_unref(1);
+}
+
+/* A fresh board with the fake renderer on, the driver bound. Needs the old board destroyed and the machine freed. */
+static HvDisk *board_root; /* the board's slots depend on its disk */
+static HvVirtioGpu *gpu3d_board(void) {
+    static const uint8_t mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
+    if (hv_machine_init(&m, 4 << 20) != 0 || hv_virt_create(&b, &m, cpus, 1, 64ull << 20, board_root, mac) != 0) {
+        check("board for the destroy cases", 1, 0);
+        return NULL;
+    }
+    hv_virt_reset(&b);
+    fk.ram_lo = (uint64_t)(uintptr_t)ram(VIRT_MEM);
+    fk.ram_hi = fk.ram_lo + b.mem.size;
+    g3dev = b.gpu;
+    wr8(GPU_BAR + 0x14, 0);
+    check("set_3d on the new board", hv_virtio_gpu_set_3d(b.gpu, &fk_ops, &fk), 0);
+    gpu3d_setup(1);
+    return b.gpu;
+}
+
+/* Runs last: it destroys the board and builds its own. */
+static void test_gpu3d_destroy(void) {
+    /* destroy sends UNREF and CTX_DESTROY for what is left, to a renderer that is still on */
+    HvVirtioGpu *g = gpu3d_board();
+    if (!g) return;
+    check("a context", c_ctx_create(21, 0, "d"), OK);
+    check("a resource", c_create(0, 950, 2, 1, 8, 8, 1, 1, 0, 0), OK);
+    uint64_t unrefs = fk_count(0x102), destroys = fk_count(0x201);
+    hv_virt_destroy(&b);
+    check("destroy: the resource went to the renderer", fk_count(0x102) - unrefs, 1);
+    check("destroy: the context went to the renderer", fk_count(0x201) - destroys, 1);
+    hv_machine_free(&m);
+
+    /* a reset that gave up on a stuck request, then destroy: the device is kept, so the late done() is safe */
+    g = gpu3d_board();
+    if (!g) return;
+    check("a context to abandon", c_ctx_create(22, 0, "o"), OK);
+    fk.hold = 1, fk.nheld = 0;
+    g->drain_ms = 50;
+    wr8(GPU_BAR + 0x14, 0); /* the driver resets while the renderer is stuck */
+    check("the reset left an orphan", g->norphan >= 1, 1);
+    fk.hold = 0;
+    hv_virt_destroy(&b); /* nothing is open now, but the orphan still points at the device */
+    fk_release_all();
+    check("the late done() found a live device", g->norphan, 0);
+    hv_machine_free(&m);
+}
+
+/* ---- fuzz: random 3D requests, from a driver and through a renderer on its own thread ---- */
+static uint32_t pick(const uint32_t *v, int n) { return v[next_rand() % (uint64_t)n]; }
+
+static void fuzz_create_fields(uint64_t r) {
+    uint32_t t = (r & 0x70) ? (uint32_t)(r >> 8) % 9 : edge32();
+    q32(28, t);
+    q32(32, (r & 0xe0000) ? 1 + (uint32_t)(r >> 12) % 3 : edge32());
+    uint32_t w = pick((const uint32_t[]){1, 2, 3, 4, 8, 16, 64, 100}, 8), h = pick((const uint32_t[]){1, 2, 4, 8, 16, 64}, 6);
+    uint32_t d = 1, a = 1, last = (uint32_t)(r >> 20) % 4;
+    if (r & 0x30000) { /* a plausible shape for this target */
+        h = (t == 1 || t == 6 || t == 0) ? 1 : h;
+        if (t == 0) w = 64 + (uint32_t)(r >> 24) % 4000, last = 0;
+        if (t == 4 || t == 8) h = w, a = t == 4 ? 6 : 6 * (1 + (uint32_t)(r >> 28) % 3);
+        if (t == 3) d = 1 + (uint32_t)(r >> 28) % 8;
+        if (t == 6 || t == 7) a = 1 + (uint32_t)(r >> 28) % 6;
+    } else {
+        h = (r & 0x80) ? edge32() : h, d = (r & 0x100) ? edge32() : 1, a = (r & 0x200) ? edge32() : 1, last = (r & 0x400) ? edge32() : last;
+        w = (r & 0x800) ? edge32() : w;
+    }
+    q32(40, w), q32(44, h), q32(48, d), q32(52, a), q32(56, last), q32(60, (r & 0x1000) ? edge32() : 0);
+}
+
+/* a live 3D resource, or NULL: the n-th one in table order */
+static HvVgpuRes3d *fuzz_live(uint64_t n) {
+    uint32_t total = g3dev->nres3d;
+    if (!total) return NULL;
+    n %= total;
+    for (int bk = 0; bk < HV_VGPU_RES3D_BUCKETS; bk++)
+        for (HvVgpuRes3d *r = g3dev->res3d[bk]; r; r = r->next)
+            if (!n--) return r;
+    return NULL;
+}
+
+static void fuzz_gen(int k, uint32_t *len, uint32_t *resp_len, Seg *seg, int *nseg, uint32_t *type_out) {
+    static const uint32_t types[] = {0x108, 0x109, 0x200, 0x201, 0x202, 0x203, 0x204, 0x205, 0x206, 0x207, 0x102,
+                                     0x103, 0x104, 0x105, 0x106, 0x107, 0x101, 0x100};
+    static const uint32_t lens[] = {32, 32, 96, 24, 32, 32, 72, 72, 72, 32, 32, 48, 48, 56, 32, 32, 40, 24};
+    uint64_t r = next_rand();
+    unsigned t = (unsigned)(r % (sizeof types / sizeof types[0]));
+    uint32_t type = types[t];
+    uint32_t ctx = (r & 0x700) ? 1 + (uint32_t)(r >> 12) % 4 : edge32();
+    if ((r & 0xc0000) == 0) ctx = 0;
+    q_hdr(type, ctx);
+    if ((r & 0x300000) == 0) q_fence(next_rand());
+    uint32_t res = (r & 0x7000000) ? 1 + (uint32_t)(r >> 32) % 12 : edge32();
+    *nseg = 0, *resp_len = 24, *len = lens[t], *type_out = type;
+    for (int w = 6; w < 14; w++) q32(w * 4, edge32()); /* every unnamed field starts as an edge value */
+    switch (type) {
+    case 0x108: q32(24, (r & 0x30) ? (uint32_t)(r >> 40) % 3 : edge32()); *resp_len = 40; break;
+    case 0x109:
+        q32(24, (r & 0x30) ? 1 + (uint32_t)(r >> 40) % 2 : edge32()), q32(28, (r & 0x300) ? 1 + (uint32_t)(r >> 44) % 3 : edge32());
+        *resp_len = (r & 0x40) ? 24 + 64 : 24;
+        break;
+    case 0x200:
+        q32(16, (r & 0x30) ? 1 + (uint32_t)(r >> 40) % 8 : ctx), q32(24, (r & 0x300) ? (uint32_t)(r >> 44) % 66 : edge32());
+        memset(rq + 28, 0, 4);
+        memset(rq + 32, 'n', 64);
+        break;
+    case 0x202:
+    case 0x203: q32(24, res); break;
+    case 0x204:
+        q32(24, res);
+        fuzz_create_fields(next_rand());
+        break;
+    case 0x205:
+    case 0x206: {
+        uint64_t x = next_rand();
+        q32(56, res);
+        HvVgpuRes3d *live = (x >> 56) % 3 == 0 ? fuzz_live(x >> 8) : NULL;
+        if (live && live->has_backing) { /* a request that should go through */
+            q32(56, live->id), q32(24, 0), q32(28, 0), q32(32, 0), q32(36, 1), q32(40, 1), q32(44, 1), q64(48, 0), q32(60, 0), q32(64, 0), q32(68, 0);
+            if (g3dev->nctx) q32(16, g3dev->ctx[0] ? g3dev->ctx[0] : 0);
+            break;
+        }
+        if (x & 0x70)
+            q32(24, (uint32_t)(x >> 8) % 4), q32(28, (uint32_t)(x >> 12) % 4), q32(32, !((x >> 16) % 8)), q32(36, (uint32_t)(x >> 20) % 5),
+                q32(40, (uint32_t)(x >> 24) % 5), q32(44, 1 + !((x >> 28) % 8));
+        if (x & 0xe00) {
+            q64(48, (uint64_t)((x >> 32) % 0x2000)), q32(60, ((x >> 40) % 4) ? 0 : (uint32_t)(x >> 42) % 3);
+            q32(64, (x & 0x40) ? 0 : 16 * (uint32_t)(x >> 44) % 256), q32(68, (x & 0x80) ? 0 : 256);
+        } else {
+            q32(60, 0), q32(64, 0), q32(68, 0);
+        }
+        break;
+    }
+    case 0x207: {
+        uint64_t x = next_rand();
+        q32(16, (x & 0x10) ? ctx : 1 + (uint32_t)(x >> 40) % 4);
+        uint32_t size = (x & 0x20) ? 4 * ((uint32_t)(x >> 8) % 0x800) : (x & 0x40) ? edge32() : (uint32_t)(x >> 8) % 0x3000;
+        uint32_t given = (x & 0x80) ? size : (uint32_t)(x >> 24) % 0x3000;
+        if (given > 0x3f000) given = 0x3f000;
+        q32(24, size);
+        if (given) seg[(*nseg)++] = (Seg){G3_DATA + (uint64_t)k * 0x40000, given, 0};
+        break;
+    }
+    case 0x102: case 0x107: q32(24, res); break;
+    case 0x103: q32(24, (uint32_t)(r >> 40) % 8), q32(28, (uint32_t)(r >> 44) % 4), q32(32, 8 + (uint32_t)(r >> 48) % 64), q32(36, 8 + (uint32_t)(r >> 52) % 64),
+                q32(40, (r & 0x80) ? 0 : edge32()), q32(44, res); break;
+    case 0x104: q32(24, (uint32_t)(r >> 40) % 8), q32(28, (uint32_t)(r >> 44) % 4), q32(32, (uint32_t)(r >> 48) % 70), q32(36, (uint32_t)(r >> 52) % 70), q32(40, res); break;
+    case 0x105: q32(24, (uint32_t)(r >> 40) % 8), q32(28, (uint32_t)(r >> 44) % 4), q32(32, (uint32_t)(r >> 48) % 70), q32(36, (uint32_t)(r >> 52) % 70),
+                q64(40, (uint64_t)(r >> 56) * 64), q32(48, res); break;
+    case 0x106: {
+        uint64_t x = next_rand();
+        HvVgpuRes3d *live = (x >> 56) % 3 == 0 ? fuzz_live(x >> 8) : NULL;
+        if (live) res = live->id;
+        uint32_t n = (x & 0x70) ? 1 + (uint32_t)(x >> 8) % 5 : edge32();
+        uint32_t given = (x & 0x380) ? (n < 6 ? n : 5) : (uint32_t)(x >> 12) % 6;
+        q32(24, res), q32(28, n);
+        uint8_t *e = ram(G3_LISTBUF + (uint64_t)k * 0x10000);
+        for (uint32_t i = 0; i < given; i++) {
+            uint64_t y = next_rand(), addr = G3_BK + (y >> 8) % 0x30000;
+            uint32_t l = 1 + (uint32_t)(y >> 40) % 0x2000;
+            switch (y & 0xff) {
+            case 0: addr = ~0ull - (y >> 8) % 64; break;
+            case 1: addr = VIRT_MEM + b.mem.size - (y >> 8) % 64; break;
+            case 2: l = 0; break;
+            case 3: l = edge32(); break;
+            default: break;
+            }
+            memcpy(e + 16 * i, &addr, 8), memcpy(e + 16 * i + 8, &l, 4), memset(e + 16 * i + 12, 0, 4);
+        }
+        if (given) seg[(*nseg)++] = (Seg){G3_LISTBUF + (uint64_t)k * 0x10000, given * 16, 0};
+        break;
+    }
+    case 0x101: q32(24, 1 + (uint32_t)(r >> 40) % 30), q32(28, 1 + (uint32_t)(r >> 44) % 4), q32(32, 1 + (uint32_t)(r >> 48) % 40), q32(36, 1 + (uint32_t)(r >> 52) % 40); break;
+    default: break;
+    }
+    if ((r & 0x3c00000) == 0) *len = (uint32_t)(r >> 50) % 100; /* a cut-short request */
+}
+
+static void test_gpu3d_fuzz(HvVirtioGpu *g) {
+    wr8(GPU_BAR + 0x14, 0);
+    check("fuzz: renderer back on", hv_virtio_gpu_set_3d(g, &fk_ops, &fk), 0);
+    gpu3d_setup(1);
+    fk.model = 1, fk.violations = 0;
+    fk_thread(1);
+    uint64_t ok_by_type[0x210] = {0}, total = 0, errors0 = g->errors;
+    int bad_answer = 0, bad_len = 0, bad_state = 0, bad_echo = 0, stuck = 0;
+    g3_lost = 0;
+    static const uint32_t allowed[] = {0x1100, 0x1101, 0x1102, 0x1103, 0x1200, 0x1201, 0x1202, 0x1203, 0x1204, 0x1205};
+    for (int i = 0; i < 20000; i++) {
+        int nreq = 1 + (int)(next_rand() % 3);
+        struct { int head; uint32_t type, resp_len, fenced, len; uint64_t fence; uint32_t ctx; } rr[3];
+        g3_nreaped = 0;
+        for (int k = 0; k < nreq; k++) {
+            Seg seg[2];
+            int nseg;
+            uint32_t len, resp_len, type;
+            fuzz_gen(k, &len, &resp_len, seg, &nseg, &type);
+            rr[k].fenced = rq[4] & 1, memcpy(&rr[k].fence, rq + 8, 8), memcpy(&rr[k].ctx, rq + 16, 4);
+            rr[k].type = type, rr[k].resp_len = resp_len, rr[k].len = len;
+            rr[k].head = g3_post(len, seg, nseg, resp_len);
+        }
+        g3_kick();
+        struct timespec t0, t1;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (;;) {
+            g3_poll();
+            int n = 0;
+            for (int k = 0; k < nreq; k++) n += g3_done(rr[k].head);
+            if (n == nreq) break;
+            clock_gettime(CLOCK_MONOTONIC, &t1);
+            if (t1.tv_sec - t0.tv_sec > 5) {
+                stuck++;
+                break;
+            }
+            sched_yield();
+        }
+        if (stuck) break;
+        for (int k = 0; k < nreq; k++) {
+            uint32_t st = g3_status(rr[k].head), written = 0;
+            for (int j = 0; j < g3_nreaped; j++)
+                if (g3_reaped[j].head == rr[k].head) written = g3_reaped[j].written;
+            int known = 0;
+            for (unsigned a = 0; a < sizeof allowed / sizeof allowed[0]; a++) known |= st == allowed[a];
+            if (written >= 4 && !known) bad_answer++;
+            if (written > rr[k].resp_len) bad_len++;
+            if (written >= 24 && rr[k].len >= 24 && rr[k].fenced && (rd32(&m, G3_RESP(rr[k].head) + 4) != 1 || rd32(&m, G3_RESP(rr[k].head) + 8) != (uint32_t)rr[k].fence ||
+                rd32(&m, G3_RESP(rr[k].head) + 12) != (uint32_t)(rr[k].fence >> 32) || rd32(&m, G3_RESP(rr[k].head) + 16) != rr[k].ctx))
+                bad_echo++;
+            if (written >= 24 && rr[k].len >= 24 && !rr[k].fenced && rd32(&m, G3_RESP(rr[k].head) + 4) != 0) bad_echo++;
+            if (st == OK || st == 0x1102 || st == 0x1103) ok_by_type[rr[k].type]++;
+            total++;
+        }
+        if (i % 64 == 0) {
+            uint32_t nres = 0, nctx = 0;
+            uint64_t pieces = 0;
+            for (int bk = 0; bk < HV_VGPU_RES3D_BUCKETS; bk++)
+                for (HvVgpuRes3d *r = g->res3d[bk]; r; r = r->next) {
+                    nres++;
+                    if (r->has_backing) pieces += r->npieces;
+                    if (r->has_backing && (!r->npieces || !r->backing_len)) bad_state++;
+                    if (!r->has_backing && (r->npieces || r->backing_len)) bad_state++;
+                }
+            for (int c = 0; c < HV_VGPU_MAX_CTX; c++) {
+                nctx += g->ctx[c] != 0;
+                for (int d = c + 1; d < HV_VGPU_MAX_CTX; d++) bad_state += g->ctx[c] && g->ctx[c] == g->ctx[d];
+            }
+            if (nres != g->nres3d || nres > HV_VGPU_MAX_RES3D || nctx != g->nctx || pieces != g->backing3d || pieces > HV_VGPU_MAX_BACKING3D) bad_state++;
+            if (g->scanout3d_res && !hv_virtio_gpu_res3d(g, g->scanout3d_res)) bad_state++;
+            if (g->scanout3d_res && g->scanout_res) bad_state++;
+            if (fk.nmres != (int)nres || fk.nmctx != (int)nctx) bad_state++; /* the renderer's view is the device's */
+            uint64_t mem = 0;
+            for (int k = 0; k < HV_VGPU_MAX_RESOURCES; k++)
+                if (g->res[k].id) mem += (uint64_t)g->res[k].width * g->res[k].height * 4;
+            if (mem != g->hostmem) bad_state++;
+        }
+    }
+    check("3D fuzz: every request answered", stuck + g3_lost, 0);
+    check("3D fuzz: answers are status codes", bad_answer, 0);
+    check("3D fuzz: answers fit their buffers", bad_len, 0);
+    check("3D fuzz: fences are echoed, and only fences", bad_echo, 0);
+    check("3D fuzz: state stays sound", bad_state, 0);
+    check("3D fuzz: the renderer never saw a bad request", fk.violations, 0);
+    check("3D fuzz: nothing left pending", g->npend == 0 && g->nopen == 0 && g->pend_bytes == 0, 1);
+    uint32_t live_res = g->nres3d, live_ctx = g->nctx;
+    uint64_t unrefs = fk_count(0x102), destroys = fk_count(0x201);
+    gpu3d_setup(1);
+    check("3D fuzz: reset destroys what is left", fk_count(0x201) - destroys, live_ctx);
+    check("3D fuzz: reset unrefs 3D resources", fk_count(0x102) - unrefs >= live_res, 1);
+    check("3D fuzz: reset leaves nothing", g->nres3d == 0 && g->nctx == 0 && g->backing3d == 0 && g->hostmem == 0 && fk.nmres == 0 && fk.nmctx == 0, 1);
+    check("3D fuzz: still no bad request", fk.violations, 0);
+    fk_thread(0);
+    fk.model = 0;
+    printf("  gpu 3D fuzz: %llu requests, %llu errors answered; accepted: info %llu, capset %llu, ctx %llu/%llu, create %llu, "
+           "transfer %llu/%llu, submit %llu, attach %llu, ctx attach %llu/%llu; reached the renderer: %llu\n",
+           (unsigned long long)total, (unsigned long long)(g->errors - errors0), (unsigned long long)ok_by_type[0x108],
+           (unsigned long long)ok_by_type[0x109], (unsigned long long)ok_by_type[0x200], (unsigned long long)ok_by_type[0x201],
+           (unsigned long long)ok_by_type[0x204], (unsigned long long)ok_by_type[0x205], (unsigned long long)ok_by_type[0x206],
+           (unsigned long long)ok_by_type[0x207], (unsigned long long)ok_by_type[0x106], (unsigned long long)ok_by_type[0x202],
+           (unsigned long long)ok_by_type[0x203], (unsigned long long)fk.n);
+}
+
+static void test_gpu3d(HvVirtioGpu *g) {
+    test_gpu3d_basic(g);
+    test_gpu3d_submit(g);
+    test_gpu3d_fences(g);
+    test_gpu3d_errors(g);
+    test_gpu3d_scanout(g);
+    test_gpu3d_limits(g);
+    test_gpu3d_reset(g);
+    test_gpu3d_fuzz(g);
+    test_gpu3d_off(g);
+    check("3D: no request lost", g3_lost, 0);
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     alarm(120);
@@ -1734,6 +3157,7 @@ int main(void) {
         printf("cannot build the board\n");
         return 1;
     }
+    board_root = &root;
     hv_virt_reset(&b);
     test_memory_map();
     test_flash();
@@ -1746,8 +3170,11 @@ int main(void) {
     test_primecell();
     test_rng();
     test_blk(disk_path);
+    test_gpu3d(b.gpu);
     hv_virt_destroy(&b);
     test_create_limits();
+    hv_machine_free(&m);
+    test_gpu3d_destroy();
     test_linux_boot();
     hv_disk_close(&root);
     if (have_dtc()) {

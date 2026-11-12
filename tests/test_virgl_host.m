@@ -72,24 +72,6 @@ static void note_fail(const char *fmt, ...) {
 }
 #define DIE(...) (note_fail(__VA_ARGS__), exit(1))
 
-// ANGLE is linked statically and its entry points are hidden, so libepoxy's dlopen of the EGL and GLES
-// frameworks fails. Answer those names with one handle and look symbols up through eglGetProcAddress.
-static char gl_handle;
-static int is_gl_lib(const char *p) {
-    return p && (strstr(p, "EGL.framework") || strstr(p, "GLESv") || strstr(p, "OpenGL.framework"));
-}
-void *dlopen(const char *path, int mode) {
-    (void)mode;
-    if (is_gl_lib(path)) return &gl_handle;
-    fprintf(stderr, "note: dlopen(%s) refused\n", path ? path : "NULL");
-    return NULL;
-}
-void *dlsym(void *h, const char *name) {
-    if (h == &gl_handle) return (void *)eglGetProcAddress(name);
-    fprintf(stderr, "note: dlsym(%s) refused\n", name);
-    return NULL;
-}
-
 static void on_log(enum virgl_log_level_flags lvl, const char *msg, void *ud) {
     (void)ud;
     if (lvl >= VIRGL_LOG_LEVEL_WARNING || getenv("VIRGL_HOST_VERBOSE")) fprintf(stderr, "[virgl %d] %s", lvl, msg);

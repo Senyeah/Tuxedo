@@ -33,7 +33,7 @@ if [ "$DESKTOP" = 1 ]; then
     NAME=debian-desktop
     WORK=/work/G6
     # Variant A: labwc on Wayland. The GL libraries let henge-session pick gles2 when virgl is present (A7)
-    PKGS="$PKGS,labwc,foot,fonts-dejavu-core,libpam-systemd,xkb-data,mesa-utils,mesa-utils-bin,glmark2-es2-wayland,libgl1-mesa-dri,libgles2,libegl1"
+    PKGS="$PKGS,labwc,foot,fonts-dejavu-core,libpam-systemd,xkb-data,mesa-utils,mesa-utils-bin,glmark2-es2-wayland,libgl1-mesa-dri,libgles2,libegl1,wlr-randr"
     PARTUUID=${HENGE_PARTUUID:-9c4e7a21-3d58-4b0f-a6c2-1f8d5e90b3a7}
     FSUUID=${HENGE_FSUUID:-6d0b8e35-c1a2-47f9-9e64-b7a13c52d80f}
 else
@@ -52,8 +52,14 @@ mkdir -p "$WORK"
 rm -rf "$ROOT" "$FSIMG" "$IMG"
 mkdir -p "$ROOT"
 
+# Installed by a hook after the other packages: apt cannot see a local file in the chroot
+rm -f "$WORK"/henge-guest_*.deb
+sh /tools/build-guest-pkg.sh --inner "$WORK" >/dev/null
+GUEST_DEB=$(ls "$WORK"/henge-guest_*.deb)
+
 # The desktop files are copied after the packages, so they replace the packages' own defaults
-set -- --customize-hook='cp /tools/customize.sh "$1/tmp/customize.sh"; chroot "$1" sh -e /tmp/customize.sh; rm -f "$1/tmp/customize.sh"'
+set -- --customize-hook='cp "'"$GUEST_DEB"'" "$1/tmp/henge-guest.deb"; chroot "$1" dpkg -i /tmp/henge-guest.deb; rm -f "$1/tmp/henge-guest.deb"' \
+    --customize-hook='cp /tools/customize.sh "$1/tmp/customize.sh"; chroot "$1" sh -e /tmp/customize.sh; rm -f "$1/tmp/customize.sh"'
 if [ "$DESKTOP" = 1 ]; then
     set -- "$@" \
         --customize-hook='cp -a /tools/rootfs-desktop/. "$1"/' \

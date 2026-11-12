@@ -30,6 +30,8 @@ void hv_jit_region_close(HvJitRegion *region);
 
 /* Copy `words` instructions to start (an executable address) and make them runnable. */
 void hv_jit_write(HvJitRegion *region, uint32_t *start, const void *src, size_t bytes);
+/* Zero the whole region (udf), then call hv_jit_finish. */
+void hv_jit_zero(HvJitRegion *region);
 void hv_jit_finish(HvJitRegion *region, uint32_t *start, size_t words);
 /* hv_jit_finish for two ranges at once (a block's hot and cold parts): one wait for the instruction caches, not two. */
 void hv_jit_finish2(HvJitRegion *region, uint32_t *a, size_t na, uint32_t *b, size_t nb);

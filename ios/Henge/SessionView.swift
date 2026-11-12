@@ -154,7 +154,7 @@ struct SessionView: View {
                 }
                 if let error { errorCard(error, layout) }
                 if shutdownAsked != nil && state != 2 { shutdownCard(layout) }
-                KeyboardCatcher(active: $typing, suspended: consoleShown).frame(width: 0, height: 0)
+                KeyboardCatcher(active: $typing, suspended: consoleShown, linux: mac.guest == .linux).frame(width: 0, height: 0)
             }
             .frame(width: full.width, height: full.height)
             .ignoresSafeArea()

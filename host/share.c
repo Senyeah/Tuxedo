@@ -6,9 +6,11 @@
 
    /.henge/ is not part of the folder. It has the clipboard, where the helper inside macOS (tools/henge-agent.m)
    waits for the device's clipboard and sends the guest's, and what it takes to install that helper.
+   It also serves the Linux display follower: GET /.henge/display is "W H SCALE".
 
    Locks are accepted but not enforced: macOS only writes to a server that offers them, and there is one client. */
 #include "share.h"
+#include "vm.h"
 
 #include <copyfile.h>
 #include <dirent.h>
@@ -717,6 +719,15 @@ static int serve_henge(Conn *c, Request *r) {
         if (body_discard(c, r) != 0) return -1;
         const char *s = what[0] == 'l' ? lighten_script : unlighten_script;
         return respond(c, r, 200, "OK", "Content-Type: text/plain\r\n", s, strlen(s));
+    }
+    if (!strcmp(what, "display") && !strcmp(r->method, "GET")) {
+        if (body_discard(c, r) != 0) return -1;
+        uint32_t w, h;
+        double scale;
+        if (!hv_vm_display(&w, &h, &scale)) return respond_empty(c, r, 404, "Not Found"); /* follower falls back to modes */
+        char line[64];
+        int n = snprintf(line, sizeof line, "%u %u %g\n", w, h, scale);
+        return respond(c, r, 200, "OK", "Content-Type: text/plain\r\nCache-Control: no-store\r\n", line, (size_t)n);
     }
     if (!strcmp(what, "agent") && !strcmp(r->method, "GET")) return serve_agent(c, r);
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "GET")) return clipboard_get(c, r);

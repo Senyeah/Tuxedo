@@ -43,6 +43,12 @@ static unsigned threads(void) {
     vm_deallocate(mach_task_self(), (vm_address_t)list, n * sizeof *list);
     return n;
 }
+static unsigned initial_threads;
+/* libdispatch keeps idle workers for a few seconds, longer under load; a leaked thread stays. */
+static int threads_settled(void) {
+    for (int w = 0; w < 15000 && threads() > initial_threads; w++) usleep(1000);
+    return threads() <= initial_threads;
+}
 static unsigned dead_ports(void) {
     mach_port_name_array_t names;
     mach_port_type_array_t types;
@@ -148,23 +154,22 @@ int main(void) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{}); /* the power key's release timer runs there */
     usleep(100000);
     int initial_fds = fds();
-    unsigned initial_threads = threads();
+    initial_threads = threads();
     unsigned initial_dead_ports = dead_ports();
     /* A virt machine is built and released without a trace, and the virtual Mac still boots after it. */
     for (int i = 0; i < 3; i++) {
         check("virt board builds", hv_vm_create(&virt, error, sizeof error) == 0 && !hv_vm_board() && hv_vm_virt());
         check("virt board has a display", hv_vm_devs()->display != NULL);
         hv_vm_destroy();
-        for (int n = 0; n < 1000 && threads() > initial_threads; n++) usleep(1000); /* the presenter's queue winds down */
         check("virt release leaves nothing behind", !hv_vm_virt() && henge_vm_can_start() && fds() == initial_fds &&
-                                                     threads() == initial_threads);
+                                                     threads_settled());
     }
     /* Missing ROM fails after disks, RAM and device workers were created. */
     for (int i = 0; i < 3; i++) {
         check("failed boot reports an error", henge_vm_boot(rom, disk, aux, 1, 0, 64, 4, error, sizeof error) != 0);
         check("failed boot allows retry", henge_vm_state() == 0 && henge_vm_can_start());
         check("failed boot closes files", fds() == initial_fds);
-        check("failed boot joins workers", threads() == initial_threads);
+        check("failed boot joins workers", threads_settled());
     }
     for (int i = 0; i < 12; i++) {
         int outcome = i % 3 == 2 ? HENGE_VM_OUTCOME_HOST_STOP : i % 3 == 1 ? HENGE_VM_OUTCOME_RESTART : HENGE_VM_OUTCOME_SHUTDOWN;
@@ -195,8 +200,7 @@ int main(void) {
         check("borrowed JIT mapping retained", mapping.rx_addr == (uint8_t *)jit.base);
         check("no disk or network descriptor leak", fds() == initial_fds);
         /* The last CPU thread can still be returning from its callback. */
-        for (int n = 0; n < 1000 && threads() > initial_threads; n++) usleep(1000);
-        check("no CPU, disk or network worker leak", threads() == initial_threads);
+        check("no CPU, disk or network worker leak", threads_settled());
         check("no leaked CPU thread ports", dead_ports() == initial_dead_ports);
     }
     /* The virt board through the bridge: a tiny firmware prints to the PL011 and ends in PSCI or a host stop. */
@@ -212,7 +216,7 @@ int main(void) {
         check("no board before a boot", henge_vm_board_kind() == -1);
         check("missing firmware file fails", henge_vm_boot_linux("/nonexistent/u-boot.bin", disk, 64, 2, error, sizeof error) != 0 &&
                                                 henge_vm_state() == 0 && henge_vm_can_start() && fds() == initial_fds &&
-                                                threads() == initial_threads);
+                                                threads_settled());
         check("no firmware fails", henge_vm_boot_linux(NULL, disk, 64, 2, error, sizeof error) != 0 && henge_vm_state() == 0);
         for (unsigned i = 0; i < sizeof cases / sizeof *cases; i++) {
             for (int again = 0; again < 2; again++) {
@@ -256,9 +260,7 @@ int main(void) {
                 check("console empty after the drain", henge_vm_console_read((uint8_t *)text, sizeof text) == 0);
                 henge_vm_power_button(); /* no machine: nothing to press */
                 check("virt leaves no descriptors", fds() == initial_fds);
-                /* The power key's 100 ms hold can grow libdispatch's idle pool for a few seconds. */
-                for (int w = 0; w < 6000 && threads() > initial_threads; w++) usleep(1000);
-                check("virt leaves no threads", threads() <= initial_threads);
+                check("virt leaves no threads", threads_settled());
                 if (threads() > initial_threads) fprintf(stderr, "  %s #%d: %u threads, started with %u\n", cases[i].name, again, threads(), initial_threads);
             }
         }

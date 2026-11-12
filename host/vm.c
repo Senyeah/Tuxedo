@@ -40,6 +40,7 @@ static CFTypeRef display_layer;
 static int display_layer_set;
 static uint32_t display_w, display_h, display_mm_w, display_mm_h;
 static int display_mode_set, display_mm_set;
+static double display_scale = 1; /* only reported to the guest, not used for drawing */
 static _Atomic(const HvBoardDevs *) display_devs; /* published only when the board is ready */
 typedef struct VgpuDisplay { HvVirtioGpu *gpu; HvVgpuMetal *presenter; } VgpuDisplay;
 static VgpuDisplay vgpu;
@@ -359,6 +360,20 @@ void hv_vm_set_display_mode(uint32_t width, uint32_t height) {
     const HvBoardDevs *shown = shown_display();
     if (shown && shown->display) shown->display->set_mode(shown->display_opaque, width, height);
     os_unfair_lock_unlock(&display_lock);
+}
+
+void hv_vm_set_display_scale(double scale) {
+    os_unfair_lock_lock(&display_lock);
+    display_scale = scale > 0 ? scale : 1;
+    os_unfair_lock_unlock(&display_lock);
+}
+
+int hv_vm_display(uint32_t *w, uint32_t *h, double *scale) {
+    os_unfair_lock_lock(&display_lock);
+    int set = display_mode_set;
+    if (set) *w = display_w, *h = display_h, *scale = display_scale;
+    os_unfair_lock_unlock(&display_lock);
+    return set;
 }
 
 void hv_vm_set_display_size_mm(uint32_t width_mm, uint32_t height_mm) {

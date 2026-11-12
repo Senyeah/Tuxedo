@@ -1,0 +1,79 @@
+import Foundation
+import CoreGraphics
+
+/// Safe-area insets in points; plain numbers so the policy has no UIKit state and tests run on macOS.
+struct DisplayInsets: Equatable {
+    var top: CGFloat = 0, left: CGFloat = 0, bottom: CGFloat = 0, right: CGFloat = 0
+    static let zero = DisplayInsets()
+}
+
+struct GuestMode: Equatable {
+    var w: Int
+    var h: Int
+}
+
+/// Every guest size decision, from inputs only: pixels in, a size out.
+enum DisplayModePolicy {
+    /// Pixels inside the insets, no larger than cap, rounded down to multiples of 8 (CVT rounds width the same way).
+    static func guestMode(pixels: CGSize, insets: DisplayInsets, scale: CGFloat, cap: CGSize) -> (w: Int, h: Int) {
+        let w = min(pixels.width - (insets.left + insets.right) * scale, cap.width)
+        let h = min(pixels.height - (insets.top + insets.bottom) * scale, cap.height)
+        return (max(Int(w) / 8 * 8, 8), max(Int(h) / 8 * 8, 8))
+    }
+
+    /// 2 on the phone; elsewhere 1 up to 1440 px high, else 2.
+    static func guestScale(shortSide: Int, isPhone: Bool) -> Double {
+        isPhone || shortSide > 1440 ? 2 : 1
+    }
+}
+
+/// Decides which mode to send the guest and when, from timestamped inputs. The caller sets a timer
+/// for `pending.at` and calls `take`. A newer input replaces the pending send.
+struct ModeFollower {
+    static let rotationDelay = 0.3
+    static let externalDelay = 1.0
+
+    struct Pending: Equatable {
+        var mode: GuestMode
+        var at: TimeInterval
+    }
+
+    private(set) var pending: Pending?
+    private(set) var sent: GuestMode
+    private var phone: GuestMode
+    private var external: GuestMode?
+
+    /// `initial` is the mode the guest boots with.
+    init(initial: GuestMode) {
+        sent = initial
+        phone = initial
+    }
+
+    /// The phone's mode for its current orientation. Recorded while an external screen is up, but sends nothing.
+    @discardableResult
+    mutating func orientation(_ mode: GuestMode, now: TimeInterval) -> Pending? {
+        phone = mode
+        guard external == nil else { return pending }
+        return schedule(mode, now + Self.rotationDelay)
+    }
+
+    /// The external screen's mode, or nil when it goes away (the phone's mode comes back).
+    @discardableResult
+    mutating func externalDisplay(_ mode: GuestMode?, now: TimeInterval) -> Pending? {
+        external = mode
+        return schedule(mode ?? phone, now + Self.externalDelay)
+    }
+
+    /// The mode to send now, if one is due.
+    mutating func take(now: TimeInterval) -> GuestMode? {
+        guard let p = pending, now >= p.at else { return nil }
+        pending = nil
+        sent = p.mode
+        return p.mode
+    }
+
+    private mutating func schedule(_ mode: GuestMode, _ at: TimeInterval) -> Pending? {
+        pending = mode == sent ? nil : Pending(mode: mode, at: at)
+        return pending
+    }
+}

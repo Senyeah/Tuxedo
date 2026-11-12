@@ -1,0 +1,43 @@
+--- a/src/dispatch_common.c
++++ b/src/dispatch_common.c
+@@ -172,6 +172,17 @@
+ #include <stdio.h>
+ 
+ #include "dispatch_common.h"
++
++#if defined(__APPLE__) && PLATFORM_HAS_EGL
++/* Henge: ANGLE is linked in, so no EGL or GLES framework exists to dlopen, and its symbols are hidden from
++   dlsym. Every library name gets one handle, and names come from eglGetProcAddress. */
++#define HENGE_STATIC_GL 1
++static char henge_gl_handle;
++/* ANGLE's own entry point: in this file epoxy's header renames eglGetProcAddress to epoxy's wrapper, which would recurse. */
++extern void *henge_angle_get_proc_address(const char *name) __asm__("_eglGetProcAddress");
++/* build-deps.sh and the Makefile look for this symbol to know a patched libepoxy.a */
++const int epoxy_henge_static_gl = 1;
++#endif
+ 
+ #if defined(__APPLE__)
+ #include <TargetConditionals.h>
+@@ -312,7 +323,10 @@
+         abort();
+     }
+ 
+-#ifdef _WIN32
++#ifdef HENGE_STATIC_GL
++    (void)lib_name, (void)exit_on_fail, (void)load;
++    *handle = &henge_gl_handle;
++#elif defined(_WIN32)
+     *handle = LoadLibraryA(lib_name);
+ #else
+     pthread_mutex_lock(&api.mutex);
+@@ -343,7 +357,9 @@
+     void *result;
+     const char *error = "";
+ 
+-#ifdef _WIN32
++#ifdef HENGE_STATIC_GL
++    result = *handle == &henge_gl_handle ? henge_angle_get_proc_address(name) : NULL;
++#elif defined(_WIN32)
+     result = GetProcAddress(*handle, name);
+ #else
+     result = dlsym(*handle, name);
