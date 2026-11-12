@@ -287,6 +287,14 @@ test-virgl-host:
 	else echo "test-virgl-host: skipped: no graphics libraries in $(GFX_DIR)"; fi
 .PHONY: test-virgl-host
 
+# The machine list: lists from before Linux guests still decode, and a Linux folder is recovered like a Mac's.
+$(B)/test_machine_model: ios/Henge/MachineModel.swift tests/test_machine_model.swift | $(B)
+	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
+
+test-machine-model: $(B)/test_machine_model
+	$(B)/test_machine_model
+.PHONY: test-machine-model
+
 # What the JIT setup tells the user and when it retries by itself, for each kind of network path and helper error.
 $(B)/test_jit_advice: ios/Henge/JIT/JITNetworkAdvice.swift tests/test_jit_advice.swift | $(B)
 	xcrun --sdk macosx swiftc $^ -o $@

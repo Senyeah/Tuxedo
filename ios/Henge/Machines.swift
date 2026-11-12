@@ -1,31 +1,10 @@
 import Foundation
 import UIKit
 
-/// A Mac made on the Mac (HengeVM or Henge) and brought over: its boot ROM,
-/// disk and auxiliary storage, and the identity it was installed with.
-struct VirtualMac: Identifiable, Codable, Hashable {
-    var id = UUID()
-    var name: String
-    var ecid: UInt64
-    var seed: UInt64
-    var ramMB: Int
-    var diskBytes: Int64
-    var added = Date()
-    var osName: String?
-    var lastUsed: Date?
-    /// The size macOS is told its screen is. Macs made before this was a choice have none: 16:9.
-    var screenWidth: Int?
-    var screenHeight: Int?
-    /// m4 fork: the iPad's own panel at Retina density. On by default on iPad, for Macs that never chose.
-    var retina: Bool?
+extension VirtualMac {
     var isRetina: Bool { Device.isPad && (retina ?? false) }
     var screen: (width: Int, height: Int) { isRetina ? Device.retinaScreen : (screenWidth ?? 1920, screenHeight ?? 1080) }
     var aspect: CGFloat { CGFloat(screen.width) / CGFloat(screen.height) }
-
-    var directory: URL { Machines.directory(for: id) }
-    var rom: URL { directory.appendingPathComponent("AVPBooter.vmapple2.bin") }
-    var disk: URL { directory.appendingPathComponent("disk.img") }
-    var aux: URL { directory.appendingPathComponent("auxiliary.bin") }
 }
 
 /// How much RAM a Mac gets. The engine first asks the kernel to leave it out of Henge's footprint,
@@ -44,14 +23,6 @@ enum GuestMemory {
         HengeLog.log("session", "guest RAM \(ram) MB (asked \(mac.ramMB), disk room \(room), largest mapping \(reach))")
         return ram
     }
-}
-
-/// machine.json in an exported folder (tools/export_ios.sh writes it).
-private struct MachineFile: Codable {
-    var name: String?
-    var ecid: UInt64
-    var seed: UInt64?
-    var ramMB: Int?
 }
 
 @MainActor
@@ -84,9 +55,6 @@ final class Machines: ObservableObject {
         removeLeftovers()
     }
 
-    /// The file the installer puts in a machine's folder once macOS is on its disk (it holds the release's name).
-    nonisolated static let installedMarker = "installed"
-
     /// Machine folders nothing refers to (an install cut short by a crash or by quitting): their disks take real space.
     /// A folder whose install finished (Henge stopped before it was listed) is listed again instead, and nothing is
     /// removed when the list itself could not be read: every Mac would look unreferenced.
@@ -111,15 +79,8 @@ final class Machines: ObservableObject {
         let items = (try? fm.contentsOfDirectory(at: Self.root, includingPropertiesForKeys: nil)) ?? []
         for item in items {
             guard let id = UUID(uuidString: item.lastPathComponent), !known.contains(id) else { continue }
-            let marker = item.appendingPathComponent(Self.installedMarker)
-            if fm.fileExists(atPath: marker.path), let data = try? Data(contentsOf: item.appendingPathComponent("machine.json")),
-               let info = try? JSONDecoder().decode(MachineFile.self, from: data),
-               fm.fileExists(atPath: item.appendingPathComponent("disk.img").path) {
-                var mac = VirtualMac(id: id, name: info.name ?? "Mac", ecid: info.ecid, seed: info.seed ?? 0,
-                                     ramMB: info.ramMB ?? Device.suggestedRAMGB * 1024, diskBytes: 64 << 30)
-                let os = (try? String(contentsOf: marker, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                mac.osName = os.isEmpty ? nil : os
-                (mac.screenWidth, mac.screenHeight) = Device.fittingScreen
+            if var mac = MachineList.recover(id: id, folder: item, defaultRAMMB: Device.suggestedRAMGB * 1024) {
+                if mac.guest == .mac { (mac.screenWidth, mac.screenHeight) = Device.fittingScreen }
                 all.append(mac)
                 save()
                 try? fm.removeItem(at: item.appendingPathComponent("restore"))
@@ -131,11 +92,8 @@ final class Machines: ObservableObject {
         }
     }
 
-    nonisolated static var root: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return base.appendingPathComponent("Machines", isDirectory: true)
-    }
-    nonisolated static func directory(for id: UUID) -> URL { root.appendingPathComponent(id.uuidString, isDirectory: true) }
+    nonisolated static var root: URL { MachinePaths.root }
+    nonisolated static func directory(for id: UUID) -> URL { MachinePaths.directory(for: id) }
     /// Where Finder file sharing puts what the user drops on Henge.
     nonisolated static var inbox: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] }
 
@@ -167,7 +125,8 @@ final class Machines: ObservableObject {
             let info = try JSONDecoder().decode(MachineFile.self, from: data)
             let missing = Self.required.filter { !FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path) }
             guard missing.isEmpty, Self.hasDisk(folder) else { throw message("The folder is missing \((missing + (Self.hasDisk(folder) ? [] : ["disk.img"])).joined(separator: ", ")).") }
-            var mac = VirtualMac(name: info.name ?? folder.lastPathComponent, ecid: info.ecid, seed: info.seed ?? 0,
+            guard (info.kind ?? .mac) == .mac, let ecid = info.ecid else { throw message("This folder is not a Mac.") }
+            var mac = VirtualMac(name: info.name ?? folder.lastPathComponent, ecid: ecid, seed: info.seed ?? 0,
                                  ramMB: info.ramMB ?? 2048, diskBytes: 0)
             importing = mac.name
             unpacked = 0
@@ -302,12 +261,12 @@ final class Machines: ObservableObject {
 
     private func load() {
         guard let data = try? Data(contentsOf: listURL) else { return }
-        guard let list = try? JSONDecoder().decode([VirtualMac].self, from: data) else {
+        guard let list = MachineList.decode(data) else {
             listUnreadable = true
             HengeLog.log("machines", "machines.json (\(data.count) bytes) could not be read")
             return
         }
-        all = list.filter { FileManager.default.fileExists(atPath: $0.disk.path) }
+        all = list
     }
 
     private func save() {

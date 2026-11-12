@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "dispatch.h"
+#include <dispatch/dispatch.h>
 #include "henge-ios-jit.h"
 #include "net_slirp.h"
 #include "dns_proxy.h"
@@ -104,6 +105,51 @@ int henge_vm_boot(const char *rom, const char *disk, const char *aux, uint64_t e
             jit->size >> 20);
     if (hv_vm_create(&c, err, errlen) != 0) return failed_start();
     if (getenv("HV_STATS")) hv_vm_machine()->stats_interval = atoi(getenv("HV_STATS"));
+    return started(err, errlen);
+}
+
+/* Serial console output: the guest's bytes wait here until the UI drains them. */
+#define CONSOLE_RING_BYTES (256 << 10)
+static pthread_mutex_t console_mutex = PTHREAD_MUTEX_INITIALIZER;
+static uint8_t console_ring[CONSOLE_RING_BYTES];
+static size_t console_head, console_len;
+
+static void console_clear(void) {
+    pthread_mutex_lock(&console_mutex);
+    console_head = console_len = 0;
+    pthread_mutex_unlock(&console_mutex);
+}
+/* Runs on a CPU thread under the device lock; the ring lock is a leaf. */
+static void console_out(void *opaque, uint8_t c) {
+    (void)opaque;
+    pthread_mutex_lock(&console_mutex);
+    if (console_len == CONSOLE_RING_BYTES) { /* full: drop the oldest byte */
+        console_head = (console_head + 1) % CONSOLE_RING_BYTES;
+        console_len--;
+    }
+    console_ring[(console_head + console_len++) % CONSOLE_RING_BYTES] = c;
+    pthread_mutex_unlock(&console_mutex);
+}
+
+int henge_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb, int cpus, char *err, size_t errlen) {
+    { extern void hv_prof_ios_start(void); hv_prof_ios_start(); }
+    if (!firmware) {
+        snprintf(err, errlen, "A Linux machine needs its firmware (u-boot.bin).");
+        return -1;
+    }
+    if (begin_start(err, errlen)) return -1;
+    HengeDualMapping *jit = henge_ios_jit_get_mapping();
+    if (!jit || !jit->rw_addr) {
+        snprintf(err, errlen, "Henge has no JIT region. Turn on JIT first.");
+        return failed_start();
+    }
+    HvVmConfig c = {.board = HV_BOARD_VIRT, .rom = firmware, .disk = disk, .ram_mb = ram_mb, .ncpus = cpus, .log = 1,
+                    .jit_rx = jit->rx_addr, .jit_rw = jit->rw_addr, .jit_bytes = jit->size};
+    fprintf(stderr, "henge: booting Linux with %d CPUs, %llu MB RAM, a %zu MB JIT region\n", cpus,
+            (unsigned long long)ram_mb, jit->size >> 20);
+    console_clear();
+    hv_vm_console_set_output(console_out, NULL); /* destroy clears it, so every boot sets it */
+    if (hv_vm_create(&c, err, errlen) != 0) return failed_start();
     return started(err, errlen);
 }
 
@@ -211,6 +257,54 @@ long henge_vm_balloon(long target_mb) {
     }
     pthread_rwlock_unlock(&api_lock);
     return actual;
+}
+
+/* Reads need no api_lock: the ring outlives the machine, so the last bytes before a stop stay readable. */
+size_t henge_vm_console_read(uint8_t *buf, size_t cap) {
+    pthread_mutex_lock(&console_mutex);
+    size_t n = console_len < cap ? console_len : cap;
+    for (size_t i = 0; i < n; i++) buf[i] = console_ring[(console_head + i) % CONSOLE_RING_BYTES];
+    console_head = (console_head + n) % CONSOLE_RING_BYTES;
+    console_len -= n;
+    pthread_mutex_unlock(&console_mutex);
+    return n;
+}
+void henge_vm_console_write(const uint8_t *buf, size_t n) {
+    if (!lock_running()) return;
+    hv_vm_console_input(buf, n);
+    pthread_rwlock_unlock(&api_lock);
+}
+
+/* The power key is GPIO pin 3 (VIRT_GPIO_POWER, and QEMU's pin on vmapple); a press is high for 100 ms. */
+static int power_pin(int level, uint64_t gen) {
+    if (!lock_running()) return 0;
+    HvPl061 *gpio = hv_vm_devs()->gpio;
+    int done = gpio && gen == atomic_load(&generation); /* the release must not reach a newer machine */
+    if (done) {
+        hv_dev_lock(hv_vm_machine());
+        hv_pl061_set_input(gpio, 3, level);
+        hv_dev_unlock(hv_vm_machine());
+    }
+    pthread_rwlock_unlock(&api_lock);
+    return done;
+}
+void henge_vm_power_button(void) {
+    if (lock_running()) { /* virt: the host's key, which hv_vm_destroy waits for */
+        int done = hv_vm_power_button();
+        pthread_rwlock_unlock(&api_lock);
+        if (done) return;
+    }
+    uint64_t gen = atomic_load(&generation);
+    if (!power_pin(1, gen)) return;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0),
+                   ^{ power_pin(0, gen); });
+}
+
+int henge_vm_board_kind(void) {
+    if (!lock_running()) return -1;
+    int kind = hv_vm_board() ? HENGE_VM_BOARD_MAC : hv_vm_virt() ? HENGE_VM_BOARD_LINUX : -1;
+    pthread_rwlock_unlock(&api_lock);
+    return kind;
 }
 
 uint64_t henge_vm_dns(int which) {
