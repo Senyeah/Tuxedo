@@ -184,6 +184,11 @@ test-linux-display: $(B)/hengevm
 	uv run tools/linux/display-check.py $(DISPLAY_ARGS)
 .PHONY: test-linux-display
 
+# P10: the guest's virtio_balloon binds, inflate returns host memory, deflate restores it. BALLOON_ARGS="--load --overshoot --cpus 4" adds the package build and OOM runs.
+test-linux-balloon: $(B)/hengevm
+	uv run tools/linux/balloon-check.py $(BALLOON_ARGS)
+.PHONY: test-linux-balloon
+
 test-vm-lifecycle: $(B)/test_vm_lifecycle
 	$(B)/test_vm_lifecycle
 .PHONY: test-vm-lifecycle
