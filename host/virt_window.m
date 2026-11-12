@@ -19,11 +19,31 @@ static const uint8_t hid_of[128] = {
 };
 
 static void key(uint16_t mac, int down) {
-    if (mac < 128 && hid_of[mac]) hv_vm_key_hid(hid_of[mac], down);
+    if (mac >= 128 || !hid_of[mac]) return;
+    hv_virt_machine_lock();
+    hv_vm_key_hid(hid_of[mac], down);
+    hv_virt_machine_unlock();
+}
+
+static void mouse_button(int b, int down) {
+    hv_virt_machine_lock();
+    hv_vm_mouse_button(b, down);
+    hv_virt_machine_unlock();
+}
+
+/* Device-side modifier bits (NX_DEVICE*MASK) per modifier key code. */
+static NSUInteger device_mask(uint16_t k) {
+    switch (k) {
+    case 0x3b: return 0x1;    case 0x38: return 0x2;    case 0x3c: return 0x4;
+    case 0x37: return 0x8;    case 0x36: return 0x10;   case 0x3a: return 0x20;
+    case 0x3d: return 0x40;   case 0x3e: return 0x2000;
+    }
+    return 0;
 }
 
 @interface VWView : NSView
 @property BOOL captured;
+- (void)releaseAll;
 @end
 
 @implementation VWView {
@@ -55,24 +75,29 @@ static void key(uint16_t mac, int down) {
 
 - (void)keyDown:(NSEvent *)e { if (!e.isARepeat) key(e.keyCode, 1); }
 - (void)keyUp:(NSEvent *)e { key(e.keyCode, 0); }
+- (void)releaseAll { /* so the guest does not keep keys down */
+    for (uint16_t mk = 0; mk < 64; mk++)
+        if (held & ((NSUInteger)1 << mk)) {
+            held &= ~((NSUInteger)1 << mk);
+            key(mk, 0);
+        }
+}
 - (void)flagsChanged:(NSEvent *)e {
     uint16_t k = e.keyCode;
+    NSUInteger mask = device_mask(k);
     if (k == 0x39) { /* Caps Lock reports each toggle: tap it */
         key(k, 1);
         key(k, 0);
-    } else if (k < 64) {
+    } else if (mask) {
+        int down = (e.modifierFlags & mask) != 0; /* the event's state, not a toggle */
         NSUInteger bit = (NSUInteger)1 << k;
-        int down = !(held & bit);
-        held ^= bit;
+        if (down) held |= bit;
+        else held &= ~bit;
         key(k, down);
     }
     NSEventModifierFlags f = e.modifierFlags;
     if (self.captured && (f & NSEventModifierFlagControl) && (f & NSEventModifierFlagOption)) {
-        for (uint16_t mk = 0x3a; mk <= 0x3e; mk++) /* so the guest does not keep them down */
-            if (held & ((NSUInteger)1 << mk)) {
-                held &= ~((NSUInteger)1 << mk);
-                key(mk, 0);
-            }
+        [self releaseAll];
         [self setCapture:NO];
     }
 }
@@ -80,7 +105,7 @@ static void key(uint16_t mac, int down) {
 - (void)moved:(NSEvent *)e {
     if (!self.captured) return;
     int dx = (int)lround(e.deltaX), dy = (int)lround(e.deltaY);
-    if (dx || dy) hv_vm_mouse_move(dx, dy);
+    if (dx || dy) { hv_virt_machine_lock(); hv_vm_mouse_move(dx, dy); hv_virt_machine_unlock(); }
 }
 - (void)mouseMoved:(NSEvent *)e { [self moved:e]; }
 - (void)mouseDragged:(NSEvent *)e { [self moved:e]; }
@@ -91,13 +116,13 @@ static void key(uint16_t mac, int down) {
         [self setCapture:YES];
         return;
     }
-    hv_vm_mouse_button(0, 1);
+    mouse_button(0, 1);
 }
-- (void)mouseUp:(NSEvent *)e { if (self.captured) hv_vm_mouse_button(0, 0); }
-- (void)rightMouseDown:(NSEvent *)e { if (self.captured) hv_vm_mouse_button(1, 1); }
-- (void)rightMouseUp:(NSEvent *)e { if (self.captured) hv_vm_mouse_button(1, 0); }
-- (void)otherMouseDown:(NSEvent *)e { if (self.captured) hv_vm_mouse_button(2, 1); }
-- (void)otherMouseUp:(NSEvent *)e { if (self.captured) hv_vm_mouse_button(2, 0); }
+- (void)mouseUp:(NSEvent *)e { if (self.captured) mouse_button(0, 0); }
+- (void)rightMouseDown:(NSEvent *)e { if (self.captured) mouse_button(1, 1); }
+- (void)rightMouseUp:(NSEvent *)e { if (self.captured) mouse_button(1, 0); }
+- (void)otherMouseDown:(NSEvent *)e { if (self.captured) mouse_button(2, 1); }
+- (void)otherMouseUp:(NSEvent *)e { if (self.captured) mouse_button(2, 0); }
 - (void)scrollWheel:(NSEvent *)e {
     if (!self.captured) return;
     static double acc_y, acc_x; /* trackpads give fine deltas: gather whole steps */
@@ -106,18 +131,22 @@ static void key(uint16_t mac, int down) {
     int sy = (int)acc_y, sx = (int)acc_x;
     acc_y -= sy;
     acc_x -= sx;
-    if (sy) hv_vm_mouse_wheel(sy);
-    if (sx) hv_vm_mouse_hwheel(-sx);
+    if (sy) { hv_virt_machine_lock(); hv_vm_mouse_wheel(sy); hv_virt_machine_unlock(); }
+    if (sx) { hv_virt_machine_lock(); hv_vm_mouse_hwheel(-sx); hv_virt_machine_unlock(); }
 }
 @end
 
 @interface VWDelegate : NSObject <NSWindowDelegate>
 @end
 @implementation VWDelegate
-- (void)windowDidResignKey:(NSNotification *)n { [(VWView *)((NSWindow *)n.object).contentView setCapture:NO]; }
+- (void)windowDidResignKey:(NSNotification *)n {
+    VWView *v = (VWView *)((NSWindow *)n.object).contentView;
+    [v releaseAll];
+    [v setCapture:NO];
+}
 - (void)windowWillClose:(NSNotification *)n {
     (void)n;
-    exit(0);
+    hv_virt_quit(); /* the CPU thread flushes the disks and exits */
 }
 @end
 

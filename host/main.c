@@ -520,6 +520,12 @@ static void both_hook(HvCpu *c) {
 
 /* Debugging: HV_INPUT_FILE=path follows a file of lines, for driving a running guest:
    "click x y", "move x y", "key code" (Linux), "hidkey usage", "hiddown usage", "hidup usage", "shiftkey code", "type words", "wait seconds". */
+static void hid_locked(uint8_t usage, int down) {
+    hv_virt_machine_lock();
+    hv_vm_key_hid(usage, down);
+    hv_virt_machine_unlock();
+}
+
 static void *input_thread(void *unused) {
     (void)unused;
     FILE *f = fopen(getenv("HV_INPUT_FILE"), "a+");
@@ -544,8 +550,10 @@ static void *input_thread(void *unused) {
         else if (sscanf(line, "click %d %d", &x, &y) == 2) pointer_to(x, y), click_here();
         else if (sscanf(line, "move %d %d", &x, &y) == 2) pointer_to(x, y);
         else if (sscanf(line, "scroll %d %d", &x, &y) == 2) {
+            hv_virt_machine_lock();
             if (y) hv_vm_mouse_wheel(y);
             if (x) hv_vm_mouse_hwheel(x);
+            hv_virt_machine_unlock();
         }
         else if (!strncmp(line, "pointer", 7)) {
             int px = -1, py = -1;
@@ -603,12 +611,12 @@ static void *input_thread(void *unused) {
             fprintf(stderr, "hengevm: guest clipboard: %s (agent seen %ld s ago)\n", text ? text : "(nothing new)", hv_share_agent_seen());
             free(text);
         }
-        else if (sscanf(line, "hiddown %i", &x) == 1) hv_vm_key_hid((uint8_t)x, 1);
-        else if (sscanf(line, "hidup %i", &x) == 1) hv_vm_key_hid((uint8_t)x, 0);
+        else if (sscanf(line, "hiddown %i", &x) == 1) hid_locked((uint8_t)x, 1);
+        else if (sscanf(line, "hidup %i", &x) == 1) hid_locked((uint8_t)x, 0);
         else if (sscanf(line, "hidkey %i", &x) == 1) {
-            hv_vm_key_hid((uint8_t)x, 1);
+            hid_locked((uint8_t)x, 1);
             usleep(60000);
-            hv_vm_key_hid((uint8_t)x, 0);
+            hid_locked((uint8_t)x, 0);
         }
         else if (sscanf(line, "key %d", &x) == 1) key_press(x, 0);
         else if (sscanf(line, "shiftkey %d", &x) == 1) key_press(x, 1);
@@ -883,6 +891,18 @@ static int write_png(const char *path, uint8_t *bgra, unsigned w, unsigned h) {
     return ok ? 0 : -1;
 }
 
+/* Held across a guest restart's destroy and create: the shot thread and window input never see a half-built board. */
+static pthread_mutex_t machine_mu = PTHREAD_MUTEX_INITIALIZER;
+
+void hv_virt_machine_lock(void) { pthread_mutex_lock(&machine_mu); }
+void hv_virt_machine_unlock(void) { pthread_mutex_unlock(&machine_mu); }
+
+/* The window closed: stop like Ctrl-A x, so the disks flush and the status is 0. */
+void hv_virt_quit(void) {
+    quit_req = 1;
+    hv_vm_stop();
+}
+
 static void *virt_shot_thread(void *unused) {
     (void)unused;
     const char *e = getenv("HV_SHOT_SECS");
@@ -893,7 +913,10 @@ static void *virt_shot_thread(void *unused) {
     snprintf(tmp, sizeof tmp, "%s.tmp.png", virt_shot_path);
     while (px) {
         usleep((useconds_t)(every * 1e6));
-        if (hv_vm_snapshot(px, (int)virt_w, (int)virt_h) != 0) continue;
+        pthread_mutex_lock(&machine_mu);
+        int rc = hv_vm_snapshot(px, (int)virt_w, (int)virt_h);
+        pthread_mutex_unlock(&machine_mu);
+        if (rc != 0) continue;
         if (write_png(tmp, px, virt_w, virt_h) == 0) rename(tmp, virt_shot_path); /* a reader never sees half a file */
     }
     return NULL;
@@ -998,8 +1021,11 @@ static void virt_exit(int r);
 static void *rebuild_thread(void *unused) {
     (void)unused;
     char err[256];
+    pthread_mutex_lock(&machine_mu);
     hv_vm_destroy();
-    if (hv_vm_create(&boot_cfg, err, sizeof err) != 0) {
+    int made = hv_vm_create(&boot_cfg, err, sizeof err);
+    pthread_mutex_unlock(&machine_mu);
+    if (made != 0) {
         fprintf(stderr, "hengevm: %s\n", err);
         finish("cannot rebuild the machine", EXIT_FAULT);
     }
