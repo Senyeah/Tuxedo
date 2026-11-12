@@ -19,6 +19,8 @@ import UIKit
 ///   cpus N             the CPUs setting (1-6) for the next Mac started; it stays, so set it back afterwards
 ///   env NAME [VALUE]   set (or unset) an engine environment setting for the next Mac started
 ///   balloon MB         ask the Mac for that much of its memory back (HV_BALLOON set), log what it gave
+///   linux-catalogue URL   set the Linux catalogue URL and load it
+///   linux-download ID  download that catalogue entry and wait; linux-delete ID removes it
 ///   snap [NAME]        the Mac's screen (1920x1080) into Documents/NAME.jpg (snap.jpg)
 ///   log TEXT           a marker in henge.log
 ///   stop               stop the Mac
@@ -111,6 +113,22 @@ enum Autopilot {
                 let found = henge_vm_knob(String(kv[0]), value)
                 HengeLog.log("autopilot", found != 0 ? "knob \(kv[0]) = \(value)" : "no knob \(kv[0]) (or no Mac running)")
             }
+        case "linux-catalogue": // "linux-catalogue URL": the catalogue setting, then load it
+            UserDefaults.standard.set(arg, forKey: LinuxCatalogue.urlKey)
+            await LinuxInstaller.shared.refresh()
+            HengeLog.log("autopilot", "catalogue: \(LinuxInstaller.shared.catalogue)")
+        case "linux-download", "linux-delete": // "linux-download debian-console": download it (going on from a part), wait for the end
+            guard case .loaded(let images) = LinuxInstaller.shared.catalogue, let image = images.first(where: { $0.id == arg }) else {
+                HengeLog.log("autopilot", "no catalogue entry \(arg)")
+                return
+            }
+            if parts[0] == "linux-delete" { LinuxInstaller.shared.deleteDownload(image); return }
+            LinuxInstaller.shared.reset()
+            LinuxInstaller.shared.download(image)
+            while LinuxInstaller.shared.busy, !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            HengeLog.log("autopilot", "linux-download \(arg): \(LinuxInstaller.shared.phase), \(LinuxInstaller.shared.received) of \(LinuxInstaller.shared.expected) bytes")
         case "snap": // the Mac's screen, full size, into Documents/snap.jpg (or NAME.jpg): "snap", "snap safari"
             let name = arg.isEmpty ? "snap" : arg
             let url = docs.appendingPathComponent("\(name).jpg")

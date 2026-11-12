@@ -136,6 +136,8 @@ struct InstallView: View {
                 .buttonStyle(DeskButtonStyle())
                 .padding(.top, 12)
         }
+        LinuxImagesSection() // I9 moves this behind a macOS/Linux switch
+            .padding(.top, 8)
     }
 
     private func versionRow(_ r: MacOSRelease) -> some View {
