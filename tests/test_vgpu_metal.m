@@ -329,8 +329,38 @@ static void test_pixels(void) {
     for (double end = now() + 2; now() < end && !ok; usleep(2000)) ok = hv_vgpu_metal_drawn(p, NULL, 800, 600) > 0;
     check("a mode change with the scanout off resizes the black screen", ok, 1);
 
+    /* R6: the layer's pixels bound the drawable, not the mode (800 x 600 here). */
+    check("create a 4K resource", create(6, HV_VGPU_B8G8R8X8, 3840, 2160), OK);
+    check("set a 4K scanout", scanout(6, 3840, 2160), OK);
+    CAMetalLayer *big = [CAMetalLayer layer];
+    big.bounds = CGRectMake(0, 0, 3840, 2160), big.contentsScale = 1;
+    hv_vgpu_metal_set_layer(p, (__bridge void *)big);
+    ok = 0;
+    for (double end = now() + 4; now() < end && !ok; usleep(2000)) ok = hv_vgpu_metal_drawn(p, NULL, 3840, 2160) > 0;
+    check("a 4K scanout on a 4K layer is drawn 1:1", ok, 1);
+    check("its drawable is 3840 x 2160", CGSizeEqualToSize(big.drawableSize, CGSizeMake(3840, 2160)), 1);
+
+    CAMetalLayer *small = [CAMetalLayer layer];
+    small.bounds = CGRectMake(0, 0, 1000, 500), small.contentsScale = 2; /* 2000 x 1000 pixels */
+    hv_vgpu_metal_set_layer(p, (__bridge void *)small);
+    ok = 0;
+    for (double end = now() + 4; now() < end && !ok; usleep(2000)) ok = hv_vgpu_metal_drawn(p, NULL, 1778, 1000) > 0;
+    check("a layer smaller than the scanout gets a drawable that fits it, in the scanout's shape", ok, 1);
+    check("its drawable size", CGSizeEqualToSize(small.drawableSize, CGSizeMake(1778, 1000)), 1);
+
+    /* A rotated mode, the old scanout: the layer (now tall) still sets the size. */
+    hv_virtio_gpu_set_mode(b.gpu, 2160, 3840);
+    hv_virtio_gpu_poll(b.gpu);
+    CAMetalLayer *tall = [CAMetalLayer layer];
+    tall.bounds = CGRectMake(0, 0, 540, 1200), tall.contentsScale = 2; /* 1080 x 2400 pixels */
+    hv_vgpu_metal_set_layer(p, (__bridge void *)tall);
+    ok = 0;
+    for (double end = now() + 4; now() < end && !ok; usleep(2000)) ok = hv_vgpu_metal_drawn(p, NULL, 1080, 608) > 0;
+    check("a rotated mode with the old scanout fills the layer's width", ok, 1);
+    check("its drawable is not below the layer's limit nor over it", CGSizeEqualToSize(tall.drawableSize, CGSizeMake(1080, 608)), 1);
+
     hv_vgpu_metal_destroy(p);
-    check("flush callback released", b.gpu->on_flush == NULL && b.gpu->opaque == NULL, 1);
+    check("flush callback released",b.gpu->on_flush == NULL && b.gpu->opaque == NULL, 1);
     hv_virt_destroy(&b);
     hv_machine_free(&m);
 }

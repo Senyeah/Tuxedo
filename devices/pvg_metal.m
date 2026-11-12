@@ -42,6 +42,7 @@ static int cursor_scale(void) {
 #include <stdlib.h>
 #include <string.h>
 
+#include "drawable_fit.h"
 #include "pvg_lite.h"
 #include "metallib.h"
 
@@ -2447,7 +2448,7 @@ static NSString *const screen_shaders = @"#include <metal_stdlib>\n"
             if (changed) continue;
             return;
         }
-        CGSize want = CGSizeMake(W, H);
+        CGSize want = hv_drawable_fit(target, W, H, 0, 0); /* no larger than the layer's pixels */
         if (!CGSizeEqualToSize(target.drawableSize, want)) {
             [CATransaction begin];
             [CATransaction setDisableActions:YES];
@@ -2535,9 +2536,10 @@ static NSString *const screen_shaders = @"#include <metal_stdlib>\n"
             [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
         }
         [e endEncoding];
-        if (cp.on) cp_capture_post(self, drawable.texture, W, H, cb);
+        if (cp.on) cp_capture_post(self, drawable.texture, (uint32_t)drawable.texture.width, (uint32_t)drawable.texture.height, cb);
 #if !TARGET_OS_IPHONE
         if (getenv("HV_PVG_GPU_TEST")) { /* the same pixels for a screenshot: this is the path a phone runs */
+            uint32_t W = (uint32_t)drawable.texture.width, H = (uint32_t)drawable.texture.height; /* the drawable can be smaller than the screen */
             NSUInteger bytes = (NSUInteger)W * H * 4;
             if (!test_readback || test_readback.length < bytes) test_readback = [device newBufferWithLength:bytes options:MTLResourceStorageModeShared];
             id<MTLBuffer> rb = test_readback;
