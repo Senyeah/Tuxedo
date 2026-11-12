@@ -6,14 +6,15 @@ B = build
 CORE = $(B)/classify.o $(B)/operands.o $(B)/translate.o $(B)/dispatch.o $(B)/mmu.o $(B)/memop.o \
        $(B)/exception.o $(B)/sysreg.o $(B)/machine.o
 HOST = $(B)/jit_region.o $(B)/enter.o $(B)/disk.o
-DEV = $(B)/pvg_lite.o $(B)/pvg_metal.o $(B)/gicv3.o $(B)/timer.o $(B)/pl011.o $(B)/pl031.o $(B)/cfg.o $(B)/bdif.o $(B)/pcie.o \
+DEV = $(B)/pvg_lite.o $(B)/pvg_metal.o $(B)/vgpu_metal.o $(B)/gicv3.o $(B)/timer.o $(B)/pl011.o $(B)/pl031.o $(B)/cfg.o $(B)/bdif.o $(B)/pcie.o \
       $(B)/virtio.o $(B)/virtio_blk.o $(B)/virtio_net.o $(B)/virtio_input.o $(B)/virtio_gpu.o $(B)/virtio_snd.o $(B)/virtio_usb.o $(B)/virtio_balloon.o $(B)/xhci.o $(B)/vmapple.o $(B)/aes.o $(B)/pl061.o $(B)/metallib.o $(B)/fdt.o $(B)/guest_ram.o $(B)/virt.o $(B)/virt_fdt.o
 ENGINE = $(CORE) $(HOST)
 VM = $(B)/vm.o $(B)/linux_boot.o
 METAL_LIBS = -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers
 
 TESTS = $(B)/test_classify $(B)/test_jit_region $(B)/test_operands $(B)/test_jit $(B)/test_mem \
-        $(B)/test_mmu $(B)/test_exc $(B)/test_devices $(B)/test_shutdown $(B)/test_fdt $(B)/test_console $(B)/test_virt
+        $(B)/test_mmu $(B)/test_exc $(B)/test_devices $(B)/test_shutdown $(B)/test_fdt $(B)/test_console $(B)/test_virt \
+        $(B)/test_vgpu_metal
 
 all: $(TESTS) $(B)/hengevm $(B)/hengevm-ref $(B)/hvsparse
 
@@ -27,6 +28,9 @@ $(B)/hengevm-ref: host/hvf_ref.c host/hvf_ref.entitlements $(ENGINE) $(DEV)
 # marked obsolete in macOS 27 without a documented replacement.
 $(B)/pvg_metal.o: devices/pvg_metal.m devices/*.h core/*.h host/*.h | $(B)
 	$(CC) $(CFLAGS) -fobjc-arc -Wno-unused-parameter -Wno-deprecated-declarations -c $< -o $@
+# The virtio GPU's presenter (Metal, both platforms).
+$(B)/vgpu_metal.o: devices/vgpu_metal.m devices/*.h core/*.h host/*.h | $(B)
+	$(CC) $(CFLAGS) -fobjc-arc -c $< -o $@
 $(B)/pvg_mac.o: devices/pvg_mac.m devices/*.h core/*.h host/*.h | $(B)
 	$(CC) -fobjc-arc -O2 -g -Wall -mmacosx-version-min=15.2 -Icore -Ihost -Idevices -c $< -o $@
 
@@ -125,6 +129,9 @@ test-vm-lifecycle: $(B)/test_vm_lifecycle
 $(B)/test_pvg_lifecycle: tests/test_pvg_lifecycle.m $(ENGINE) $(DEV)
 	$(CC) $(CFLAGS) -fobjc-arc $^ $(METAL_LIBS) -o $@
 
+$(B)/test_vgpu_metal: tests/test_vgpu_metal.m $(ENGINE) $(DEV)
+	$(CC) $(CFLAGS) -fobjc-arc $^ $(METAL_LIBS) -o $@
+
 $(B)/hvsparse: tools/hvsparse_main.c host/hvsparse.c host/hvsparse.h | $(B)
 	$(CC) $(CFLAGS) tools/hvsparse_main.c host/hvsparse.c -o $@
 
@@ -158,7 +165,7 @@ IOS_CFLAGS = -std=c11 -Wall -Wextra -O2 -g -Icore -Ihost -Idevices -I$(IOS_DEPS)
 IB = build/ios
 IOS_SRC = $(wildcard core/*.c) host/prof_ios.c host/jit_region.c host/disk.c host/vm.c host/linux_boot.c $(IOS_NET) host/dns_proxy.c host/share.c host/audio_mac.c host/hvsparse.c host/usb_host.c \
           $(filter-out devices/pvg_mac.m,$(wildcard devices/*.c))
-IOS_OBJ = $(patsubst %.c,$(IB)/%.o,$(IOS_SRC)) $(IB)/host/enter.o $(IB)/devices/pvg_metal.o
+IOS_OBJ = $(patsubst %.c,$(IB)/%.o,$(IOS_SRC)) $(IB)/host/enter.o $(IB)/devices/pvg_metal.o $(IB)/devices/vgpu_metal.o
 
 $(IB)/core/mmu.o: core/mmu.c core/*.h host/*.h devices/*.h
 	@mkdir -p $(dir $@)
@@ -169,6 +176,9 @@ $(IB)/%.o: %.c core/*.h host/*.h devices/*.h
 $(IB)/devices/pvg_metal.o: devices/pvg_metal.m devices/*.h core/*.h host/*.h
 	@mkdir -p $(dir $@)
 	$(IOS_CC) $(IOS_CFLAGS) -fobjc-arc -Wno-unused-parameter -Wno-deprecated-declarations -c $< -o $@
+$(IB)/devices/vgpu_metal.o: devices/vgpu_metal.m devices/*.h core/*.h host/*.h
+	@mkdir -p $(dir $@)
+	$(IOS_CC) $(IOS_CFLAGS) -fobjc-arc -c $< -o $@
 $(IB)/host/enter.o: host/enter.S
 	@mkdir -p $(dir $@)
 	$(IOS_CC) -c $< -o $@
