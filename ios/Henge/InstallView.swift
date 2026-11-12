@@ -6,6 +6,8 @@ struct InstallView: View {
 
     /// Starts a machine made here (Linux), from the finished screen.
     var start: (VirtualMac) -> Void = { _ in }
+    /// The side a Home button asked for; taken once shown.
+    @Binding var side: Platform?
     @ObservedObject private var linux = LinuxInstaller.shared
     @State private var platform = Platform.macOS
     @ObservedObject private var installer = Installer.shared
@@ -54,7 +56,8 @@ struct InstallView: View {
                 .deskColumn()
             }
             .background(Desk.page)
-            .onAppear { if linux.busy { platform = .linux } } // an install started elsewhere (Autopilot) shows its progress
+            .onAppear { takeSide(); if linux.busy { platform = .linux } } // an install started elsewhere (Autopilot) shows its progress
+            .onChange(of: side) { takeSide() }
             .navigationTitle(installer.busy || linux.busy ? "Installing" : platform == .linux ? "Install Linux" : "Install macOS")
             .task {
                 while !Task.isCancelled { // the region may be claimed after a hand-off to StikDebug
@@ -63,6 +66,12 @@ struct InstallView: View {
                 }
             }
         }
+    }
+
+    private func takeSide() {
+        guard let wanted = side else { return }
+        side = nil
+        if !linux.busy && installer.phase == .idle { platform = wanted } // never hide a running install
     }
 
     /// Not while an install runs: its progress belongs to one side.

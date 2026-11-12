@@ -8,6 +8,7 @@ struct HomeView: View {
     @ObservedObject private var installer = Installer.shared
     @Binding var running: VirtualMac?
     @Binding var tab: RootView.Tab
+    @Binding var installSide: InstallView.Platform?
     @State private var picking = false
     @State private var jitReady = JITBootstrap.ready
     @State private var chosen: UUID?
@@ -45,8 +46,8 @@ struct HomeView: View {
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
-                        Button("Install macOS…") { tab = .install }
-                        Button("Install Linux…") { tab = .install } // the Linux install view comes with I9
+                        Button("Install macOS…") { installSide = .macOS; tab = .install }
+                        Button("Install Linux…") { installSide = .linux; tab = .install }
                         Button("Bring in a machine from a computer…") { picking = true }
                     } label: {
                         Image(systemName: "plus")
@@ -95,8 +96,8 @@ struct HomeView: View {
             Text("No machine yet").font(.system(size: 24, weight: .bold))
             Text("Install macOS or Linux on this \(Device.name), or bring in a machine made on a computer.")
                 .font(.system(size: 15)).foregroundStyle(Desk.dim).multilineTextAlignment(.center)
-            Button("Install macOS") { tab = .install }.buttonStyle(DeskButtonStyle())
-            Button("Install Linux") { tab = .install }
+            Button("Install macOS") { installSide = .macOS; tab = .install }.buttonStyle(DeskButtonStyle())
+            Button("Install Linux") { installSide = .linux; tab = .install }
                 .font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.accentLight)
             Button("Bring in a machine") { picking = true }
                 .font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.accentLight)
@@ -211,9 +212,10 @@ private struct MacHero: View {
     }
 
     @ViewBuilder private var preview: some View {
+        let image = UIImage(contentsOfFile: MacPreview.file(for: mac).path)
         ZStack {
             Desk.raised.opacity(0.5)
-            if let image = UIImage(contentsOfFile: MacPreview.file(for: mac).path) {
+            if let image {
                 Image(uiImage: image).resizable().aspectRatio(contentMode: .fill)
             } else {
                 Image(systemName: mac.guest == .linux ? "terminal" : "macwindow.on.rectangle")
@@ -221,7 +223,7 @@ private struct MacHero: View {
                     .foregroundStyle(Desk.faint)
             }
         }
-        .aspectRatio(mac.aspect, contentMode: .fit)
+        .aspectRatio(image.map { MacPreview.aspect(of: $0, fallback: mac.aspect) } ?? mac.aspect, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Desk.hairline, lineWidth: 0.5))
         .accessibilityHidden(true)

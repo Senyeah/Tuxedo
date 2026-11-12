@@ -43,15 +43,16 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var running: VirtualMac?
     @State private var tab = Tab.macs
+    @State private var installSide: InstallView.Platform? // the side a Home button asked for
     @AppStorage(DeskAppearance.key) private var appearance = DeskAppearance.system
 
     var body: some View {
         ZStack {
             TabView(selection: $tab) {
-                HomeView(running: $running, tab: $tab)
+                HomeView(running: $running, tab: $tab, installSide: $installSide)
                     .tabItem { Label(MachineList.tabTitle(machines.all), systemImage: "macwindow") }
                     .tag(Tab.macs)
-                InstallView(start: { mac in tab = .macs; running = mac })
+                InstallView(start: { mac in tab = .macs; running = mac }, side: $installSide)
                     .tabItem { Label("Install", systemImage: "arrow.down.circle") }
                     .tag(Tab.install)
                 SettingsView()

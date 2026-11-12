@@ -148,6 +148,11 @@ struct DeskBar: View {
 enum MacPreview {
     static func file(for mac: VirtualMac) -> URL { mac.directory.appendingPathComponent("preview.jpg") }
 
+    /// The saved picture's own shape: a phone-native Linux screen is not 16:9.
+    static func aspect(of image: UIImage, fallback: CGFloat) -> CGFloat {
+        CGFloat(PreviewShape.aspect(width: image.size.width, height: image.size.height, fallback: fallback))
+    }
+
     static func capture(width: Int, height: Int) -> CGImage? {
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
         guard henge_vm_snapshot(&pixels, Int32(width), Int32(height)) == 0 else { return nil }

@@ -119,6 +119,13 @@ enum MachineFolder {
     }
 }
 
+enum PreviewShape {
+    /// The saved picture's own shape: a phone-native Linux screen is not 16:9.
+    static func aspect(width: Double, height: Double, fallback: Double) -> Double {
+        width > 0 && height > 0 && width.isFinite && height.isFinite ? width / height : fallback
+    }
+}
+
 enum MachineList {
     /// nil when the list is damaged or from a newer Henge. A machine whose disk is gone is dropped.
     static func decode(_ data: Data, diskExists: (VirtualMac) -> Bool = { FileManager.default.fileExists(atPath: $0.disk.path) }) -> [VirtualMac]? {

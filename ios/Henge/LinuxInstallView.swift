@@ -112,7 +112,7 @@ struct LinuxInstallView: View {
                         .padding(.bottom, 10)
                 }
                 Rectangle().fill(Desk.hairline).frame(height: 0.5)
-                Stepper(value: Binding(get: { max(diskGB, minGB) }, set: { diskGB = $0 }), in: minGB...512) {
+                Stepper(value: Binding(get: { max(diskGB, minGB) }, set: { diskGB = $0 }), in: minGB...max(minGB, LinuxCatalogue.maxDiskGB)) {
                     HStack {
                         Text("Disk size").font(.system(size: 16))
                         Spacer()
