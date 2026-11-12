@@ -267,6 +267,10 @@ static void test_linux_boot(void) {
 
     write_image(kernel, 0, 300 << 20, 0x644d5241);
     check("image_size over RAM is refused", boot_fails_with(&vb, kernel, NULL, "does not fit"), 1);
+    write_image(kernel, 0, ~0ull - 0x1000, 0x644d5241);
+    check("an image_size that wraps is refused", boot_fails_with(&vb, kernel, NULL, "does not fit"), 1);
+    write_image(kernel, ~0ull - 0x1000, 64 << 10, 0x644d5241);
+    check("a text_offset that wraps is refused", boot_fails_with(&vb, kernel, NULL, "does not fit"), 1);
     write_image(kernel, 0, 64 << 10, 0x644d5241);
     write_file(initrd, NULL, 200 << 20);
     check("initrd over RAM is refused", boot_fails_with(&vb, kernel, initrd, "more RAM"), 1);

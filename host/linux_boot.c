@@ -84,11 +84,12 @@ int hv_linux_boot(HvVirt *b, const char *kernel, const char *initrd, const char 
         return -1;
     }
     r.kernel = VIRT_MEM + text_offset;
-    r.kernel_end = r.kernel + (image_size > ksize ? image_size : ksize);
-    if (text_offset >= b->mem.size || r.kernel_end > r.fdt) {
+    uint64_t span = image_size > ksize ? image_size : ksize;
+    if (text_offset >= r.fdt - VIRT_MEM || span > r.fdt - r.kernel) { /* compared, not added: a header can wrap */
         close(fd);
         return failf(err, errlen, "The kernel does not fit in the guest's RAM.");
     }
+    r.kernel_end = r.kernel + span;
     int loaded = load(b, fd, r.kernel, ksize);
     close(fd);
     if (loaded != 0) return failf(err, errlen, "Cannot read the kernel image.");
