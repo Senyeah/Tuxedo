@@ -189,6 +189,11 @@ test-linux-balloon: $(B)/hengevm
 	uv run tools/linux/balloon-check.py $(BALLOON_ARGS)
 .PHONY: test-linux-balloon
 
+# P8: snd_virtio binds, speaker-test and a 60 s file reach the host's audio backend whole and in time. SOUND_ARGS=--pipewire adds pw-play.
+test-linux-sound: $(B)/hengevm
+	uv run tools/linux/sound-check.py $(SOUND_ARGS)
+.PHONY: test-linux-sound
+
 test-vm-lifecycle: $(B)/test_vm_lifecycle
 	$(B)/test_vm_lifecycle
 .PHONY: test-vm-lifecycle

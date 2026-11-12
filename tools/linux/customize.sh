@@ -10,7 +10,7 @@ grep -q '^COMPRESS=zstd' /etc/initramfs-tools/initramfs.conf
 grep -q '^MODULES=list' /etc/initramfs-tools/initramfs.conf
 printf '%s\n' virtio_pci virtio_blk virtio_net virtio_rng ext4 >> /etc/initramfs-tools/modules
 
-useradd --create-home --shell /bin/bash --groups sudo henge
+useradd --create-home --shell /bin/bash --groups sudo,audio henge
 passwd -d henge
 
 # henge-guest enables its own units; fail the build if it did not
