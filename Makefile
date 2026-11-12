@@ -30,7 +30,7 @@ VM = $(B)/vm.o $(B)/linux_boot.o
 METAL_LIBS = -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers $(GFX_LDLIBS)
 
 TESTS = $(B)/test_classify $(B)/test_jit_region $(B)/test_operands $(B)/test_jit $(B)/test_mem \
-        $(B)/test_mmu $(B)/test_exc $(B)/test_devices $(B)/test_shutdown $(B)/test_big_lock $(B)/test_fdt $(B)/test_console $(B)/test_virt \
+        $(B)/test_mmu $(B)/test_exc $(B)/test_devices $(B)/test_shutdown $(B)/test_big_lock $(B)/test_machine_rebuild $(B)/test_fdt $(B)/test_console $(B)/test_virt \
         $(B)/test_vgpu_metal $(if $(GFX),$(B)/test_vgpu_virgl)
 
 all: $(TESTS) $(B)/hengevm $(B)/hengevm-ref $(B)/hvsparse
@@ -123,6 +123,9 @@ $(B)/test_shutdown: tests/test_shutdown.c $(ENGINE)
 	$(CC) $(CFLAGS) $^ -o $@
 
 $(B)/test_big_lock: tests/test_big_lock.c $(ENGINE)
+	$(CC) $(CFLAGS) $^ -o $@
+
+$(B)/test_machine_rebuild: tests/test_machine_rebuild.c $(ENGINE)
 	$(CC) $(CFLAGS) $^ -o $@
 
 $(B)/test_fdt: tests/test_fdt.c $(B)/fdt.o
