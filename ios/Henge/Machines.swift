@@ -33,8 +33,7 @@ final class Machines: ObservableObject {
     @Published private(set) var importing: String?
     @Published var lastError: String?
 
-    /// The files an exported machine folder holds; its disk is disk.img, or disk.img.hvsparse (tools/export_ios.sh packs it).
-    static let required = ["AVPBooter.vmapple2.bin", "auxiliary.bin", "machine.json"]
+    /// An exported folder's disk is disk.img, or disk.img.hvsparse (tools/export_ios.sh packs it); the rest is MachineFolder.required.
     static let packedDisk = "disk.img.hvsparse"
 
     nonisolated static func hasDisk(_ folder: URL) -> Bool {
@@ -105,7 +104,9 @@ final class Machines: ObservableObject {
 
     private func collect() async {
         guard importing == nil, let items = try? FileManager.default.contentsOfDirectory(at: Self.inbox, includingPropertiesForKeys: nil) else { return }
-        for folder in items where Self.hasDisk(folder) && Self.required.allSatisfy({ FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path) }) {
+        for folder in items {
+            guard Self.hasDisk(folder), let info = MachineFolder.info(folder),
+                  MachineFolder.required(info.kind ?? .mac).allSatisfy({ FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path) }) else { continue }
             await adopt(folder, move: true)
         }
     }
@@ -123,18 +124,27 @@ final class Machines: ObservableObject {
         do {
             let data = try Data(contentsOf: folder.appendingPathComponent("machine.json"))
             let info = try JSONDecoder().decode(MachineFile.self, from: data)
-            let missing = Self.required.filter { !FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path) }
+            let kind = info.kind ?? .mac
+            let missing = MachineFolder.required(kind).filter { !FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path) }
             guard missing.isEmpty, Self.hasDisk(folder) else { throw message("The folder is missing \((missing + (Self.hasDisk(folder) ? [] : ["disk.img"])).joined(separator: ", ")).") }
-            guard (info.kind ?? .mac) == .mac, let ecid = info.ecid else { throw message("This folder is not a Mac.") }
-            var mac = VirtualMac(name: info.name ?? folder.lastPathComponent, ecid: ecid, seed: info.seed ?? 0,
+            var mac: VirtualMac
+            switch kind {
+            case .mac:
+                guard let ecid = info.ecid else { throw message("This folder is not a Mac.") }
+                mac = VirtualMac(name: info.name ?? folder.lastPathComponent, ecid: ecid, seed: info.seed ?? 0,
                                  ramMB: info.ramMB ?? 2048, diskBytes: 0)
+            case .linux:
+                mac = VirtualMac(name: info.name ?? folder.lastPathComponent, ecid: 0, seed: 0,
+                                 ramMB: info.ramMB ?? 2048, diskBytes: 0)
+                mac.kind = .linux
+            }
             importing = mac.name
             unpacked = 0
             let dest = mac.directory
             let fm = FileManager.default
             try fm.createDirectory(at: dest, withIntermediateDirectories: true)
             excludeFromBackup()
-            for name in ["AVPBooter.vmapple2.bin", "auxiliary.bin", "machine.json", "disk.img"] {
+            for name in MachineFolder.files(kind) {
                 let from = folder.appendingPathComponent(name)
                 guard fm.fileExists(atPath: from.path) else { continue }
                 if move { try fm.moveItem(at: from, to: dest.appendingPathComponent(name)) }
@@ -157,7 +167,7 @@ final class Machines: ObservableObject {
             mac.diskBytes = (try? fm.attributesOfItem(atPath: mac.disk.path)[.size] as? Int64) ?? 0
             all.append(mac)
             save()
-            HengeLog.log("machines", "imported \(mac.name) (ECID \(mac.ecid), \(mac.diskBytes >> 30) GB disk)")
+            HengeLog.log("machines", "imported \(mac.name) (\(kind == .linux ? "Linux" : "ECID \(mac.ecid)"), \(mac.diskBytes >> 30) GB disk)")
         } catch {
             lastError = error.localizedDescription
             HengeLog.log("machines", "import of \(folder.lastPathComponent) failed: \(error.localizedDescription)")
@@ -204,10 +214,13 @@ final class Machines: ObservableObject {
         }
         try fm.createDirectory(at: partial, withIntermediateDirectories: true)
         do {
-            try fm.copyItem(at: mac.rom, to: partial.appendingPathComponent("AVPBooter.vmapple2.bin"))
-            try fm.copyItem(at: mac.aux, to: partial.appendingPathComponent("auxiliary.bin"))
-            let info: [String: Any] = ["name": mac.name, "ecid": mac.ecid, "seed": mac.seed, "ramMB": mac.ramMB]
-            try JSONSerialization.data(withJSONObject: info).write(to: partial.appendingPathComponent("machine.json"))
+            if mac.guest == .linux {
+                try fm.copyItem(at: mac.firmware, to: partial.appendingPathComponent("u-boot.bin"))
+            } else {
+                try fm.copyItem(at: mac.rom, to: partial.appendingPathComponent("AVPBooter.vmapple2.bin"))
+                try fm.copyItem(at: mac.aux, to: partial.appendingPathComponent("auxiliary.bin"))
+            }
+            try JSONSerialization.data(withJSONObject: MachineFolder.exportInfo(mac)).write(to: partial.appendingPathComponent("machine.json"))
             let source = mac.disk.path, target = partial.appendingPathComponent(Self.packedDisk).path
             let ok = await Task.detached { () -> Bool in
                 hv_sparse_pack_progress(source, target, { done, total, _ in

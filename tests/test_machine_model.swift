@@ -111,6 +111,18 @@ struct MachineModelTests {
         precondition(StopText.detail(.shutdown, guest: .linux, reason: "").contains("machines"))
         precondition(StopText.detail(.shutdown, guest: .mac, reason: "").contains("Macs"))
 
+        precondition(MachineFolder.required(.linux) == ["u-boot.bin", "machine.json"])
+        precondition(MachineFolder.required(.mac).contains("auxiliary.bin"))
+        precondition(MachineFolder.files(.linux).contains("u-boot.bin") && !MachineFolder.files(.linux).contains("auxiliary.bin"))
+        var lin = VirtualMac(name: "Deb", ecid: 0, seed: 0, ramMB: 1024, diskBytes: 0)
+        lin.kind = .linux
+        let exp = MachineFolder.exportInfo(lin)
+        precondition(exp["kind"] as? String == "linux" && exp["ecid"] == nil && exp["ramMB"] as? Int == 1024)
+        let exported = try JSONDecoder().decode(MachineFile.self, from: JSONSerialization.data(withJSONObject: exp))
+        precondition(exported.kind == .linux && exported.name == "Deb")
+        let macExp = MachineFolder.exportInfo(VirtualMac(name: "M", ecid: 7, seed: 9, ramMB: 2048, diskBytes: 0))
+        precondition(macExp["kind"] == nil && macExp["ecid"] as? UInt64 == 7)
+
         print("machine model: ok")
     }
 }

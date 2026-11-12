@@ -69,6 +69,29 @@ struct MachineFile: Codable {
     var ramMB: Int?
 }
 
+/// What an exported machine folder holds, by kind.
+enum MachineFolder {
+    /// Files that must be there (the disk is checked apart: disk.img or disk.img.hvsparse).
+    static func required(_ kind: GuestKind) -> [String] {
+        kind == .linux ? ["u-boot.bin", "machine.json"] : ["AVPBooter.vmapple2.bin", "auxiliary.bin", "machine.json"]
+    }
+
+    /// Files adopt moves or copies as they are; the packed disk is unpacked apart.
+    static func files(_ kind: GuestKind) -> [String] { required(kind) + ["disk.img"] }
+
+    static func info(_ folder: URL) -> MachineFile? {
+        guard let data = try? Data(contentsOf: folder.appendingPathComponent("machine.json")) else { return nil }
+        return try? JSONDecoder().decode(MachineFile.self, from: data)
+    }
+
+    /// machine.json for an export.
+    static func exportInfo(_ mac: VirtualMac) -> [String: Any] {
+        var info: [String: Any] = ["name": mac.name, "ramMB": mac.ramMB]
+        if mac.guest == .linux { info["kind"] = GuestKind.linux.rawValue } else { info["ecid"] = mac.ecid; info["seed"] = mac.seed }
+        return info
+    }
+}
+
 enum MachineList {
     /// nil when the list is damaged or from a newer Henge. A machine whose disk is gone is dropped.
     static func decode(_ data: Data, diskExists: (VirtualMac) -> Bool = { FileManager.default.fileExists(atPath: $0.disk.path) }) -> [VirtualMac]? {
