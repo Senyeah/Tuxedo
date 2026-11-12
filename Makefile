@@ -137,6 +137,11 @@ test-linux-smp: $(B)/hengevm
 	uv run tools/linux/smoke.py --uboot --stress --cpus 4 $(SMOKE_ARGS)
 .PHONY: test-linux-smp
 
+# T3: the U-Boot boot, every check after login, then restart and the power key (E12). SMOKE_ARGS="--runs 5 --cpus 4" etc.
+test-linux-smoke: $(B)/hengevm
+	uv run tools/linux/smoke.py --uboot --power $(SMOKE_ARGS)
+.PHONY: test-linux-smoke
+
 test-vm-lifecycle: $(B)/test_vm_lifecycle
 	$(B)/test_vm_lifecycle
 .PHONY: test-vm-lifecycle

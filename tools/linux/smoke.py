@@ -30,7 +30,7 @@ are installed with apt (network through slirp) when the image has none.
 without sync and then ends the machine a different way, and the next boot must find the file whole and the root filesystem
 clean (no journal recovery): sudo reboot (hengevm builds the machine again; the guest comes back), the power key as SIGTERM
 (Debian shuts down by itself, exit status 0), the power key as Ctrl-A p, and two SIGTERMs (the second stops the machine at
-once). --qemu has no Ctrl-A p, and the key goes through the monitor.
+once). --qemu has no power key (see power_key), no Ctrl-A p and no second SIGTERM: sudo poweroff takes their place.
 Exit 1 on any failed check; the last 200 lines of console output go to stderr.
 """
 import argparse
@@ -75,9 +75,9 @@ UBOOT_LIMITS = {"banner": 5, "uboot step": 6, "uboot command": 5, "login": 29}
 # QEMU runs U-Boot under TCG only (hvf aborts on it), which is several times slower.
 QEMU_TCG_SCALE = 4
 UBOOT_PROMPT = r"=> "
-# --power, seconds. Measured at 1 CPU (E12 findings): sudo reboot to the U-Boot banner, the power key to the exit,
-# the second SIGTERM to the exit.
-POWER_LIMITS = {"restart": 60, "power key": 60, "stop": 5}
+# --power, seconds: three times the slowest of five runs at 1 CPU (sudo reboot to the banner 1.5 s, the power key to the
+# exit 1.4 s, the second SIGTERM to the exit 0.4 s), with the 5 s floor (E12 findings).
+POWER_LIMITS = {"restart": 5, "power key": 5, "stop": 5}
 # --stress, seconds. The install depends on snapshot.debian.org (105 s at 4 CPUs); stress-ng runs for 60 s.
 STRESS_LIMITS = {"install": 900, "stress": 180, "build": 600}
 STRESS_PACKAGES = "stress-ng build-essential"
@@ -124,15 +124,14 @@ class Fail(Exception):
 
 def command(args, kernel, initrd, tmp, append=APPEND, disk=None, firmware=None):
     """argv for the machine under test. hengevm's stderr goes to a file so the console stays clean."""
-    mon = ["-monitor", f"unix:{os.path.join(tmp, 'mon')},server,nowait"] if args.qemu and args.power else []
     if args.qemu and firmware:
-        return [QEMU, "-M", "virt,gic-version=3,highmem=off,its=off", "-accel", "tcg", "-cpu", "max"] + mon + [
+        return [QEMU, "-M", "virt,gic-version=3,highmem=off,its=off", "-accel", "tcg", "-cpu", "max",
                 "-smp", str(args.cpus), "-m", str(args.ram), "-nographic", "-bios", firmware,
                 "-drive", f"if=none,file={disk},format=raw,id=d0", "-device", "virtio-blk-pci,drive=d0",
                 "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-device", "virtio-rng-pci",
                 "-device", "qemu-xhci", "-device", "usb-kbd"]
     if args.qemu:
-        argv = [QEMU, "-M", "virt,gic-version=3,highmem=off", "-accel", "hvf", "-cpu", "host"] + mon + [
+        argv = [QEMU, "-M", "virt,gic-version=3,highmem=off", "-accel", "hvf", "-cpu", "host",
                 "-smp", str(args.cpus), "-m", str(args.ram), "-nographic",
                 "-kernel", kernel, "-initrd", initrd] + (["-no-reboot"] if args.no_reboot else [])
         if disk:
@@ -442,15 +441,11 @@ def disk(args, times):
                 raise
 
 
-def power_key(p, tmp, args, how):
-    """Presses the guest's power key: SIGTERM or Ctrl-A p for hengevm, the monitor's system_powerdown for QEMU."""
+def power_key(p, args, how):
+    """Presses the guest's power key: SIGTERM or Ctrl-A p for hengevm. QEMU's system_powerdown never reaches
+    this guest (the pl061 interrupt count stays 0, E12 findings), so there the guest powers itself off."""
     if args.qemu:
-        import socket
-        s = socket.socket(socket.AF_UNIX)
-        s.connect(os.path.join(tmp, "mon"))
-        s.sendall(b"system_powerdown\n")
-        time.sleep(0.2)  # QEMU acts on the line before it sees the close
-        s.close()
+        p.sendline("sudo poweroff")
     elif how == "sigterm":
         os.kill(p.pid, signal.SIGTERM)
     else:
@@ -509,7 +504,7 @@ def power(args, times):
             """Ends the running machine; it must exit 0 with hengevm's stop line."""
             p = st["p"]
             t = time.monotonic()
-            power_key(p, tmp, args, how)
+            power_key(p, args, how)
             expect(p, pexpect.EOF, lim(key), what_t)
             times[what_t] = time.monotonic() - t
             stopped(p, 0, want_line, stderr, args)
