@@ -153,6 +153,11 @@ test-linux-input: $(B)/hengevm
 	uv run tools/linux/input-check.py $(INPUT_ARGS)
 .PHONY: test-linux-input
 
+# R3: a mode line in HV_INPUT_FILE changes the guest's display mode (fbcon on the console image).
+test-linux-mode: $(B)/hengevm
+	uv run tools/linux/mode-check.py $(MODE_ARGS)
+.PHONY: test-linux-mode
+
 test-vm-lifecycle: $(B)/test_vm_lifecycle
 	$(B)/test_vm_lifecycle
 .PHONY: test-vm-lifecycle
