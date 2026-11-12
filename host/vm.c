@@ -1,5 +1,7 @@
 #include "vm.h"
+#include "linux_boot.h"
 #include "pvg_lite.h"
+#include "virt.h"
 
 #include <TargetConditionals.h>
 #include <CoreFoundation/CoreFoundation.h>
@@ -26,6 +28,7 @@ static HvMachine m;
 static HvCpu cpus[HV_MAX_CPUS]; /* the board takes them as an array */
 static int ncpus = 1;
 static HvVmapple board = {.ram_fd = -1};
+static HvVirt virt = {.mem.fd = -1};
 static int board_kind = HV_BOARD_VMAPPLE;
 static HvBoardDevs devs;
 static _Atomic int input_stopping = 1;
@@ -50,6 +53,7 @@ static int primary_started;
 
 HvMachine *hv_vm_machine(void) { return &m; }
 HvVmapple *hv_vm_board(void) { return board_kind == HV_BOARD_VMAPPLE ? &board : NULL; }
+HvVirt *hv_vm_virt(void) { return machine_created && board_kind == HV_BOARD_VIRT ? &virt : NULL; }
 const HvBoardDevs *hv_vm_devs(void) { return &devs; }
 HvCpu *hv_vm_cpu(int index) { return index >= 0 && index < ncpus ? &cpus[index] : NULL; }
 int hv_vm_ncpus(void) { return ncpus; }
@@ -70,7 +74,7 @@ int hv_vm_boot_display(HvBootDisplay *d) {
     }
     uint8_t *ram = board.ram;
     uint64_t size = board.ram_size;
-    if (!ram) return -1;
+    if (!ram || board_kind != HV_BOARD_VMAPPLE) return -1;
     for (int pass = 0; pass < 2; pass++) {
         if (!boot_args_offset || pass) {
             /* A full scan at most every 2 s; boot_args sits low in RAM
@@ -341,15 +345,40 @@ static int create_vmapple(const HvVmConfig *c, uint64_t ram_size, char *err, siz
     return 0;
 }
 
+static int create_virt(const HvVmConfig *c, uint64_t ram_size, char *err, size_t errlen) {
+    static const uint8_t mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56}; /* QEMU's default */
+    if (hv_virt_create(&virt, &m, cpus, ncpus, ram_size, c->disk ? &disk : NULL, mac) != 0)
+        return fail(err, errlen, "Cannot build the machine (not enough memory for the guest's RAM?).");
+    if (c->rom) {
+        if (hv_virt_load_firmware(&virt, c->rom) != 0) return fail(err, errlen, "Cannot read the firmware (at most 64 MB).");
+        uint32_t size = 0;
+        uint8_t *fdt = hv_virt_build_fdt(&virt, NULL, 0, 0, &size);
+        int placed = hv_virt_place_fdt(&virt, fdt, size);
+        free(fdt);
+        if (placed != 0) return fail(err, errlen, "Cannot build the device tree.");
+    }
+    hv_virt_reset(&virt);
+    if (c->kernel && hv_linux_boot(&virt, c->kernel, c->initrd, c->cmdline, NULL, err, errlen) != 0) return -1;
+    devs = (HvBoardDevs){.gic = virt.gic, .uart = virt.uart, .gpio = virt.gpio, .usb = virt.usb,
+                         .keyboard = virt.keyboard, .mouse = virt.mouse, .net = virt.net, .snd = virt.snd,
+                         .balloon = virt.balloon, .blk = {virt.blk, NULL},
+                         .ram = virt.mem.host, .ram_pa = VIRT_MEM, .ram_size = virt.mem.size};
+    virt.poll = board_poll;
+    return 0;
+}
+
 int hv_vm_create(const HvVmConfig *c, char *err, size_t errlen) {
     if (machine_created) return fail(err, errlen, "The previous machine has not been released.");
     if (primary_started) {
         pthread_join(primary_thread, NULL);
         primary_started = 0;
     }
-    if (c->board == HV_BOARD_VIRT) return fail(err, errlen, "The virt board is not built yet.");
-    if (c->board != HV_BOARD_VMAPPLE) return fail(err, errlen, "Unknown board.");
-    if (!c->rom || !c->disk || !c->aux) return fail(err, errlen, "The ROM, disk and auxiliary storage are all needed.");
+    if (c->board != HV_BOARD_VMAPPLE && c->board != HV_BOARD_VIRT) return fail(err, errlen, "Unknown board.");
+    if (c->board == HV_BOARD_VMAPPLE && (!c->rom || !c->disk || !c->aux))
+        return fail(err, errlen, "The ROM, disk and auxiliary storage are all needed.");
+    if (c->kernel && (c->board != HV_BOARD_VIRT || c->rom))
+        return fail(err, errlen, "A kernel boots directly on the virt board only, without firmware.");
+    if ((c->initrd || c->cmdline) && !c->kernel) return fail(err, errlen, "An initrd or a command line needs a kernel.");
     machine_created = 1;
     board_kind = c->board;
     struct sigaction ill = {.sa_flags = SA_SIGINFO | SA_ONSTACK};
@@ -361,7 +390,7 @@ int hv_vm_create(const HvVmConfig *c, char *err, size_t errlen) {
         signals_installed = 1;
     }
     signal(SIGPIPE, SIG_IGN); /* a guest connection closing at the far end must not end the machine */
-    if (hv_disk_open(&disk, c->disk, 0, 0) != 0) return fail(err, errlen, "Cannot open the disk image.");
+    if (c->disk && hv_disk_open(&disk, c->disk, 0, 0) != 0) return fail(err, errlen, "Cannot open the disk image.");
     size_t jit = c->jit_bytes ? c->jit_bytes : (size_t)768 << 20;
     int r = c->jit_rx ? hv_machine_init_jit(&m, c->jit_rx, c->jit_rw, jit) : hv_machine_init(&m, jit);
     if (r != 0) return fail(err, errlen, "Cannot set up the JIT region.");
@@ -370,7 +399,8 @@ int hv_vm_create(const HvVmConfig *c, char *err, size_t errlen) {
     if (getenv("HV_SLOW_MEM")) m.slow_mem = 1; /* debugging: every load and store through the helper */
     ncpus = c->ncpus < 1 ? 1 : c->ncpus > HV_MAX_CPUS ? HV_MAX_CPUS : c->ncpus;
     m.big_lock_on = ncpus > 1 && getenv("HV_BIG_LOCK"); /* debugging: one CPU in guest code at a time */
-    if (create_vmapple(c, (c->ram_mb ? c->ram_mb : 2048) << 20, err, errlen) != 0) return -1;
+    uint64_t ram_size = (c->ram_mb ? c->ram_mb : 2048) << 20;
+    if ((c->board == HV_BOARD_VIRT ? create_virt : create_vmapple)(c, ram_size, err, errlen) != 0) return -1;
     if (devs.net && !c->no_net) {
         if (hv_net_attach(&m, devs.net) != 0) fprintf(stderr, "hengevm: user-mode network unavailable\n");
         else net_on = 1;
@@ -399,6 +429,7 @@ void hv_vm_destroy(void) {
     console_reset();
     memset(&devs, 0, sizeof devs);
     if (board_kind == HV_BOARD_VMAPPLE) hv_vmapple_destroy(&board);
+    else hv_virt_destroy(&virt);
     hv_disk_close(&disk);
     hv_disk_close(&aux);
     hv_machine_free(&m);

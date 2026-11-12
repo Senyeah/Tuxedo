@@ -98,10 +98,13 @@ int main(void) {
     int initial_fds = fds();
     unsigned initial_threads = threads();
     unsigned initial_dead_ports = dead_ports();
-    /* No virt board yet: refused before anything is built. */
-    HvVmConfig virt = {.board = HV_BOARD_VIRT, .disk = disk};
-    check("virt board refused", hv_vm_create(&virt, error, sizeof error) != 0 && strstr(error, "virt"));
-    check("virt refusal leaves nothing to release", hv_vm_board() != NULL && henge_vm_can_start() && fds() == initial_fds);
+    /* A virt machine is built and released without a trace, and the virtual Mac still boots after it. */
+    HvVmConfig virt = {.board = HV_BOARD_VIRT, .disk = disk, .ram_mb = 64, .ncpus = 2, .no_net = 1, .no_sound = 1,
+                       .jit_rx = mapping.rx_addr, .jit_rw = mapping.rw_addr, .jit_bytes = mapping.size};
+    check("virt board builds", hv_vm_create(&virt, error, sizeof error) == 0 && !hv_vm_board() && hv_vm_virt());
+    hv_vm_destroy();
+    check("virt release leaves nothing behind", !hv_vm_virt() && henge_vm_can_start() && fds() == initial_fds &&
+                                                 threads() == initial_threads);
     /* Missing ROM fails after disks, RAM and device workers were created. */
     for (int i = 0; i < 3; i++) {
         check("failed boot reports an error", henge_vm_boot(rom, disk, aux, 1, 0, 64, 4, error, sizeof error) != 0);

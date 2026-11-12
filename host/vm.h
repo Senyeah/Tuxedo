@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "disk.h"
+#include "virt.h"
 #include "vmapple.h"
 
 /* The virtual Mac as a host app drives it: build it from files, run it, feed
@@ -14,8 +15,9 @@ enum { HV_BOARD_VMAPPLE = 0, HV_BOARD_VIRT = 1 };
 
 typedef struct HvVmConfig {
     int board;                /* HV_BOARD_*; 0 is the virtual Mac */
-    const char *rom;          /* AVPBooter.vmapple2.bin */
-    const char *disk, *aux;   /* the root disk image and the auxiliary storage */
+    const char *rom;          /* vmapple: AVPBooter.vmapple2.bin. virt: u-boot.bin, or NULL (a kernel boot, or no firmware and no tree) */
+    const char *disk, *aux;   /* the root disk and the auxiliary storage (vmapple only); virt: disk may be NULL */
+    const char *kernel, *initrd, *cmdline; /* virt direct boot (rom NULL): an arm64 Image; initrd and cmdline may be NULL */
     uint64_t aux_offset;      /* where the aux image's data starts (16 KB) */
     uint64_t ecid, seed;      /* the machine identity the disk was installed with */
     uint64_t ram_mb;
@@ -50,6 +52,7 @@ int hv_vm_create(const HvVmConfig *cfg, char *err, size_t errlen);
 void hv_vm_destroy(void);
 HvMachine *hv_vm_machine(void);
 HvVmapple *hv_vm_board(void); /* NULL when the board is not vmapple */
+HvVirt *hv_vm_virt(void);     /* NULL unless a virt machine exists */
 const HvBoardDevs *hv_vm_devs(void);
 HvCpu *hv_vm_cpu(int index);
 extern void (*hv_prof_register)(void); /* debugging: each thread that will run guest code calls this */
