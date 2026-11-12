@@ -123,6 +123,10 @@ struct LinuxUnpackTests {
         precondition(LinuxUnpack.diskBytes(chosen: nil, for: big) == 16 * gb)
         precondition(LinuxUnpack.diskBytes(chosen: 8 * gb, for: big) == 8 * gb)
         precondition(LinuxUnpack.diskBytes(chosen: gb, for: big) == 3 * gb)
+        precondition(LinuxUnpack.minDiskGB(for: big) == 3 && LinuxUnpack.defaultDiskGB(for: big) == 16)
+        var odd = big
+        odd.logicalBytes = 3 * gb + 1
+        precondition(LinuxUnpack.minDiskGB(for: odd) == 4)
         precondition(big.unpackSpaceNeeded == 2 * 473_957_360 + gb)
         precondition(fails { try LinuxCatalogue.checkUnpackSpace(big, free: gb) }?.contains("Unpacking needs") == true)
         precondition(fails { try LinuxCatalogue.checkUnpackSpace(big, free: 100 * gb) } == nil)

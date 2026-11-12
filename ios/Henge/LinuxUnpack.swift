@@ -13,6 +13,11 @@ enum LinuxUnpack {
         max(chosen ?? defaultDiskBytes, image.logicalBytes)
     }
 
+    /// Whole GB (GiB, as the guest's df shows them) the disk setting cannot go below.
+    static func minDiskGB(for image: LinuxImage) -> Int { Int((image.logicalBytes + (1 << 30) - 1) >> 30) }
+
+    static func defaultDiskGB(for image: LinuxImage) -> Int { Int(diskBytes(chosen: nil, for: image) >> 30) }
+
     static func checkDisk(_ bytes: Int64, for image: LinuxImage) throws {
         if bytes < image.logicalBytes {
             throw LinuxError.text("The disk must be at least \(LinuxCatalogue.sizeText(image.logicalBytes)) for this image.")

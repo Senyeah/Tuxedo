@@ -34,7 +34,11 @@ final class LinuxInstaller: ObservableObject {
     }
 
     @Published private(set) var catalogue: Catalogue = .none
-    @Published private(set) var phase: Phase = .idle
+    @Published private(set) var phase: Phase = .idle {
+        didSet { if let n = Self.stage(phase) { reached = max(reached, n) } }
+    }
+    /// The furthest of the four Install steps so far: the download and its check alternate for firmware and disk.
+    private(set) var reached = 0
     @Published private(set) var current: LinuxImage?
     @Published private(set) var received: Int64 = 0
     @Published private(set) var expected: Int64 = 0
@@ -58,6 +62,17 @@ final class LinuxInstaller: ObservableObject {
         }
     }
 
+    /// Download 0, Check 1, Unpack 2 (decode and unpack), Finish 3.
+    static func stage(_ phase: Phase) -> Int? {
+        switch phase {
+        case .downloading: return 0
+        case .checking: return 1
+        case .decoding, .unpacking: return 2
+        case .finishing: return 3
+        default: return nil
+        }
+    }
+
     func reset() { if !busy { phase = .idle; current = nil } }
 
     func download(_ image: LinuxImage) { run(image, options: nil) }
@@ -68,6 +83,7 @@ final class LinuxInstaller: ObservableObject {
     private func run(_ image: LinuxImage, options: Options?) {
         guard !busy else { return }
         current = image
+        reached = 0
         phase = .downloading
         received = LinuxDownload.present(image, in: Self.folder)
         expected = image.downloadBytes
@@ -90,9 +106,10 @@ final class LinuxInstaller: ObservableObject {
                     Task { @MainActor in
                         let me = LinuxInstaller.shared
                         guard me.busy, me.current?.id == image.id else { return } // a late update after the end
-                        me.phase = stage == .download ? .downloading : .checking
-                        me.received = have
-                        me.expected = total
+                        me.phase = stage == .check ? .checking : .downloading
+                        // the check bar is the disk's alone: the firmware, read first, counts in the download
+                        me.received = stage == .check ? max(have - image.firmwareBytes, 0) : have
+                        me.expected = stage == .check ? image.diskBytes : total
                     }
                 }
                 Machines.excludeFromBackup(Self.folder)
@@ -182,80 +199,5 @@ final class ProgressThrottle: @unchecked Sendable {
         guard force || now.timeIntervalSince(last) >= 0.2 else { return false }
         last = now
         return true
-    }
-}
-
-/// The Linux images card in the Install view.
-struct LinuxImagesSection: View {
-    @ObservedObject private var linux = LinuxInstaller.shared
-    @AppStorage(LinuxCatalogue.urlKey) private var catalogueURL = ""
-
-    var body: some View {
-        DeskHeading("Linux images")
-        VStack(alignment: .leading, spacing: 0) {
-            switch linux.catalogue {
-            case .none:
-                note(LinuxCatalogue.configuredURL == nil
-                     ? "To download a Linux machine, Henge needs a catalogue URL: enter it in Settings. Or bring in a machine made on a computer: the + button on the Machines tab, then \"Bring in a machine from a computer\"."
-                     : "")
-                if LinuxCatalogue.configuredURL != nil { Button("Load the catalogue") { Task { await linux.refresh() } }.padding(17) }
-            case .loading:
-                ProgressView("Loading the catalogue…").padding(17)
-            case .failed(let text):
-                note(text)
-                Button("Try again") { Task { await linux.refresh() } }.padding(.horizontal, 17).padding(.bottom, 14)
-            case .loaded(let images):
-                ForEach(images) { image in
-                    row(image)
-                    if image.id != images.last?.id { Rectangle().fill(Desk.hairline).frame(height: 0.5) }
-                }
-            }
-        }
-        .deskCard()
-        .task(id: catalogueURL) { await linux.refresh() }
-    }
-
-    private static func verb(_ phase: LinuxInstaller.Phase) -> String {
-        switch phase {
-        case .checking: return "Checking"
-        case .decoding: return "Decompressing"
-        case .unpacking: return "Unpacking"
-        case .finishing: return "Finishing"
-        default: return "Downloading"
-        }
-    }
-
-    private func note(_ text: String) -> some View {
-        Text(text).font(.system(size: 14)).foregroundStyle(Desk.dim).padding(17)
-    }
-
-    @ViewBuilder private func row(_ image: LinuxImage) -> some View {
-        let mine = linux.current == image
-        let have = LinuxDownload.haveAll(image, in: LinuxInstaller.folder)
-        VStack(alignment: .leading, spacing: 4) {
-            Text("\(image.name), \(image.version)").font(.system(size: 16, weight: .medium)).foregroundStyle(Desk.text)
-            Text("\(ByteText.string(image.downloadBytes)) download, \(ByteText.string(image.logicalBytes)) installed")
-                .font(.system(size: 13)).foregroundStyle(Desk.dim)
-            if mine, linux.busy {
-                DeskBar(fraction: linux.expected > 0 ? Double(linux.received) / Double(linux.expected) : 0, height: 8)
-                Text("\(Self.verb(linux.phase)) \(ByteText.string(linux.received)) of \(ByteText.string(linux.expected))")
-                    .font(.system(size: 13)).foregroundStyle(Desk.dim)
-            } else if mine, case .failed(let text) = linux.phase {
-                Text(text).font(.system(size: 13)).foregroundStyle(.red)
-            }
-            HStack {
-                if have {
-                    Text("Downloaded and checked").font(.system(size: 13)).foregroundStyle(Desk.good)
-                    Spacer()
-                    Button("Delete") { linux.deleteDownload(image) }.disabled(linux.busy)
-                } else {
-                    let part = LinuxDownload.present(image, in: LinuxInstaller.folder)
-                    Button(part > 0 ? "Go on downloading" : "Download") { linux.download(image) }.disabled(linux.busy)
-                }
-            }
-            .padding(.top, 2)
-        }
-        .padding(.horizontal, 17)
-        .padding(.vertical, 12)
     }
 }

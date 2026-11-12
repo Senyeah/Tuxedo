@@ -2,6 +2,12 @@ import SwiftUI
 
 /// Download macOS (or use a copy already on this device) and install it on a new Mac.
 struct InstallView: View {
+    enum Platform: String { case macOS, linux }
+
+    /// Starts a machine made here (Linux), from the finished screen.
+    var start: (VirtualMac) -> Void = { _ in }
+    @ObservedObject private var linux = LinuxInstaller.shared
+    @State private var platform = Platform.macOS
     @ObservedObject private var installer = Installer.shared
     @ObservedObject private var jit = JITCoordinator.shared
     @State private var jitReady = JITBootstrap.ready
@@ -21,6 +27,17 @@ struct InstallView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 0) {
+                    if showSwitch {
+                        Picker("Install", selection: $platform) {
+                            Text("macOS").tag(Platform.macOS)
+                            Text("Linux").tag(Platform.linux)
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(.top, 8)
+                    }
+                    if platform == .linux {
+                        LinuxInstallView(jitReady: jitReady, start: start)
+                    } else {
                     switch installer.phase {
                     case .idle: chooser
                     case .checking:
@@ -30,13 +47,15 @@ struct InstallView: View {
                     case .done(let text): finished(text)
                     case .failed(let text): failed(text)
                     }
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
                 .deskColumn()
             }
             .background(Desk.page)
-            .navigationTitle(installer.busy ? "Installing" : "Install macOS")
+            .onAppear { if linux.busy { platform = .linux } } // an install started elsewhere (Autopilot) shows its progress
+            .navigationTitle(installer.busy || linux.busy ? "Installing" : platform == .linux ? "Install Linux" : "Install macOS")
             .task {
                 while !Task.isCancelled { // the region may be claimed after a hand-off to StikDebug
                     jitReady = JITBootstrap.ready
@@ -44,6 +63,11 @@ struct InstallView: View {
                 }
             }
         }
+    }
+
+    /// Not while an install runs: its progress belongs to one side.
+    private var showSwitch: Bool {
+        platform == .linux ? !linux.busy : installer.phase == .idle
     }
 
     // MARK: Choosing
@@ -136,8 +160,6 @@ struct InstallView: View {
                 .buttonStyle(DeskButtonStyle())
                 .padding(.top, 12)
         }
-        LinuxImagesSection() // I9 moves this behind a macOS/Linux switch
-            .padding(.top, 8)
     }
 
     private func versionRow(_ r: MacOSRelease) -> some View {
@@ -298,7 +320,7 @@ struct InstallView: View {
 }
 
 /// The last lines of Henge's log.
-private struct LogTail: View {
+struct LogTail: View {
     @State private var lines: [String] = []
 
     var body: some View {

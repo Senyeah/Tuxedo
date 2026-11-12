@@ -2,7 +2,8 @@ import Foundation
 
 /// Fetches a catalogue entry's firmware and disk into one folder, checking each against the catalogue's SHA-256.
 enum LinuxDownload {
-    enum Stage { case download, check }
+    /// The firmware is small: its check counts as part of the download step.
+    enum Stage { case download, check, checkFirmware }
 
     struct Files { var disk: URL; var firmware: URL }
 
@@ -66,7 +67,8 @@ enum LinuxDownload {
             try? FileManager.default.removeItem(at: dest)
             let part = dest.appendingPathExtension("part")
             try await download(url, part: part) { have in progress(.download, offset + have, total) }
-            try FileHash.verify(part, expected: sha, what: what) { done in progress(.check, offset + done, total) }
+            let stage: Stage = what == "firmware" ? .checkFirmware : .check
+            try FileHash.verify(part, expected: sha, what: what) { done in progress(stage, offset + done, total) }
             try FileManager.default.moveItem(at: part, to: dest)
             base += bytes
         }
