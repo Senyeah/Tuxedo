@@ -395,6 +395,14 @@ static void c_clear(uint32_t ctx, uint32_t res, const uint8_t rgba[4]) {
     check("the clear is answered OK", cmd(), OK);
 }
 
+// Records the size each blit asks for.
+static uint32_t blit_dw, blit_dh;
+static void *rec_blit(void *r, uint32_t res, HvGpu3dBox src, uint32_t dw, uint32_t dh, uint64_t *serial) {
+    blit_dw = dw, blit_dh = dh;
+    return hv_vgpu_virgl_scanout_ops()->blit(r, res, src, dw, dh, serial);
+}
+static const HvGpu3dScanoutOps rec_ops = {rec_blit};
+
 static void test_scanout(void) {
     static const uint8_t GREEN[4] = {0x20, 0xc0, 0x40, 0xff};
     HvVgpuMetal *pm = hv_vgpu_metal_create(b.gpu);
@@ -460,6 +468,19 @@ static void test_scanout(void) {
     check("SET_SCANOUT of 22 whole again", c_scanout(22, 64, 64), OK);
     check("unref the scanout resource", c_res_unref(22), OK);
     check("the screen goes black", (uint64_t)shows(pm, (const uint8_t[4]){0, 0, 0, 255}, 0, 64), 0);
+
+    // A scanout over the 2D path's cap (8,294,400 pixels) is shown scaled down, not as a 64 MB surface
+    hv_vgpu_metal_set_3d(pm, &rec_ops, rend);
+    check("a 4096 x 4096 3D resource", c_res_create(30, 4096, 4096), OK);
+    check("attach it to the context", c_ctx_attach(0x202, 20, 30), OK);
+    c_clear(20, 30, RED);
+    check("SET_SCANOUT of 4096 x 4096", c_scanout(30, 4096, 4096), OK);
+    check("flush it", c_flush(30, 4096, 4096), OK);
+    check("the big scanout shows", (uint64_t)shows(pm, RED, 0, 64), 0);
+    check("the blit was capped in pixels", (uint64_t)blit_dw * blit_dh <= 3840ull * 2160, 1);
+    check("the blit kept the shape", blit_dw == blit_dh && blit_dw >= 2800, 1);
+    check("unref the big resource", c_res_unref(30), OK);
+    hv_vgpu_metal_set_3d(pm, hv_vgpu_virgl_scanout_ops(), rend);
 
     hv_vgpu_metal_set_3d(pm, NULL, NULL);
     hv_vgpu_metal_destroy(pm);

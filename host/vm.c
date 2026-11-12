@@ -3,6 +3,9 @@
 #include "pvg_lite.h"
 #include "vgpu_metal.h"
 #include "virt.h"
+#ifdef HV_GFX
+#include "vgpu_virgl.h"
+#endif
 
 #include <TargetConditionals.h>
 #include <CoreFoundation/CoreFoundation.h>
@@ -43,6 +46,9 @@ static int display_mode_set, display_mm_set;
 static _Atomic(const HvBoardDevs *) display_devs; /* published only when the board is ready */
 typedef struct VgpuDisplay { HvVirtioGpu *gpu; HvVgpuMetal *presenter; } VgpuDisplay;
 static VgpuDisplay vgpu;
+#ifdef HV_GFX
+static HvVgpuVirgl *virgl; /* the renderer behind vgpu.gpu (--gpu-accel) */
+#endif
 static HvDisk disk = {.fd = -1, .wfd = -1}, aux = {.fd = -1, .wfd = -1};
 static int machine_created, signals_installed;
 static uint64_t boot_args_offset;
@@ -430,6 +436,19 @@ static int create_virt(const HvVmConfig *c, uint64_t ram_size, char *err, size_t
     if (virt.gpu) {
         vgpu = (VgpuDisplay){.gpu = virt.gpu, .presenter = hv_vgpu_metal_create(virt.gpu)};
         devs.display = &vgpu_display, devs.display_opaque = &vgpu;
+        if (c->accel) {
+#ifdef HV_GFX
+            /* Before the guest runs: the driver must not have bound yet. */
+            virgl = hv_vgpu_virgl_create();
+            if (!virgl || hv_virtio_gpu_set_3d(virt.gpu, hv_vgpu_virgl_ops(), virgl) != 0)
+                return fail(err, errlen, "Graphics acceleration is unavailable (ANGLE or virglrenderer refused to start).");
+            hv_vgpu_metal_set_3d(vgpu.presenter, hv_vgpu_virgl_scanout_ops(), virgl);
+#else
+            return fail(err, errlen, "This build has no graphics acceleration (build with GFX=1).");
+#endif
+        }
+    } else if (c->accel) {
+        return fail(err, errlen, "Graphics acceleration needs the virtio GPU.");
     }
     publish_display();
     return 0;
@@ -496,8 +515,19 @@ void hv_vm_destroy(void) {
     hv_audio_detach();
     console_reset();
     memset(&devs, 0, sizeof devs);
+#ifdef HV_GFX
+    if (virgl) hv_vgpu_metal_set_3d(vgpu.presenter, NULL, NULL);
+#endif
     hv_vgpu_metal_destroy(vgpu.presenter); /* before the board frees the GPU */
     vgpu = (VgpuDisplay){0};
+#ifdef HV_GFX
+    if (virgl) { /* the device drops its renderer objects first; the renderer goes before guest RAM */
+        hv_virtio_gpu_destroy(virt.gpu);
+        virt.gpu = NULL;
+        hv_vgpu_virgl_destroy(virgl);
+        virgl = NULL;
+    }
+#endif
     if (board_kind == HV_BOARD_VMAPPLE) hv_vmapple_destroy(&board);
     else hv_virt_destroy(&virt);
     hv_disk_close(&disk);

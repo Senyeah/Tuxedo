@@ -44,6 +44,7 @@
 typedef struct ScanJob {
     uint32_t res;
     HvGpu3dBox src;
+    uint32_t dw, dh; // the target's size: src.w x src.h, or smaller when the presenter caps it
     void *surf; // IOSurfaceRef, retained, for the caller
     uint64_t serial;
     pthread_mutex_t mu;
@@ -80,7 +81,7 @@ typedef struct { uint32_t id, version, size; uint8_t *data[MAX_CAPVER]; } CapSet
 typedef struct Scan {
     EGLContext ctx;
     GLuint prog, fbo, tex, sampler;
-    GLint u;
+    GLint u, v;
     EGLSurface pb;
     IOSurfaceRef surf;
     uint32_t w, h;
@@ -367,15 +368,16 @@ static void execute(HvVgpuVirgl *r, Job *j) {
 
 static const char *scan_vs = "#version 300 es\n"
     "void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }\n";
-// u = (box x, box y, last row, flip). Row 0 of the target is the top of the picture. A Y_0_TOP resource is stored
+// u = (box x, box y, last row, flip); v = (box w, box h, target w, target h). Row 0 of the target is the top of the picture. A Y_0_TOP resource is stored
 // bottom row first (virgl inverts its transfers), so its picture is read from the last row up; the others top down.
 static const char *scan_fs = "#version 300 es\n"
     "precision highp float;\n"
     "uniform highp sampler2D t;\n"
     "uniform highp ivec4 u;\n"
+    "uniform highp ivec4 v;\n"
     "out vec4 o;\n"
-    "void main() { ivec2 p = ivec2(gl_FragCoord.xy); int gy = u.y + p.y; int ty = u.w != 0 ? u.z - gy : gy;\n"
-    "  o = vec4(texelFetch(t, ivec2(u.x + p.x, ty), 0).rgb, 1.0); }\n";
+    "void main() { ivec2 p = ivec2(gl_FragCoord.xy); int gy = u.y + p.y * v.y / v.w; int ty = u.w != 0 ? u.z - gy : gy;\n"
+    "  o = vec4(texelFetch(t, ivec2(u.x + p.x * v.x / v.z, ty), 0).rgb, 1.0); }\n";
 
 static GLuint scan_shader(GLenum type, const char *src) {
     GLuint sh = glCreateShader(type);
@@ -407,6 +409,7 @@ static int scan_program(Scan *s) {
     glGetProgramiv(s->prog, GL_LINK_STATUS, &ok);
     if (!ok) return -1;
     s->u = glGetUniformLocation(s->prog, "u");
+    s->v = glGetUniformLocation(s->prog, "v");
     glUseProgram(s->prog);
     glUniform1i(glGetUniformLocation(s->prog, "t"), 0);
     glGenSamplers(1, &s->sampler); // overrides the texture's own filter: virgl's may make a one-level texture incomplete
@@ -484,17 +487,18 @@ static void scan_blit(HvVgpuVirgl *r, ScanJob *j) {
         }
     }
     if (!eglMakeCurrent(r->dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, s->ctx)) return;
-    int ok = (s->prog || scan_program(s) == 0) && scan_target(r, j->src.w, j->src.h) == 0;
+    int ok = (s->prog || scan_program(s) == 0) && scan_target(r, j->dw, j->dh) == 0;
     if (!s->prog) s->failed = 1;
     if (ok) {
         glBindFramebuffer(GL_FRAMEBUFFER, s->fbo);
-        glViewport(0, 0, (GLsizei)j->src.w, (GLsizei)j->src.h);
+        glViewport(0, 0, (GLsizei)j->dw, (GLsizei)j->dh);
         glDisable(GL_BLEND);
         glDisable(GL_SCISSOR_TEST);
         glUseProgram(s->prog);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, info.tex_id);
         glUniform4i(s->u, (GLint)j->src.x, (GLint)j->src.y, (GLint)info.height - 1, (info.flags & VIRGL_Y_0_TOP) ? 1 : 0);
+        glUniform4i(s->v, (GLint)j->src.w, (GLint)j->src.h, (GLint)j->dw, (GLint)j->dh);
         glDrawArrays(GL_TRIANGLES, 0, 3);
         glBindTexture(GL_TEXTURE_2D, 0);
         glFinish();
@@ -735,9 +739,10 @@ static void op_submit(void *rp, const HvGpu3dReq *req, void *cookie) {
     pthread_mutex_unlock(&r->mu);
 }
 
-static void *op_blit(void *rp, uint32_t res_id, HvGpu3dBox src, uint64_t *serial) {
+static void *op_blit(void *rp, uint32_t res_id, HvGpu3dBox src, uint32_t dw, uint32_t dh, uint64_t *serial) {
     HvVgpuVirgl *r = rp;
-    ScanJob sj = {.res = res_id, .src = src, .mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER};
+    if (!dw || !dh || dw > src.w || dh > src.h) return NULL;
+    ScanJob sj = {.res = res_id, .src = src, .dw = dw, .dh = dh, .mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER};
     Job *j = calloc(1, sizeof *j);
     if (!j) return NULL;
     j->scan = &sj;

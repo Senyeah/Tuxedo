@@ -1,6 +1,6 @@
 # Light build: one clang call per file, no parallel jobs needed.
 CC = clang
-CFLAGS = -std=c11 -Wall -Wextra -O2 -g -Icore -Ihost -Idevices
+CFLAGS = -std=c11 -Wall -Wextra -O2 -g -Icore -Ihost -Idevices $(if $(GFX),-DHV_GFX=1)
 B = build
 
 # GFX=1 adds the virtio GPU's virgl renderer (devices/vgpu_virgl.m, A5): ANGLE, libepoxy and virglrenderer from
@@ -213,7 +213,7 @@ IOS_SDK = $(shell xcrun --sdk iphoneos --show-sdk-path)
 IOS_CC = xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=17.0 -isysroot $(IOS_SDK)
 # ios/deps/include/slirp first when it holds libslirp's headers (they are all the engine takes from there).
 IOS_DEPS ?= $(if $(wildcard ios/deps/include/slirp/libslirp.h),$(CURDIR)/ios/deps,$(HOME)/Documents/Coding/Husk/build/ios-arm64/sysroot)
-IOS_CFLAGS = -std=c11 -Wall -Wextra -O2 -g -Icore -Ihost -Idevices -I$(IOS_DEPS)/include/slirp
+IOS_CFLAGS = -std=c11 -Wall -Wextra -O2 -g -Icore -Ihost -Idevices -I$(IOS_DEPS)/include/slirp $(if $(GFX),-DHV_GFX=1)
 IB = build/ios
 IOS_GFX_DIR ?= $(GFX_ROOT)/ios
 IOS_SRC = $(wildcard core/*.c) host/prof_ios.c host/jit_region.c host/disk.c host/vm.c host/linux_boot.c $(IOS_NET) host/dns_proxy.c host/share.c host/audio_mac.c host/hvsparse.c host/usb_host.c \
