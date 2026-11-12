@@ -1,12 +1,19 @@
 #!/bin/sh
-# Start labwc. WLR_RENDERER comes from /etc/henge/renderer, or is pixman.
-renderer=pixman
+# Start labwc. /etc/henge/renderer forces a renderer; else gles2 with virgl, else pixman.
+export LANG=C.UTF-8
+rt=${XDG_RUNTIME_DIR:-/tmp}
+renderer=
 if [ -r /etc/henge/renderer ]; then
-    r=$(head -n 1 /etc/henge/renderer | tr -d ' \t\r')
-    [ -n "$r" ] && renderer=$r
+    renderer=$(head -n 1 /etc/henge/renderer | tr -d ' \t\r')
+fi
+if [ -z "$renderer" ]; then
+    renderer=pixman
+    # llvmpipe on gles2 is slower than pixman, so gles2 needs virgl
+    if [ -e /dev/dri/renderD128 ] && timeout 10 eglinfo -B 2>/dev/null | grep -qi virgl; then
+        renderer=gles2
+    fi
 fi
 export WLR_RENDERER=$renderer
-# Debian has no locale set; foot warns without a UTF-8 one
-export LANG=C.UTF-8
-echo "login $(cut -d' ' -f1 /proc/uptime)" > "${XDG_RUNTIME_DIR:-/tmp}/henge-times"
+echo "login $(cut -d' ' -f1 /proc/uptime)" > "$rt/henge-times"
+echo "renderer=$renderer" | tee "$rt/henge-session.log"
 labwc

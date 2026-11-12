@@ -32,8 +32,8 @@ PKGS="linux-image-arm64-16k,systemd-sysv,udev,dbus,kmod,initramfs-tools,u-boot-m
 if [ "$DESKTOP" = 1 ]; then
     NAME=debian-desktop
     WORK=/work/G6
-    # Variant A: labwc on Wayland. mesa and glmark2 are for the graphics tests (A1)
-    PKGS="$PKGS,labwc,foot,fonts-dejavu-core,libpam-systemd,xkb-data,mesa-utils,mesa-utils-bin,glmark2-es2-wayland,libgl1-mesa-dri"
+    # Variant A: labwc on Wayland. The GL libraries let henge-session pick gles2 when virgl is present (A7)
+    PKGS="$PKGS,labwc,foot,fonts-dejavu-core,libpam-systemd,xkb-data,mesa-utils,mesa-utils-bin,glmark2-es2-wayland,libgl1-mesa-dri,libgles2,libegl1"
     PARTUUID=${HENGE_PARTUUID:-9c4e7a21-3d58-4b0f-a6c2-1f8d5e90b3a7}
     FSUUID=${HENGE_FSUUID:-6d0b8e35-c1a2-47f9-9e64-b7a13c52d80f}
 else
@@ -108,10 +108,11 @@ echo "$PARTUUID" > "/out/$NAME.partuuid"
     echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "mirror=$MIRROR"
     echo "suite=$DEBIAN_SUITE"
-    [ "$DESKTOP" = 1 ] && echo "variant=A (labwc, foot, pixman renderer, no GL needed)"
+    [ "$DESKTOP" = 1 ] && echo "variant=A (labwc, foot, renderer chosen at session start: gles2 with virgl, else pixman)"
     echo "kernel_version=$KVER"
     echo "vmlinuz_file=$VMLINUZ_FILE"
     echo "image_file=$IMAGE_FILE"
+    echo "rootfs_used_mb=$(du -sxm "$ROOT" | cut -f1)"
     echo "partuuid=$PARTUUID"
     echo "image_sha256=$(sha256sum /out/$NAME.img | cut -d' ' -f1)"
     echo "[extlinux.conf]"

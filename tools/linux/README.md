@@ -39,10 +39,10 @@ Options of `qemu-ref.sh`: `--accel hvf|tcg` (default `tcg`), `--its-off`, `--dtb
 
 ## Desktop
 
-The desktop image is variant A of G6: labwc on Wayland with the pixman renderer, and one foot terminal. It needs no OpenGL.
+The desktop image is variant A of G6: labwc on Wayland and one foot terminal. It runs with pixman, or with gles2 when the GPU is virgl.
 
 - Autologin on tty1 runs `/usr/local/bin/henge-session` from `/etc/profile.d/henge-desktop.sh`. The serial console stays a plain shell. If labwc stops, tty1 keeps a shell.
-- The renderer is `pixman`. To change it, write `gles2` or `pixman` into `/etc/henge/renderer`. The session reads the file at every start. Without the file it uses `pixman`.
+- The renderer is chosen at every session start: `gles2` if `/dev/dri/renderD128` exists and `eglinfo -B` names virgl, else `pixman`. To force one, write `gles2` or `pixman` into `/etc/henge/renderer`. The choice is printed on tty1 and written to `$XDG_RUNTIME_DIR/henge-session.log` as `renderer=...`.
 - labwc runs `/etc/xdg/labwc/autostart`. It starts foot and, if `/etc/henge/bench.sh` is executable, runs it once in the background with `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR` and `WLR_RENDERER` set. Its output goes to `$XDG_RUNTIME_DIR/henge-bench.log`. The user `henge` is in the `dialout` group, so the script can also write to `/dev/ttyAMA0`.
 - `$XDG_RUNTIME_DIR/henge-times` (`/run/user/1000/henge-times`) holds the guest uptime in seconds at login, when labwc is up and when the terminal's shell starts.
 - The touchpad has tap to click and natural scrolling (`/etc/xdg/labwc/rc.xml`).
