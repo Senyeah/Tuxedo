@@ -243,19 +243,24 @@ static void test_pixels(void) {
     }
 
     /* Converted formats go through the shadow, where only a flushed rectangle reaches the screen. */
-    for (uint32_t k = 0; k < 32 * 16; k++) memcpy(ram(FB2) + k * 4, (uint8_t[]){0x40, 0x50, 0x60, 0x99}, 4);
-    uint64_t fr = hv_vgpu_metal_frames(p);
+    for (uint32_t k = 0; k < 32 * 16; k++) memcpy(ram(FB2) + k * 4, (uint8_t[]){0x70, 0x80, 0x90, 0x99}, 4);
+    transfer(2, 0, 0, 32, 16, 32 * 4);
     check("scanout to resource 2", scanout(2, 32, 16), OK);
-    for (double end = now() + 2; now() < end && hv_vgpu_metal_frames(p) == fr; usleep(2000)) {} /* its first pull has run */
+    want_bgr[0] = 0x90, want_bgr[1] = 0x80, want_bgr[2] = 0x70;
+    check("resource 2 shown", wait_shot(p, 32, 16, flat), 1);
+    for (uint32_t k = 0; k < 32 * 16; k++) memcpy(ram(FB2) + k * 4, (uint8_t[]){0x40, 0x50, 0x60, 0x99}, 4);
     transfer(2, 0, 0, 32, 16, 32 * 4);
     flush(2, 0, 0, 16, 16); /* the left half */
-    uint8_t half_new[3] = {0x60, 0x50, 0x40}, half_old[3] = {0x30, 0x20, 0x10};
+    uint8_t half_new[3] = {0x60, 0x50, 0x40}, half_old[3] = {0x90, 0x80, 0x70};
     int half_ok = 0;
     for (double end = now() + 2; now() < end && !half_ok; usleep(2000)) {
         if (hv_vgpu_metal_snapshot(p, shot, 32, 16)) continue;
         half_ok = 1;
         for (uint32_t i = 0; i < 32 * 16; i++) half_ok &= !memcmp(shot + i * 4, i % 32 < 16 ? half_new : half_old, 3);
     }
+    usleep(50000);
+    hv_vgpu_metal_snapshot(p, shot, 32, 16);
+    for (uint32_t i = 0; i < 32 * 16; i++) half_ok &= !memcmp(shot + i * 4, i % 32 < 16 ? half_new : half_old, 3);
     check("a converted scanout shows only the flushed rectangle", half_ok, 1);
 
     /* A width whose rows are not 16-byte multiples cannot be a linear texture: the shadow path shows it. */
