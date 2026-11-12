@@ -7,12 +7,16 @@
 #include <GLES3/gl3.h>
 #include <GLES2/gl2ext.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
@@ -116,6 +120,7 @@ struct HvVgpuVirgl {
     uint32_t ncaps;
 
     _Atomic uint64_t requests, errors, fences;
+    _Atomic uint64_t busy_ns, longest_ns; // time inside run(): a shader compile shows as one long request
     char gl_renderer[96];
 };
 
@@ -329,7 +334,12 @@ static void log_error(HvVgpuVirgl *r, const HvGpu3dReq *q, uint32_t st) {
 
 static void execute(HvVgpuVirgl *r, Job *j) {
     const HvGpu3dReq *q = &j->req;
+    uint64_t t0 = clock_gettime_nsec_np(CLOCK_MONOTONIC);
     uint32_t st = run(r, q);
+    uint64_t dt = clock_gettime_nsec_np(CLOCK_MONOTONIC) - t0;
+    atomic_fetch_add(&r->busy_ns, dt);
+    if (dt > atomic_load(&r->longest_ns)) atomic_store(&r->longest_ns, dt);
+    if (dt > 250000000 && getenv("HV_VIRGL_STATS")) fprintf(stderr, "virgl: request 0x%x (context %u, %u bytes) took %llu ms\n", q->type, q->ctx_id, q->len, (unsigned long long)(dt / 1000000));
     atomic_fetch_add(&r->requests, 1);
     if (st != HV_GPU3D_OK) {
         atomic_fetch_add(&r->errors, 1);
@@ -543,6 +553,94 @@ static void scan_unref(ScanJob *j, int finished) {
     }
 }
 
+/* ---- A10: ANGLE's blob cache, one file per key ---- */
+
+#ifndef HV_ANGLE_COMMIT
+#define HV_ANGLE_COMMIT "unknown"
+#endif
+#define BLOB_MAX_VALUE (32u << 20)
+static char blob_dir[PATH_MAX]; // empty: no cache
+static _Atomic uint64_t blob_hits, blob_misses, blob_stores;
+
+static int blob_path(char *out, size_t n, const void *key, EGLsizeiANDROID ks) {
+    if (!blob_dir[0] || ks <= 0 || ks > 64 || strlen(blob_dir) + 2 * (size_t)ks + 16 > n) return -1;
+    int len = snprintf(out, n, "%s/", blob_dir);
+    for (EGLsizeiANDROID i = 0; i < ks; i++) len += snprintf(out + len, n - (size_t)len, "%02x", ((const uint8_t *)key)[i]);
+    return 0;
+}
+
+static void blob_set(const void *key, EGLsizeiANDROID ks, const void *val, EGLsizeiANDROID vs) {
+    char path[PATH_MAX], tmp[PATH_MAX + 16];
+    if (vs <= 0 || (size_t)vs > BLOB_MAX_VALUE || blob_path(path, sizeof path, key, ks)) return;
+    snprintf(tmp, sizeof tmp, "%s.%d.tmp", path, (int)getpid());
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return;
+    int ok = write(fd, val, (size_t)vs) == (ssize_t)vs;
+    close(fd);
+    if (ok && rename(tmp, path) == 0) atomic_fetch_add(&blob_stores, 1);
+    else unlink(tmp);
+}
+
+static EGLsizeiANDROID blob_get(const void *key, EGLsizeiANDROID ks, void *val, EGLsizeiANDROID vs) {
+    char path[PATH_MAX];
+    struct stat st;
+    if (blob_path(path, sizeof path, key, ks) || stat(path, &st) || st.st_size <= 0 || (size_t)st.st_size > BLOB_MAX_VALUE) {
+        if (vs <= 0 || !val) atomic_fetch_add(&blob_misses, 1); // the size query counts the miss
+        return 0;
+    }
+    if (vs < st.st_size) return (EGLsizeiANDROID)st.st_size; // a size query
+    int fd = open(path, O_RDONLY);
+    ssize_t got = fd < 0 ? -1 : read(fd, val, (size_t)st.st_size);
+    if (fd >= 0) close(fd);
+    if (got != st.st_size) return 0;
+    atomic_fetch_add(&blob_hits, 1);
+    utimes(path, NULL); // the oldest go first when the directory is pruned
+    return (EGLsizeiANDROID)st.st_size;
+}
+
+#define BLOB_DIR_MAX (128u << 20)
+
+// Keeps the directory bounded: other ANGLE commits' directories go, stale temp files go, then the oldest files until 3/4 of the cap is left.
+static void blob_prune(NSString *base, NSString *dir) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    for (NSString *name in [fm contentsOfDirectoryAtPath:base error:nil])
+        if ([name hasPrefix:@"angle-"] && ![name isEqualToString:dir.lastPathComponent]) [fm removeItemAtPath:[base stringByAppendingPathComponent:name] error:nil];
+    NSMutableArray<NSArray *> *files = [NSMutableArray array]; // path, size, mtime
+    unsigned long long total = 0;
+    NSDate *now = [NSDate date];
+    for (NSString *name in [fm contentsOfDirectoryAtPath:dir error:nil]) {
+        NSString *path = [dir stringByAppendingPathComponent:name];
+        NSDictionary *a = [fm attributesOfItemAtPath:path error:nil];
+        NSDate *mt = a[NSFileModificationDate];
+        if (!a || !mt) continue;
+        if ([name hasSuffix:@".tmp"] && [now timeIntervalSinceDate:mt] > 3600) {
+            [fm removeItemAtPath:path error:nil];
+            continue;
+        }
+        [files addObject:@[path, a[NSFileSize], mt]];
+        total += [a[NSFileSize] unsignedLongLongValue];
+    }
+    if (total <= BLOB_DIR_MAX) return;
+    [files sortUsingComparator:^NSComparisonResult(NSArray *x, NSArray *y) { return [x[2] compare:y[2]]; }];
+    for (NSArray *f in files) {
+        if (total <= BLOB_DIR_MAX / 4 * 3) break;
+        if ([fm removeItemAtPath:f[0] error:nil]) total -= [f[1] unsignedLongLongValue];
+    }
+}
+
+// HV_GL_CACHE=off turns it off; a path replaces <Caches>/Henge. The directory carries the ANGLE commit, so a new ANGLE starts empty.
+static void blob_init(void) {
+    blob_dir[0] = 0;
+    const char *env = getenv("HV_GL_CACHE");
+    if (env && !strcmp(env, "off")) return;
+    NSString *base = env && *env ? @(env) : [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject stringByAppendingPathComponent:@"Henge"];
+    if (!base) return;
+    NSString *dir = [base stringByAppendingPathComponent:@"angle-" HV_ANGLE_COMMIT];
+    if (![[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil]) return;
+    blob_prune(base, dir);
+    if (strlen(dir.fileSystemRepresentation) < sizeof blob_dir) strcpy(blob_dir, dir.fileSystemRepresentation);
+}
+
 /* ---- thread ---- */
 
 static int egl_start(HvVgpuVirgl *r) {
@@ -558,6 +656,11 @@ static int egl_start(HvVgpuVirgl *r) {
         fprintf(stderr, "virgl: eglInitialize failed (0x%x)\n", eglGetError());
         return -1;
     }
+    const char *dext = eglQueryString(r->dpy, EGL_EXTENSIONS);
+    blob_init();
+    if (blob_dir[0] && dext && strstr(dext, "EGL_ANDROID_blob_cache")) eglSetBlobCacheFuncsANDROID(r->dpy, blob_set, blob_get);
+    else blob_dir[0] = 0;
+    (void)eglGetError(); // a display that was set up before may refuse the funcs: the first ones stay
     eglBindAPI(EGL_OPENGL_ES_API);
     // The scanout binds IOSurfaces as pbuffers: pick a config that can.
     EGLint ca[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT, EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8,
@@ -701,6 +804,13 @@ static void *thread_main(void *arg) {
             }
         }
         if (stopping && !j) break;
+    }
+    if (getenv("HV_VIRGL_STATS")) {
+        HvVgpuVirglStats st;
+        hv_vgpu_virgl_stats(r, &st);
+        fprintf(stderr, "virgl: %llu requests, %llu ms in the renderer, longest %llu ms; shader cache %llu hits, %llu misses, %llu stored\n",
+                (unsigned long long)st.requests, (unsigned long long)st.busy_ms, (unsigned long long)st.longest_ms,
+                (unsigned long long)st.cache_hits, (unsigned long long)st.cache_misses, (unsigned long long)st.cache_stores);
     }
     @autoreleasepool { renderer_stop(r); }
     if (r->abandoned) atomic_store(&active, NULL); // the struct stays: late callers may still read it
@@ -860,5 +970,7 @@ void hv_vgpu_virgl_stats(HvVgpuVirgl *r, HvVgpuVirglStats *out) {
     memset(out, 0, sizeof *out);
     if (!r) return;
     out->requests = atomic_load(&r->requests), out->errors = atomic_load(&r->errors), out->fences = atomic_load(&r->fences);
+    out->busy_ms = atomic_load(&r->busy_ns) / 1000000, out->longest_ms = atomic_load(&r->longest_ns) / 1000000;
+    out->cache_hits = atomic_load(&blob_hits), out->cache_misses = atomic_load(&blob_misses), out->cache_stores = atomic_load(&blob_stores);
     snprintf(out->gl_renderer, sizeof out->gl_renderer, "%s", r->gl_renderer);
 }

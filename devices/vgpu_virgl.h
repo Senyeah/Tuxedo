@@ -31,6 +31,9 @@ typedef struct HvVgpuVirglStats {
     uint64_t requests;   /* run by the renderer */
     uint64_t errors;     /* of those, answered with an error */
     uint64_t fences;     /* fences created and retired */
+    uint64_t busy_ms;    /* time spent inside requests; a shader compile is one long request */
+    uint64_t longest_ms; /* the longest single request */
+    uint64_t cache_hits, cache_misses, cache_stores; /* the shader (blob) cache on disk; process-wide */
     char gl_renderer[96];
 } HvVgpuVirglStats;
 void hv_vgpu_virgl_stats(HvVgpuVirgl *r, HvVgpuVirglStats *out);

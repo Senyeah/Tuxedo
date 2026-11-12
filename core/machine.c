@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 #include "mmu.h"
 #include "sysreg.h"
@@ -19,6 +21,22 @@ extern void hv_ijc_thunk(void);
 extern void hv_xjump_thunk(void);
 
 static int init_rest(HvMachine *m);
+
+/* Big tables come straight from the kernel as zero pages. calloc reuses a freed block and zeroes all of it, so a
+   machine rebuilt after a guest restart touched about 780 MB more than the first one (A10). */
+static size_t zbytes(size_t n, size_t sz) {
+    size_t b = n * sz, pg = (size_t)sysconf(_SC_PAGESIZE);
+    return n && sz > SIZE_MAX / n ? 0 : (b + pg - 1) & ~(pg - 1);
+}
+static void *zalloc(size_t n, size_t sz) {
+    size_t b = zbytes(n, sz);
+    if (!b) return NULL;
+    void *p = mmap(NULL, b, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    return p == MAP_FAILED ? NULL : p;
+}
+static void zfree(void *p, size_t n, size_t sz) {
+    if (p) munmap(p, zbytes(n, sz));
+}
 
 int hv_knob[HV_K_COUNT];
 static const char *const hv_knob_names[HV_K_COUNT] = {"HV_NO_RAS", "HV_SUPERBLOCKS", "HV_GROUPS", "HV_WFI_SPIN", "HV_FLUSH", "HV_K1", "HV_K2", "HV_K3", "HV_TLBT", "HV_JIT_CAP", "HV_RECHECK", "HV_SYNC_WAIT", "HV_SWITCH_FLUSH", "HV_RANGE_DROP", "HV_MOVIMM", "HV_PREDSTAT", "HV_WALK_LOG", "HV_HOIST_CHECK", "HV_IJC_PAGES", "HV_DNS_PROXY"};
@@ -119,24 +137,24 @@ static int init_rest(HvMachine *m) {
     size_t bytes = m->jit.capacity * sizeof(uint32_t);
     m->max_blocks = (uint32_t)(bytes / 160 < 4096 ? 4096 : bytes / 160);
     m->max_slots = m->max_blocks * 2;
-    m->blocks = calloc(m->max_blocks, sizeof(HvBlock));
+    m->blocks = zalloc(m->max_blocks, sizeof(HvBlock));
     if (!m->blocks) return -1;
     m->stop_pc = ~0ull;
     m->stop_pc2 = ~0ull;
     m->chain = 1;
-    m->slots = calloc(m->max_slots, sizeof *m->slots);
-    m->slot_site = calloc(m->max_slots, sizeof *m->slot_site);
-    m->slot_stub = calloc(m->max_slots, sizeof *m->slot_stub);
-    m->slot_cond = calloc(m->max_slots, sizeof *m->slot_cond);
-    m->slot_xa = calloc(m->max_slots, sizeof *m->slot_xa);
-    m->slot_xpa = calloc(m->max_slots, sizeof *m->slot_xpa);
-    m->slot_xnext = calloc(m->max_slots, sizeof *m->slot_xnext);
+    m->slots = zalloc(m->max_slots, sizeof *m->slots);
+    m->slot_site = zalloc(m->max_slots, sizeof *m->slot_site);
+    m->slot_stub = zalloc(m->max_slots, sizeof *m->slot_stub);
+    m->slot_cond = zalloc(m->max_slots, sizeof *m->slot_cond);
+    m->slot_xa = zalloc(m->max_slots, sizeof *m->slot_xa);
+    m->slot_xpa = zalloc(m->max_slots, sizeof *m->slot_xpa);
+    m->slot_xnext = zalloc(m->max_slots, sizeof *m->slot_xnext);
     if (!m->slots || !m->slot_site || !m->slot_stub || !m->slot_cond || !m->slot_xa || !m->slot_xpa || !m->slot_xnext) return -1;
     for (int i = 0; i < HV_MAX_CPUS; i++) { /* untouched pages cost nothing, so every CPU gets its tables now */
         HvPerCpu *p = &m->percpu[i];
-        p->ijc = calloc(HV_IJC_TABLES * HV_IJC_TABLE_BYTES / 8, 8);
-        p->ucode = calloc(1u << HV_UCODE_BITS, 8);
-        p->cid_chunks = calloc(65536, sizeof *p->cid_chunks);
+        p->ijc = zalloc(HV_IJC_TABLES * HV_IJC_TABLE_BYTES / 8, 8);
+        p->ucode = zalloc(1u << HV_UCODE_BITS, 8);
+        p->cid_chunks = zalloc(65536, sizeof *p->cid_chunks);
         if (!p->ijc || !p->ucode || !p->cid_chunks) return -1;
         for (int k = 0; k < HV_STASHES; k++) {
             p->stash[k].slot = calloc(HV_STASH_CAP, sizeof *p->stash[k].slot);
@@ -389,19 +407,20 @@ void hv_machine_wake(HvMachine *m) {
 void hv_machine_free(HvMachine *m) {
     hv_jit_region_close(&m->jit);
     for (int i = 0; i < m->nram; i++) {
-        free(m->ram[i].code_pages);
-        free(m->ram[i].page_gen);
-        free(m->ram[i].whint);
-        free(m->ram[i].ijc_va);
-        free(m->ram[i].xhead);
+        HvRam *r = &m->ram[i];
+        zfree(r->code_pages, (size_t)1 << r->pages_log2, 1);
+        zfree(r->page_gen, r->npages, sizeof *r->page_gen);
+        zfree(r->whint, r->npages * HV_MAX_CPUS, sizeof *r->whint);
+        zfree(r->ijc_va, r->npages, sizeof *r->ijc_va);
+        zfree(r->xhead, r->npages, sizeof *r->xhead);
     }
-    free(m->blocks);
+    zfree(m->blocks, m->max_blocks, sizeof(HvBlock));
     for (int i = 0; i < HV_MAX_CPUS; i++) {
         /* hv_run keeps a thread send right for statistics; CPU workers have ended. */
         if (m->percpu[i].thread) mach_port_deallocate(mach_task_self(), m->percpu[i].thread);
-        free(m->percpu[i].ijc);
-        free(m->percpu[i].ucode);
-        free(m->percpu[i].cid_chunks);
+        zfree(m->percpu[i].ijc, HV_IJC_TABLES * HV_IJC_TABLE_BYTES / 8, 8);
+        zfree(m->percpu[i].ucode, 1u << HV_UCODE_BITS, 8);
+        zfree(m->percpu[i].cid_chunks, 65536, sizeof *m->percpu[i].cid_chunks);
         for (int k = 0; k < HV_STASHES; k++) {
             free(m->percpu[i].stash[k].slot);
             free(m->percpu[i].stash[k].ent);
@@ -412,13 +431,13 @@ void hv_machine_free(HvMachine *m) {
             pthread_mutex_destroy(&m->percpu[i].req_mu);
         }
     }
-    free(m->slots);
-    free(m->slot_site);
-    free(m->slot_stub);
-    free(m->slot_cond);
-    free(m->slot_xa);
-    free(m->slot_xpa);
-    free(m->slot_xnext);
+    zfree(m->slots, m->max_slots, sizeof *m->slots);
+    zfree(m->slot_site, m->max_slots, sizeof *m->slot_site);
+    zfree(m->slot_stub, m->max_slots, sizeof *m->slot_stub);
+    zfree(m->slot_cond, m->max_slots, sizeof *m->slot_cond);
+    zfree(m->slot_xa, m->max_slots, sizeof *m->slot_xa);
+    zfree(m->slot_xpa, m->max_slots, sizeof *m->slot_xpa);
+    zfree(m->slot_xnext, m->max_slots, sizeof *m->slot_xnext);
     if (m->locks_initialized) {
         pthread_mutex_destroy(&m->big_mu);
         pthread_cond_destroy(&m->big_cv);
@@ -441,13 +460,13 @@ int hv_machine_add_ram(HvMachine *m, uint64_t pa, uint64_t size, void *host, int
     r->pages_log2 = 0;
     while ((1ull << r->pages_log2) < pages) r->pages_log2++;
     /* A power of two, so translated code bounds-checks a page index with one shift (IC IVAU). */
-    r->code_pages = calloc((size_t)1 << r->pages_log2, 1);
+    r->code_pages = zalloc((size_t)1 << r->pages_log2, 1);
     if (!m->main_ram || size > m->main_ram->size) m->main_ram = r;
-    r->page_gen = calloc(pages, sizeof *r->page_gen);
+    r->page_gen = zalloc(pages, sizeof *r->page_gen);
     r->npages = pages;
-    r->whint = calloc(pages * HV_MAX_CPUS, sizeof *r->whint);
-    r->ijc_va = calloc(pages, sizeof *r->ijc_va);
-    r->xhead = calloc(pages, sizeof *r->xhead);
+    r->whint = zalloc(pages * HV_MAX_CPUS, sizeof *r->whint);
+    r->ijc_va = zalloc(pages, sizeof *r->ijc_va);
+    r->xhead = zalloc(pages, sizeof *r->xhead);
     return r->code_pages && r->page_gen && r->whint && r->ijc_va && r->xhead ? 0 : -1;
 }
 
