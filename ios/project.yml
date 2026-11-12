@@ -160,3 +160,83 @@ targets:
       # StikJIT 1.9.0 (MPL-2.0, with idevice under MIT), unmodified; embedded by the app's Embed StikJIT.
       - framework: deps/StikJIT.xcframework
         embed: false
+
+  # The app for the iOS Simulator (ios/scripts/sim_build.sh): no JIT helper, no StikJIT, and the network and pairing
+  # libraries stubbed. Its engine is built apart, in build/ios-sim. The JIT region is made in-process (JITBootstrap).
+  HengeSim:
+    type: application
+    platform: iOS
+    sources:
+      - path: Henge
+        excludes:
+          - "Resources/**"
+          - "Info.plist"
+          - "Henge.entitlements"
+          - "Henge.personal.entitlements"
+          - "AppIcon.icon/**"
+          - "AppIcon.icon"
+      - path: Henge/Resources
+        buildPhase: resources
+      - path: Henge/AppIcon.icon
+        type: file
+        buildPhase: resources
+      - path: HengeJITHelper/HengeJITMessages.swift
+      - path: HengeSim/sim_stubs.c
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(HENGE_BUNDLE_IDENTIFIER)
+        PRODUCT_NAME: Henge
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SDKROOT: iphonesimulator
+        SUPPORTED_PLATFORMS: iphonesimulator
+        ARCHS: arm64
+        EXCLUDED_ARCHS: x86_64
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: YES
+        INFOPLIST_FILE: Henge/Info.plist
+        SWIFT_OBJC_BRIDGING_HEADER: Henge/HengeBridge.h
+        TARGETED_DEVICE_FAMILY: "1,2"
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/Frameworks"
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/../core"
+          - "$(SRCROOT)/../host"
+          - "$(SRCROOT)/../devices"
+          - "$(SRCROOT)/Henge/Native"
+        LIBRARY_SEARCH_PATHS:
+          - "$(inherited)"
+          - "$(SRCROOT)/../build/ios-sim"
+        OTHER_LDFLAGS:
+          - "$(inherited)"
+          - "-lhengevm"
+          - "-lhengerestore"
+          - "-lz"
+          - "-liconv"
+          - "-lresolv"
+          - "-framework"
+          - "Metal"
+          - "-framework"
+          - "IOSurface"
+          - "-framework"
+          - "AudioToolbox"
+          - "-framework"
+          - "AVFAudio"
+          - "-framework"
+          - "CoreFoundation"
+    preBuildScripts:
+      - name: Build the simulator engine
+        script: |
+          set -e
+          cd "$SRCROOT/.."
+          make ios-sim-lib build/henge-agent.gz
+          ./tools/build_ios_restore.sh sim
+        basedOnDependencyAnalysis: false
+    postBuildScripts:
+      - name: Bundle the Mac helper
+        script: |
+          set -e
+          cp "$SRCROOT/../build/henge-agent.gz" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/henge-agent.gz"
+        basedOnDependencyAnalysis: false

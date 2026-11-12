@@ -376,6 +376,29 @@ static void henge_ios_jit_release_low_hold(size_t bytes);
 static HengeDualMapping henge_self_dual_mapping(size_t bytes)
 {
     HengeDualMapping none = { NULL, NULL, 0 };
+#if TARGET_OS_SIMULATOR
+    /* A simulator process is a macOS process: plain RW memory, an alias, then R-X (as host/jit_region.c open_split). */
+    {
+        size_t size = (bytes + 0x3fff) & ~(size_t)0x3fff;
+        uint8_t *rx = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (rx == MAP_FAILED) {
+            HENGE_LOG("self: simulator mmap failed (%s)", strerror(errno));
+            return none;
+        }
+        uint8_t *rw = henge_rw_alias(rx, size, false);
+        if (rw && mprotect(rx, size, PROT_READ | PROT_EXEC) == 0 && henge_self_selftest(rx, rw)) {
+            HengeDualMapping m = { rw, rx, size };
+            atomic_store(&g_jit_available, true);
+            g_self_route = "simulator";
+            HENGE_LOG("self: PASS -- %zu MiB of simulator memory, rx=%p rw=%p", size >> 20, (void *)rx, (void *)rw);
+            return m;
+        }
+        HENGE_LOG("self: simulator region did not pass its test");
+        if (rw) vm_deallocate(mach_task_self(), (vm_address_t)rw, size);
+        munmap(rx, size);
+        return none;
+    }
+#endif
     if (__builtin_available(iOS 26.0, *)) {
         HENGE_LOG("self: iOS 26 enforces TXM; only a debugger can grant executable memory here");
         return none;

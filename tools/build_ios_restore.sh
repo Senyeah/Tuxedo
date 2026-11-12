@@ -15,6 +15,12 @@ if [ "$1" = mac ]; then
     SDKNAME=macosx
     CC=(xcrun --sdk macosx clang -arch arm64 -mmacosx-version-min=14.0)
     CMAKE_TARGET=(-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0)
+elif [ "$1" = sim ]; then
+    # iOS Simulator (arm64): build/ios-sim/libhengerestore.a, for ios/scripts/sim_build.sh
+    BUILD="$ROOT/build/ios-sim"
+    SDKNAME=iphonesimulator
+    CC=(xcrun --sdk iphonesimulator clang -arch arm64 -target arm64-apple-ios17.0-simulator)
+    CMAKE_TARGET=(-DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphonesimulator -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0)
 else
     BUILD="$ROOT/build/ios"
     SDKNAME=iphoneos

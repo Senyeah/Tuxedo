@@ -63,6 +63,19 @@ the packager as an environment variable (`HENGE_ENTITLEMENTS=... ios/scripts/pac
 - **Chips**: the virtual CPU offers Armv8.5 instructions (`core/sysreg.c`), which
   macOS uses and which run as they are, so Henge needs an A14 or M1 or newer.
 
+## iOS Simulator
+
+`ios/scripts/sim_build.sh [device]` builds the `HengeSim` target, boots a simulator if none is booted
+(default "iPhone 18 Pro"), installs and launches Henge, and prints the path of `henge.log`. It needs no
+phone, signing, Husk checkout or libslirp: the engine is built for `iphonesimulator` in `build/ios-sim`
+(`make ios-sim-lib`, the installer stack with `tools/build_ios_restore.sh sim`).
+
+What differs from the device app: networking is a stub (`host/net_stub.c`, the guest has no network),
+pairing is a stub (`HengeSim/sim_stubs.c`), and there is no JIT helper or StikJIT. The JIT region is
+made in-process the way `host/jit_region.c` does (RW map, alias, R-X): a simulator process is a macOS
+process, so no debugger is needed. Settings shows JIT "On" and `henge.log` has "self: PASS ... simulator memory".
+Launch with `simctl`, not under a debugger. Memory figures in Settings read zero in the simulator.
+
 Code from Husk (GPL-2.0-or-later): `Henge/JIT/*`, `Henge/HengeLog.swift`,
 `Henge/Native/henge-ios-jit.*`, `henge-brk.S`, `HengeJITHelper/`. StikJIT is
 MPL-2.0 and idevice MIT (`Henge/Resources/legal/`); `tcg-apple-jit.h` is QEMU's

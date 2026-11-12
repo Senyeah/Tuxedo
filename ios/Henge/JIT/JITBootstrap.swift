@@ -83,6 +83,18 @@ enum JITBootstrap {
     @discardableResult
     static func prewarm() -> Bool {
         if prewarmed { return true }
+        #if targetEnvironment(simulator)
+        // The simulator runs the app as a macOS process: no debugger, no TXM; the region is made in-process.
+        selfGrantTried = true
+        if henge_ios_jit_prewarm_self(jitBytes) {
+            prewarmed = true
+            lastFailure = nil
+            HengeLog.log("jit", "JIT region made by Henge itself (simulator)")
+            return true
+        }
+        lastFailure = "The simulator refused the JIT region; see henge.log."
+        return false
+        #else
         // Before iOS 26 Henge can make the region itself where the device allows it (a jailbreak,
         // a debugger that attached and let go such as TrollStore's enable-jit, or dynamic-codesigning),
         // so it does not wait for CS_DEBUGGED there if jailbroken: Dopamine hides that flag from apps unless
@@ -145,6 +157,7 @@ enum JITBootstrap {
         HengeLog.log("jit", ok ? "JIT region secured; it will be handed to QEMU later"
                               : "JIT prewarm FAILED -- StikDebug is not servicing traps")
         return ok
+        #endif
     }
 
     /// Whether to leave StikDebug attached after the region is held.
@@ -174,12 +187,16 @@ enum JITBootstrap {
     /// the region itself, which is all TrollStore and jailbroken devices need. Cheap after the first call, and logs nothing.
     static var ready: Bool {
         if prewarmed || isLive { return true }
+        #if targetEnvironment(simulator)
+        return !selfGrantTried && prewarm()
+        #else
         // On a TXM device the debugger must also answer the brk that claims the region. CS_DEBUGGED alone is what opening
         // Henge from StikDebug's app list gives (no Henge script) or LiveContainer, and an install then stops at
         // "Henge has no JIT region" (#23).
         if debuggedFlag { return !deviceEnforcesTXM }
         guard canGrantOwnJIT, !selfGrantTried else { return false }
         return prewarm()
+        #endif
     }
 
     /// True once this process has told StikDebug to let go.
@@ -343,8 +360,12 @@ enum JITBootstrap {
     /// debugger to hand it out: true before iOS 26, which is when the Trusted Execution Monitor arrived. It is what makes
     /// TrollStore and jailbreaks enough, without StikDebug.
     static var canGrantOwnJIT: Bool {
+        #if targetEnvironment(simulator)
+        return true
+        #else
         if #available(iOS 26, *) { return false }
         return true
+        #endif
     }
 
     /// henge-jit.js as standard base64, which Built-in StikJIT's custom script takes.
