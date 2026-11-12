@@ -210,7 +210,7 @@ struct MacSettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Toggle("Graphics acceleration", isOn: Binding(get: { mac.accel ?? false }, set: { mac.accel = $0; save() }))
                 .font(.system(size: 16))
-            Text("The guest draws 3D and its desktop on this \(Device.name)'s GPU (OpenGL ES 3.0). It takes more memory, and a graphics fault can stop the machine. Experimental. Applies the next time this machine starts.")
+            Text("The guest draws 3D and its desktop on this \(Device.name)'s GPU (OpenGL ES 3.0). It takes more memory, and a graphics fault can stop the machine. In the background the whole machine pauses, even while it plays sound, so its sound stops. Experimental. Applies the next time this machine starts.")
                 .font(.system(size: 13)).foregroundStyle(Desk.dim)
         }
         .padding(17)

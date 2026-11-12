@@ -1042,10 +1042,11 @@ struct SessionView: View {
 
     /// Linux pauses while the app is away, so iOS freezing it does not jump the guest's clock (RCU stalls).
     /// A Mac keeps running as before: the pause is not checked with macOS yet (T4).
+    /// A machine with graphics acceleration always pauses, even while it plays sound: iOS allows no Metal work in the background.
     private func setBackground(_ away: Bool) {
         guard mac.guest == .linux else { return }
         let was = henge_vm_paused() != 0
-        henge_vm_set_background(away ? 1 : 0) // with sound playing, it pauses when the sound stops
+        henge_vm_set_background(away ? 1 : 0) // sound keeps only a machine without acceleration running; it pauses when the sound stops
         let now = henge_vm_paused() != 0
         if now != was { HengeLog.log("session", now ? "paused in the background" : "resumed") }
     }
