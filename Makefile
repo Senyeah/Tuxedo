@@ -295,6 +295,23 @@ test-machine-model: $(B)/test_machine_model
 	$(B)/test_machine_model
 .PHONY: test-machine-model
 
+# E13/T4: the engine gate. The macOS guest boot has no machine on this Mac, so it stays an iPhone check.
+# Needs no Husk checkout: IOS_DEPS falls back to Homebrew's libslirp when the default sysroot is missing.
+GATE_IOS_DEPS ?= $(if $(wildcard $(IOS_DEPS)/include/slirp/libslirp.h),$(IOS_DEPS),/opt/homebrew)
+gate-engine:
+	$(MAKE) test
+	$(MAKE) test-vm-lifecycle
+	$(MAKE) test-display-routing
+	ios/scripts/check_display.sh
+	$(MAKE) ios-lib IOS_DEPS=$(GATE_IOS_DEPS)
+	$(MAKE) ios-sim-lib IOS_DEPS=$(GATE_IOS_DEPS)
+	$(MAKE) test-linux-dtb
+	$(MAKE) test-linux-direct
+	$(MAKE) test-linux-smoke
+	$(MAKE) test-virgl-host
+	$(MAKE) test-machine-model
+.PHONY: gate-engine
+
 # What the JIT setup tells the user and when it retries by itself, for each kind of network path and helper error.
 $(B)/test_jit_advice: ios/Henge/JIT/JITNetworkAdvice.swift tests/test_jit_advice.swift | $(B)
 	xcrun --sdk macosx swiftc $^ -o $@
