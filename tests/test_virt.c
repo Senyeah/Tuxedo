@@ -1832,14 +1832,14 @@ static void test_gpu3d_submit(HvVirtioGpu *g) {
     g3_kick();
     g3_poll();
     check("64 MB of held submits wait", fk.nheld, 64);
-    check("the 65th is refused at once", g3_done(heads[64]) && g3_status(heads[64]) == NOMEM, 1);
-    check("the others have not been answered", g3_nreaped, 1);
+    check("the 65th is refused, but its answer waits behind the others on its context", g3_nreaped, 0);
     check("pending bytes", g->pend_bytes, 64u << 20);
     fk.hold = 0;
     g3_nreaped = 0;
     fk_release_all();
     g3_poll();
-    check("released: 64 answers", g3_nreaped, 64);
+    check("released: 65 answers", g3_nreaped, 65);
+    check("the 65th's answer is the refusal, last", g3_status(heads[64]) == NOMEM && g3_reaped[64].head == heads[64], 1);
     int all_ok = 1;
     for (int i = 0; i < 64; i++) all_ok &= g3_done(heads[i]) && g3_status(heads[i]) == OK;
     check("all of them OK", all_ok, 1);
@@ -1921,6 +1921,75 @@ static void test_gpu3d_fences(HvVirtioGpu *g) {
     check("a fenced error with nothing before it", G3(72), BAD_ID);
     check("fence echoed at once", rd32(&m, G3_RESP(g3_last_head) + 8), 77);
     c_unref(300), c_unref(301);
+
+    /* a flood of deferred fenced answers, each on its own context, stays inside the limit and cannot hang the tick */
+    fk.hold_fenced = 1, fk.nheld = 0;
+    g3_next = 0;
+    q_hdr(0x207, 1), q32(24, 8), q_fence(30);
+    h[0] = g3_post(32, &s, 1, 24);
+    g3_nreaped = 0;
+    g3_kick();
+    g3_poll();
+    for (int b = 0; b < 30; b++) {
+        g3_next = 0;
+        for (int i = 0; i < 100; i++) {
+            q_hdr(0x205, 100000 + b * 100 + i), q32(56, 5555), q_fence(31 + b * 100 + i);
+            g3_post(72, NULL, 0, 24);
+        }
+        g3_kick();
+        g3_poll();
+    }
+    check("3000 distinct contexts: the pending list stays inside the limit", g->npend <= HV_VGPU_MAX_PEND, 1);
+    check("the held request is still held", g->nopen == 1 && fk.nheld == 1, 1);
+    fk_release(0);
+    g3_poll();
+    check("released: nothing pending", g->npend == 0 && g->nopen == 0, 1);
+    fk.hold_fenced = 0;
+
+    /* a refused attach must not undo the attach of a later resource that reuses the id */
+    uint8_t *lst = ram(G3_LISTBUF);
+    uint64_t ba = G3_BK;
+    uint32_t bl = 0x1000;
+    memcpy(lst, &ba, 8), memcpy(lst + 8, &bl, 4), memset(lst + 12, 0, 4);
+    Seg ls = {G3_LISTBUF, 16, 0};
+    check("create 900", c_create(0, 900, 2, 1, 8, 8, 1, 1, 0, 0), OK);
+    fk.hold = 1, fk.nheld = 0;
+    g3_next = 0;
+    g3_nreaped = 0;
+    q_hdr(0x106, 0), q32(24, 900), q32(28, 1);
+    g3_post(32, &ls, 1, 24); /* the renderer refuses this one */
+    q_hdr(0x102, 0), q32(24, 900);
+    g3_post(32, NULL, 0, 24);
+    q_hdr(0x204, 0), q32(24, 900), q32(28, 2), q32(32, 1), q32(36, 0x11), q32(40, 8), q32(44, 8), q32(48, 1), q32(52, 1);
+    g3_post(72, NULL, 0, 24);
+    q_hdr(0x106, 0), q32(24, 900), q32(28, 1);
+    g3_post(32, &ls, 1, 24);
+    fk.fail = HV_GPU3D_ERR_PARAM;
+    g3_kick();
+    g3_poll();
+    fk.hold = 0;
+    fk_release_all();
+    g3_poll();
+    HvVgpuRes3d *r9 = hv_virtio_gpu_res3d(g, 900);
+    check("the new resource 900 keeps its backing", r9 && r9->has_backing && r9->npieces == 1, 1);
+    c_unref(900);
+
+    /* the backing may not sit in read-only RAM */
+    void *ro = NULL;
+    if (posix_memalign(&ro, 0x4000, 0x10000) == 0) {
+        memset(ro, 0, 0x10000);
+        uint64_t ro_pa = 0x7000000000ull;
+        int added = hv_machine_add_ram(&m, ro_pa, 0x10000, ro, 1);
+        check("read-only RAM added", added, 0);
+        if (added == 0) {
+            check("create 901", c_create(0, 901, 2, 1, 8, 8, 1, 1, 0, 0), OK);
+            uint64_t a = ro_pa;
+            uint32_t l = 0x1000;
+            check("attach: a piece in read-only RAM", c_attach(901, 1, 1, &a, &l, 1), UNSPEC);
+            check("and 901 has no backing", hv_virtio_gpu_res3d(g, 901)->has_backing, 0);
+            c_unref(901);
+        }
+    }
 }
 
 static void test_gpu3d_errors(HvVirtioGpu *g) {

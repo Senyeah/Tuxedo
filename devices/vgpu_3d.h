@@ -35,8 +35,9 @@ enum {
 typedef struct HvGpu3dBox { uint32_t x, y, z, w, h, d; } HvGpu3dBox;
 
 typedef struct HvGpu3dRange {
-    void *ptr; /* host pointer into guest RAM, checked by hv_phys_ptr */
+    void *ptr; /* host pointer into guest RAM, checked by hv_phys_ptr; never read-only RAM */
     uint32_t len;
+    uint64_t gpa; /* the device calls hv_dma_written for a TRANSFER_FROM_HOST itself */
 } HvGpu3dRange;
 
 /* Valid from submit until the renderer calls hv_virtio_gpu_3d_done: copy what outlives that. */
@@ -61,10 +62,12 @@ typedef struct HvGpu3dReq {
 } HvGpu3dReq;
 
 typedef struct HvGpu3dOps {
-    /* 0 and the capset at `index` (from 0), or nonzero past the last. CPU thread: must not wait on the renderer's queue. */
+    /* 0 and the capset at `index` (from 0), or nonzero past the last. CPU thread: must not wait on the renderer's queue,
+       nor call into GL (virglrenderer is single-threaded): answer from a cache filled at init. */
     int (*capset_info)(void *r, uint32_t index, uint32_t *id, uint32_t *version, uint32_t *size);
     /* 0 and exactly `size` bytes of the capset's `version`. Same thread rules. */
     int (*capset)(void *r, uint32_t id, uint32_t version, void *out, uint32_t size);
+    /* The renderer outlives hv_virtio_gpu_destroy: it gets UNREF/CTX_DESTROY for what is live, and done() runs after. */
     /* Queue the request and return; never run it on this thread. Call hv_virtio_gpu_3d_done(cookie, status) exactly
        once, from any thread: after the command ran, or for a fenced request after its fence. */
     void (*submit)(void *r, const HvGpu3dReq *req, void *cookie);

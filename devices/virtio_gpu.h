@@ -63,6 +63,7 @@ typedef struct HvVgpuRes3d {
     int has_backing;
     uint32_t npieces;
     uint64_t backing_len;
+    HvVgpuPiece *pieces;      /* the backing's guest addresses, for hv_dma_written */
     struct HvVgpuRes3d *next; /* hash chain */
 } HvVgpuRes3d;
 
