@@ -9,7 +9,7 @@ DD=build/ios-sim-app
 make ios-sim-lib build/henge-agent.gz
 tools/build_ios_restore.sh sim
 (cd ios && xcodegen generate)
-xcodebuild -project ios/Henge.xcodeproj -scheme HengeSim -sdk iphonesimulator \
+xcodebuild -project ios/Henge.xcodeproj -scheme HengeSim -skipPackagePluginValidation \
   -destination 'generic/platform=iOS Simulator' -configuration Debug -derivedDataPath "$DD" build \
   | grep -E 'error:|BUILD (SUCCEEDED|FAILED)' || true
 APP="$DD/Build/Products/Debug-iphonesimulator/Henge.app"

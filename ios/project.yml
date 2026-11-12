@@ -5,6 +5,12 @@ options:
     iOS: "17.0"
   createIntermediateGroups: true
 
+packages:
+  # The console view's terminal (MIT). Pinned exactly; its licence is in Henge/Resources/legal.
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    exactVersion: 1.99.1
+
 settings:
   base:
     # The app and its JIT helper follow this together (the helper's id sits under the app's).
@@ -88,6 +94,7 @@ targets:
           - "-framework"
           - "CoreFoundation"
     dependencies:
+      - package: SwiftTerm
       # Built-in StikJIT's debugger process. Embedded into PlugIns/.
       - target: HengeJITHelper
     preBuildScripts:
@@ -226,6 +233,8 @@ targets:
           - "AVFAudio"
           - "-framework"
           - "CoreFoundation"
+    dependencies:
+      - package: SwiftTerm
     preBuildScripts:
       - name: Build the simulator engine
         script: |
