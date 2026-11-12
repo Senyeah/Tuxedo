@@ -5,6 +5,8 @@ echo "labwc-up $(cut -d' ' -f1 /proc/uptime)" >> "$log"
 
 foot -e sh -c 'echo "terminal $(cut -d" " -f1 /proc/uptime)" >> "$0"; exec bash' "$log" &
 
+/usr/local/bin/henge-display > "${XDG_RUNTIME_DIR:-/tmp}/henge-display.log" 2>&1 &
+
 # Optional unattended run. Its output goes to $XDG_RUNTIME_DIR/henge-bench.log
 if [ -x /etc/henge/bench.sh ]; then
     /etc/henge/bench.sh > "${XDG_RUNTIME_DIR:-/tmp}/henge-bench.log" 2>&1 &

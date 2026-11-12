@@ -174,6 +174,16 @@ test-linux-input: $(B)/hengevm
 	uv run tools/linux/input-check.py $(INPUT_ARGS)
 .PHONY: test-linux-input
 
+# R3: a mode line in HV_INPUT_FILE changes the guest's display mode (fbcon on the console image).
+test-linux-mode: $(B)/hengevm
+	uv run tools/linux/mode-check.py $(MODE_ARGS)
+.PHONY: test-linux-mode
+
+# R5: the desktop follows a mode line (labwc framebuffer size, wlr-randr scale). DISPLAY_ARGS="--image FILE" for a rebuilt desktop image.
+test-linux-display: $(B)/hengevm
+	uv run tools/linux/display-check.py $(DISPLAY_ARGS)
+.PHONY: test-linux-display
+
 test-vm-lifecycle: $(B)/test_vm_lifecycle
 	$(B)/test_vm_lifecycle
 .PHONY: test-vm-lifecycle
@@ -296,6 +306,14 @@ $(B)/test_legacy_external_display: ios/Henge/LegacyExternalDisplay.swift ios/Hen
 # Info.plist must declare the external display scene role with ExternalDisplaySceneDelegate, or iOS 17-26 never offer the display.
 $(B)/test_scene_manifest: tests/test_scene_manifest.swift | $(B)
 	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
+
+# Guest mode sizes and when to send them: pure policy, no UIKit.
+$(B)/test_display_mode_policy: ios/Henge/DisplayModePolicy.swift tests/test_display_mode_policy.swift | $(B)
+	xcrun --sdk macosx swiftc $^ -o $@
+
+test-display-mode-policy: $(B)/test_display_mode_policy
+	$(B)/test_display_mode_policy
+.PHONY: test-display-mode-policy
 
 test-display-routing: $(B)/test_display_targets $(B)/test_display_router $(B)/test_external_screen_plan $(B)/test_legacy_external_display $(B)/test_scene_manifest
 	$(B)/test_display_targets

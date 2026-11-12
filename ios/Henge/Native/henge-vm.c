@@ -357,6 +357,7 @@ long henge_share_agent_seen(void) { return hv_share_agent_seen(); }
 
 /* vm.c keeps the mode and gives it to the board's display once one exists. */
 void henge_vm_set_display(uint32_t width, uint32_t height) { hv_vm_set_display_mode(width, height); }
+void henge_vm_set_display_scale(double scale) { hv_vm_set_display_scale(scale); }
 void henge_vm_set_display_mm(uint32_t width_mm, uint32_t height_mm) { hv_vm_set_display_size_mm(width_mm, height_mm); }
 
 void henge_vm_key(uint16_t code, int down) {

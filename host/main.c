@@ -539,7 +539,8 @@ static void hid_locked(uint8_t usage, int down) {
     hv_virt_machine_unlock();
 }
 
-/* HV_INPUT_FILE lines for the virt board: rel DX DY, rclick, msleep MS, tpframe (ends a touch batch), and btn, tp, tpclick as on vmapple. */
+/* HV_INPUT_FILE lines for the virt board: rel DX DY, rclick, msleep MS, tpframe (ends a touch batch), mode WxH [SCALE] (live display mode), and btn, tp, tpclick as on vmapple.
+   --screenshot still writes the --display size, so read the size from the guest after a mode line. */
 static int virt_input(const char *line) {
     int a, b;
     unsigned code;
@@ -547,6 +548,15 @@ static int virt_input(const char *line) {
         hv_virt_machine_lock();
         hv_vm_mouse_move(a, b);
         hv_virt_machine_unlock();
+    } else if (!strncmp(line, "mode ", 5)) {
+        unsigned w, h;
+        double scale;
+        int n = sscanf(line + 5, "%ux%u %lf", &w, &h, &scale);
+        if (n < 2 || !w || !h) fprintf(stderr, "hengevm: input: %s: want mode WxH [SCALE]\n", line);
+        else {
+            hv_vm_set_display_mode(w, h);
+            if (n == 3) hv_vm_set_display_scale(scale);
+        }
     } else if (sscanf(line, "msleep %d", &a) == 1) {
         usleep((useconds_t)a * 1000);
     } else if (!strncmp(line, "rclick", 6)) {
