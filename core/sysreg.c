@@ -122,6 +122,7 @@ static int read_reg(HvCpu *cpu, uint32_t reg, uint64_t *v) {
     case R(3, 0, 0, 6, 1): *v = ID_AA64ISAR1; return 0;
     case R(3, 0, 0, 7, 0): *v = ID_AA64MMFR0; return 0;
     case R(3, 0, 0, 7, 1): *v = ID_AA64MMFR1; return 0;
+    case R(3, 0, 0, 7, 2): *v = m->id_mmfr2; return 0;
     case R(3, 3, 0, 0, 1): *v = CTR_EL0; return 0;
     case R(3, 3, 0, 0, 7): *v = 4; return 0;                             /* DCZID: 64-byte DC ZVA */
     case R(3, 1, 0, 0, 1): *v = CLIDR; return 0;
@@ -209,6 +210,7 @@ static int write_reg(HvCpu *cpu, uint32_t reg, uint64_t v) {
         uint64_t old = cpu->ttbr1_el1;
         cpu->ttbr1_el1 = v;
         if ((old ^ v) & 0x0000ffffffffffffull) cpu->m->stats.flush_why[3]++, hv_tlb_flush(cpu);
+        /* Kernel entries are not tagged by ASID: kept, as the TTBR1 half is global unless its table changes */
         else if ((old ^ v) >> 48 && (cpu->tcr_el1 >> 22) & 1) hv_tlb_switch_asid(cpu, old);
         return 0;
     }
@@ -417,7 +419,8 @@ void hv_tlbi_apply(HvCpu *cpu, uint32_t op1, uint32_t crn, uint32_t crm, uint32_
                 else if (!have && __atomic_compare_exchange_n(&cpu->m->switch_flush_pc[i], &zero, pc, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) known = 1;
             }
         }
-        if (crm == 7 && hv_knob[HV_K_SWITCHFLUSH] && (since_switch < 480 || late) &&
+        /* Not under TCR.A1: Linux's ASID rollover needs this flush to retire the old ids */
+        if (crm == 7 && hv_knob[HV_K_SWITCHFLUSH] && !((cpu->tcr_el1 >> 22) & 1) && (since_switch < 480 || late) &&
             (hv_knob[HV_K_SWITCHFLUSH] < 2 || (nth++ & 127) || !hv_tlb_check_all(cpu))) {
             if (cpu->m->stats_interval) cpu->m->stats.flush_skipped++, cpu->m->stats.flush_skipped_late += (uint64_t)late;
             return;

@@ -294,6 +294,7 @@ typedef struct HvMachine {
        count (days of uptime) macOS 12 took the user as idle for that long and put itself to sleep while
        still starting up: its window server never drew. */
     uint64_t cntvoff;
+    uint64_t id_mmfr2;   /* the board's ID_AA64MMFR2_EL1 (vmapple: 0) */
 } HvMachine;
 
 static inline uint32_t hv_block_hash(uint64_t va, uint64_t pa, uint32_t flags) {

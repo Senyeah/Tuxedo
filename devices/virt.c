@@ -76,6 +76,7 @@ int hv_virt_create(HvVirt *b, HvMachine *m, HvCpu *cpus, int ncpus, uint64_t ram
 
     m->tick = tick;
     m->tick_opaque = b;
+    m->id_mmfr2 = 1ull << 60; /* E0PD: with it, a KASLR kernel does not force page-table isolation (a flush per syscall) */
     cpus->m = m;
     return 0;
 }

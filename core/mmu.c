@@ -53,6 +53,7 @@ void hv_mmu_walk(HvCpu *cpu, uint64_t va, HvAccess acc, int el, HvWalk *out) {
     if (acc == HV_ACC_EXEC && tbid) tbi = 0;
     uint32_t tsz = hi ? (tcr >> 16) & 63 : tcr & 63;
     int epd = hi ? (tcr >> 23) & 1 : (tcr >> 7) & 1;
+    int e0pd = el == 0 && (hi ? (tcr >> 56) & 1 : (tcr >> 55) & 1); /* E0PD: EL0 faults as if unmapped (Linux, instead of KPTI) */
     int hpd = hi ? (tcr >> 42) & 1 : (tcr >> 41) & 1;
     int g = granule_bits(hi ? (tcr >> 30) & 3 : (tcr >> 14) & 3, hi);
     if (tsz < 16) tsz = 16;
@@ -62,7 +63,7 @@ void hv_mmu_walk(HvCpu *cpu, uint64_t va, HvAccess acc, int el, HvWalk *out) {
     /* Bits above the input size must all match bit 55 (or bit 63 without TBI). */
     int top = tbi ? 55 : 63;
     uint64_t mask = (top - inputsize + 1 >= 64 ? ~0ull : ((1ull << (top - inputsize + 1)) - 1)) << inputsize;
-    if ((va & mask) != (hi ? mask : 0) || epd) {
+    if ((va & mask) != (hi ? mask : 0) || epd || e0pd) {
         out->fsc = HV_FSC_TRANSLATION(0);
         return;
     }

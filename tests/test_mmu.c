@@ -167,6 +167,92 @@ static void linux_asids(HvMachine *m, HvCpu *cpu) {
     m->stats_interval = 0;
 }
 
+/* Another CPU's TLBIs against an A1 stash (its ASID taken from TTBR1): by VA and by range for a switched-out
+   process, and by VA for the running one; each process gets the rest back when it runs again. */
+static void linux_remote(HvMachine *m) {
+    static HvCpu c;
+    hv_cpu_reset_index(&c, m, 1);
+    pt_next = 0;
+    const uint64_t U = 0x4000, V = 0x8000, W = 0xc000, K = 0xfffffff000010000ull, D = PT_PA + 0xc0000;
+    const uint16_t A = 0x33, B = 0x77;
+    uint64_t rA = alloc_table(), rB = alloc_table(), empty = alloc_table(), rK = alloc_table();
+    map(rA, 14, 36, U, 3, D | PAGE | AF | AP(1), 0);
+    map(rA, 14, 36, V, 3, (D + 0x4000) | PAGE | AF | AP(1), 0);
+    map(rA, 14, 36, W, 3, (D + 0x8000) | PAGE | AF | AP(1), 0);
+    map(rB, 14, 36, U, 3, (D + 0xc000) | PAGE | AF | AP(1), 0);
+    map(rK, 14, 36, K, 3, (D + 0x10000) | PAGE | AF, 0);
+    c.mair_el1 = 0xff;
+    c.tcr_el1 = 28 | 2u << 14 | 28u << 16 | 1u << 22 | 1u << 30 | 5ull << 32 | 1ull << 36;
+    c.sctlr_el1 |= 1;
+    c.el = 1;
+    uint64_t pa;
+    msr(&c, MSR_TTBR1, rK | (uint64_t)A << 48);
+    msr(&c, MSR_TTBR0, rA);
+    hv_mmu_access(&c, U, HV_ACC_READ, 0, &pa);
+    hv_mmu_access(&c, V, HV_ACC_READ, 0, &pa);
+    hv_mmu_access(&c, W, HV_ACC_READ, 0, &pa);
+    linux_switch(&c, empty, rK, rB, B);
+    hv_mmu_access(&c, U, HV_ACC_READ, 0, &pa);
+
+    check_that(hv_tlbi_drop_remote_va(&c, U, A) == 1, "A1 remote: a TLBI by VA for a switched-out ASID was not done");
+    check_that(hv_tlbi_drop_remote_range(&c, W, 1, A) == 1, "A1 remote: a range TLBI for a switched-out ASID was not done");
+    hv_mmu_access(&c, U, HV_ACC_READ, 0, &pa); /* the live slot went too, whatever its ASID */
+    linux_switch(&c, empty, rK, rA, A);
+    check_that(!tlb_has(&c, U, 0, D), "A1 remote: a TLBI by VA left the switched-out process's entry");
+    check_that(!tlb_has(&c, W, 0, D + 0x8000), "A1 remote: a range TLBI left the switched-out process's entry");
+    check_that(tlb_has(&c, V, 0, D + 0x4000), "A1 remote: a TLBI of other pages dropped this one");
+
+    /* The running process's page goes from the live TLB; B's stashed entry for the same VA stays. */
+    check_that(hv_tlbi_drop_remote_va(&c, U, A) == 1 && hv_tlbi_drop_remote_va(&c, V, A) == 1 && !tlb_has(&c, V, 0, D + 0x4000),
+               "A1 remote: a TLBI by VA for the running ASID left its entry");
+    linux_switch(&c, empty, rK, rB, B);
+    check_that(tlb_has(&c, U, 0, D + 0xc000), "A1 remote: a TLBI for A dropped B's stashed entry");
+
+    /* HV_SWITCH_FLUSH never skips Linux's TLBI VMALLE1 right after a switch: its ASID rollover needs it. */
+    int knob = hv_knob[HV_K_SWITCHFLUSH];
+    hv_knob[HV_K_SWITCHFLUSH] = 1;
+    linux_switch(&c, empty, rK, rA, A);
+    hv_mmu_access(&c, U, HV_ACC_READ, 0, &pa);
+    linux_switch(&c, empty, rK, rB, B);
+    hv_sysreg_sys(&c, 0xd508871fu, 0); /* tlbi vmalle1 */
+    linux_switch(&c, empty, rK, rA, A);
+    check_that(!tlb_has(&c, U, 0, D), "A1: HV_SWITCH_FLUSH left out a TLBI VMALLE1 after a switch");
+    hv_knob[HV_K_SWITCHFLUSH] = knob;
+}
+
+/* E0PD (the virt board advertises it): EL0 and unprivileged accesses to a half with TCR.E0PDx set fault at level 0. */
+static void e0pd(HvMachine *m, HvCpu *cpu) {
+    hv_cpu_reset(cpu, m);
+    pt_next = 0;
+    const uint64_t U = 0x4000, K = 0xfffffff000010000ull, D = PT_PA + 0xc0000;
+    uint64_t r0 = alloc_table(), r1 = alloc_table();
+    map(r0, 14, 36, U, 3, D | PAGE | AF | AP(1), 0);
+    map(r1, 14, 36, K, 3, (D + 0x4000) | PAGE | AF | AP(1), 0); /* EL0 may read it: only E0PD stops it */
+    cpu->mair_el1 = 0xff;
+    cpu->tcr_el1 = 28 | 2u << 14 | 28u << 16 | 1u << 22 | 1u << 30 | 5ull << 32 | 1ull << 36;
+    cpu->sctlr_el1 |= 1;
+    cpu->ttbr0_el1 = r0, cpu->ttbr1_el1 = r1;
+    expect("no E0PD: EL0 reads the upper half", cpu, K, HV_ACC_READ, 0, D + 0x4000, 0);
+    cpu->tcr_el1 |= 1ull << 56;
+    expect("E0PD1: EL0 faults at level 0", cpu, K, HV_ACC_READ, 0, 0, HV_FSC_TRANSLATION(0));
+    expect("E0PD1: EL1 still reads it", cpu, K, HV_ACC_READ, 1, D + 0x4000, 0);
+    expect("E0PD1: the lower half is not affected", cpu, U, HV_ACC_READ, 0, D, 0);
+    cpu->tcr_el1 ^= 3ull << 55;
+    expect("E0PD0: EL0 faults in the lower half", cpu, U, HV_ACC_READ, 0, 0, HV_FSC_TRANSLATION(0));
+    expect("E0PD0: EL0 reads the upper half", cpu, K, HV_ACC_READ, 0, D + 0x4000, 0);
+    cpu->tcr_el1 &= ~(3ull << 55);
+
+    uint64_t keep = m->id_mmfr2;
+    cpu->el = 1;
+    cpu->x[1] = 1;
+    hv_sysreg_mrs(cpu, 0xd5380741u, 0); /* mrs x1, id_aa64mmfr2_el1 */
+    check_that(cpu->x[1] == 0, "ID_AA64MMFR2_EL1 is not 0 by default (vmapple)");
+    m->id_mmfr2 = 1ull << 60;
+    hv_sysreg_mrs(cpu, 0xd5380741u, 0);
+    check_that(cpu->x[1] == 1ull << 60, "ID_AA64MMFR2_EL1 does not read as the board's value");
+    m->id_mmfr2 = keep;
+}
+
 int main(void) {
     static HvMachine m;
     static HvCpu cpu;
@@ -579,6 +665,8 @@ int main(void) {
     }
 
     linux_asids(&m, &cpu);
+    linux_remote(&m);
+    e0pd(&m, &cpu);
 
     printf("%d checks, %d failures\n", checks, failures);
     return failures != 0;
