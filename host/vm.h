@@ -110,6 +110,17 @@ void hv_vm_cpu_qos(void);
 int hv_vm_run_cpu0(void);
 /* Stop at the next block; the CPUs' threads end. */
 void hv_vm_stop(void);
+/* Not on a CPU's thread. Hold every CPU (and the sound output) until hv_vm_resume, which hides the time
+   between from the guest's virtual counter: a guest frozen with the host's counter running (an iOS app
+   suspended while the phone is awake) otherwise wakes to a jumped clock, and Linux to RCU stalls.
+   0 once held, or -1 if no machine runs or a CPU did not stop within 2 s. A stop ends a pause. */
+int hv_vm_pause(void);
+/* Returns the seconds hidden from the guest, 0 if it was not paused. */
+double hv_vm_resume(void);
+int hv_vm_paused(void);
+/* The iOS app in the background (1) or not (0): pause now, or, while the guest plays sound (which keeps
+   the app running), as soon as it stops. 0 resumes. Not on a CPU's thread. */
+void hv_vm_set_background(int on);
 void hv_vm_flush_disks(void);
 const char *hv_vm_reason_name(int reason);
 

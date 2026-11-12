@@ -19,7 +19,9 @@
 
 static AudioComponentInstance unit;
 static int capture_fd = -1; /* HV_SND_CAPTURE=path: what the host plays, silence included, for tests */
-static int unit_running;
+static _Atomic int unit_running;
+static int held; /* hv_audio_hold stopped a running unit */
+void (*hv_audio_stopped)(void);
 static unsigned cur_channels, cur_format, cur_rate;
 
 static OSStatus render(void *ref, AudioUnitRenderActionFlags *flags, const AudioTimeStamp *ts, UInt32 bus,
@@ -84,6 +86,20 @@ static void stop(void *opaque) {
     (void)opaque;
     if (unit && unit_running) AudioOutputUnitStop(unit); /* waits for the render callback to finish */
     unit_running = 0;
+    held = 0;
+    if (hv_audio_stopped) hv_audio_stopped();
+}
+
+int hv_audio_playing(void) {
+    return unit_running;
+}
+
+void hv_audio_hold(int on) {
+    if (on && unit && unit_running && !held) held = AudioOutputUnitStop(unit) == noErr;
+    else if (!on && held) {
+        held = 0;
+        if (unit && AudioOutputUnitStart(unit) != noErr) unit_running = 0;
+    }
 }
 
 void hv_audio_attach(HvVirtioSnd *d) {
@@ -98,6 +114,7 @@ void hv_audio_detach(void) {
         unit = NULL;
     }
     unit_running = 0;
+    held = 0;
     cur_channels = cur_format = cur_rate = 0;
     if (capture_fd >= 0) close(capture_fd), capture_fd = -1;
 }

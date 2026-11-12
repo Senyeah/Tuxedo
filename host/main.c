@@ -1048,7 +1048,38 @@ static void sigterm_as_power_key(void) {
     dispatch_resume(src);
 }
 
-/* Stdin to the guest's UART. Ctrl-A x quits, Ctrl-A p presses the power key and Ctrl-A Ctrl-A sends one Ctrl-A. */
+/* Ctrl-A s and SIGTSTP: what the iOS app does in the background (hv_vm_pause). */
+static void toggle_pause(void) {
+    if (hv_vm_paused()) fprintf(stderr, "hengevm: resumed; %.1f s hidden from the guest\n", hv_vm_resume());
+    else if (hv_vm_pause() == 0) fprintf(stderr, "hengevm: paused (Ctrl-A s resumes)\n");
+    else fprintf(stderr, "hengevm: cannot pause\n");
+}
+
+/* SIGTSTP pauses the machine and then stops the process, as iOS freezes the app; SIGCONT resumes it. */
+static void sigtstp_as_suspend(void) {
+    static dispatch_source_t tstp, cont;
+    static _Atomic int stopped;
+    dispatch_queue_t q = dispatch_queue_create("henge.suspend", DISPATCH_QUEUE_SERIAL);
+    signal(SIGTSTP, SIG_IGN);
+    signal(SIGCONT, SIG_IGN); /* still continues the process; the source below sees it */
+    tstp = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGTSTP, 0, q);
+    dispatch_source_set_event_handler(tstp, ^{
+        if (hv_vm_paused() || hv_vm_pause() != 0) return;
+        fprintf(stderr, "hengevm: paused and stopped (SIGCONT resumes)\n");
+        atomic_store(&stopped, 1);
+        kill(getpid(), SIGSTOP);
+    });
+    cont = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGCONT, 0, q);
+    dispatch_source_set_event_handler(cont, ^{
+        if (atomic_exchange(&stopped, 0) && hv_vm_paused())
+            fprintf(stderr, "hengevm: resumed; %.1f s hidden from the guest\n", hv_vm_resume());
+    });
+    dispatch_resume(tstp);
+    dispatch_resume(cont);
+}
+
+/* Stdin to the guest's UART. Ctrl-A x quits, Ctrl-A p presses the power key, Ctrl-A s pauses or resumes and
+   Ctrl-A Ctrl-A sends one Ctrl-A. */
 static void *stdin_thread(void *unused) {
     (void)unused;
     uint8_t in[256], out[256];
@@ -1071,6 +1102,7 @@ static void *stdin_thread(void *unused) {
                 return NULL;
             }
             if (c == 'p' || c == 'P') hv_vm_power_button();
+            if (c == 's' || c == 'S') toggle_pause();
             if (c == 1) out[k++] = 1;
         }
         if (k) hv_vm_console_input(out, k);
@@ -1241,7 +1273,7 @@ static void *cpu_thread(void *unused) {
 
 static void usage(void) {
     fprintf(stderr, "usage: hengevm --board virt (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N] [--display WxH] [--gpu-accel] [--screenshot PNG] [--window]\n"
-                    "       (virt: Ctrl-A x quits, Ctrl-A p and SIGTERM press the power key; exit status 0 shutdown, 3 restart with --no-reboot, 4 panic or engine error)\n");
+                    "       (virt: Ctrl-A x quits, Ctrl-A p and SIGTERM press the power key, Ctrl-A s pauses and resumes, SIGTSTP pauses and stops until SIGCONT; exit status 0 shutdown, 3 restart with --no-reboot, 4 panic or engine error)\n");
     fprintf(stderr, "usage: hengevm [--board vmapple] --rom FILE --disk FILE --aux FILE --ecid N [--seed N] [--ram MB] [--log N] [--trace 1] [--screenshot PNG] [--watch VA] [--stats SECONDS [--profile 1]] [--cpus N] [--window] [--no-pvg] [--no-chain] [--break PC [--break-hits N]] [--dump PA LEN FILE] [--aux-offset BYTES] [--install IPSW]\n");
     exit(2);
 }
@@ -1413,6 +1445,7 @@ int main(int argc, char **argv) {
     if (virt) {
         signal(SIGHUP, on_signal);
         sigterm_as_power_key();
+        sigtstp_as_suspend();
         hv_vm_console_set_output(console_out, NULL);
         tty_raw();
     }
