@@ -14,9 +14,7 @@
 #define R(op0, op1, crn, crm, op2) ((op0) << 14 | (op1) << 11 | (crn) << 7 | (crm) << 3 | (op2))
 
 
-#define CTR_EL0      0x9444c004ull         /* 64-byte lines, PIPT I-cache, IDC */
 #define CLIDR        0x0a200023ull         /* L1 split, L2 unified */
-#define CNTFRQ       24000000ull
 
 static uint64_t counter(void) {
     return mach_absolute_time(); /* 24 MHz on Apple silicon */
@@ -115,8 +113,8 @@ static int read_reg(HvCpu *cpu, uint32_t reg, uint64_t *v) {
     case R(3, 0, 0, 7, 0): *v = m->id.mmfr0; return 0;
     case R(3, 0, 0, 7, 1): *v = m->id.mmfr1; return 0;
     case R(3, 0, 0, 7, 2): *v = m->id.mmfr2; return 0;
-    case R(3, 3, 0, 0, 1): *v = CTR_EL0; return 0;
-    case R(3, 3, 0, 0, 7): *v = 4; return 0;                             /* DCZID: 64-byte DC ZVA */
+    case R(3, 3, 0, 0, 1): *v = HV_CTR_EL0; return 0;
+    case R(3, 3, 0, 0, 7): *v = HV_DCZID_EL0; return 0;
     case R(3, 1, 0, 0, 1): *v = CLIDR; return 0;
     case R(3, 1, 0, 0, 7): *v = 0; return 0;                             /* AIDR */
     case R(3, 1, 0, 0, 0):                                               /* CCSIDR for CSSELR's level */
@@ -124,7 +122,7 @@ static int read_reg(HvCpu *cpu, uint32_t reg, uint64_t *v) {
         return 0;
 
     /* Generic timer */
-    case R(3, 3, 14, 0, 0): *v = CNTFRQ; return 0;
+    case R(3, 3, 14, 0, 0): *v = HV_CNTFRQ; return 0;
     case R(3, 3, 14, 0, 1): case R(3, 3, 14, 0, 5): *v = now; return 0;
     case R(3, 3, 14, 0, 2): case R(3, 3, 14, 0, 6): *v = now - cpu->cntvoff; return 0;
     case R(3, 3, 14, 2, 0): *v = (uint32_t)(cpu->cntp_cval - now); return 0;

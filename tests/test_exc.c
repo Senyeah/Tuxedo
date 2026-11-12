@@ -11,6 +11,8 @@ DECLARE_PROGRAM(p_brk_undef);
 DECLARE_PROGRAM(p_dabt);
 DECLARE_PROGRAM(p_el0);
 DECLARE_PROGRAM(p_sysregs);
+DECLARE_PROGRAM(p_sysregs_const);
+DECLARE_PROGRAM(p_sysregs_const_el0);
 DECLARE_PROGRAM(p_irq);
 DECLARE_PROGRAM(p_fptrap);
 DECLARE_PROGRAM(p_psci);
@@ -158,6 +160,24 @@ int main(void) {
         check("sysregs", "VBAR", c.x[18], c.vbar_el1);
         check("sysregs", "CNTV_CVAL", c.x[21], 0x123);
         check("sysregs", "CNTV_CTL ISTATUS", c.x[23], 5);
+    }
+    static const TestProgram sc = TEST_PROGRAM(p_sysregs_const);
+    if (!run(&sc, &c, 0)) {
+        check("sysregs const", "CNTFRQ", c.x[1], HV_CNTFRQ);
+        check("sysregs const", "CTR_EL0", c.x[2], HV_CTR_EL0);
+        check("sysregs const", "DCZID_EL0", c.x[3], HV_DCZID_EL0);
+        check("sysregs const", "APIAKeyLo reads 0", c.x[4], 0);
+        check("sysregs const", "APGAKeyHi reads 0", c.x[5], 0);
+        check("sysregs const", "DCZID_EL0 again", c.x[7], HV_DCZID_EL0);
+        check("sysregs const", "no exception", c.x[24], 0);
+    }
+    static const TestProgram sce = TEST_PROGRAM(p_sysregs_const_el0);
+    if (!run(&sce, &c, ADDR(stack) + 8192)) {
+        check("sysregs const el0", "DCZID_EL0", c.x[1], HV_DCZID_EL0);
+        check("sysregs const el0", "CTR_EL0 undefined: ESR", c.x[3], 0x02000000);
+        check("sysregs const el0", "CTR_EL0 undefined: one exception", c.x[4], 1);
+        check("sysregs const el0", "CNTFRQ undefined", c.x[6], 2);
+        check("sysregs const el0", "key undefined", c.x[8], 3);
     }
     mach_timebase_info_data_t tb;
     mach_timebase_info(&tb);
