@@ -80,9 +80,12 @@ sgdisk -o -n 1:2048:0 -t 1:8300 -c 1:henge-root -A 1:set:2 -u 1:"$PARTUUID" "$IM
 SECTORS=$(sgdisk -i 1 "$IMG" | sed -n 's/^Partition size: \([0-9]*\) sectors.*/\1/p')
 [ -n "$SECTORS" ]
 
-# No loop devices: build the filesystem as a file, then copy it in
-truncate -s $((SECTORS * 512)) "$FSIMG"
+# No loop devices: build the filesystem as a file, then copy it in.
+# A whole number of 16 KB pages: on a 16 KB kernel resize2fs rounds its target down to one, and would see a shrink.
+FSBYTES=$((SECTORS * 512 / 16384 * 16384))
+truncate -s "$FSBYTES" "$FSIMG"
 mke2fs -q -t ext4 -L henge-root -U "$FSUUID" -E root_owner=0:0,hash_seed="$FSUUID" -d "$ROOT" "$FSIMG"
+[ $(( $(dumpe2fs -h "$FSIMG" 2>/dev/null | sed -n 's/^Block count: *//p') * 4096 % 16384 )) -eq 0 ]
 dd if="$FSIMG" of="$IMG" bs=1M seek=1 conv=notrunc,sparse status=none
 rm -f "$FSIMG"
 
