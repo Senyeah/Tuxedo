@@ -6,6 +6,9 @@ Every change keeps its original author in the git history.
 
 ## Unreleased
 
+### Linux guests
+- Henge boots Debian 13 (arm64) as a second kind of machine, on a `virt` board that copies QEMU's, started by U-Boot v2026.10 and a 16 KB-page Debian kernel. `hengevm --board virt` runs it on the Mac, and the app runs it as a machine of kind Linux, with a SwiftTerm console, a screen that follows the phone's size and rotation or an external display, a shared folder and clipboard, sound, and opt-in 3D (virgl on ANGLE and Metal, OpenGL ES 3.0). Images come from a catalogue set in Settings or from a folder in Files. Verified on the Mac tool and in the iOS Simulator; the iPhone checks are not done. `tools/linux/README.md` builds the firmware and images, `docs/licensing.md` has the licences and source offers, and the root README lists the limits.
+
 ### The screen is a Magic Trackpad 2
 - The session's trackpad is no longer a relative mouse: the engine presents it to the Mac as
   a Magic Trackpad 2 (Apple's vendor multitouch format) on the xHCI USB bus, so the guest's

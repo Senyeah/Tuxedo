@@ -63,6 +63,19 @@ the packager as an environment variable (`HENGE_ENTITLEMENTS=... ios/scripts/pac
 - **Chips**: the virtual CPU offers Armv8.5 instructions (`core/sysreg.c`), which
   macOS uses and which run as they are, so Henge needs an A14 or M1 or newer.
 
+## Linux machines
+
+A machine has a kind, `GuestKind` (`mac` or `linux`, in `MachineModel.swift`). A machine file with no kind is a Mac. The kind picks the folder's required files (`MachineFolder.required`): a Mac needs `AVPBooter.vmapple2.bin`, `auxiliary.bin` and `machine.json`; a Linux machine needs `u-boot.bin` and `machine.json`. Both have `disk.img`, or `disk.img.hvsparse` in an exported folder. A Linux `machine.json` has `name`, `kind` and `ramMB`.
+
+- **Boot**: `henge_vm_boot_linux(firmware, disk, ram_mb, cpus, accel, ...)` in `Native/henge-vm.h` starts `hengevm`'s `virt` board with U-Boot. The same header has `henge_vm_console_read` and `henge_vm_console_write` for the serial console, and `henge_vm_power_button`, which presses the guest's power key. Shut Down on a Linux session presses it, so Debian shuts down by itself.
+- **Session**: `SessionView` shows the console (`ConsoleView.swift`, a SwiftTerm terminal over the engine's 256 KB ring) or the screen. A machine opens on the console. The console model lives with the session, so its scrollback survives a switch to the screen and back. The serial line has no window size and the guest shell assumes 80 columns, so `ConsoleModel.fit()` types `stty rows R cols C` on request.
+- **Install**: Install has a macOS side and a Linux side. `LinuxCatalogue.swift` reads `linux-images.json`, `LinuxDownload.swift` and `RangedDownload.swift` fetch the firmware and the disk and resume with byte ranges, `LinuxUnpack.swift` decodes the LZFSE package and runs `hv_sparse_unpack`, and `LinuxInstaller.swift` grows the disk to the chosen size and writes the installed marker last. `tools/linux/package-image.sh` writes the catalogue and its packages (see [tools/linux/README.md](../tools/linux/README.md)).
+- **Catalogue setting**: Settings, Linux images, Catalogue URL (the `henge.linux.catalogueURL` default). Empty means no catalogue: import a folder instead. File names in the catalogue may be relative to its URL. A public host must use `https`, because App Transport Security refuses plain `http` except to local hosts (`NSAllowsLocalNetworking`). An image's `minBuild` is checked against `CFBundleVersion`.
+- **Screen**: a Linux machine on the phone follows the phone's safe area at scale 2 and the device's rotation (`DisplayModePolicy.swift`). Settings also offers an external display, 2560x1440 and 1920x1080. The guest follows a mode change through `/.henge/display` and `henge-display`.
+- **Graphics acceleration**: see below. **Sharing**: the shared folder is `~/Henge` in the guest, and the desktop image shares the clipboard.
+- **SwiftTerm**: the console's terminal, a Swift package (MIT) in `project.yml`, pinned to 1.99.1. It is the app's only Swift package. Its build plugin needs `-skipPackagePluginValidation`, and `xcodebuild` must not get `-sdk`. Its licence is in `Henge/Resources/legal/LICENSE-SwiftTerm-MIT.txt`. `ios/scripts/check_display.sh` clones it over the network on its first run.
+- **iPad and hardware keyboards** have not been tried with Linux. The iPhone checklist (`LINUX-PLAN-07-testing.md`, section T5) is not done.
+
 ## iOS Simulator
 
 `ios/scripts/sim_build.sh [device]` builds the `HengeSim` target, boots a simulator if none is booted

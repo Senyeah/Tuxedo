@@ -12,9 +12,66 @@ Every script runs inside the builder container, so no cross compiler is needed.
 - `henge-guest/` (G9): the source of the `henge-guest` Debian package. It holds the grow and first-boot scripts (`/usr/lib/henge/`) and units (`/usr/lib/systemd/system/henge-*.service`, G8), and enables them in `postinst`. `build-guest-pkg.sh` builds the `.deb` on its own; `build-image.sh` builds it too and installs it in both images. P6 adds the shared-folder mount (`home-henge-Henge.mount` and `.automount`, `/etc/henge/davfs2.conf`); P7 adds the clipboard helper (`henge-clipboard` and a user unit). `grow-check.py` tests the grow units, `share-check.py` the shared folder and `clipboard-check.py` the clipboard.
 - `run.sh`: runs a command in the builder image. `build/linux/` is mounted at `/out`, the repo's `tools/linux/` at `/tools` (read only), and a named volume at `/work` for source trees.
 
-`run.sh` builds the image on first use. Set `HENGE_LINUX_OUT` to change the artefact directory. The default is the shared `$HOME/Repos/Henge/build/linux`, so all worktrees see the same files.
+`run.sh` builds the image on first use. `HENGE_LINUX_OUT` is the artefact directory. `run.sh`, `package-image.sh`, `serve.sh`, `qemu-ref.sh`, `qemu-check.py`, `balloon-check.py` and `sound-check.py` default to the author's `$HOME/Repos/Henge/build/linux`, so on any other Mac set it first (see From nothing). `smoke.py` and the Makefile targets default to `build/linux` of the main checkout, where all worktrees share the files.
 
 Keep source trees in `/work`, not on the Mac filesystem. It is case-insensitive and the kernel tree has names that differ only by case.
+
+U-Boot is GPL-2.0 and Debian's packages have their own licences. [docs/licensing.md](../../docs/licensing.md) says what to keep with a shipped image and how to fetch the source.
+
+## From nothing
+
+This builds every artefact, in order, on an Apple Silicon Mac. The times are the ones the findings log recorded on an M4 Pro. The commands without a time were not timed.
+
+Needs:
+
+- Xcode 27 or later, `uv`, and Homebrew's `pkgconf` and `libslirp` (`brew install pkgconf libslirp`). `make` also finds libplist, libimobiledevice, libusbmuxd, libimobiledevice-glue, libtatsu, libzip and curl through `pkg-config` for the Mac tool; `make` says which one is missing.
+- Docker with arm64 images (Docker Desktop or colima). Keep the artefact directory under your home folder: a path under `/private/tmp` made the scripts exit 0 and write nothing to the Mac.
+- Disk space: the console image takes about 0.45 GB and the desktop image about 0.77 GB on disk (each is a 3 GB sparse file), plus Docker's work volume. `tools/gfx` (optional) takes about 8.3 GB.
+- QEMU (`brew install qemu`) only for the reference checks (`qemu-ref.sh`, `qemu-check.py`, `make test-linux-dtb`).
+
+Steps, from the root of a clean checkout:
+
+```sh
+export HENGE_LINUX_OUT=$PWD/build/linux       # set it in every shell that runs these scripts
+
+tools/linux/run.sh uname -m                   # builds the builder image, prints aarch64
+tools/linux/build-uboot.sh                    # build/linux/u-boot.bin and .manifest
+tools/linux/build-uboot.sh --stock            # u-boot-stock.bin, with the 2 s countdown; the U-Boot prompt tests need it
+tools/linux/build-image.sh                    # about 6 min (the first image): debian-console.img, Image, initrd.img, .partuuid, .manifest
+tools/linux/build-image.sh --desktop          # debian-desktop.img (labwc and foot)
+
+make                                          # the Mac tool: build/hengevm, build/hvsparse
+make test-linux-direct                        # Image and initrd.img on build/hengevm, to a shell
+make test-linux-smoke                         # U-Boot, extlinux, Debian, restarts and the power key
+```
+
+`build/linux` ends up with `u-boot.bin`, `u-boot-stock.bin`, `Image`, `initrd.img`, `config-debian-16k`, both images and their `.partuuid` and `.manifest` files. All of it stays out of git. The pins are in `versions.env`: the U-Boot tag and the Debian snapshot date. The builder image is `debian:trixie` and is not pinned by digest.
+
+To boot by hand, use a copy, because `hengevm` writes to the disk. `cp -c` makes an APFS clone that costs no space:
+
+```sh
+cp -c build/linux/debian-console.img /tmp/henge-debian.img
+build/hengevm --board virt --firmware build/linux/u-boot.bin --disk /tmp/henge-debian.img --ram 2048 --cpus 2
+```
+
+Debian autologs in as `henge`. `Ctrl-A p` presses the power key, and `Ctrl-A x` stops the machine. For the desktop image add `--window`, and `--gpu-accel` for 3D after `tools/gfx` (below).
+
+Then, as needed:
+
+```sh
+tools/linux/package-image.sh --image build/linux/debian-console.img --kind console   # build/linux/dist/: package + linux-images.json
+tools/linux/package-image.sh --image build/linux/debian-desktop.img --kind desktop
+tools/linux/serve.sh                          # the catalogue on the LAN, for the app's Settings
+tools/linux/export-ios.sh build/linux/debian-console.img build/linux/u-boot.bin Debian   # a folder to import through Files
+
+tools/gfx/build-deps.sh                       # 30 to 60 min, about 9 GB: ANGLE, libepoxy, virglrenderer (optional)
+make GFX=1                                    # hengevm with --gpu-accel
+make test-linux-accel                         # virgl against pixman, frame time and glmark2
+```
+
+The app: `ios/scripts/sim_build.sh` builds and runs it in the iOS Simulator with no phone, signing or Husk checkout. A device build needs the Husk checkout, `ios/scripts/fetch_deps.sh` and `ios/scripts/package_ipa.sh` (see the root README, Building). With `tools/gfx` built, both scripts link the graphics libraries on their own (`ios/scripts/gfx_env.sh`). The app gets a Linux image from the catalogue address in Settings or from an imported folder.
+
+If a step fails, run it again with the same `HENGE_LINUX_OUT`. `build-image.sh` renames its output into place, so a failed build does not damage an image that is in use, and `make clean` keeps `build/linux`.
 
 ## Order
 
