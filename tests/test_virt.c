@@ -50,13 +50,13 @@ static void test_memory_map(void) {
     check("PL061 PeriphID0", rd32(&m, VIRT_GPIO + 0xfe0), 0x61);
     check("GIC distributor PIDR2", rd32(&m, VIRT_GIC_DIST + 0xffe8), 0x3b);
     check("GIC redistributor 0 PIDR2", rd32(&m, VIRT_GIC_REDIST + 0xffe8), 0x3b);
-    static const uint32_t ids[] = {0x00081b36, 0x10421af4, 0x10411af4, 0x000d1b36, 0x10521af4, 0x10521af4, 0x10591af4};
-    for (int s = 0; s < 7; s++) {
+    static const uint32_t ids[] = {0x00081b36, 0x10421af4, 0x10411af4, 0x10441af4, 0x000d1b36, 0x10521af4, 0x10521af4, 0x10591af4};
+    for (int s = 0; s < 8; s++) {
         char what[48];
         snprintf(what, sizeof what, "ECAM slot %d vendor and device", s);
         check(what, rd32(&m, VIRT_PCIE_ECAM + ((uint64_t)s << 15)), ids[s]);
     }
-    check("ECAM slot 7 is empty", rd32(&m, VIRT_PCIE_ECAM + (7ull << 15)), 0xffffffff);
+    check("ECAM slot 8 is empty", rd32(&m, VIRT_PCIE_ECAM + (8ull << 15)), 0xffffffff);
     check("ECAM bus 1 is empty", rd32(&m, VIRT_PCIE_ECAM + (1ull << 20)), 0xffffffff);
     check("PCI I/O window reads as all ones", rd32(&m, VIRT_PCIE_PIO + 0x10), 0xffffffff);
     wr32(&m, VIRT_PCIE_PIO + 0x10, 0);
@@ -84,17 +84,17 @@ static void test_flash(void) {
     check("firmware over 64 MB is refused", hv_virt_load_firmware(&b, path) != 0, 1);
 }
 
-/* Slots 1 (disk) and 5 (mouse) share INTx line 1, SPI 4. */
+/* Slots 1 (disk) and 5 (keyboard) share INTx line 1, SPI 4. */
 static void test_pci_intx(void) {
-    HvPciDev *disk = b.pcie->dev[1], *mouse = b.pcie->dev[5];
+    HvPciDev *disk = b.pcie->dev[1], *kbd = b.pcie->dev[5];
     int intid = 32 + VIRT_IRQ_PCIE + 1;
     hv_pci_set_intx(disk, 1);
     check("slot 1 raises SPI 4", b.gic->level[intid], 1);
-    hv_pci_set_intx(mouse, 1);
+    hv_pci_set_intx(kbd, 1);
     hv_pci_set_intx(disk, 0);
     check("slot 5 keeps SPI 4 up", b.gic->level[intid], 1);
     check("slot 5 leaves SPI 3 low", b.gic->level[32 + VIRT_IRQ_PCIE], 0);
-    hv_pci_set_intx(mouse, 0);
+    hv_pci_set_intx(kbd, 0);
     check("SPI 4 drops when both are low", b.gic->level[intid], 0);
     hv_pci_set_intx(b.pcie->dev[3], 1);
     check("slot 3 raises SPI 6", b.gic->level[32 + VIRT_IRQ_PCIE + 3], 1);
