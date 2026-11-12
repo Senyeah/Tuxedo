@@ -19,6 +19,8 @@ typedef struct HvGuestRam {
 int hv_guest_ram_alloc(HvGuestRam *r, uint64_t size);
 /* Safe on a zeroed or failed HvGuestRam; leaves it with fd -1. */
 void hv_guest_ram_free(HvGuestRam *r);
+/* Forgets the RAM without unmapping it: a stuck renderer may still touch it. */
+void hv_guest_ram_leak(HvGuestRam *r);
 /* Host memory outside the footprint (as guest RAM), or anonymous memory. NULL on failure; free with munmap. */
 uint8_t *hv_host_mem_alloc(uint64_t size);
 

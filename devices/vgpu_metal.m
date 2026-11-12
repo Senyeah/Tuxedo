@@ -91,6 +91,9 @@ static NSString *const shaders = @"#include <metal_stdlib>\n"
     uint32_t src_w, src_h;      /* the scanout the shadow shows */
     uint32_t mode_w, mode_h;    /* bounds the drawable if the layer has no size */
     uint64_t cursor_seen, retry_until, retry_generation;
+    int blit_retries;
+    uint32_t retry_res;
+    HvVgpuRect retry_rect;
     uint32_t cursor_px[CURSOR * CURSOR];
     id<MTLBuffer> readback;
     /* The work queue writes these under shadow_mu; snapshots read them under it. */
@@ -213,11 +216,21 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
     const HvGpu3dScanoutOps *ops = scan_ops;
     void *renderer = scan_r;
     os_unfair_lock_unlock(&layer_lock);
-    pthread_mutex_lock(&shadow_mu); /* snapshots read the surface under it */
     BOOL moved = !mode3d || res != res3d || s.x != rect3d_x || s.y != rect3d_y || s.width != src_w || s.height != src_h;
+    BOOL failed = NO;
+    BOOL locked = NO;
     if (ops && (changed || moved)) {
+        locked = YES;
         uint64_t serial = 0;
-        IOSurfaceRef surf = ops->blit(renderer, res, (HvGpu3dBox){s.x, s.y, 0, s.width, s.height, 1}, &serial);
+        uint32_t dw = s.width, dh = s.height;
+        if ((uint64_t)dw * dh > SHOW_MAX_PIXELS) { /* as the 2D shadow: a guest cannot ask for a 1 GB surface */
+            double k = sqrt((double)SHOW_MAX_PIXELS / ((double)dw * dh));
+            dw = (uint32_t)fmax(1, floor(dw * k)), dh = (uint32_t)fmax(1, floor(dh * k));
+        }
+        /* Not under shadow_mu: the blit may wait BLIT_WAIT_MS and a snapshot must not wait with it. */
+        IOSurfaceRef surf = ops->blit(renderer, res, (HvGpu3dBox){s.x, s.y, 0, s.width, s.height, 1}, dw, dh, &serial);
+        pthread_mutex_lock(&shadow_mu); /* snapshots read the surface under it */
+        BOOL got = surf != NULL;
         if (surf && (!surf3d || serial != surf3d_serial || !tex3d)) {
             MTLTextureDescriptor *t = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
                                                                                          width:IOSurfaceGetWidth(surf) height:IOSurfaceGetHeight(surf) mipmapped:NO];
@@ -229,12 +242,22 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
                 surf = NULL;
             }
         }
+        if (got && (!tex3d || serial != surf3d_serial)) got = NO; /* the texture could not be made */
         if (surf) CFRelease(surf);
+        failed = !got; /* the renderer has no texture yet; an idle guest sends no flush */
+        if (res != retry_res || memcmp(&s, &retry_rect, sizeof s)) blit_retries = 0; /* a new scanout gets its own tries */
+        retry_res = res, retry_rect = s;
+        blit_retries = failed ? blit_retries + 1 : 0;
+        if (blit_retries > 50) failed = NO; /* each try may wait BLIT_WAIT_MS: a stuck renderer holds this queue ~155 s, then we wait for fresh work */
     }
-    mode3d = YES, res3d = res, rect3d_x = s.x, rect3d_y = s.y;
+    if (!locked) pthread_mutex_lock(&shadow_mu);
+    if (failed) res3d = 0; /* res 0 is never a scanout, so the next present blits again */
+    else res3d = res;
+    mode3d = YES, rect3d_x = s.x, rect3d_y = s.y;
     src_w = s.width, src_h = s.height;
     if (surf3d) shown_once = YES;
     pthread_mutex_unlock(&shadow_mu);
+    if (failed) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), work, ^{ [self kick]; });
 }
 
 - (void)prepare:(CAMetalLayer *)target {
