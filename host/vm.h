@@ -30,6 +30,16 @@ typedef struct HvVmConfig {
     size_t jit_bytes;         /* 0: 768 MB */
 } HvVmConfig;
 
+/* What the host layer asks of a board's display device; d is HvBoardDevs.display_opaque. */
+typedef struct HvDisplayOps {
+    void (*set_layer)(void *d, void *layer);
+    uint64_t (*frames)(void *d);
+    int (*snapshot)(void *d, uint8_t *bgra, uint32_t width, uint32_t height);
+    int (*pointer)(void *d, int *x, int *y);
+    void (*set_mode)(void *d, uint32_t width, uint32_t height);
+    void (*set_size_mm)(void *d, uint32_t width_mm, uint32_t height_mm); /* NULL: the guest is not told */
+} HvDisplayOps;
+
 /* The devices of any board, for the code that does not care which board it is. */
 typedef struct HvBoardDevs {
     HvGic *gic;
@@ -43,6 +53,8 @@ typedef struct HvBoardDevs {
     HvVirtioBlk *blk[2]; /* root, then aux (vmapple only) */
     uint8_t *ram;
     uint64_t ram_pa, ram_size;
+    const HvDisplayOps *display; /* NULL: no display device */
+    void *display_opaque;
 } HvBoardDevs;
 
 /* Returns 0, or -1 with a reason in err. */
@@ -59,6 +71,11 @@ extern void (*hv_prof_register)(void); /* debugging: each thread that will run g
 /* Frames go to this CAMetalLayer, drawn by the GPU, instead of hv_vm_boot_display. */
 void hv_vm_set_display_layer(void *layer);
 uint64_t hv_vm_gpu_frames(void);
+/* Any thread: the screen size the guest is offered. Kept for later machines; a
+   running one gets it through its display device. */
+void hv_vm_set_display_mode(uint32_t width, uint32_t height);
+/* The panel's size, for a guest that works out its pixel density from it (vmapple). 0 x 0: the default. */
+void hv_vm_set_display_size_mm(uint32_t width_mm, uint32_t height_mm);
 int hv_vm_ncpus(void);
 
 /* The boot framebuffer iBoot hands the kernel (XNU's boot_args video info):

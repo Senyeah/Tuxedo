@@ -94,17 +94,24 @@ int main(void) {
     if (pthread_create(&reader, NULL, read_ui, NULL)) return 1;
     /* Warm the process-wide pointer queue before counting worker threads. */
     hv_vm_mouse_move(0, 0);
+    /* And Metal, which the virt board's presenter opens once for the process. */
+    HvVmConfig virt = {.board = HV_BOARD_VIRT, .disk = disk, .ram_mb = 64, .ncpus = 2, .no_net = 1, .no_sound = 1,
+                       .jit_rx = mapping.rx_addr, .jit_rw = mapping.rw_addr, .jit_bytes = mapping.size};
+    if (hv_vm_create(&virt, error, sizeof error) != 0) fprintf(stderr, "virt warm-up: %s\n", error);
+    hv_vm_destroy();
     usleep(100000);
     int initial_fds = fds();
     unsigned initial_threads = threads();
     unsigned initial_dead_ports = dead_ports();
     /* A virt machine is built and released without a trace, and the virtual Mac still boots after it. */
-    HvVmConfig virt = {.board = HV_BOARD_VIRT, .disk = disk, .ram_mb = 64, .ncpus = 2, .no_net = 1, .no_sound = 1,
-                       .jit_rx = mapping.rx_addr, .jit_rw = mapping.rw_addr, .jit_bytes = mapping.size};
-    check("virt board builds", hv_vm_create(&virt, error, sizeof error) == 0 && !hv_vm_board() && hv_vm_virt());
-    hv_vm_destroy();
-    check("virt release leaves nothing behind", !hv_vm_virt() && henge_vm_can_start() && fds() == initial_fds &&
-                                                 threads() == initial_threads);
+    for (int i = 0; i < 3; i++) {
+        check("virt board builds", hv_vm_create(&virt, error, sizeof error) == 0 && !hv_vm_board() && hv_vm_virt());
+        check("virt board has a display", hv_vm_devs()->display != NULL);
+        hv_vm_destroy();
+        for (int n = 0; n < 1000 && threads() > initial_threads; n++) usleep(1000); /* the presenter's queue winds down */
+        check("virt release leaves nothing behind", !hv_vm_virt() && henge_vm_can_start() && fds() == initial_fds &&
+                                                     threads() == initial_threads);
+    }
     /* Missing ROM fails after disks, RAM and device workers were created. */
     for (int i = 0; i < 3; i++) {
         check("failed boot reports an error", henge_vm_boot(rom, disk, aux, 1, 0, 64, 4, error, sizeof error) != 0);
