@@ -3,21 +3,23 @@
 # requires-python = ">=3.9"
 # dependencies = ["pexpect", "pillow"]
 # ///
-"""A8: the desktop image with `hengevm --gpu-accel` (make test-linux-accel).
+"""A8: the desktop image with and without `hengevm --gpu-accel` (make test-linux-accel).
 
-Boots a clone of debian-desktop.img by direct kernel boot, with the virgl renderer behind the virtio GPU. Checks, over the
-serial console: the session log says renderer=gles2, eglinfo names virgl and an OpenGL ES version of at least 3.0, a ten
-second glmark2 scene scores at least three times the saved software score, and dmesg has no virtio_gpu or DRM error. The
---screenshot PNG must show the idle desktop (a large lit area: the foot window), both before glmark2 and a few seconds
-after it ends. The desktop path is timed too: foot printing 3000000 lines under labwc (median of three runs, window startup
-included) must take no more than 1.25 times the saved pixman time, as the plan's rule that virgl is no slower than pixman.
-The guest then powers off with status 0. glmark2's frame time is 1000/score for one scene, so it is not a second check.
-
---save-baseline boots without --gpu-accel (labwc on pixman, glmark2 on llvmpipe), runs the same scene and writes the score
-to tools/linux/accel-baseline.json. The shared image never changes: the guest runs on an APFS clone.
+Boots a clone of debian-desktop.img twice by direct kernel boot, back to back: first with the virgl renderer behind the
+virtio GPU (henge-session picks gles2), then without it (pixman, llvmpipe). Both sets of numbers come from the same run at
+the same host load, so no saved score or time decides the result. Each boot checks, over the serial console: the session
+log names the expected renderer, eglinfo names virgl and OpenGL ES >= 3.0 (accelerated boot), dmesg has no virtio_gpu or
+DRM error, the --screenshot PNG shows the idle desktop before and after the load, and the guest powers off with status 0.
+Each boot measures:
+  - frame time: tools/linux/wlprobe.py, a Wayland client that redraws a full 1280x720 shm window on every frame callback
+    and times the callback gaps (labwc's real per-frame time). Rule: virgl median <= 1.25 x pixman median.
+  - glmark2: the virgl score is at least 3 x the llvmpipe score. The gate runs a short scene set; --full runs the whole
+    default benchmark at 1280x720 and prints every scene's FPS and frame time.
+  - the foot terminal time (seq 1 3000000), printed only: it measures pty throughput, not frame time.
+  - hengevm's CPU use (cputime over wall time, from ps) per phase, and the host load average.
+The shared image never changes: each guest runs on an APFS clone.
 """
 import argparse
-import json
 import os
 import re
 import statistics
@@ -29,14 +31,16 @@ import time
 import pexpect
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-BASELINE = os.path.join(ROOT, "tools", "linux", "accel-baseline.json")
+PROBE = os.path.join(ROOT, "tools", "linux", "wlprobe.py")
 MARK = "HENGE_RC_"
 SHELL = r"henge@henge:[^\n]*\$ "
 WAYLAND = "export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0"
-SCENE = "build:duration=10.0"
+SCENE = "build:duration=10.0"  # the gate's short scene set
 SIZE = "1280x720"
+PROBE_SECS = 10
 TERM_CMD = "foot -e sh -c 'seq 1 3000000'"
 TERM_RUNS = 3
+DESKTOP_LIT = 0.2  # the foot window alone lights about 0.4; fbcon text only about 0.012
 
 
 class Fail(Exception):
@@ -56,19 +60,46 @@ def sh(p, cmd, limit=60):
     try:
         p.expect(MARK + r"(\d+)\r*\n", timeout=limit)
     except pexpect.TIMEOUT:
-        raise Fail(f"{cmd!r}: no answer within {limit} s")
+        raise Fail(f"{cmd[:80]!r}: no answer within {limit} s")
     out = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", p.before).replace("\r", "")
     out = "\n".join(l for l in out.splitlines() if not l.startswith("[virgl"))  # virglrenderer's own log lines
     return re.sub(r"^henge@henge:[^\n$]*\$ ", "", out), int(p.match.group(1))
-
-
-DESKTOP_LIT = 0.2  # the foot window alone lights about 0.4; fbcon text only about 0.012
 
 
 def lit_fraction(path):
     from PIL import Image
     im = Image.open(path).convert("L")
     return sum(im.histogram()[25:]) / (im.width * im.height)
+
+
+def cpu_secs(pid):
+    # ps cputime is [H:]M:SS.ss
+    out = subprocess.run(["ps", "-o", "cputime=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    if not out:
+        return None
+    secs = 0.0
+    for part in out.split(":"):
+        secs = secs * 60 + float(part)
+    return secs
+
+
+class Phase:
+    """hengevm's CPU use over one stretch of the run."""
+
+    def __init__(self, pid, cpu_log, name):
+        self.pid, self.cpu_log, self.name = pid, cpu_log, name
+
+    def __enter__(self):
+        self.c0, self.t0 = cpu_secs(self.pid), time.monotonic()
+
+    def __exit__(self, *exc):
+        c1, t1 = cpu_secs(self.pid), time.monotonic()
+        if self.c0 is not None and c1 is not None and t1 > self.t0:
+            self.cpu_log[self.name] = 100 * (c1 - self.c0) / (t1 - self.t0)
+
+
+def load_note():
+    return f"host load average {os.getloadavg()[0]:.1f} on {os.cpu_count()} CPUs"
 
 
 def term_ms(p):
@@ -82,11 +113,7 @@ def term_ms(p):
     return statistics.median(runs), runs
 
 
-def load_note():
-    return f"host load average {os.getloadavg()[0]:.1f} on {os.cpu_count()} CPUs"
-
-
-def desktop_shot(shot, keep, what, wait=6.0):
+def desktop_shot(shot, keep, tag, what, wait=6.0):
     # the shot is rewritten every HV_SHOT_SECS: wait for a file newer than this call
     start = time.time()
     deadline = start + wait + 15
@@ -95,124 +122,170 @@ def desktop_shot(shot, keep, what, wait=6.0):
             break
         time.sleep(0.5)
     else:
-        raise Fail(f"no fresh screenshot ({what})")
+        raise Fail(f"no fresh screenshot ({tag}, {what})")
     lit = lit_fraction(shot)
     if keep:
-        subprocess.run(["/bin/cp", shot, keep + "." + what.replace(" ", "-") + ".png"])
+        subprocess.run(["/bin/cp", shot, f"{keep}.{tag}.{what.replace(' ', '-')}.png"])
     if lit < DESKTOP_LIT:
-        raise Fail(f"the screenshot {what} is not the desktop ({lit:.4f} of its pixels are lit, need {DESKTOP_LIT})")
-    print(f"ok   screenshot {what} shows the desktop ({lit:.3f} of its pixels are lit)")
+        raise Fail(f"the screenshot {what} ({tag}) is not the desktop ({lit:.4f} of its pixels are lit, need {DESKTOP_LIT})")
+    print(f"ok   [{tag}] screenshot {what} shows the desktop ({lit:.3f} of its pixels are lit)")
+
+
+def upload(p, local, remote):
+    import base64
+    data = base64.b64encode(open(local, "rb").read()).decode()
+    sh(p, f": > {remote}.b64")
+    for i in range(0, len(data), 600):
+        sh(p, f"printf %s '{data[i:i + 600]}' >> {remote}.b64")
+    out, rc = sh(p, f"base64 -d {remote}.b64 > {remote}")
+    if rc:
+        raise Fail(f"upload of {local} failed: {out.strip()}")
+
+
+def parse_glmark(out):
+    sc = re.search(r"glmark2 Score: (\d+)", out)
+    if not sc:
+        raise Fail(f"glmark2 gave no score: {out.strip()}")
+    scenes = []
+    for m in re.finditer(r"^\[(\w+)\] ([^\n]*?): FPS: (\d+)(?: FrameTime: ([\d.]+) ms)?", out, re.M):
+        scenes.append((f"{m.group(1)} {m.group(2)}".strip(), int(m.group(3)), float(m.group(4)) if m.group(4) else None))
+    return int(sc.group(1)), scenes
+
+
+def boot(args, accel, d, tmp):
+    """One boot and every measurement. Returns the numbers."""
+    tag = "virgl" if accel else "pixman"
+    image = os.path.join(d, "debian-desktop.img")
+    partuuid = open(os.path.join(d, "debian-desktop.partuuid")).read().strip()
+    clone, shot = os.path.join(tmp, f"disk-{tag}.img"), os.path.join(tmp, f"shot-{tag}.png")
+    r = subprocess.run(["/bin/cp", "-c", image, clone], capture_output=True, text=True)
+    if r.returncode:
+        raise Fail(f"cannot clone {image}: {r.stderr.strip()}")
+    argv = [args.hengevm, "--board", "virt", "--kernel", os.path.join(d, "Image"), "--initrd", os.path.join(d, "initrd.img"),
+            "--append", f"console=ttyAMA0 root=PARTUUID={partuuid} rw", "--disk", clone, "--ram", "3072",
+            "--cpus", str(args.cpus), "--display", SIZE, "--screenshot", shot]
+    if accel:
+        argv.append("--gpu-accel")
+    res = {"tag": tag, "cpu": {}, "load_start": os.getloadavg()[0]}
+    print(f"--   [{tag}] booting ({load_note()})")
+    p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200),
+                      env=dict(os.environ, HV_SHOT_SECS="1"))
+    try:
+        p.expect(r"\(automatic login\)", timeout=300)
+        p.expect(SHELL, timeout=60)
+        sh(p, "stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1")
+        time.sleep(10)  # labwc and foot settle
+        measure(p, args, accel, tag, shot, res)
+    except pexpect.TIMEOUT:
+        raise Fail(f"[{tag}] timeout waiting for the guest; tail:\n" + (p.before or "")[-1500:])
+    except pexpect.EOF:
+        raise Fail(f"[{tag}] hengevm ended early; tail:\n" + (p.before or "")[-1500:])
+    finally:
+        if p.isalive():
+            p.sendline("sudo poweroff")
+            try:
+                p.expect(pexpect.EOF, timeout=60)
+            except pexpect.TIMEOUT:
+                p.terminate(force=True)
+        p.close()
+    if p.exitstatus != 0:
+        raise Fail(f"[{tag}] hengevm exit status {p.exitstatus}, expected 0 after poweroff")
+    print(f"ok   [{tag}] power off: exit status 0")
+    res["load_end"] = os.getloadavg()[0]
+    return res
+
+
+def measure(p, args, accel, tag, shot, res):
+    pid, cpu = p.pid, res["cpu"]
+    out, _ = sh(p, "cat /run/user/1000/henge-session.log")
+    m = re.search(r"renderer=(\w+)", out)
+    want = "gles2" if accel else "pixman"
+    if not m or m.group(1) != want:
+        raise Fail(f"[{tag}] session log says {m.group(1) if m else 'nothing'}, expected renderer={want}; log: {out.strip()}")
+    print(f"ok   [{tag}] henge-session: renderer={want}")
+    out, _ = sh(p, "eglinfo -B -p gbm 2>/dev/null | grep -E 'OpenGL ES profile (renderer|version)'")
+    rend = re.search(r"ES profile renderer: (.*)", out)
+    ver = re.search(r"OpenGL ES (\d+)\.(\d+)", out)
+    if not rend or not ver:
+        raise Fail(f"[{tag}] eglinfo gave no ES profile: {out.strip()}")
+    res["gl_renderer"] = rend.group(1).strip()
+    print(f"     [{tag}] GL_RENDERER: {res['gl_renderer']}; OpenGL ES {ver.group(1)}.{ver.group(2)}")
+    if accel:
+        if "virgl" not in rend.group(1).lower():
+            raise Fail(f"eglinfo's renderer does not name virgl: {rend.group(1)}")
+        if (int(ver.group(1)), int(ver.group(2))) < (3, 0):
+            raise Fail(f"the guest gets OpenGL ES {ver.group(1)}.{ver.group(2)}, expected at least 3.0")
+        print("ok   [virgl] eglinfo names virgl with OpenGL ES >= 3.0")
+    desktop_shot(shot, args.keep_shot, tag, "before the load")
+
+    upload(p, PROBE, "/tmp/wlprobe.py")
+    with Phase(pid, cpu, "frame probe"):
+        out, rc = sh(p, f"{WAYLAND}; python3 /tmp/wlprobe.py 1280 720 {PROBE_SECS} 2>&1 | tail -3", PROBE_SECS + 120)
+    m = re.search(r"frames=(\d+) mean=([\d.]+)ms p50=([\d.]+)", out)
+    if not m:
+        raise Fail(f"[{tag}] the frame probe gave no result: {out.strip()}")
+    res["frames"], res["frame_mean"], res["frame_p50"] = int(m.group(1)), float(m.group(2)), float(m.group(3))
+    print(f"     [{tag}] frame time {SIZE}: median {res['frame_p50']:.2f} ms, mean {res['frame_mean']:.2f} ms over {res['frames']} frames ({load_note()})")
+
+    cmd = f"-s {SIZE}" if args.full else f"-s {SIZE} -b {SCENE}"
+    with Phase(pid, cpu, "glmark2"):
+        out, rc = sh(p, f"{WAYLAND}; glmark2-es2-wayland {cmd} 2>&1 | grep -E 'FPS|Score|Error|error'", 1500 if args.full else 180)
+    res["score"], res["scenes"] = parse_glmark(out)
+    print(f"     [{tag}] glmark2 {'(full default run)' if args.full else SCENE} at {SIZE}: score {res['score']} ({load_note()})")
+    if args.full:
+        for name, fps, ft in res["scenes"]:
+            print(f"       {name}: {fps} FPS" + (f", {ft:.3f} ms" if ft else ""))
+
+    with Phase(pid, cpu, "terminal"):
+        res["term_ms"], runs = term_ms(p)
+    print(f"     [{tag}] terminal ({TERM_CMD}): median {res['term_ms']:g} ms of {runs} (printed only)")
+    for name, pct in cpu.items():
+        print(f"     [{tag}] hengevm CPU during {name}: {pct:.0f}% of one core")
+
+    out, _ = sh(p, "sudo dmesg | grep -i -E 'virtio_gpu.*(error|fail|timed? ?out)|\\[drm.*(error|fail)|\\*ERROR\\*'")
+    if out.strip():
+        raise Fail(f"[{tag}] the guest logged virtio_gpu or DRM errors:\n" + out.strip())
+    print(f"ok   [{tag}] dmesg has no virtio_gpu or DRM error")
+    desktop_shot(shot, args.keep_shot, tag, "after the load")
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--hengevm", default=os.path.join(ROOT, "build", "hengevm"))
     ap.add_argument("--linux-dir")
-    ap.add_argument("--work-dir", help="where the clone goes (the image's APFS volume)")
-    ap.add_argument("--save-baseline", action="store_true", help="measure the software path and save its score")
-    ap.add_argument("--factor", type=float, default=3.0, help="the least accelerated score over the saved one")
-    ap.add_argument("--term-slack", type=float, default=1.25, help="the most accelerated terminal time over the saved one")
+    ap.add_argument("--work-dir", help="where the clones go (the image's APFS volume)")
+    ap.add_argument("--factor", type=float, default=3.0, help="the least virgl glmark2 score over the llvmpipe score")
+    ap.add_argument("--frame-slack", type=float, default=1.25, help="the most virgl median frame time over the pixman one")
+    ap.add_argument("--full", action="store_true", help="glmark2's whole default benchmark instead of the short scene set")
     ap.add_argument("--cpus", type=int, default=4)
     ap.add_argument("--keep-shot", help="copy the screenshots here (suffixed)")
     args = ap.parse_args()
     d = args.linux_dir or linux_dir()
-    image = os.path.join(d, "debian-desktop.img")
-    partuuid = open(os.path.join(d, "debian-desktop.partuuid")).read().strip()
-    kernel, initrd = os.path.join(d, "Image"), os.path.join(d, "initrd.img")
-    for f in (args.hengevm, image, kernel, initrd):
+    for f in (args.hengevm, os.path.join(d, "debian-desktop.img"), os.path.join(d, "debian-desktop.partuuid"),
+              os.path.join(d, "Image"), os.path.join(d, "initrd.img"), PROBE):
         if not os.path.exists(f):
             raise Fail(f"missing {f}")
-    accel = not args.save_baseline
-    if accel:
-        if not os.path.exists(BASELINE):
-            raise Fail(f"no {BASELINE}: run with --save-baseline first")
-        base = json.load(open(BASELINE))
     with tempfile.TemporaryDirectory(prefix="accel-", dir=args.work_dir) as tmp:
-        clone, shot = os.path.join(tmp, "disk.img"), os.path.join(tmp, "shot.png")
-        r = subprocess.run(["/bin/cp", "-c", image, clone], capture_output=True, text=True)
-        if r.returncode:
-            raise Fail(f"cannot clone {image}: {r.stderr.strip()}")
-        argv = [args.hengevm, "--board", "virt", "--kernel", kernel, "--initrd", initrd, "--append",
-                f"console=ttyAMA0 root=PARTUUID={partuuid} rw", "--disk", clone, "--ram", "3072", "--cpus", str(args.cpus),
-                "--display", SIZE, "--screenshot", shot]
-        if accel:
-            argv.append("--gpu-accel")
-        p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200),
-                          env=dict(os.environ, HV_SHOT_SECS="1"))
-        try:
-            p.expect(r"\(automatic login\)", timeout=300)
-            p.expect(SHELL, timeout=60)
-            sh(p, "stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1")
-            time.sleep(10)  # labwc and foot settle
-            run(p, args, accel, shot, tmp, base if accel else None)
-        except pexpect.TIMEOUT:
-            raise Fail("timeout waiting for the guest; tail:\n" + (p.before or "")[-1500:])
-        except pexpect.EOF:
-            raise Fail("hengevm ended early; tail:\n" + (p.before or "")[-1500:])
-        finally:
-            if p.isalive():
-                p.sendline("sudo poweroff")
-                try:
-                    p.expect(pexpect.EOF, timeout=60)
-                except pexpect.TIMEOUT:
-                    p.terminate(force=True)
-            p.close()
-        if p.exitstatus != 0:
-            raise Fail(f"hengevm exit status {p.exitstatus}, expected 0 after poweroff")
-        print("ok   power off: exit status 0")
-
-
-def run(p, args, accel, shot, tmp, base):
-    out, _ = sh(p, "cat /run/user/1000/henge-session.log")
-    m = re.search(r"renderer=(\w+)", out)
-    want = "gles2" if accel else "pixman"
-    if not m or m.group(1) != want:
-        raise Fail(f"session log says {m.group(1) if m else 'nothing'}, expected renderer={want}; log: {out.strip()}")
-    print(f"ok   henge-session: renderer={want}")
-    out, _ = sh(p, "eglinfo -B -p gbm 2>/dev/null | grep -E 'OpenGL ES profile (renderer|version)'")
-    rend = re.search(r"ES profile renderer: (.*)", out)
-    ver = re.search(r"OpenGL ES (\d+)\.(\d+)", out)
-    if not rend or not ver:
-        raise Fail(f"eglinfo gave no ES profile: {out.strip()}")
-    print(f"     GL_RENDERER: {rend.group(1).strip()}; OpenGL ES {ver.group(1)}.{ver.group(2)}")
-    if accel:
-        if "virgl" not in rend.group(1).lower():
-            raise Fail(f"eglinfo's renderer does not name virgl: {rend.group(1)}")
-        if (int(ver.group(1)), int(ver.group(2))) < (3, 0):
-            raise Fail(f"the guest gets OpenGL ES {ver.group(1)}.{ver.group(2)}, expected at least 3.0")
-        print("ok   eglinfo names virgl with OpenGL ES >= 3.0")
-    desktop_shot(shot, args.keep_shot, "before glmark2")
-    out, rc = sh(p, f"{WAYLAND}; glmark2-es2-wayland -s {SIZE} -b {SCENE} 2>&1 | grep -E 'FPS|Score|Error|error'", 180)
-    sc = re.search(r"glmark2 Score: (\d+)", out)
-    if not sc:
-        raise Fail(f"glmark2 gave no score: {out.strip()}")
-    score = int(sc.group(1))
-    ft = re.search(r"FrameTime: ([\d.]+) ms", out)
-    print(f"     glmark2 {SCENE} at {SIZE}: score {score}" + (f", frame time {ft.group(1)} ms" if ft else "") + f" ({load_note()})")
-    tms, truns = term_ms(p)
-    print(f"     terminal ({TERM_CMD}): median {tms:g} ms of {truns}")
-    if not accel:
-        json.dump({"scene": SCENE, "size": SIZE, "software_score": score, "frame_time_ms": float(ft.group(1)) if ft else None,
-                   "terminal_cmd": TERM_CMD, "terminal_ms": tms,
-                   "measured": time.strftime("%d/%m/%Y"), "renderer": rend.group(1).strip()}, open(BASELINE, "w"), indent=2)
-        open(BASELINE, "a").write("\n")
-        print(f"ok   saved the software score {score} to {BASELINE}")
+        v = boot(args, True, d, tmp)
+        s = boot(args, False, d, tmp)
+    print(f"     host load average at the start of each boot: virgl {v['load_start']:.1f}, pixman {s['load_start']:.1f}; at the end {v['load_end']:.1f}, {s['load_end']:.1f}")
+    limit = args.frame_slack * s["frame_p50"]
+    ratio = v["frame_p50"] / s["frame_p50"]
+    need = args.factor * s["score"]
+    print(f"     frame time median: virgl {v['frame_p50']:.2f} ms, pixman {s['frame_p50']:.2f} ms (ratio {ratio:.2f}, limit {args.frame_slack:g})")
+    print(f"     glmark2 score: virgl {v['score']}, llvmpipe {s['score']} (ratio {v['score'] / max(1, s['score']):.1f}, need {args.factor:g})")
+    bad = []
+    if v["frame_p50"] > limit:
+        bad.append(f"virgl median frame time {v['frame_p50']:.2f} ms is over {limit:.2f} ms ({args.frame_slack:g} x pixman {s['frame_p50']:.2f} ms)")
     else:
-        need = args.factor * base["software_score"]
-        if score < need:
-            raise Fail(f"glmark2 scored {score}, under {args.factor:g} times the saved software score {base['software_score']} ({need:g}); {load_note()}")
-        print(f"ok   glmark2 {score} >= {args.factor:g} x {base['software_score']} (software)")
-        if not base.get("terminal_ms"):
-            raise Fail("the baseline has no terminal time: run with --save-baseline")
-        limit = base["terminal_ms"] * args.term_slack
-        if tms > limit:
-            raise Fail(f"terminal run took {tms:g} ms, over {limit:g} ms ({args.term_slack:g} x the software {base['terminal_ms']} ms); {load_note()}")
-        print(f"ok   terminal {tms:g} ms <= {limit:g} ms (software {base['terminal_ms']} ms x {args.term_slack:g})")
-    out, _ = sh(p, "sudo dmesg | grep -i -E 'virtio_gpu.*(error|fail|timed? ?out)|\\[drm.*(error|fail)|\\*ERROR\\*'")
-    if out.strip():
-        raise Fail("the guest logged virtio_gpu or DRM errors:\n" + out.strip())
-    print("ok   dmesg has no virtio_gpu or DRM error")
-    desktop_shot(shot, args.keep_shot, "after glmark2")
+        print(f"ok   virgl frame time {v['frame_p50']:.2f} ms <= {limit:.2f} ms ({args.frame_slack:g} x pixman)")
+    if v["score"] < need:
+        bad.append(f"virgl glmark2 scored {v['score']}, under {args.factor:g} times the llvmpipe score {s['score']} ({need:g})")
+    else:
+        print(f"ok   glmark2 {v['score']} >= {args.factor:g} x {s['score']} (llvmpipe, same run)")
+    if bad:
+        raise Fail("; ".join(bad) + f"; {load_note()}")
+
 
 if __name__ == "__main__":
     try:

@@ -92,6 +92,8 @@ static NSString *const shaders = @"#include <metal_stdlib>\n"
     uint32_t mode_w, mode_h;    /* bounds the drawable if the layer has no size */
     uint64_t cursor_seen, retry_until, retry_generation;
     int blit_retries;
+    uint32_t retry_res;
+    HvVgpuRect retry_rect;
     uint32_t cursor_px[CURSOR * CURSOR];
     id<MTLBuffer> readback;
     /* The work queue writes these under shadow_mu; snapshots read them under it. */
@@ -240,8 +242,10 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
         if (got && (!tex3d || serial != surf3d_serial)) got = NO; /* the texture could not be made */
         if (surf) CFRelease(surf);
         failed = !got; /* the renderer has no texture yet; an idle guest sends no flush */
+        if (res != retry_res || memcmp(&s, &retry_rect, sizeof s)) blit_retries = 0; /* a new scanout gets its own tries */
+        retry_res = res, retry_rect = s;
         blit_retries = failed ? blit_retries + 1 : 0;
-        if (blit_retries > 50) failed = NO; /* 5 s: wait for fresh work instead */
+        if (blit_retries > 50) failed = NO; /* each try may wait BLIT_WAIT_MS: a stuck renderer holds this queue ~155 s, then we wait for fresh work */
     }
     if (failed) res3d = 0; /* res 0 is never a scanout, so the next present blits again */
     else res3d = res;
