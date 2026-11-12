@@ -74,6 +74,10 @@ uint64_t hv_vm_gpu_frames(void);
 /* Any thread: the screen size the guest is offered. Kept for later machines; a
    running one gets it through its display device. */
 void hv_vm_set_display_mode(uint32_t width, uint32_t height);
+/* Any thread: the scale the guest is told to draw at (its UI points are pixels / scale). */
+void hv_vm_set_display_scale(double scale);
+/* The mode and scale last set; 0 when no mode was ever set (outputs untouched). */
+int hv_vm_display(uint32_t *w, uint32_t *h, double *scale);
 /* The panel's size, for a guest that works out its pixel density from it (vmapple). 0 x 0: the default. */
 void hv_vm_set_display_size_mm(uint32_t width_mm, uint32_t height_mm);
 int hv_vm_ncpus(void);

@@ -43,6 +43,21 @@ def wait_mode(p, want, limit=15):
     raise Fail(f"first mode is {got!r}, expected {want!r} within {limit} s; modes: {allm.strip()}")
 
 
+FETCH = ("python3 -c 'import urllib.request;print(urllib.request.urlopen"
+         "(\"http://10.0.2.4/.henge/display\").read().decode().strip())'")
+
+
+def wait_display(p, want, limit=15):
+    end, got = time.monotonic() + limit, ""
+    while time.monotonic() < end:
+        out, rc = sh(p, FETCH, 10)
+        got = out.strip().splitlines()[-1] if rc == 0 and out.strip() else out.strip()
+        if got == want:
+            return
+        time.sleep(0.5)
+    raise Fail(f"/.henge/display is {got!r}, expected {want!r} within {limit} s")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--hengevm", default=os.path.join(smoke.ROOT, "build", "hengevm"))
@@ -59,23 +74,30 @@ def main():
     with tempfile.TemporaryDirectory(prefix="mode-", dir=args.work_dir) as tmp:
         clone, infile, err = (os.path.join(tmp, n) for n in ("disk.img", "input", "stderr"))
         open(infile, "w").close()
+        share = os.path.join(tmp, "share")
+        os.mkdir(share)
         r = subprocess.run(["/bin/cp", "-c", image, clone], capture_output=True, text=True)
         if r.returncode:
             raise Fail(f"cannot clone {image}: {r.stderr.strip()}")
         argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.hengevm, "--board", "virt", "--kernel", kernel,
-                "--initrd", initrd, "--append", append, "--disk", clone, "--ram", "1024", "--display", "1920x1080"]
+                "--initrd", initrd, "--append", append, "--disk", clone, "--ram", "1024", "--display", "1920x1080", "--share", share]
         p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200),
                           env=dict(os.environ, HV_INPUT_FILE=infile))
         try:
             login(p, None, 150)
             wait_mode(p, "1920x1080", 5)
             print("ok   boot mode 1920x1080")
-            for line, want in (("mode 1280x800", "1280x800"), ("mode 1024x768 2", "1024x768"),
-                               ("mode 1280x800", "1280x800")):
+            wait_display(p, "1920 1080 1", 10)
+            print("ok   /.henge/display is '1920 1080 1'")
+            for line, want, disp in (("mode 1280x800", "1280x800", "1280 800 1"),
+                                     ("mode 1024x768 2", "1024x768", "1024 768 2"),
+                                     ("mode 1280x800", "1280x800", "1280 800 2")):  # scale stays until set
                 with open(infile, "a") as f:
                     f.write(line + "\n")
                 wait_mode(p, want)
                 print(f"ok   '{line}' -> {want}")
+                wait_display(p, disp, 5)
+                print(f"ok   /.henge/display is '{disp}'")
             for bad in ("mode 0x0", "mode junk", "mode 640"):
                 with open(infile, "a") as f:
                     f.write(bad + "\n")

@@ -555,7 +555,7 @@ static int virt_input(const char *line) {
         if (n < 2 || !w || !h) fprintf(stderr, "hengevm: input: %s: want mode WxH [SCALE]\n", line);
         else {
             hv_vm_set_display_mode(w, h);
-            if (n == 3) fprintf(stderr, "hengevm: input: scale %g ignored until R4\n", scale);
+            if (n == 3) hv_vm_set_display_scale(scale);
         }
     } else if (sscanf(line, "msleep %d", &a) == 1) {
         usleep((useconds_t)a * 1000);
