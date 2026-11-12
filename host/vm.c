@@ -675,17 +675,19 @@ static void power_now(void *ctx) {
     (void)ctx;
     if (atomic_load(&input_stopping) || !devs.gpio) return;
     hv_dev_lock(&m);
-    hv_pl061_set_input(devs.gpio, 3, 1);
+    hv_pl061_set_input(devs.gpio, VIRT_GPIO_POWER, 1);
     hv_dev_unlock(&m);
     usleep(100000);
     hv_dev_lock(&m);
-    hv_pl061_set_input(devs.gpio, 3, 0);
+    hv_pl061_set_input(devs.gpio, VIRT_GPIO_POWER, 0);
     hv_dev_unlock(&m);
 }
 
 /* On the pointer queue so hv_vm_destroy waits for the release (stop_pointer). */
-void hv_vm_power_button(void) {
+int hv_vm_power_button(void) {
+    if (board_kind != HV_BOARD_VIRT || !machine_created || atomic_load(&input_stopping)) return 0;
     dispatch_async_f(pointer_queue(), NULL, power_now);
+    return 1;
 }
 
 /* The guest takes a wheel event as 8 bits: -200 arrives as +56, the wrong way. So big moves go in pieces. */

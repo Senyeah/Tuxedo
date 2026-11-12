@@ -447,15 +447,19 @@ static void test_vm(void) {
     wr32(vm, VIRT_GPIO + 0x40c, key);
     wr32(vm, VIRT_GPIO + 0x410, key);
     check("power key starts low", rd32(vm, pin), 0);
-    hv_vm_power_button();
-    usleep(50000);
+    check("power key accepted", hv_vm_power_button(), 1);
+    for (int i = 0; i < 100 && !rd32(vm, pin); i++) usleep(10000); /* the queue may be slow under load */
     check("power key is high", rd32(vm, pin), key);
     check("power key raises its SPI", hv_vm_devs()->gic->level[32 + VIRT_IRQ_GPIO], 1);
-    usleep(150000);
+    for (int i = 0; i < 100 && rd32(vm, pin); i++) usleep(10000);
     check("power key is released", rd32(vm, pin), 0);
+    /* destroy must wait for a release that is under way */
+    check("second press accepted", hv_vm_power_button(), 1);
+    for (int i = 0; i < 100 && !rd32(vm, pin); i++) usleep(10000);
+    check("second press is high", rd32(vm, pin), key);
     hv_vm_destroy();
     check("no virt board after destroy", hv_vm_virt() == NULL, 1);
-    hv_vm_power_button(); /* no machine: nothing happens */
+    check("no machine: key refused", hv_vm_power_button(), 0);
     usleep(20000);
 
     char kernel[256];

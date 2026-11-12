@@ -67,17 +67,19 @@ DMESG_ALLOW = [
     r"usb usb1-port2: unable to enumerate USB device",
 ]
 # --disk, seconds: three times the slowest of five runs at 1 CPU (login 10.6 s, the 256 MB write 1.6 s,
-# poweroff 1.7 s), with the same 5 s floor (E9 findings). 4 CPUs are faster.
-DISK_LIMITS = {"login": 32, "running": 5, "command": 5, "network": 5, "write": 5, "poweroff": 6}
+# poweroff 1.7 s), with the same 5 s floor (E9 findings). 4 CPUs are faster. Login is 60 s: at load 60+
+# (other jobs on the Mac) it took 29 s or more (E12 review).
+DISK_LIMITS = {"login": 60, "running": 5, "command": 5, "network": 5, "write": 5, "poweroff": 6}
 # --uboot, seconds: three times the slowest of five runs at 1 CPU (kernel to login 9.5 s; the longest
-# U-Boot step is its 2 s countdown), with the 5 s floor for the banner (under 1 s) and commands (0.4 s) (E10 findings).
-UBOOT_LIMITS = {"banner": 5, "uboot step": 6, "uboot command": 5, "login": 29}
+# U-Boot step is its 2 s countdown) (E10 findings). Banner, step and login limits are wider for a busy Mac:
+# the banner took 4.7 s and the login 28 s at load 15 to 60 (E12 review).
+UBOOT_LIMITS = {"banner": 15, "uboot step": 15, "uboot command": 10, "login": 60}
 # QEMU runs U-Boot under TCG only (hvf aborts on it), which is several times slower.
 QEMU_TCG_SCALE = 4
 UBOOT_PROMPT = r"=> "
 # --power, seconds: three times the slowest of five runs at 1 CPU (sudo reboot to the banner 1.5 s, the power key to the
-# exit 1.4 s, the second SIGTERM to the exit 0.4 s), with the 5 s floor (E12 findings).
-POWER_LIMITS = {"restart": 5, "power key": 5, "stop": 5}
+# exit 1.4 s, the second SIGTERM to the exit 0.4 s). Wider for a busy Mac (E12 review).
+POWER_LIMITS = {"restart": 15, "power key": 10, "stop": 10}
 # --stress, seconds. The install depends on snapshot.debian.org (105 s at 4 CPUs); stress-ng runs for 60 s.
 STRESS_LIMITS = {"install": 900, "stress": 180, "build": 600}
 STRESS_PACKAGES = "stress-ng build-essential"
@@ -442,14 +444,22 @@ def disk(args, times):
 
 
 def power_key(p, args, how):
-    """Presses the guest's power key: SIGTERM or Ctrl-A p for hengevm. QEMU's system_powerdown never reaches
-    this guest (the pl061 interrupt count stays 0, E12 findings), so there the guest powers itself off."""
+    """Presses the guest's power key: SIGTERM or Ctrl-A p for hengevm. On the -bios path QEMU has no gpio-keys
+    (it builds an ACPI GED), so there the guest powers itself off."""
     if args.qemu:
         p.sendline("sudo poweroff")
     elif how == "sigterm":
         os.kill(p.pid, signal.SIGTERM)
     else:
         p.send("\x01p")
+
+
+def wait_for_logind_keys(p):
+    """logind must watch gpio-keys before the key; an earlier press is lost (E12 review)."""
+    check(p, "( for i in $(seq 150); do sudo journalctl -b -u systemd-logind --no-pager | "
+          "grep -q 'Watching system buttons.*gpio-keys' && exit 0; sleep 0.2; done; exit 1 )",
+          DISK_LIMITS["command"] + 30, lambda o: True, "logind watching gpio-keys")
+    time.sleep(1)
 
 
 def power(args, times):
@@ -503,6 +513,8 @@ def power(args, times):
         def ends(how, key, want_line, what_t):
             """Ends the running machine; it must exit 0 with hengevm's stop line."""
             p = st["p"]
+            if not args.qemu:
+                wait_for_logind_keys(p)
             t = time.monotonic()
             power_key(p, args, how)
             expect(p, pexpect.EOF, lim(key), what_t)
@@ -545,10 +557,10 @@ def power(args, times):
                 up(what)
                 p = st["p"]
                 clean(p, "r3", digest)
-                # the second SIGTERM stops the machine without the guest
+                # the second SIGTERM stops the machine without the guest; no gap (the source merges them)
+                wait_for_logind_keys(p)
                 t = time.monotonic()
                 os.kill(p.pid, signal.SIGTERM)
-                time.sleep(0.3)  # the first is the power key; the dispatch source takes both in turn
                 os.kill(p.pid, signal.SIGTERM)
                 expect(p, pexpect.EOF, lim("stop"), "second SIGTERM")
                 times["second SIGTERM"] = time.monotonic() - t

@@ -907,8 +907,10 @@ static void sigterm_as_power_key(void) {
     src = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGTERM, 0,
                                  dispatch_queue_create("henge.sigterm", DISPATCH_QUEUE_SERIAL));
     dispatch_source_set_event_handler(src, ^{
-        if (taken++) on_signal(SIGTERM);
-        else hv_vm_power_button();
+        /* the source merges signals that come before the handler runs; count them all */
+        taken += (int)dispatch_source_get_data(src);
+        if (taken >= 2) on_signal(SIGTERM);
+        else if (!hv_vm_power_button()) taken = 0; /* no key pressed: not the first of two */
     });
     dispatch_resume(src);
 }
