@@ -546,6 +546,29 @@ static void test_guest_programs(void) {
     }
 }
 
+/* Rotating INTx routing (QEMU virt): slots 1 and 5 share a line. */
+static void test_pcie_rotate(void) {
+    enum { BASE = 32 + 200 }; /* clear of vmapple SPIs */
+    HvPcie *p = hv_pcie_create(&m, board.gic, 0x7c000000, 0x100000, 0x7d000000, 0x100000, BASE, 1);
+    static HvPciDev d[5];
+    for (int i = 0; i < 5; i++) {
+        hv_pci_init(&d[i], 0x1af4, 0x1000, 0x020000, 0x1af4, 0);
+        check("attach slot", hv_pcie_attach(p, &d[i]), i + 1);
+    }
+    HvPciDev *a = &d[0], *b = &d[4];
+    check("slots", a->slot * 10 + b->slot, 15);
+    hv_pci_set_intx(a, 1);
+    check("slot 1 raises line 1", board.gic->level[BASE + 1], 1);
+    hv_pci_set_intx(b, 1);
+    check("slot 5 shares line 1", board.gic->level[BASE + 1], 1);
+    check("slot 5 leaves line 0 low", board.gic->level[BASE + 0], 0);
+    check("slot 5 leaves line 5 low", board.gic->level[BASE + 5], 0);
+    hv_pci_set_intx(a, 0);
+    check("line stays up for slot 5", board.gic->level[BASE + 1], 1);
+    hv_pci_set_intx(b, 0);
+    check("line down when both are low", board.gic->level[BASE + 1], 0);
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     if (hv_machine_init(&m, 4 << 20) != 0) return 1;
@@ -594,6 +617,7 @@ int main(void) {
     check("gpio edge raises SPI 5", board.gic->level[32 + VMAPPLE_IRQ_GPIO], 1);
     wr32(VMAPPLE_GPIO + 0x41c, 1u << 3);
     check("gpio interrupt cleared", board.gic->level[32 + VMAPPLE_IRQ_GPIO], 0);
+    test_pcie_rotate();
     test_guest_programs();
 
     hv_disk_close(&root);
