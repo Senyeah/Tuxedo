@@ -697,12 +697,15 @@ static void *input_thread(void *unused) {
         else if (sscanf(line, "wait %d", &x) == 1) sleep((unsigned)x);
         else if (!strncmp(line, "type ", 5)) type_text(line + 5);
         else if (!strncmp(line, "prof ", 5)) prof_dump(line + 5);
-        else if (!strncmp(line, "balloon ", 8)) { /* MB the guest should hand back (HV_BALLOON set at boot) */
-            HvVmapple *bd = hv_vm_board();
-            if (!bd || !bd->balloon) fprintf(stderr, "hengevm: no balloon (set HV_BALLOON)\n");
+        else if (!strncmp(line, "balloon ", 8) || !strncmp(line, "balloonstat", 11)) { /* "balloon MB": target (HV_BALLOON set at boot); both print the counters */
+            HvVirtioBalloon *bl = hv_vm_devs()->balloon;
+            if (!bl) fprintf(stderr, "hengevm: no balloon (set HV_BALLOON)\n");
             else {
-                hv_virtio_balloon_set_target(bd->balloon, (uint64_t)atoll(line + 8) << 20);
-                fprintf(stderr, "hengevm: balloon: the guest has handed over %llu MB\n", (unsigned long long)(hv_virtio_balloon_actual(bd->balloon) >> 20));
+                if (line[7] == ' ') hv_virtio_balloon_set_target(bl, (uint64_t)atoll(line + 8) << 20);
+                fprintf(stderr, "hengevm: balloon: actual %llu MB, given back %llu MB, taken back %llu MB, partial %llu, out of ram %llu, failed %llu\n",
+                        (unsigned long long)(hv_virtio_balloon_actual(bl) >> 20), (unsigned long long)(bl->given_back * 16 >> 10),
+                        (unsigned long long)(bl->taken_back * 16 >> 10), (unsigned long long)bl->partial,
+                        (unsigned long long)bl->out_of_ram, (unsigned long long)bl->failed);
             }
         }
         else if (!strncmp(line, "knob ", 5)) {

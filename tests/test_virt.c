@@ -1758,11 +1758,21 @@ static void test_create_limits(void) {
     check("create: the other devices are there", vb.rng && vb.usb && vb.keyboard && vb.mouse && vb.gpu, 1);
     check("create: the rng takes the first slot", vb.rng->vio.pci.slot, 1);
     check("create: xHCI follows", vb.usb->pci.slot, 2);
+    check("create: no balloon without HV_BALLOON", vb.balloon == NULL, 1);
     check("create: tree needs room", hv_virt_place_fdt(&vb, (const uint8_t *)"x", 100u << 20), -1);
     check("create: no tree", hv_virt_place_fdt(&vb, NULL, 4), -1);
     check("create: a missing firmware file", hv_virt_load_firmware(&vb, "/nonexistent/firmware") != 0, 1);
     hv_virt_destroy(&vb);
     hv_machine_free(&mm);
+
+    setenv("HV_BALLOON", "0", 1);
+    if (hv_machine_init(&mm, 1 << 20) == 0 && hv_virt_create(&vb, &mm, cc, 1, 64ull << 20, NULL, NULL) == 0) {
+        check("balloon: HV_BALLOON adds it", vb.balloon != NULL, 1);
+        check("balloon: Linux may deflate it on OOM", vb.balloon && (vb.balloon->vio.features & HV_VIRTIO_BALLOON_F_DEFLATE_ON_OOM) != 0, 1);
+        hv_virt_destroy(&vb);
+        hv_machine_free(&mm);
+    }
+    unsetenv("HV_BALLOON");
 
     if (hv_machine_init(&mm, 1 << 20) == 0) {
         check("create: too many CPUs are capped", hv_virt_create(&vb, &mm, cc, HV_MAX_CPUS + 2, 64ull << 20, NULL, NULL), 0);
