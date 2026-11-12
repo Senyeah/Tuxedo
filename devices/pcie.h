@@ -29,6 +29,7 @@ typedef struct HvPcie {
     HvMachine *m;
     HvGic *gic;
     int intx_base;            /* INTID of INTx line 0 */
+    int intx_rotate;          /* 1: line = slot mod 4 (QEMU gpex); 0: line = slot (vmapple) */
     int line_count[HV_PCI_SLOTS];
     HvPciDev *dev[HV_PCI_SLOTS];
     HvPciDev bridge;
@@ -36,7 +37,7 @@ typedef struct HvPcie {
 } HvPcie;
 
 HvPcie *hv_pcie_create(HvMachine *m, HvGic *gic, uint64_t ecam_pa, uint64_t ecam_size, uint64_t mmio_pa,
-                       uint64_t mmio_size, int intx_intid);
+                       uint64_t mmio_size, int intx_intid, int intx_rotate);
 /* Fills in the header; the caller then adds BARs and capabilities. */
 void hv_pci_init(HvPciDev *d, uint16_t vendor, uint16_t device, uint32_t class_rev, uint16_t sub_vendor,
                  uint16_t sub_id);

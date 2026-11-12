@@ -60,10 +60,8 @@ void hv_pci_set_intx(HvPciDev *d, int level) {
     put16(d->config + PCI_STATUS, level ? status | STATUS_INTX : status & ~STATUS_INTX);
     if (eff == d->intx) return;
     d->intx = eff;
-    /* Apple's pcie,vmapple1 has no interrupt-map: the kernel takes slot s's INTx
-       as interrupt-base + s (QEMU's gpex would swizzle to s % 4; the two agree
-       only for slots 0-3). */
-    int line = d->slot;
+    /* vmapple's pcie has no interrupt-map, so slot s is line s; QEMU's gpex rotates by slot mod 4. */
+    int line = p->intx_rotate ? d->slot % 4 : d->slot;
     p->line_count[line] += eff ? 1 : -1;
     update_line(p, line);
 }
@@ -143,11 +141,12 @@ int hv_pcie_attach(HvPcie *p, HvPciDev *d) {
 }
 
 HvPcie *hv_pcie_create(HvMachine *m, HvGic *gic, uint64_t ecam_pa, uint64_t ecam_size, uint64_t mmio_pa,
-                       uint64_t mmio_size, int intx_intid) {
+                       uint64_t mmio_size, int intx_intid, int intx_rotate) {
     HvPcie *p = calloc(1, sizeof *p);
     p->m = m;
     p->gic = gic;
     p->intx_base = intx_intid;
+    p->intx_rotate = intx_rotate;
     p->mmio_base = mmio_pa;
     p->mmio_size = mmio_size;
     hv_pci_init(&p->bridge, 0x1b36, 0x0008, 0x06000000, 0x1af4, 0x1100); /* QEMU PCIe host bridge */

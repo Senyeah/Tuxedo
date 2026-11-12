@@ -306,7 +306,7 @@ int hv_vmapple_create(HvVmapple *b, HvMachine *m, HvCpu *cpu, uint64_t ram_size,
     p.ram_size = ram_size;
     b->cfg = hv_cfg_create(m, VMAPPLE_CONFIG, &p);
     b->pcie = hv_pcie_create(m, b->gic, VMAPPLE_PCIE_ECAM, 0x10000000, VMAPPLE_PCIE_MMIO, 0x1fff0000,
-                             32 + VMAPPLE_IRQ_PCIE);
+                             32 + VMAPPLE_IRQ_PCIE, 0);
     /* Same order as QEMU's documented command line: aux, root, then the NIC. */
     if (aux) b->aux_blk = hv_virtio_blk_create(m, b->pcie, aux, HV_VBLK_AUX);
     if (root) b->root_blk = hv_virtio_blk_create(m, b->pcie, root, HV_VBLK_ROOT);
