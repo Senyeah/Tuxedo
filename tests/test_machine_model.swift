@@ -69,6 +69,48 @@ struct MachineModelTests {
         let macNoEcid = try folder("mac-noecid", files: ["installed": "", "machine.json": #"{"name":"M"}"#, "disk.img": "x"])
         precondition(MachineList.recover(id: id, folder: macNoEcid, defaultRAMMB: 1024) == nil)
 
+        // I5: a per-machine CPU count falls back to the global one, and stays in range.
+        precondition(old[0].cpus == nil && old[0].cpuCount(fallback: 4) == 4)
+        var four = linux
+        four.cpus = 2
+        precondition(four.cpuCount(fallback: 4) == 2 && linux.cpuCount(fallback: 5) == 5)
+        four.cpus = 99
+        precondition(four.cpuCount(fallback: 4) == 6 && linux.cpuCount(fallback: 0) == 1)
+        four.cpus = 3
+        let again = try MachineList.decode(JSONEncoder().encode([four]), diskExists: { _ in true })!; precondition(again[0].cpus == 3)
+
+        // The tab and the list heading say "machines" once a Linux machine exists.
+        precondition(MachineList.tabTitle([]) == "Macs" && MachineList.tabTitle(old) == "Macs")
+        precondition(MachineList.tabTitle(both) == "Machines" && MachineList.othersHeading(both) == "Other machines")
+        precondition(MachineList.othersHeading(old) == "Other Macs" && linux.noun == "machine" && old[0].noun == "Mac")
+
+        // Disk growth: the file gets longer, never shorter.
+        let img = tmp.appendingPathComponent("grow.img")
+        try Data(count: 4096).write(to: img)
+        try DiskGrowth.grow(img, toBytes: 1 << 20)
+        let len = try (fm.attributesOfItem(atPath: img.path)[.size] as! NSNumber).int64Value; precondition(len == 1 << 20)
+        for bad in [Int64(1 << 20), 4096] {
+            do { try DiskGrowth.grow(img, toBytes: bad); preconditionFailure("shrink allowed") } catch {}
+        }
+        let len2 = try (fm.attributesOfItem(atPath: img.path)[.size] as! NSNumber).int64Value; precondition(len2 == 1 << 20)
+        var sized = linux
+        sized.diskBytes = 5
+        precondition(sized.logicalDiskBytes == 5) // no disk.img in its folder: the stored size
+
+        // The stopped card has its own words per kind, and a panic is not "stopped unexpectedly".
+        for guest in [GuestKind.mac, .linux] {
+            let name = guest == .linux ? "Debian" : "Mac"
+            precondition(StopText.title(.shutdown, guest: guest) == "\(name) shut down")
+            precondition(StopText.title(.restart, guest: guest) == "\(name) requested a restart")
+            precondition(StopText.title(.panic, guest: guest) == "\(name) had a kernel panic")
+            precondition(StopText.title(.error, guest: guest) == "\(name) stopped unexpectedly")
+            precondition(StopText.detail(.error, guest: guest, reason: "boom").contains("boom"))
+            precondition(!StopText.detail(.panic, guest: guest, reason: "guest panic").contains("guest panic"))
+        }
+        precondition(StopText.startLabel(guest: .linux) == "Start" && StopText.startLabel(guest: .mac) == "Start Mac")
+        precondition(StopText.detail(.shutdown, guest: .linux, reason: "").contains("machines"))
+        precondition(StopText.detail(.shutdown, guest: .mac, reason: "").contains("Macs"))
+
         print("machine model: ok")
     }
 }

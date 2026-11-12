@@ -25,12 +25,23 @@ struct VirtualMac: Identifiable, Codable, Hashable {
     /// Missing in a list written before Linux guests: that is a Mac.
     var kind: GuestKind?
     var guest: GuestKind { kind ?? .mac }
+    /// This machine's own CPU count. Missing: the global henge.cpus setting.
+    var cpus: Int?
 
     var directory: URL { MachinePaths.directory(for: id) }
     var rom: URL { directory.appendingPathComponent("AVPBooter.vmapple2.bin") }
     var disk: URL { directory.appendingPathComponent("disk.img") }
     var aux: URL { directory.appendingPathComponent("auxiliary.bin") }
     var firmware: URL { directory.appendingPathComponent("u-boot.bin") }
+
+    var noun: String { guest == .linux ? "machine" : "Mac" }
+    static let cpuRange = 1...6
+    func cpuCount(fallback: Int) -> Int { min(max(cpus ?? fallback, Self.cpuRange.lowerBound), Self.cpuRange.upperBound) }
+
+    /// disk.img's size as the guest sees it (the file is sparse, so this is not what it takes on flash).
+    var logicalDiskBytes: Int64 {
+        (try? FileManager.default.attributesOfItem(atPath: disk.path)[.size] as? Int64) ?? diskBytes
+    }
 
     /// Writes the file that says the install finished; the list is rebuilt from it after a crash.
     func markInstalled() {
@@ -91,4 +102,50 @@ enum MachineList {
         mac.osName = os.isEmpty ? nil : os
         return mac
     }
+
+    /// "Macs" until a Linux machine exists.
+    static func tabTitle(_ list: [VirtualMac]) -> String { list.contains { $0.guest == .linux } ? "Machines" : "Macs" }
+    static func othersHeading(_ list: [VirtualMac]) -> String { list.contains { $0.guest == .linux } ? "Other machines" : "Other Macs" }
+}
+
+enum DiskGrowth {
+    /// Extends a sparse disk image. It never shrinks: the guest's partitions would be cut.
+    static func grow(_ disk: URL, toBytes: Int64) throws {
+        let handle = try FileHandle(forUpdating: disk)
+        defer { try? handle.close() }
+        let now = Int64(try handle.seekToEnd())
+        guard toBytes > now else {
+            throw NSError(domain: "Henge", code: 2, userInfo: [NSLocalizedDescriptionKey: "A disk can only grow."])
+        }
+        try handle.truncate(atOffset: UInt64(toBytes))
+    }
+}
+
+/// Why a machine stopped (the app maps HengeVmOutcome to this) and what to tell the person.
+enum StopKind { case shutdown, restart, hostStop, panic, error }
+
+enum StopText {
+    static func title(_ kind: StopKind, guest: GuestKind) -> String {
+        let name = guest == .linux ? "Debian" : "Mac"
+        switch kind {
+        case .shutdown: return "\(name) shut down"
+        case .restart: return "\(name) requested a restart"
+        case .hostStop: return "\(name) stopped"
+        case .panic: return "\(name) had a kernel panic"
+        case .error: return "\(name) stopped unexpectedly"
+        }
+    }
+
+    static func detail(_ kind: StopKind, guest: GuestKind, reason: String) -> String {
+        let noun = guest == .linux ? "machine" : "Mac"
+        let next = "You can start this \(noun) again or return to your \(guest == .linux ? "machines" : "Macs")."
+        switch kind {
+        case .shutdown, .hostStop: return next
+        case .restart: return "The \(noun) is ready to start again."
+        case .panic: return "The kernel stopped with a panic. " + next
+        case .error: return "The \(noun) stopped: \(reason). " + next
+        }
+    }
+
+    static func startLabel(guest: GuestKind) -> String { guest == .linux ? "Start" : "Start Mac" }
 }
