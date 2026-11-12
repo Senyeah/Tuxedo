@@ -66,9 +66,12 @@ final class LinuxInstaller: ObservableObject {
                 try checkSpace(image)
                 Machines.excludeFromBackup(Machines.root)
                 HengeLog.log("linux", "downloading \(image.id) \(image.version)")
+                let throttle = ProgressThrottle()
                 _ = try await LinuxDownload.fetch(image, in: Self.folder) { stage, have, total in
+                    guard throttle.allow(stage == .check || have >= total) else { return }
                     Task { @MainActor in
                         let me = LinuxInstaller.shared
+                        guard me.busy, me.current?.id == image.id else { return } // a late update after the end
                         me.phase = stage == .download ? .downloading : .checking
                         me.received = have
                         me.expected = total
@@ -86,7 +89,9 @@ final class LinuxInstaller: ObservableObject {
 
     func deleteDownload(_ image: LinuxImage) {
         guard !busy else { return }
-        LinuxDownload.delete(image, in: Self.folder)
+        var others: [LinuxImage] = []
+        if case .loaded(let all) = catalogue { others = all }
+        LinuxDownload.delete(image, in: Self.folder, others: others)
         objectWillChange.send()
     }
 
@@ -100,6 +105,20 @@ final class LinuxInstaller: ObservableObject {
         guard grace != .invalid else { return }
         UIApplication.shared.endBackgroundTask(grace)
         grace = .invalid
+    }
+}
+
+/// Lets about 5 progress updates per second through, so the main actor does not queue one per chunk.
+final class ProgressThrottle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var last = Date.distantPast
+
+    func allow(_ force: Bool) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        let now = Date()
+        guard force || now.timeIntervalSince(last) >= 0.2 else { return false }
+        last = now
+        return true
     }
 }
 

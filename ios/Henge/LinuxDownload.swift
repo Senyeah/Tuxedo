@@ -21,7 +21,8 @@ enum LinuxDownload {
 
     static func haveAll(_ image: LinuxImage, in dir: URL) -> Bool {
         let f = files(image, in: dir)
-        return size(f.disk) == image.diskBytes && size(f.firmware) == image.firmwareBytes
+        return image.diskBytes > 0 && image.firmwareBytes > 0
+            && size(f.disk) == image.diskBytes && size(f.firmware) == image.firmwareBytes
     }
 
     /// Bytes of this entry already on the device, whole files and parts.
@@ -34,9 +35,11 @@ enum LinuxDownload {
         return have(f.disk, image.diskBytes) + have(f.firmware, image.firmwareBytes)
     }
 
-    static func delete(_ image: LinuxImage, in dir: URL) {
+    /// `others` are the other entries: firmware another one still uses stays.
+    static func delete(_ image: LinuxImage, in dir: URL, others: [LinuxImage] = []) {
         let f = files(image, in: dir)
-        for u in [f.disk, f.firmware] {
+        let shared = others.contains { $0.id != image.id && files($0, in: dir).firmware == f.firmware }
+        for u in shared ? [f.disk] : [f.disk, f.firmware] {
             try? FileManager.default.removeItem(at: u)
             try? FileManager.default.removeItem(at: u.appendingPathExtension("part"))
         }
@@ -55,7 +58,7 @@ enum LinuxDownload {
         for (url, dest, bytes, sha, what) in [(image.firmwareURL, f.firmware, image.firmwareBytes, image.firmwareSHA256, "firmware"),
                                               (image.diskURL, f.disk, image.diskBytes, image.diskSHA256, "disk")] {
             let offset = base
-            if size(dest) == bytes {
+            if bytes > 0 && size(dest) == bytes {
                 base += bytes
                 progress(.download, base, total)
                 continue
@@ -78,8 +81,8 @@ enum LinuxDownload {
                 try await d.run()
                 return
             } catch let error as NSError {
-                // A refusal (status, wrong range) does not get better by waiting.
-                let refused = error.domain == "Henge" && (error.code == 3 || error.code == 5)
+                // A refusal (status, wrong range, no file) does not get better by waiting.
+                let refused = error.domain == "Henge" && (error.code == 3 || error.code == 4 || error.code == 5)
                 if Task.isCancelled || attempt == 20 || refused { throw error }
                 log("download interrupted (\(error.localizedDescription)) at \(RangedDownload.size(of: part)) bytes; going on")
                 try await Task.sleep(nanoseconds: 3_000_000_000)

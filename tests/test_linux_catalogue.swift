@@ -21,7 +21,7 @@ struct LinuxCatalogueTests {
         do { try body(); return nil } catch { return error.localizedDescription }
     }
 
-    static func main() throws {
+    static func main() async throws {
         let base = URL(string: "http://192.168.1.5:8000/linux-images.json")!
         let images = try LinuxCatalogue.decode(Data(sample.utf8), base: base)
         precondition(images.count == 2)
@@ -80,6 +80,87 @@ struct LinuxCatalogueTests {
         LinuxDownload.delete(a, in: dir)
         precondition(LinuxDownload.present(a, in: dir) == 0)
 
+        // Shared firmware stays when another entry uses it; zero sizes never count as present.
+        var b = a
+        b.id = "other"
+        try Data(count: 5).write(to: f.firmware)
+        LinuxDownload.delete(a, in: dir, others: [a, b])
+        precondition(fm.fileExists(atPath: f.firmware.path))
+        LinuxDownload.delete(a, in: dir)
+        precondition(!fm.fileExists(atPath: f.firmware.path))
+
+        try await fetchTests(tmp)
         print("test_linux_catalogue: ok")
+    }
+
+    // A real fetch against a local server that answers Range, as tools/linux/serve.sh does.
+    static func fetchTests(_ tmp: URL) async throws {
+        let fm = FileManager.default
+        let www = tmp.appendingPathComponent("www")
+        try fm.createDirectory(at: www, withIntermediateDirectories: true)
+        let disk = Data((0..<300_000).map { UInt8($0 % 251) })
+        let fw = Data((0..<4_000).map { UInt8($0 % 97) })
+        try disk.write(to: www.appendingPathComponent("d.bin"))
+        try fw.write(to: www.appendingPathComponent("f.bin"))
+        let py = """
+        import http.server, re, os, sys
+        class H(http.server.SimpleHTTPRequestHandler):
+            def log_message(self, *a): pass
+            def do_GET(self):
+                p = self.translate_path(self.path); d = open(p, 'rb').read()
+                m = re.fullmatch(r'bytes=(\\d+)-', self.headers.get('Range', ''))
+                if m:
+                    s = int(m.group(1)); self.send_response(206)
+                    self.send_header('Content-Range', 'bytes %d-%d/%d' % (s, len(d) - 1, len(d))); d = d[s:]
+                else:
+                    self.send_response(200)
+                self.send_header('Content-Length', str(len(d))); self.end_headers(); self.wfile.write(d)
+        os.chdir(sys.argv[1])
+        s = http.server.ThreadingHTTPServer(('127.0.0.1', 0), H)
+        print(s.server_address[1], flush=True)
+        s.serve_forever()
+        """
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        proc.arguments = ["python3", "-c", py, www.path]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        try proc.run()
+        defer { proc.terminate() }
+        let line = String(decoding: pipe.fileHandleForReading.availableData, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let port = Int(line) else { fatalError("no test server") }
+
+        func image(diskSHA: String) -> LinuxImage {
+            try! LinuxCatalogue.decode(Data("""
+            {"images":[{"id":"t","name":"T","version":"1","kind":"console","diskURL":"d.bin","diskBytes":\(disk.count),
+             "diskSHA256":"\(diskSHA)","unpackedBytes":1,"logicalBytes":1,"firmwareURL":"f.bin","firmwareBytes":\(fw.count),
+             "firmwareSHA256":"\(sha(fw))","minBuild":1}]}
+            """.utf8), base: URL(string: "http://127.0.0.1:\(port)/c.json")!)[0]
+        }
+        func sha(_ d: Data) -> String {
+            let u = tmp.appendingPathComponent("h-\(UUID().uuidString)")
+            try! d.write(to: u); defer { try? fm.removeItem(at: u) }
+            return try! FileHash.sha256(of: u)
+        }
+
+        // Resume: a part of 100000 bytes is completed with a range request and verified.
+        let dir = tmp.appendingPathComponent("fetch1")
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let good = image(diskSHA: sha(disk))
+        let gf = LinuxDownload.files(good, in: dir)
+        try disk.prefix(100_000).write(to: gf.disk.appendingPathExtension("part"))
+        _ = try await LinuxDownload.fetch(good, in: dir) { _, _, _ in }
+        precondition(LinuxDownload.haveAll(good, in: dir))
+        let got = try Data(contentsOf: gf.disk)
+        precondition(got == disk)
+        precondition(!fm.fileExists(atPath: gf.disk.appendingPathExtension("part").path))
+
+        // A wrong hash deletes the file and says it was damaged.
+        let dir2 = tmp.appendingPathComponent("fetch2")
+        let bad = image(diskSHA: String(repeating: "0", count: 64))
+        var msg = ""
+        do { _ = try await LinuxDownload.fetch(bad, in: dir2) { _, _, _ in } } catch { msg = error.localizedDescription }
+        precondition(msg.contains("damaged") && !LinuxDownload.haveAll(bad, in: dir2))
+        precondition(!fm.fileExists(atPath: LinuxDownload.files(bad, in: dir2).disk.path))
     }
 }
