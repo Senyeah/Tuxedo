@@ -9,6 +9,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
+#include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -278,6 +279,38 @@ static void step2(void) {
     CHECK(cpu.x[11] == 0, "guest reads the new pages (0)");
 }
 
+
+/* The path the pinned virglrenderer takes for host-visible Venus memory on macOS: a POSIX shm file imported into Vulkan as host
+   memory (a MTLBuffer without copy over its mapping), and an fd handed out for the window. */
+static void step2e(void) {
+    printf("step 2e: Venus host-visible memory: shm fd, MTLBuffer over one mapping, the window over the fd\n");
+    char name[64];
+    snprintf(name, sizeof name, "/henge-a11-%d", getpid());
+    int fd = shm_open(name, O_CREAT | O_EXCL | O_RDWR, 0600);
+    shm_unlink(name);
+    const uint64_t len = 4 * PG, off = 112ull << 20, gpa = WIN_PA + off;
+    CHECK(fd >= 0 && ftruncate(fd, len) == 0, "anonymous shm file of %llu KB", (unsigned long long)(len >> 10));
+    uint8_t *host = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    CHECK(host != MAP_FAILED && ((uintptr_t)host & (PG - 1)) == 0, "host mapping %p is 16 KB aligned", host);
+    id<MTLBuffer> nb = [dev newBufferWithBytesNoCopy:host length:len options:MTLResourceStorageModeShared deallocator:nil];
+    CHECK(nb != nil, "newBufferWithBytesNoCopy over the shm mapping (what MoltenVK's host-pointer import makes)");
+    void *w = mmap(resv + off, len, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, 0);
+    CHECK(w == resv + off, "mmap of the fd over the reservation at a fixed address");
+    if (!nb || w == MAP_FAILED) return;
+    CHECK(gpu_run(nb, len / 4, pfill, 0x30000) == 0, "GPU fill");
+    guest(&P_WLD, gpa, 0, 0, 0, 0, &cpu);
+    CHECK(cpu.x[11] == (0x30000ull | (0x30001ull << 32)), "guest sees the GPU's bytes through the second mapping (%llx)", (unsigned long long)cpu.x[11]);
+    guest(&P_WRW, gpa, 0x6161, 0x6262, 0, 0, &cpu);
+    CHECK(gpu_run(nb, len / 4, pincr, 0) == 0 && ((uint32_t *)host)[0] == 0x6162, "GPU sees the guest's store and increments it");
+    unmap_zero(off, len);
+    guest(&P_WLD, gpa, 0, 0, 0, 0, &cpu);
+    CHECK(cpu.x[11] == 0 && ((uint32_t *)host)[0] == 0x6162, "unmap of the window leaves the shm memory alone");
+    /* The same through vm_remap of the host mapping instead of mmap of the fd. */
+    CHECK(map_into(off, host, len) == 0, "vm_remap of the shm mapping works too");
+    guest(&P_WLD, gpa, 0, 0, 0, 0, &cpu);
+    CHECK((uint32_t)cpu.x[11] == 0x6162, "and the guest sees it");
+}
+
 static void hole(void) {
     printf("step 2d: newBufferWithBytesNoCopy over a range with a PROT_NONE hole\n");
     const uint64_t off = 96ull << 20, len = 2 * PG;
@@ -316,6 +349,7 @@ int main(int argc, char **argv) {
     remap_cost();
     if (gpu_init()) { printf("no Metal device\n"); return 2; }
     step2();
+    step2e();
     printf("%d failures\n", failures);
     return failures != 0;
 }
