@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include "virt.h"
+#include "vgpu_metal.h"
 #include "vgpu_virgl.h"
 #include "virtio_gpu.h"
 
@@ -170,13 +171,14 @@ static uint32_t c_ctx_create(uint32_t ctx, const char *name) {
 }
 static uint32_t c_ctx_destroy(uint32_t ctx) { q_hdr(0x201, ctx, 0), rq_len = 32; return cmd(); }
 static uint32_t c_ctx_attach(uint32_t type, uint32_t ctx, uint32_t res) { q_hdr(type, ctx, 0), q32(24, res), rq_len = 32; return cmd(); }
-static uint32_t c_res_create(uint32_t id, uint32_t w, uint32_t h) {
+static uint32_t c_res_create_flags(uint32_t id, uint32_t w, uint32_t h, uint32_t flags) {
     q_hdr(0x204, 0, 0);
     // target 2D, format R8G8B8A8_UNORM (67), bind render target and sampler view
-    q32(24, id), q32(28, 2), q32(32, 67), q32(36, 0xa), q32(40, w), q32(44, h), q32(48, 1), q32(52, 1);
+    q32(24, id), q32(28, 2), q32(32, 67), q32(36, 0xa), q32(40, w), q32(44, h), q32(48, 1), q32(52, 1), q32(64, flags);
     rq_len = 72;
     return cmd();
 }
+static uint32_t c_res_create(uint32_t id, uint32_t w, uint32_t h) { return c_res_create_flags(id, w, h, 0); }
 static uint32_t c_res_unref(uint32_t id) { q_hdr(0x102, 0, 0), q32(24, id), rq_len = 32; return cmd(); }
 static uint32_t c_attach(uint32_t res, uint64_t addr, uint32_t len) {
     q_hdr(0x106, 0, 0), q32(24, res), q32(28, 1), q64(32, addr), q32(40, len);
@@ -358,6 +360,114 @@ static void test_flood(void) {
     check("res 3 unref'd", c_res_unref(3), OK);
 }
 
+/* A6: a 3D resource as the scanout, shown through the presenter's snapshot; and back and forth with a 2D one. */
+static int shot_bad(HvVgpuMetal *pm, const uint8_t rgba[4], uint32_t y0, uint32_t y1) {
+    static uint8_t shot[64 * 64 * 4];
+    if (hv_vgpu_metal_snapshot(pm, shot, 64, 64)) return -1;
+    int bad = 0;
+    for (uint32_t y = y0; y < y1; y++)
+        for (uint32_t x = 0; x < 64; x++) {
+            const uint8_t *px = shot + ((size_t)y * 64 + x) * 4;
+            bad += px[0] != rgba[2] || px[1] != rgba[1] || px[2] != rgba[0] || px[3] != 255;
+        }
+    return bad;
+}
+/* Waits for rows y0 to y1 of the snapshot to be rgba. Returns the pixels still wrong, -1 if there is no picture yet. */
+static int shows(HvVgpuMetal *pm, const uint8_t rgba[4], uint32_t y0, uint32_t y1) {
+    uint64_t t0 = now_ms();
+    int bad;
+    while ((bad = shot_bad(pm, rgba, y0, y1)) != 0 && now_ms() - t0 < 5000) usleep(5000);
+    return bad;
+}
+static uint32_t c_scanout(uint32_t res, uint32_t w, uint32_t h) {
+    q_hdr(0x103, 0, 0), q32(32, w), q32(36, h), q32(40, 0), q32(44, res);
+    rq_len = 48;
+    return cmd();
+}
+static uint32_t c_flush(uint32_t res, uint32_t w, uint32_t h) {
+    q_hdr(0x104, 0, 0), q32(32, w), q32(36, h), q32(40, res);
+    rq_len = 48;
+    return cmd();
+}
+static void c_clear(uint32_t ctx, uint32_t res, const uint8_t rgba[4]) {
+    uint32_t dw[32], n = clear_cmd(dw, res, rgba);
+    q_submit(ctx, dw, n, 0);
+    check("the clear is answered OK", cmd(), OK);
+}
+
+static void test_scanout(void) {
+    static const uint8_t GREEN[4] = {0x20, 0xc0, 0x40, 0xff};
+    HvVgpuMetal *pm = hv_vgpu_metal_create(b.gpu);
+    check("the presenter starts", pm != NULL, 1);
+    if (!pm) return;
+    check("the scanout is not shown before anything is set", shot_bad(pm, RED, 0, 64), -1);
+    hv_vgpu_metal_set_3d(pm, hv_vgpu_virgl_scanout_ops(), rend);
+    check("ctx", c_ctx_create(20, "scan"), OK);
+    check("3D resource", c_res_create(20, 64, 64), OK);
+    check("attach it to the context", c_ctx_attach(0x202, 20, 20), OK);
+    c_clear(20, 20, BLUE);
+    check("SET_SCANOUT with a 3D resource", c_scanout(20, 64, 64), OK);
+    check("RESOURCE_FLUSH", c_flush(20, 64, 64), OK);
+    check("the 3D clear shows in the snapshot", (uint64_t)shows(pm, BLUE, 0, 64), 0);
+    c_clear(20, 20, RED);
+    check("a second colour needs a flush: flush", c_flush(20, 64, 64), OK);
+    check("the second 3D clear shows", (uint64_t)shows(pm, RED, 0, 64), 0);
+
+    // 2D in between, with its upload path
+    check("2D resource", ({ q_hdr(0x101, 0, 0), q32(24, 21), q32(28, 67), q32(32, 64), q32(36, 64); rq_len = 40; cmd(); }), OK);
+    check("2D backing", c_attach(21, BACKING + 0x40000, 64 * 64 * 4), OK);
+    for (int i = 0; i < 64 * 64; i++) memcpy(ram(BACKING + 0x40000) + 4 * i, GREEN, 4);
+    check("2D transfer", ({ q_hdr(0x105, 0, 0), q32(32, 64), q32(36, 64), q64(40, 0), q32(48, 21); rq_len = 56; cmd(); }), OK);
+    check("SET_SCANOUT with the 2D resource", c_scanout(21, 64, 64), OK);
+    check("2D flush", c_flush(21, 64, 64), OK);
+    check("the 2D picture shows after a 3D one", (uint64_t)shows(pm, GREEN, 0, 64), 0);
+    // and back
+    check("SET_SCANOUT with the 3D resource again", c_scanout(20, 64, 64), OK);
+    check("the 3D picture shows after a 2D one", (uint64_t)shows(pm, RED, 0, 64), 0);
+
+    // A transfer puts guest row 0 at the top with or without Y_0_TOP (virgl inverts a Y_0_TOP one on the way in)
+    check("3D resource 22, Y_0_TOP", c_res_create_flags(22, 64, 64, 1), OK);
+    check("backing 22", c_attach(22, BACKING + 0x80000, 64 * 64 * 4), OK);
+    for (int y = 0; y < 64; y++)
+        for (int x = 0; x < 64; x++) memcpy(ram(BACKING + 0x80000) + 4 * (y * 64 + x), y < 32 ? GREEN : BLUE, 4);
+    check("attach 22 to the context", c_ctx_attach(0x202, 20, 22), OK);
+    q_transfer(0x205, 20, 22, 64, 64, 0);
+    check("TRANSFER_TO_HOST_3D", cmd(), OK);
+    check("SET_SCANOUT with resource 22", c_scanout(22, 64, 64), OK);
+    check("flush 22", c_flush(22, 64, 64), OK);
+    check("the top half is green", (uint64_t)shows(pm, GREEN, 0, 32), 0);
+    check("the bottom half is blue", (uint64_t)shows(pm, BLUE, 32, 64), 0);
+    check("3D resource 23, no Y_0_TOP", c_res_create_flags(23, 64, 64, 0), OK);
+    check("backing 23", c_attach(23, BACKING + 0x80000, 64 * 64 * 4), OK);
+    check("attach 23 to the context", c_ctx_attach(0x202, 20, 23), OK);
+    for (int y = 0; y < 64; y++)
+        for (int x = 0; x < 64; x++) memcpy(ram(BACKING + 0x80000) + 4 * (y * 64 + x), y < 32 ? RED : GREEN, 4);
+    q_transfer(0x205, 20, 23, 64, 64, 0);
+    check("TRANSFER_TO_HOST_3D of 23", cmd(), OK);
+    check("SET_SCANOUT with resource 23", c_scanout(23, 64, 64), OK);
+    check("flush 23", c_flush(23, 64, 64), OK);
+    check("without the flag the top half is red too", (uint64_t)shows(pm, RED, 0, 32), 0);
+    check("and the bottom half is green", (uint64_t)shows(pm, GREEN, 32, 64), 0);
+    check("unref 23", c_res_unref(23), OK);
+
+    // A part of a larger resource
+    q_hdr(0x103, 0, 0), q32(24, 0), q32(28, 32), q32(32, 64), q32(36, 32), q32(40, 0), q32(44, 22), rq_len = 48;
+    check("SET_SCANOUT of 64 x 32 at y 32", cmd(), OK);
+    check("flush the part", c_flush(22, 64, 64), OK);
+    check("the part is all blue", ({ uint64_t t0 = now_ms(); int bad; static uint8_t sh[64 * 32 * 4]; do { bad = hv_vgpu_metal_snapshot(pm, sh, 64, 32); if (!bad) for (int i = 0; i < 64 * 32; i++) bad += sh[4 * i] != BLUE[2] || sh[4 * i + 1] != BLUE[1] || sh[4 * i + 2] != BLUE[0]; if (bad) usleep(5000); } while (bad && now_ms() - t0 < 5000); (uint64_t)bad; }), 0);
+
+    // The scanout resource goes away: black, as a 2D one does
+    check("SET_SCANOUT of 22 whole again", c_scanout(22, 64, 64), OK);
+    check("unref the scanout resource", c_res_unref(22), OK);
+    check("the screen goes black", (uint64_t)shows(pm, (const uint8_t[4]){0, 0, 0, 255}, 0, 64), 0);
+
+    hv_vgpu_metal_set_3d(pm, NULL, NULL);
+    hv_vgpu_metal_destroy(pm);
+    check("2D unref", c_res_unref(21), OK);
+    check("3D unref", c_res_unref(20), OK);
+    check("ctx destroy", c_ctx_destroy(20), OK);
+}
+
 /* A reset with a context and resources alive: the renderer drops them, and the ids can be used again. */
 static void test_reset(void) {
     HvVgpuVirglStats s0, s1;
@@ -418,6 +528,7 @@ int main(void) {
     test_isolation();
     test_flood();
     test_reset();
+    test_scanout();
 
     hv_vgpu_virgl_stats(rend, &st);
     printf("  renderer: %llu requests, %llu errors, %llu fences\n", (unsigned long long)st.requests, (unsigned long long)st.errors,

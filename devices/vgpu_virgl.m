@@ -1,9 +1,11 @@
 // virglrenderer on ANGLE (Metal) behind HvGpu3dOps. See vgpu_virgl.h.
 #import <Foundation/Foundation.h>
+#import <IOSurface/IOSurfaceRef.h>
 #define EGL_EGLEXT_PROTOTYPES 1
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES3/gl3.h>
+#include <GLES2/gl2ext.h>
 #include <errno.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -23,6 +25,14 @@
 #define EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE 0x3489
 #endif
 
+#ifndef EGL_BIND_TO_TEXTURE_TARGET_ANGLE
+#define EGL_BIND_TO_TEXTURE_TARGET_ANGLE 0x348D
+#endif
+#ifndef GL_TEXTURE_RECTANGLE_ANGLE
+#define GL_TEXTURE_RECTANGLE_ANGLE 0x84F5
+#endif
+#define VIRGL_Y_0_TOP 1 /* virgl_hw.h's VIRGL_RESOURCE_Y_0_TOP, in resource_info.flags */
+
 #define NBUCKET 256
 #define FENCE_POLL_MS 2
 #define SHUTDOWN_FENCE_MS 1000
@@ -30,8 +40,20 @@
 #define MAX_CAPSETS 2 /* VIRGL and VIRGL2 */
 #define MAX_CAPVER 4
 
+// A6: a blit request from the presenter, run on the renderer thread; the presenter waits on cv.
+typedef struct ScanJob {
+    uint32_t res;
+    HvGpu3dBox src;
+    void *surf; // IOSurfaceRef, retained, for the caller
+    uint64_t serial;
+    pthread_mutex_t mu;
+    pthread_cond_t cv;
+    int done;
+} ScanJob;
+
 typedef struct Job {
     struct Job *next;
+    ScanJob *scan; // set: not a guest request
     HvGpu3dReq req; /* its pointers live until done(), as the device promises */
     void *cookie;
 } Job;
@@ -54,6 +76,18 @@ typedef struct Fence {
 
 typedef struct { uint32_t id, version, size; uint8_t *data[MAX_CAPVER]; } CapSet;
 
+// The scanout blit's own GL context (same share group as virgl's), program and IOSurface render target.
+typedef struct Scan {
+    EGLContext ctx;
+    GLuint prog, fbo, tex, sampler;
+    GLint u;
+    EGLSurface pb;
+    IOSurfaceRef surf;
+    uint32_t w, h;
+    uint64_t serial;
+    int failed;
+} Scan;
+
 struct HvVgpuVirgl {
     pthread_t thread;
     pthread_mutex_t mu;
@@ -64,6 +98,9 @@ struct HvVgpuVirgl {
     // Owned by the renderer thread from here on.
     EGLDisplay dpy;
     EGLConfig cfg;
+    EGLint bind_target; // the IOSurface's texture target, asked of the config
+    EGLContext first_ctx; // a context virgl made, to share with when none is current
+    Scan scan;
     Tab ctx, res;
     Fence *fhead, *ftail;
     uint32_t nfence, fseq;
@@ -132,12 +169,15 @@ static virgl_renderer_gl_context cb_create(void *cookie, int idx, struct virgl_r
     HvVgpuVirgl *r = cookie;
     EGLint at[] = {EGL_CONTEXT_MAJOR_VERSION, p->major_ver, EGL_CONTEXT_MINOR_VERSION, p->minor_ver, EGL_NONE};
     EGLContext share = p->shared ? eglGetCurrentContext() : EGL_NO_CONTEXT;
+    if (p->shared && share == EGL_NO_CONTEXT) share = r->first_ctx;
     EGLContext e = eglCreateContext(r->dpy, r->cfg, share, at);
     if (!e) (void)eglGetError();
+    else if (!r->first_ctx) r->first_ctx = e;
     return e;
 }
 static void cb_destroy(void *cookie, virgl_renderer_gl_context x) {
     HvVgpuVirgl *r = cookie;
+    if (x == r->first_ctx) r->first_ctx = EGL_NO_CONTEXT;
     eglDestroyContext(r->dpy, x);
 }
 static int cb_current(void *cookie, int idx, virgl_renderer_gl_context x) {
@@ -323,6 +363,172 @@ static void execute(HvVgpuVirgl *r, Job *j) {
     }
 }
 
+/* ---- scanout blit (A6) ---- */
+
+static const char *scan_vs = "#version 300 es\n"
+    "void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }\n";
+// u = (box x, box y, last row, flip). Row 0 of the target is the top of the picture. A Y_0_TOP resource is stored
+// bottom row first (virgl inverts its transfers), so its picture is read from the last row up; the others top down.
+static const char *scan_fs = "#version 300 es\n"
+    "precision highp float;\n"
+    "uniform highp sampler2D t;\n"
+    "uniform highp ivec4 u;\n"
+    "out vec4 o;\n"
+    "void main() { ivec2 p = ivec2(gl_FragCoord.xy); int gy = u.y + p.y; int ty = u.w != 0 ? u.z - gy : gy;\n"
+    "  o = vec4(texelFetch(t, ivec2(u.x + p.x, ty), 0).rgb, 1.0); }\n";
+
+static GLuint scan_shader(GLenum type, const char *src) {
+    GLuint sh = glCreateShader(type);
+    glShaderSource(sh, 1, &src, NULL);
+    glCompileShader(sh);
+    GLint ok = 0;
+    glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        char log[256] = "";
+        glGetShaderInfoLog(sh, sizeof log, NULL, log);
+        fprintf(stderr, "virgl: scanout shader: %s\n", log);
+        glDeleteShader(sh);
+        return 0;
+    }
+    return sh;
+}
+
+// Current context: the scan one.
+static int scan_program(Scan *s) {
+    GLuint vs = scan_shader(GL_VERTEX_SHADER, scan_vs), fs = scan_shader(GL_FRAGMENT_SHADER, scan_fs);
+    if (!vs || !fs) return -1;
+    s->prog = glCreateProgram();
+    glAttachShader(s->prog, vs);
+    glAttachShader(s->prog, fs);
+    glLinkProgram(s->prog);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    GLint ok = 0;
+    glGetProgramiv(s->prog, GL_LINK_STATUS, &ok);
+    if (!ok) return -1;
+    s->u = glGetUniformLocation(s->prog, "u");
+    glUseProgram(s->prog);
+    glUniform1i(glGetUniformLocation(s->prog, "t"), 0);
+    glGenSamplers(1, &s->sampler); // overrides the texture's own filter: virgl's may make a one-level texture incomplete
+    glSamplerParameteri(s->sampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glSamplerParameteri(s->sampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glSamplerParameteri(s->sampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glSamplerParameteri(s->sampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindSampler(0, s->sampler);
+    glGenFramebuffers(1, &s->fbo);
+    return 0;
+}
+
+// Current context: the scan one. The presenter's texture keeps the surface itself alive.
+static void scan_drop_target(HvVgpuVirgl *r) {
+    Scan *s = &r->scan;
+    if (s->pb != EGL_NO_SURFACE) {
+        eglReleaseTexImage(r->dpy, s->pb, EGL_BACK_BUFFER);
+        eglDestroySurface(r->dpy, s->pb);
+        s->pb = EGL_NO_SURFACE;
+    }
+    if (s->tex) glDeleteTextures(1, &s->tex), s->tex = 0;
+    if (s->surf) CFRelease(s->surf), s->surf = NULL;
+}
+
+static int scan_target(HvVgpuVirgl *r, uint32_t w, uint32_t h) {
+    Scan *s = &r->scan;
+    if (s->surf && s->w == w && s->h == h) return 0;
+    scan_drop_target(r);
+    NSDictionary *props = @{(id)kIOSurfaceWidth: @(w), (id)kIOSurfaceHeight: @(h), (id)kIOSurfaceBytesPerElement: @4,
+                            (id)kIOSurfacePixelFormat: @(0x42475241u)}; // 'BGRA'
+    s->surf = IOSurfaceCreate((__bridge CFDictionaryRef)props);
+    if (!s->surf) return -1;
+    EGLint sa[] = {EGL_WIDTH, (EGLint)w, EGL_HEIGHT, (EGLint)h, EGL_IOSURFACE_PLANE_ANGLE, 0, EGL_TEXTURE_TARGET, r->bind_target,
+                   EGL_TEXTURE_INTERNAL_FORMAT_ANGLE, GL_BGRA_EXT, EGL_TEXTURE_FORMAT, EGL_TEXTURE_RGBA,
+                   EGL_TEXTURE_TYPE_ANGLE, GL_UNSIGNED_BYTE, EGL_NONE};
+    s->pb = eglCreatePbufferFromClientBuffer(r->dpy, EGL_IOSURFACE_ANGLE, (EGLClientBuffer)s->surf, r->cfg, sa);
+    if (s->pb == EGL_NO_SURFACE) {
+        fprintf(stderr, "virgl: scanout IOSurface pbuffer failed (0x%x)\n", eglGetError());
+        CFRelease(s->surf), s->surf = NULL;
+        return -1;
+    }
+    GLenum target = r->bind_target == EGL_TEXTURE_RECTANGLE_ANGLE ? GL_TEXTURE_RECTANGLE_ANGLE : GL_TEXTURE_2D;
+    glGenTextures(1, &s->tex);
+    glBindTexture(target, s->tex);
+    if (!eglBindTexImage(r->dpy, s->pb, EGL_BACK_BUFFER)) {
+        fprintf(stderr, "virgl: scanout eglBindTexImage failed (0x%x)\n", eglGetError());
+        scan_drop_target(r);
+        return -1;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, s->fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, target, s->tex, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        fputs("virgl: scanout framebuffer incomplete\n", stderr);
+        scan_drop_target(r);
+        return -1;
+    }
+    s->w = w, s->h = h, s->serial++;
+    return 0;
+}
+
+static void scan_blit(HvVgpuVirgl *r, ScanJob *j) {
+    Scan *s = &r->scan;
+    struct virgl_renderer_resource_info info = {0};
+    if (s->failed || !j->src.w || !j->src.h || virgl_renderer_resource_get_info((int)j->res, &info) || !info.tex_id) return;
+    if (j->src.x + (uint64_t)j->src.w > info.width || j->src.y + (uint64_t)j->src.h > info.height) return;
+    EGLContext prev = eglGetCurrentContext(); // virgl's: put it back, it does not expect another context current
+    if (prev) glFlush();
+    if (!s->ctx) {
+        EGLint ca[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 0, EGL_NONE};
+        s->ctx = eglCreateContext(r->dpy, r->cfg, prev ? prev : r->first_ctx, ca);
+        if (!s->ctx) {
+            fprintf(stderr, "virgl: scanout context failed (0x%x)\n", eglGetError());
+            s->failed = 1;
+            return;
+        }
+    }
+    if (!eglMakeCurrent(r->dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, s->ctx)) return;
+    int ok = (s->prog || scan_program(s) == 0) && scan_target(r, j->src.w, j->src.h) == 0;
+    if (!s->prog) s->failed = 1;
+    if (ok) {
+        glBindFramebuffer(GL_FRAMEBUFFER, s->fbo);
+        glViewport(0, 0, (GLsizei)j->src.w, (GLsizei)j->src.h);
+        glDisable(GL_BLEND);
+        glDisable(GL_SCISSOR_TEST);
+        glUseProgram(s->prog);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, info.tex_id);
+        glUniform4i(s->u, (GLint)j->src.x, (GLint)j->src.y, (GLint)info.height - 1, (info.flags & VIRGL_Y_0_TOP) ? 1 : 0);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glFinish();
+        if (glGetError() == GL_NO_ERROR) {
+            j->surf = (void *)CFRetain(s->surf);
+            j->serial = s->serial;
+        }
+    }
+    eglMakeCurrent(r->dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, prev);
+}
+
+// Renderer thread, before virgl is cleaned up.
+static void scan_free(HvVgpuVirgl *r) {
+    Scan *s = &r->scan;
+    if (!s->ctx) return;
+    if (eglMakeCurrent(r->dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, s->ctx)) {
+        scan_drop_target(r);
+        if (s->prog) glDeleteProgram(s->prog);
+        if (s->fbo) glDeleteFramebuffers(1, &s->fbo);
+        if (s->sampler) glDeleteSamplers(1, &s->sampler);
+        glFinish();
+    }
+    eglMakeCurrent(r->dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    eglDestroyContext(r->dpy, s->ctx);
+    memset(s, 0, sizeof *s);
+}
+
+static void scan_finish(ScanJob *j) {
+    pthread_mutex_lock(&j->mu);
+    j->done = 1;
+    pthread_cond_signal(&j->cv);
+    pthread_mutex_unlock(&j->mu);
+}
+
 /* ---- thread ---- */
 
 static int egl_start(HvVgpuVirgl *r) {
@@ -339,7 +545,7 @@ static int egl_start(HvVgpuVirgl *r) {
         return -1;
     }
     eglBindAPI(EGL_OPENGL_ES_API);
-    // A6 binds IOSurfaces as pbuffers: pick a config that can.
+    // The scanout binds IOSurfaces as pbuffers: pick a config that can.
     EGLint ca[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT, EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8,
                    EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_BIND_TO_TEXTURE_RGBA, EGL_TRUE, EGL_NONE};
     EGLint n = 0;
@@ -348,6 +554,8 @@ static int egl_start(HvVgpuVirgl *r) {
         eglTerminate(r->dpy);
         return -1;
     }
+    eglGetConfigAttrib(r->dpy, r->cfg, EGL_BIND_TO_TEXTURE_TARGET_ANGLE, &r->bind_target);
+    if (r->bind_target != EGL_TEXTURE_RECTANGLE_ANGLE) r->bind_target = EGL_TEXTURE_2D;
     // A probe context names the renderer for the stats, then goes.
     EGLint pa[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 0, EGL_NONE};
     EGLContext probe = eglCreateContext(r->dpy, r->cfg, EGL_NO_CONTEXT, pa);
@@ -413,6 +621,7 @@ static void renderer_stop(HvVgpuVirgl *r) {
         if (r->nfence) usleep(1000);
     }
     fail_all_fences(r);
+    scan_free(r);
     // What the guest left. Backing goes first so nothing reads guest RAM.
     for (int b = 0; b < NBUCKET; b++)
         for (Ent *e = r->res.b[b]; e; e = e->next) detach_backing(e);
@@ -466,7 +675,10 @@ static void *thread_main(void *arg) {
         pthread_mutex_unlock(&r->mu);
 
         @autoreleasepool {
-            if (j && stopping) finish(j->cookie, HV_GPU3D_ERR_UNSPEC); // a stop does not run guest requests
+            if (j && j->scan) {
+                if (!stopping) scan_blit(r, j->scan);
+                scan_finish(j->scan); // the ScanJob is the presenter's stack: last touch
+            } else if (j && stopping) finish(j->cookie, HV_GPU3D_ERR_UNSPEC); // a stop does not run guest requests
             else if (j) execute(r, j);
             free(j);
             if (r->nfence && !stopping) {
@@ -523,7 +735,33 @@ static void op_submit(void *rp, const HvGpu3dReq *req, void *cookie) {
     pthread_mutex_unlock(&r->mu);
 }
 
+static void *op_blit(void *rp, uint32_t res_id, HvGpu3dBox src, uint64_t *serial) {
+    HvVgpuVirgl *r = rp;
+    ScanJob sj = {.res = res_id, .src = src, .mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER};
+    Job *j = calloc(1, sizeof *j);
+    if (!j) return NULL;
+    j->scan = &sj;
+    pthread_mutex_lock(&r->mu);
+    if (r->stop) {
+        pthread_mutex_unlock(&r->mu);
+        free(j);
+        return NULL;
+    }
+    if (r->tail) r->tail->next = j;
+    else r->head = j;
+    r->tail = j;
+    pthread_cond_signal(&r->cv);
+    pthread_mutex_unlock(&r->mu);
+    pthread_mutex_lock(&sj.mu);
+    while (!sj.done) pthread_cond_wait(&sj.cv, &sj.mu);
+    pthread_mutex_unlock(&sj.mu);
+    if (serial) *serial = sj.serial;
+    return sj.surf;
+}
+
 static const HvGpu3dOps ops = {op_capset_info, op_capset, op_submit};
+static const HvGpu3dScanoutOps scan_ops = {op_blit};
+const HvGpu3dScanoutOps *hv_vgpu_virgl_scanout_ops(void) { return &scan_ops; }
 const HvGpu3dOps *hv_vgpu_virgl_ops(void) { return &ops; }
 
 HvVgpuVirgl *hv_vgpu_virgl_create(void) {

@@ -73,4 +73,12 @@ typedef struct HvGpu3dOps {
     void (*submit)(void *r, const HvGpu3dReq *req, void *cookie);
 } HvGpu3dOps;
 
+/* A6: a 3D resource shown as the scanout. The presenter calls blit from its own thread. */
+typedef struct HvGpu3dScanoutOps {
+    /* Blocks until the renderer thread has copied the box (x, y, w, h) of resource res_id into a BGRA IOSurface of w x h
+       (top row first, as the guest sees it) and finished the GPU work. Returns the IOSurfaceRef retained, which the caller
+       releases, and a serial that changes with every new surface. NULL when the resource is gone or the renderer stopped. */
+    void *(*blit)(void *r, uint32_t res_id, HvGpu3dBox src, uint64_t *serial);
+} HvGpu3dScanoutOps;
+
 #endif

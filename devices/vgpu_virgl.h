@@ -17,6 +17,8 @@ typedef struct HvVgpuVirgl HvVgpuVirgl;
 HvVgpuVirgl *hv_vgpu_virgl_create(void);
 /* The ops for hv_virtio_gpu_set_3d(gpu, hv_vgpu_virgl_ops(), r). */
 const HvGpu3dOps *hv_vgpu_virgl_ops(void);
+/* The scanout hook for hv_vgpu_metal_set_3d(presenter, hv_vgpu_virgl_scanout_ops(), r) (A6). */
+const HvGpu3dScanoutOps *hv_vgpu_virgl_scanout_ops(void);
 /* After hv_virtio_gpu_destroy and before the board frees guest RAM. Fails what is still queued without running it,
    destroys what the guest left, then releases EGL. Waits for the thread: no time limit. */
 void hv_vgpu_virgl_destroy(HvVgpuVirgl *r);

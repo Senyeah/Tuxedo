@@ -367,7 +367,7 @@ static void res3d_remove(HvVirtioGpu *g, uint32_t id) {
         if (r->id != id) continue;
         *pp = r->next;
         res3d_drop_backing(g, r);
-        if (g->scanout3d_res == id) g->scanout3d_res = 0;
+        if (g->scanout3d_res == id) g->scanout3d_res = 0, scanout_all_dirty(g); /* the screen goes black */
         g->nres3d--;
         free(r);
         return;
@@ -619,6 +619,7 @@ static int try_3d(HvVirtioGpu *g, const HvVirtqElem *e, const uint8_t *req, uint
             return 1;
         }
         (*out)->req.res_id = r->id, (*out)->req.ctx_id = 0;
+        if (g->scanout3d_res == r->id) *wake = 1;
         res3d_remove(g, r->id);
         *status = QUEUED;
         return 1;
@@ -644,7 +645,7 @@ static int try_3d(HvVirtioGpu *g, const HvVirtqElem *e, const uint8_t *req, uint
                  rect.height < 16)
             *status = RESP_ERR_INVALID_PARAMETER;
         else {
-            g->scanout_res = 0; /* the plain scanout is off until A6 shows this one */
+            g->scanout_res = 0; /* the presenter shows the 3D one instead */
             g->scanout3d_res = r->id, g->scanout3d = rect;
             scanout_all_dirty(g);
             *wake = 1;
@@ -656,7 +657,7 @@ static int try_3d(HvVirtioGpu *g, const HvVirtqElem *e, const uint8_t *req, uint
         if (!(r = hv_virtio_gpu_res3d(g, get32(req + 40)))) return 0;
         if (!rect_inside(get_rect(req + 24), r->width, r->height)) *status = RESP_ERR_INVALID_PARAMETER;
         else {
-            if (r->id == g->scanout3d_res) g->flushes++;
+            if (r->id == g->scanout3d_res) g->flushes++, scanout_all_dirty(g), *wake = 1;
             *status = RESP_OK_NODATA;
         }
         return 1;
