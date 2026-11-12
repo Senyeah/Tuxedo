@@ -271,6 +271,14 @@ $(B)/test_legacy_external_display: ios/Henge/LegacyExternalDisplay.swift ios/Hen
 $(B)/test_scene_manifest: tests/test_scene_manifest.swift | $(B)
 	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
 
+# Guest mode sizes and when to send them: pure policy, no UIKit.
+$(B)/test_display_mode_policy: ios/Henge/DisplayModePolicy.swift tests/test_display_mode_policy.swift | $(B)
+	xcrun --sdk macosx swiftc $^ -o $@
+
+test-display-mode-policy: $(B)/test_display_mode_policy
+	$(B)/test_display_mode_policy
+.PHONY: test-display-mode-policy
+
 test-display-routing: $(B)/test_display_targets $(B)/test_display_router $(B)/test_external_screen_plan $(B)/test_legacy_external_display $(B)/test_scene_manifest
 	$(B)/test_display_targets
 	$(B)/test_display_router
