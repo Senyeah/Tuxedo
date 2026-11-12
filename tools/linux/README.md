@@ -9,7 +9,7 @@ Every script runs inside the builder container, so no cross compiler is needed.
 - `Dockerfile`: the builder image (`debian:trixie` with the build tools).
 - `build-uboot.sh`, `build-image.sh`, `customize.sh`, `rootfs/`: see Order.
 - `customize-desktop.sh`, `rootfs-desktop/`: extra files for the desktop image (`build-image.sh --desktop`).
-- `henge-guest/` (G9): the source of the `henge-guest` Debian package. It holds the grow and first-boot scripts (`/usr/lib/henge/`) and units (`/usr/lib/systemd/system/henge-*.service`, G8), and enables them in `postinst`. `build-guest-pkg.sh` builds the `.deb` on its own; `build-image.sh` builds it too and installs it in both images. P6 (shared folder) and P7 (clipboard) add their files here. `grow-check.py` tests the units.
+- `henge-guest/` (G9): the source of the `henge-guest` Debian package. It holds the grow and first-boot scripts (`/usr/lib/henge/`) and units (`/usr/lib/systemd/system/henge-*.service`, G8), and enables them in `postinst`. `build-guest-pkg.sh` builds the `.deb` on its own; `build-image.sh` builds it too and installs it in both images. P6 adds the shared-folder mount (`home-henge-Henge.mount` and `.automount`, `/etc/henge/davfs2.conf`); P7 adds the clipboard helper (`henge-clipboard` and a user unit). `grow-check.py` tests the grow units, `share-check.py` the shared folder and `clipboard-check.py` the clipboard.
 - `run.sh`: runs a command in the builder image. `build/linux/` is mounted at `/out`, the repo's `tools/linux/` at `/tools` (read only), and a named volume at `/work` for source trees.
 
 `run.sh` builds the image on first use. Set `HENGE_LINUX_OUT` to change the artefact directory. The default is the shared `$HOME/Repos/Henge/build/linux`, so all worktrees see the same files.
@@ -35,6 +35,26 @@ Both units come from the `henge-guest` package. Raise `Version` in `henge-guest/
 - `henge-grow.service` runs on every boot. `henge-grow` finds the root partition from sysfs, moves the backup GPT header to the end of the disk (`sgdisk -e`), runs `growpart` and then `resize2fs` on the mounted root. When the disk has not grown it changes nothing. The app grows the disk file, and the next boot grows the guest.
 - `henge-firstboot.service` runs once, while `/var/lib/henge/firstboot-done` is missing. It runs `systemd-machine-id-setup` if `/etc/machine-id` is empty, then writes the marker.
 - `grow-check.py` (`uv run`) clones an image, grows the clone to 16 GB (sparse), boots it through U-Boot, checks the grown partition, filesystem and GPT, boots it again unchanged, grows it by 4 GB more and boots a third time. `--qemu` uses QEMU TCG. Otherwise it uses `build/hengevm`. `--image`, `--firmware` and `--work-dir` choose files.
+
+## Shared folder (P6)
+
+`henge-guest` mounts `http://10.0.2.4/` (the share server in `host/share.c`, reached through the user-mode network) at `/home/henge/Henge` with `davfs2`. The package depends on `davfs2`, and `build-image.sh` installs it.
+
+- `home-henge-Henge.automount` is enabled; the mount happens on the first visit to `~/Henge`, so a boot with no network or no `--share` does not wait for it. Without the share, the first visit takes about 12 s (davfs2's connect timeouts, under the unit's `TimeoutSec=20`), then shows only what davfs2 cached, and writes fail with "Resource temporarily unavailable". The unit does not fail and the system stays `running`.
+- `/etc/henge/davfs2.conf` is passed with the `conf=` mount option and does not touch Debian's `/etc/davfs2/davfs2.conf`. It sets `ask_auth 0`, `dir_refresh 5` (a change made on the Mac shows in the guest within about 5 s) and `delay_upload 1` (a write reaches the Mac about a second after close). The unmount at shutdown uploads what is left.
+- Files belong to `henge:henge`. davfs2 caches in `/var/cache/davfs2` and shows its own `lost+found` in the folder's root; it cannot be hidden.
+- Locks: the server accepts `LOCK` and `UNLOCK` and enforces nothing, and davfs2 is content with that (`use_locks` stays on). The check sees no davfs2 message about locks.
+- `share-check.py` (`uv run`) boots a clone of `--image` with `--share`, and checks the mount, create, rename, delete, names with spaces and non-ASCII characters, a 100 MB copy each way, and a write right before poweroff. A second boot without `--share` checks that the machine still reaches `running` and that a visit to the folder fails in time. `--size-mb`, `--cpus`, `--image`, `--firmware` and `--work-dir` choose the run.
+
+## Clipboard (P7)
+
+`henge-clipboard` (`/usr/lib/henge/`, run by the user unit `henge-clipboard.service`) speaks the same `/.henge/clipboard` protocol as the macOS helper `tools/henge-agent.m`, so `host/share.c` and the app's "helper running" test (`henge_share_agent_seen`, a poll in the last 40 s) work unchanged. The desktop image's labwc `autostart` imports `WAYLAND_DISPLAY` and `DISPLAY` into the user manager and starts the unit, so it runs only on the desktop; the console image has no clipboard (the app writes pasted text to the console).
+
+- Device to guest: a `GET ?since=N` that the server holds up to 25 s, as in macOS. The first request uses `since=0`; the answer that comes back at once is what the device held before the helper started, and is dropped (macOS uses a huge `since` for this, which blinds it for the first 25 s). News goes to `wl-copy`.
+- Guest to device: Wayland uses `wl-paste --type text --watch` (one base64 line per change); X11 (`HENGE_CLIPBOARD=x11`, or `DISPLAY` without `WAYLAND_DISPLAY`) looks with `xclip` once a second, as the macOS helper does. Text that was just set from the device is not sent back, and a clipboard with the `x-kde-passwordManagerHint` type (password managers) is not sent. Clipboards over 16 MB or not valid UTF-8 are not sent. Not tested: the password manager type, as `wl-copy` cannot offer two types.
+- The app's paste button sets the device clipboard, waits 0.8 s and sends Ctrl-V; its menu chooses Ctrl-Shift-V for terminals.
+- The desktop package list adds `wl-clipboard`, `xclip` and `python3`; the package only recommends them.
+- `clipboard-check.py` (`uv run`, `make test-linux-clipboard`) boots a clone of the desktop image with `--share` and `HV_INPUT_FILE` (`clip TEXT` and `getclip`), and checks each of the points above, plus the X11 mode through XWayland. `--image`, `--hengevm`, `--cpus` and `--work-dir` choose the run.
 
 ## Packaging and catalogue (G7)
 

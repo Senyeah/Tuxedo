@@ -184,6 +184,16 @@ test-linux-display: $(B)/hengevm
 	uv run tools/linux/display-check.py $(DISPLAY_ARGS)
 .PHONY: test-linux-display
 
+# P6: the shared folder (~/Henge, davfs2) against --share. SHARE_ARGS="--image FILE" for an image that has davfs2.
+test-linux-share: $(B)/hengevm
+	uv run tools/linux/share-check.py $(SHARE_ARGS)
+.PHONY: test-linux-share
+
+# P7: the clipboard helper in the desktop image against the host's clipboard. CLIP_ARGS="--image FILE" for an image that has henge-guest 1.2.
+test-linux-clipboard: $(B)/hengevm
+	uv run tools/linux/clipboard-check.py $(CLIP_ARGS)
+.PHONY: test-linux-clipboard
+
 test-vm-lifecycle: $(B)/test_vm_lifecycle
 	$(B)/test_vm_lifecycle
 .PHONY: test-vm-lifecycle

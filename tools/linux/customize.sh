@@ -12,10 +12,11 @@ printf '%s\n' virtio_pci virtio_blk virtio_net virtio_rng ext4 >> /etc/initramfs
 
 useradd --create-home --shell /bin/bash --groups sudo henge
 passwd -d henge
+install -d -o henge -g henge /home/henge/Henge
 
 # henge-guest enables its own units; fail the build if it did not
 dpkg-query -W -f='${Status}' henge-guest | grep -q 'install ok installed'
-systemctl is-enabled henge-firstboot.service henge-grow.service
+systemctl is-enabled henge-firstboot.service henge-grow.service home-henge-Henge.automount
 systemctl enable systemd-networkd.service systemd-resolved.service systemd-timesyncd.service
 ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 mkdir -p /etc/systemd/system/getty.target.wants
