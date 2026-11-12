@@ -300,6 +300,14 @@ test-machine-model: $(B)/test_machine_model
 	$(B)/test_machine_model
 .PHONY: test-machine-model
 
+# I7: the Linux catalogue, hashes, space and build checks, and the download bookkeeping.
+$(B)/test_linux_catalogue: ios/Henge/LinuxCatalogue.swift ios/Henge/LinuxDownload.swift ios/Henge/RangedDownload.swift tests/test_linux_catalogue.swift | $(B)
+	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
+
+test-linux-catalogue: $(B)/test_linux_catalogue
+	$(B)/test_linux_catalogue
+.PHONY: test-linux-catalogue
+
 # E13/T4: the engine gate. The macOS guest boot has no machine on this Mac, so it stays an iPhone check.
 # Does not run ios/scripts/sim_build.sh (HengeSim): run it when ios/ changes.
 # Needs no Husk checkout: IOS_DEPS falls back to Homebrew's libslirp when the default sysroot is missing.

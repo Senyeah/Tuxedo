@@ -1,0 +1,127 @@
+import CryptoKit
+import Foundation
+
+/// One downloadable Linux machine image, as tools/linux/package-image.sh describes it in linux-images.json.
+struct LinuxImage: Codable, Identifiable, Hashable {
+    var id: String
+    var name: String
+    var version: String
+    var kind: String
+    var diskURL: URL
+    var diskBytes: Int64
+    var diskSHA256: String
+    /// The disk's .hvsparse once decoded, before hv_sparse_unpack.
+    var unpackedBytes: Int64
+    var logicalBytes: Int64
+    var firmwareURL: URL
+    var firmwareBytes: Int64
+    var firmwareSHA256: String
+    var kernel: String?
+    var minBuild: Int?
+
+    var downloadBytes: Int64 { diskBytes + firmwareBytes }
+
+    /// Free space an install takes: what is left to download, the decoded file, and 1 GB of margin.
+    func spaceNeeded(alreadyDownloaded: Int64 = 0) -> Int64 {
+        max(downloadBytes - alreadyDownloaded, 0) + unpackedBytes + (1 << 30)
+    }
+}
+
+enum LinuxCatalogue {
+    static let urlKey = "henge.linux.catalogueURL"
+
+    /// The catalogue URL typed in Settings, or nil.
+    static var configuredURL: URL? {
+        let text = (UserDefaults.standard.string(forKey: urlKey) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let url = URL(string: text), url.scheme != nil, url.host != nil else { return nil }
+        return url
+    }
+
+    private struct File: Decodable { var images: [LinuxImage] }
+
+    /// File names in the catalogue may be relative: the packages sit next to linux-images.json.
+    static func decode(_ data: Data, base: URL) throws -> [LinuxImage] {
+        guard var list = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["images"] as? [[String: Any]] else {
+            throw LinuxError.text("The catalogue has no list of images.")
+        }
+        for i in list.indices {
+            for key in ["diskURL", "firmwareURL"] {
+                if let s = list[i][key] as? String, let u = URL(string: s, relativeTo: base)?.absoluteURL { list[i][key] = u.absoluteString }
+            }
+        }
+        do {
+            let fixed = try JSONSerialization.data(withJSONObject: ["images": list])
+            return try JSONDecoder().decode(File.self, from: fixed).images
+        } catch {
+            throw LinuxError.text("The catalogue is not in the format Henge expects (\(error.localizedDescription)).")
+        }
+    }
+
+    static func fetch(_ url: URL) async throws -> [LinuxImage] {
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = 20
+        let data: Data, response: URLResponse
+        do { (data, response) = try await URLSession.shared.data(for: request) }
+        catch { throw LinuxError.text("Henge could not reach the catalogue at \(url.absoluteString): \(error.localizedDescription)") }
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard status == 200 else { throw LinuxError.text("The catalogue server answered \(status).") }
+        return try decode(data, base: url)
+    }
+
+    /// An entry that needs a newer Henge is refused.
+    static func checkBuild(_ image: LinuxImage, appBuild: Int) throws {
+        if let min = image.minBuild, min > appBuild {
+            throw LinuxError.text("\(image.name) needs a newer Henge (build \(min); this is build \(appBuild)). Update Henge to install it.")
+        }
+    }
+
+    static var appBuild: Int { Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "") ?? 0 }
+
+    static func checkSpace(_ image: LinuxImage, free: Int64, alreadyDownloaded: Int64 = 0) throws {
+        let needed = image.spaceNeeded(alreadyDownloaded: alreadyDownloaded)
+        if free > 0 && free < needed {
+            throw LinuxError.text("This install needs about \(sizeText(needed)) free; this device has \(sizeText(free)).")
+        }
+    }
+
+    static func sizeText(_ bytes: Int64) -> String {
+        let f = ByteCountFormatter()
+        f.countStyle = .file
+        f.allowedUnits = [.useGB, .useMB]
+        return f.string(fromByteCount: bytes)
+    }
+}
+
+struct LinuxError: LocalizedError {
+    let message: String
+    static func text(_ s: String) -> LinuxError { LinuxError(message: s) }
+    var errorDescription: String? { message }
+}
+
+enum FileHash {
+    /// SHA-256 of a file as lowercase hex, read in 4 MB pieces so a 300 MB image never sits in memory.
+    static func sha256(of url: URL, progress: ((Int64) -> Void)? = nil) throws -> String {
+        let h = try FileHandle(forReadingFrom: url)
+        defer { try? h.close() }
+        var hasher = SHA256()
+        var done: Int64 = 0
+        while true {
+            let chunk = try h.read(upToCount: 4 << 20) ?? Data()
+            if chunk.isEmpty { break }
+            hasher.update(data: chunk)
+            done += Int64(chunk.count)
+            progress?(done)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Deletes the file and throws when its hash is not the catalogue's.
+    static func verify(_ url: URL, expected: String, what: String, progress: ((Int64) -> Void)? = nil) throws {
+        let actual = try sha256(of: url, progress: progress)
+        if actual != expected.lowercased() {
+            try? FileManager.default.removeItem(at: url)
+            throw LinuxError.text("The \(what) download was damaged (its checksum does not match). Henge deleted it: try again.")
+        }
+    }
+}
