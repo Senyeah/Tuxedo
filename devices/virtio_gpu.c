@@ -467,6 +467,8 @@ static uint32_t cmd_ctx_destroy(HvVirtioGpu *g, const HvVirtqElem *e, const uint
 static uint32_t cmd_ctx_attach(HvVirtioGpu *g, const HvVirtqElem *e, const uint8_t *req, uint32_t type, HvVgpuPend **out) {
     if (!ctx_ok(g, get32(req + 16))) return RESP_ERR_INVALID_CONTEXT_ID;
     uint32_t res = get32(req + 24);
+    /* Linux attaches its 2D dumb buffers too; the renderer never sees them (QEMU ignores the same attach). */
+    if (hv_virtio_gpu_resource(g, res)) return RESP_OK_NODATA;
     if (!hv_virtio_gpu_res3d(g, res)) return RESP_ERR_INVALID_RESOURCE_ID;
     HvVgpuPend *p = pend_new(g, req, e, type, 0, 0);
     if (!p) return RESP_ERR_OUT_OF_MEMORY;
@@ -882,7 +884,8 @@ static uint32_t capset_answer(HvVirtioGpu *g, uint32_t type, const uint8_t *req,
     }
     uint32_t id = get32(req + 24), version = get32(req + 28), i = 0;
     while (i < g->ncaps && g->caps[i].id != id) i++;
-    if (i == g->ncaps || !version || version > g->caps[i].version) return RESP_ERR_INVALID_PARAMETER;
+    if (i < g->ncaps && !version) version = g->caps[i].version; /* Mesa asks for capset 2 with version 0: the newest */
+    if (i == g->ncaps || version > g->caps[i].version) return RESP_ERR_INVALID_PARAMETER;
     uint32_t size = g->caps[i].size;
     *heap = calloc(1, HDR_LEN + (size_t)size);
     if (!*heap) return RESP_ERR_OUT_OF_MEMORY;
@@ -1086,13 +1089,13 @@ int hv_virtio_gpu_take_dirty(HvVirtioGpu *g, HvVgpuRect *r) {
     return had;
 }
 
-void hv_virtio_gpu_destroy(HvVirtioGpu *g) {
-    if (!g) return;
+int hv_virtio_gpu_destroy(HvVirtioGpu *g) {
+    if (!g) return 1;
     int clean = reset_3d(g); /* the renderer drops its pointers into guest RAM; it must outlive this call */
     pthread_mutex_lock(&g->cmu);
     clean = clean && !g->norphan;
     pthread_mutex_unlock(&g->cmu);
-    if (!clean) return; /* a stuck renderer may still call done() with a request of ours (now or from an earlier reset): leak the device */
+    if (!clean) return 0; /* a stuck renderer may still call done() with a request of ours (now or from an earlier reset): leak the device */
     for (int i = 0; i < HV_VGPU_MAX_RESOURCES; i++) {
         free(g->res[i].pixels);
         free(g->res[i].backing);
@@ -1103,4 +1106,5 @@ void hv_virtio_gpu_destroy(HvVirtioGpu *g) {
     pthread_mutex_destroy(&g->cmu);
     pthread_cond_destroy(&g->ccv);
     free(g);
+    return 1;
 }

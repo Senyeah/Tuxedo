@@ -1,6 +1,6 @@
 # Light build: one clang call per file, no parallel jobs needed.
 CC = clang
-CFLAGS = -std=c11 -Wall -Wextra -O2 -g -Icore -Ihost -Idevices
+CFLAGS = -std=c11 -Wall -Wextra -O2 -g -Icore -Ihost -Idevices $(if $(GFX),-DHV_GFX=1)
 B = build
 
 # GFX=1 adds the virtio GPU's virgl renderer (devices/vgpu_virgl.m, A5): ANGLE, libepoxy and virglrenderer from
@@ -43,16 +43,16 @@ $(B)/hengevm-ref: host/hvf_ref.c host/hvf_ref.entitlements $(ENGINE) $(DEV) $(B)
 # Mac-only graphics device (ParavirtualizedGraphics.framework, as QEMU uses it).
 # Built for an older deployment target: the framework's memory callbacks are
 # marked obsolete in macOS 27 without a documented replacement.
-$(B)/pvg_metal.o: devices/pvg_metal.m devices/*.h core/*.h host/*.h | $(B)
+$(B)/pvg_metal.o: devices/pvg_metal.m devices/*.h core/*.h host/*.h $(B)/.gfx-stamp | $(B)
 	$(CC) $(CFLAGS) -fobjc-arc -Wno-unused-parameter -Wno-deprecated-declarations -c $< -o $@
 # The virtio GPU's presenter (Metal, both platforms).
-$(B)/vgpu_metal.o: devices/vgpu_metal.m devices/*.h core/*.h host/*.h | $(B)
+$(B)/vgpu_metal.o: devices/vgpu_metal.m devices/*.h core/*.h host/*.h $(B)/.gfx-stamp | $(B)
 	$(CC) $(CFLAGS) -fobjc-arc -c $< -o $@
 # The virgl renderer (GFX=1, or the test below).
-$(B)/vgpu_virgl.o: devices/vgpu_virgl.m devices/*.h core/*.h host/*.h | $(B)
+$(B)/vgpu_virgl.o: devices/vgpu_virgl.m devices/*.h core/*.h host/*.h $(B)/.gfx-stamp | $(B)
 	$(call GFX_CHECK,$(GFX_DIR))
 	$(CC) $(CFLAGS) -fobjc-arc -Wno-unused-parameter -I$(GFX_DIR)/include -c $< -o $@
-$(B)/virt_window.o: host/virt_window.m host/*.h | $(B)
+$(B)/virt_window.o: host/virt_window.m host/*.h $(B)/.gfx-stamp | $(B)
 	$(CC) -fobjc-arc -O2 -g -Wall -Wextra -Icore -Ihost -Idevices -c $< -o $@
 $(B)/pvg_mac.o: devices/pvg_mac.m devices/*.h core/*.h host/*.h | $(B)
 	$(CC) -fobjc-arc -O2 -g -Wall -mmacosx-version-min=15.2 -Icore -Ihost -Idevices -c $< -o $@
@@ -94,15 +94,20 @@ $(B)/hengevm: host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/
 	    -framework AppKit -framework QuartzCore $(GFX_LDLIBS) -o $@
 
 # mmu.c: no SIMD (hv_tlb_refill runs with the guest's SIMD registers live).
-$(B)/mmu.o: core/mmu.c core/*.h host/*.h | $(B)
+$(B)/mmu.o: core/mmu.c core/*.h host/*.h $(B)/.gfx-stamp | $(B)
 	$(CC) $(CFLAGS) -mgeneral-regs-only -c $< -o $@
-$(B)/%.o: core/%.c core/*.h host/*.h | $(B)
+# -DHV_GFX changes host/vm.o: every object follows GFX through a stamp, so a GFX and a plain build never mix in one B or IB.
+$(B)/.gfx-stamp: FORCE | $(B)
+	@echo 'GFX=$(GFX)' | cmp -s - $@ || echo 'GFX=$(GFX)' > $@
+.PHONY: FORCE
+FORCE:
+$(B)/%.o: core/%.c core/*.h host/*.h $(B)/.gfx-stamp | $(B)
 	$(CC) $(CFLAGS) -c $< -o $@
-$(B)/%.o: host/%.c host/*.h core/*.h devices/*.h | $(B)
+$(B)/%.o: host/%.c host/*.h core/*.h devices/*.h $(B)/.gfx-stamp | $(B)
 	$(CC) $(CFLAGS) -c $< -o $@
 $(B)/%.o: host/%.S | $(B)
 	$(CC) -c $< -o $@
-$(B)/%.o: devices/%.c devices/*.h core/*.h host/*.h | $(B)
+$(B)/%.o: devices/%.c devices/*.h core/*.h host/*.h $(B)/.gfx-stamp | $(B)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(B)/test_classify: tests/test_classify.c tests/classify_cases.s $(B)/classify.o
@@ -174,6 +179,18 @@ test-linux-input: $(B)/hengevm
 	uv run tools/linux/input-check.py $(INPUT_ARGS)
 .PHONY: test-linux-input
 
+# A8: the desktop image booted twice, with and without --gpu-accel: renderer string, virgl frame time (median <= 4 ms, p99 <= 16.7 ms), glmark2 against the same run software score, no virtio_gpu error.
+# Builds hengevm with GFX=1 in its own directory so the objects of a plain build are not mixed in. Skipped when GFX_DIR is missing.
+# ACCEL_ARGS="--full" runs the whole default glmark2 benchmark instead of the short scene set.
+ACCEL_B ?= build/accel
+test-linux-accel:
+	@if [ ! -d "$(GFX_DIR)" ]; then echo "test-linux-accel: skipped: no graphics libraries in $(GFX_DIR)"; exit 0; fi; \
+	mkdir -p $(ACCEL_B) && \
+	{ [ -f $(ACCEL_B)/mac-restore/libhengerestore.a ] || { $(MAKE) build/mac-restore/libhengerestore.a && cp -R build/mac-restore $(ACCEL_B)/ && touch $(ACCEL_B)/mac-restore/libhengerestore.a; }; } && \
+	$(MAKE) GFX=1 B=$(ACCEL_B) $(ACCEL_B)/hengevm && \
+	uv run tools/linux/accel-check.py --hengevm $(ACCEL_B)/hengevm $(ACCEL_ARGS)
+.PHONY: test-linux-accel
+
 # R3: a mode line in HV_INPUT_FILE changes the guest's display mode (fbcon on the console image).
 test-linux-mode: $(B)/hengevm
 	uv run tools/linux/mode-check.py $(MODE_ARGS)
@@ -243,33 +260,36 @@ IOS_SDK = $(shell xcrun --sdk iphoneos --show-sdk-path)
 IOS_CC = xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=17.0 -isysroot $(IOS_SDK)
 # ios/deps/include/slirp first when it holds libslirp's headers (they are all the engine takes from there).
 IOS_DEPS ?= $(if $(wildcard ios/deps/include/slirp/libslirp.h),$(CURDIR)/ios/deps,$(HOME)/Documents/Coding/Husk/build/ios-arm64/sysroot)
-IOS_CFLAGS = -std=c11 -Wall -Wextra -O2 -g -Icore -Ihost -Idevices -I$(IOS_DEPS)/include/slirp
+IOS_CFLAGS = -std=c11 -Wall -Wextra -O2 -g -Icore -Ihost -Idevices -I$(IOS_DEPS)/include/slirp $(if $(GFX),-DHV_GFX=1)
 IB = build/ios
 IOS_GFX_DIR ?= $(GFX_ROOT)/ios
 IOS_SRC = $(wildcard core/*.c) host/prof_ios.c host/jit_region.c host/disk.c host/vm.c host/linux_boot.c $(IOS_NET) host/dns_proxy.c host/share.c host/audio_mac.c host/hvsparse.c host/usb_host.c \
           $(filter-out devices/pvg_mac.m,$(wildcard devices/*.c))
 IOS_OBJ = $(patsubst %.c,$(IB)/%.o,$(IOS_SRC)) $(IB)/host/enter.o $(IB)/devices/pvg_metal.o $(IB)/devices/vgpu_metal.o $(if $(GFX),$(IB)/devices/vgpu_virgl.o)
 
-$(IB)/core/mmu.o: core/mmu.c core/*.h host/*.h devices/*.h
+$(IB)/.gfx-stamp: FORCE
+	@mkdir -p $(IB)
+	@echo 'GFX=$(GFX)' | cmp -s - $@ || echo 'GFX=$(GFX)' > $@
+$(IB)/core/mmu.o: core/mmu.c core/*.h host/*.h devices/*.h $(IB)/.gfx-stamp
 	@mkdir -p $(dir $@)
 	$(IOS_CC) $(IOS_CFLAGS) -mgeneral-regs-only -c $< -o $@
-$(IB)/%.o: %.c core/*.h host/*.h devices/*.h
+$(IB)/%.o: %.c core/*.h host/*.h devices/*.h $(IB)/.gfx-stamp
 	@mkdir -p $(dir $@)
 	$(IOS_CC) $(IOS_CFLAGS) -c $< -o $@
-$(IB)/devices/pvg_metal.o: devices/pvg_metal.m devices/*.h core/*.h host/*.h
+$(IB)/devices/pvg_metal.o: devices/pvg_metal.m devices/*.h core/*.h host/*.h $(IB)/.gfx-stamp
 	@mkdir -p $(dir $@)
 	$(IOS_CC) $(IOS_CFLAGS) -fobjc-arc -Wno-unused-parameter -Wno-deprecated-declarations -c $< -o $@
-$(IB)/devices/vgpu_metal.o: devices/vgpu_metal.m devices/*.h core/*.h host/*.h
+$(IB)/devices/vgpu_metal.o: devices/vgpu_metal.m devices/*.h core/*.h host/*.h $(IB)/.gfx-stamp
 	@mkdir -p $(dir $@)
 	$(IOS_CC) $(IOS_CFLAGS) -fobjc-arc -c $< -o $@
-$(IB)/devices/vgpu_virgl.o: devices/vgpu_virgl.m devices/*.h core/*.h host/*.h
+$(IB)/devices/vgpu_virgl.o: devices/vgpu_virgl.m devices/*.h core/*.h host/*.h $(IB)/.gfx-stamp
 	$(call GFX_CHECK,$(IOS_GFX_DIR))
 	@mkdir -p $(dir $@)
 	$(IOS_CC) $(IOS_CFLAGS) -fobjc-arc -Wno-unused-parameter -I$(IOS_GFX_DIR)/include -c $< -o $@
 $(IB)/host/enter.o: host/enter.S
 	@mkdir -p $(dir $@)
 	$(IOS_CC) -c $< -o $@
-$(IB)/libhengevm.a: $(IOS_OBJ)
+$(IB)/libhengevm.a: $(IOS_OBJ) $(IB)/.gfx-stamp
 	rm -f $@
 	xcrun --sdk $(IOS_SDKNAME) libtool -static -o $@ $(IOS_OBJ)
 ios-lib: $(IB)/libhengevm.a

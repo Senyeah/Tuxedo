@@ -39,16 +39,18 @@
 #define VIRGL_LOG_LINES 32
 #define MAX_CAPSETS 2 /* VIRGL and VIRGL2 */
 #define MAX_CAPVER 4
+#define BLIT_WAIT_MS 3000
 
 // A6: a blit request from the presenter, run on the renderer thread; the presenter waits on cv.
 typedef struct ScanJob {
     uint32_t res;
     HvGpu3dBox src;
+    uint32_t dw, dh; // the target's size: src.w x src.h, or smaller when the presenter caps it
     void *surf; // IOSurfaceRef, retained, for the caller
     uint64_t serial;
     pthread_mutex_t mu;
     pthread_cond_t cv;
-    int done;
+    int done, gone, refs; // gone: the presenter gave up waiting; refs: it and the renderer
 } ScanJob;
 
 typedef struct Job {
@@ -80,7 +82,7 @@ typedef struct { uint32_t id, version, size; uint8_t *data[MAX_CAPVER]; } CapSet
 typedef struct Scan {
     EGLContext ctx;
     GLuint prog, fbo, tex, sampler;
-    GLint u;
+    GLint u, v;
     EGLSurface pb;
     IOSurfaceRef surf;
     uint32_t w, h;
@@ -93,7 +95,7 @@ struct HvVgpuVirgl {
     pthread_mutex_t mu;
     pthread_cond_t cv;
     Job *head, *tail;
-    int stop, ready, ok;
+    int stop, ready, ok, abandoned;
 
     // Owned by the renderer thread from here on.
     EGLDisplay dpy;
@@ -367,15 +369,16 @@ static void execute(HvVgpuVirgl *r, Job *j) {
 
 static const char *scan_vs = "#version 300 es\n"
     "void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }\n";
-// u = (box x, box y, last row, flip). Row 0 of the target is the top of the picture. A Y_0_TOP resource is stored
+// u = (box x, box y, last row, flip); v = (box w, box h, target w, target h). Row 0 of the target is the top of the picture. A Y_0_TOP resource is stored
 // bottom row first (virgl inverts its transfers), so its picture is read from the last row up; the others top down.
 static const char *scan_fs = "#version 300 es\n"
     "precision highp float;\n"
     "uniform highp sampler2D t;\n"
     "uniform highp ivec4 u;\n"
+    "uniform highp ivec4 v;\n"
     "out vec4 o;\n"
-    "void main() { ivec2 p = ivec2(gl_FragCoord.xy); int gy = u.y + p.y; int ty = u.w != 0 ? u.z - gy : gy;\n"
-    "  o = vec4(texelFetch(t, ivec2(u.x + p.x, ty), 0).rgb, 1.0); }\n";
+    "void main() { ivec2 p = ivec2(gl_FragCoord.xy); int gy = u.y + p.y * v.y / v.w; int ty = u.w != 0 ? u.z - gy : gy;\n"
+    "  o = vec4(texelFetch(t, ivec2(u.x + p.x * v.x / v.z, ty), 0).rgb, 1.0); }\n";
 
 static GLuint scan_shader(GLenum type, const char *src) {
     GLuint sh = glCreateShader(type);
@@ -407,6 +410,7 @@ static int scan_program(Scan *s) {
     glGetProgramiv(s->prog, GL_LINK_STATUS, &ok);
     if (!ok) return -1;
     s->u = glGetUniformLocation(s->prog, "u");
+    s->v = glGetUniformLocation(s->prog, "v");
     glUseProgram(s->prog);
     glUniform1i(glGetUniformLocation(s->prog, "t"), 0);
     glGenSamplers(1, &s->sampler); // overrides the texture's own filter: virgl's may make a one-level texture incomplete
@@ -484,17 +488,18 @@ static void scan_blit(HvVgpuVirgl *r, ScanJob *j) {
         }
     }
     if (!eglMakeCurrent(r->dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, s->ctx)) return;
-    int ok = (s->prog || scan_program(s) == 0) && scan_target(r, j->src.w, j->src.h) == 0;
+    int ok = (s->prog || scan_program(s) == 0) && scan_target(r, j->dw, j->dh) == 0;
     if (!s->prog) s->failed = 1;
     if (ok) {
         glBindFramebuffer(GL_FRAMEBUFFER, s->fbo);
-        glViewport(0, 0, (GLsizei)j->src.w, (GLsizei)j->src.h);
+        glViewport(0, 0, (GLsizei)j->dw, (GLsizei)j->dh);
         glDisable(GL_BLEND);
         glDisable(GL_SCISSOR_TEST);
         glUseProgram(s->prog);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, info.tex_id);
         glUniform4i(s->u, (GLint)j->src.x, (GLint)j->src.y, (GLint)info.height - 1, (info.flags & VIRGL_Y_0_TOP) ? 1 : 0);
+        glUniform4i(s->v, (GLint)j->src.w, (GLint)j->src.h, (GLint)j->dw, (GLint)j->dh);
         glDrawArrays(GL_TRIANGLES, 0, 3);
         glBindTexture(GL_TEXTURE_2D, 0);
         glFinish();
@@ -522,11 +527,20 @@ static void scan_free(HvVgpuVirgl *r) {
     memset(s, 0, sizeof *s);
 }
 
-static void scan_finish(ScanJob *j) {
+static void scan_unref(ScanJob *j, int finished) {
     pthread_mutex_lock(&j->mu);
-    j->done = 1;
-    pthread_cond_signal(&j->cv);
+    if (finished) {
+        j->done = 1;
+        if (j->gone && j->surf) CFRelease(j->surf), j->surf = NULL;
+        pthread_cond_signal(&j->cv);
+    }
+    int last = --j->refs == 0;
     pthread_mutex_unlock(&j->mu);
+    if (last) {
+        pthread_mutex_destroy(&j->mu);
+        pthread_cond_destroy(&j->cv);
+        free(j);
+    }
 }
 
 /* ---- thread ---- */
@@ -677,7 +691,7 @@ static void *thread_main(void *arg) {
         @autoreleasepool {
             if (j && j->scan) {
                 if (!stopping) scan_blit(r, j->scan);
-                scan_finish(j->scan); // the ScanJob is the presenter's stack: last touch
+                scan_unref(j->scan, 1); // last touch: the presenter may have left
             } else if (j && stopping) finish(j->cookie, HV_GPU3D_ERR_UNSPEC); // a stop does not run guest requests
             else if (j) execute(r, j);
             free(j);
@@ -689,6 +703,7 @@ static void *thread_main(void *arg) {
         if (stopping && !j) break;
     }
     @autoreleasepool { renderer_stop(r); }
+    if (r->abandoned) atomic_store(&active, NULL); // the struct stays: late callers may still read it
     return NULL;
 }
 
@@ -735,16 +750,26 @@ static void op_submit(void *rp, const HvGpu3dReq *req, void *cookie) {
     pthread_mutex_unlock(&r->mu);
 }
 
-static void *op_blit(void *rp, uint32_t res_id, HvGpu3dBox src, uint64_t *serial) {
+static void *op_blit(void *rp, uint32_t res_id, HvGpu3dBox src, uint32_t dw, uint32_t dh, uint64_t *serial) {
     HvVgpuVirgl *r = rp;
-    ScanJob sj = {.res = res_id, .src = src, .mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER};
+    if (!dw || !dh || dw > src.w || dh > src.h) return NULL;
+    ScanJob *sj = calloc(1, sizeof *sj);
     Job *j = calloc(1, sizeof *j);
-    if (!j) return NULL;
-    j->scan = &sj;
+    if (!sj || !j) {
+        free(sj);
+        free(j);
+        return NULL;
+    }
+    sj->res = res_id, sj->src = src, sj->dw = dw, sj->dh = dh, sj->refs = 2;
+    pthread_mutex_init(&sj->mu, NULL);
+    pthread_cond_init(&sj->cv, NULL);
+    j->scan = sj;
     pthread_mutex_lock(&r->mu);
     if (r->stop) {
         pthread_mutex_unlock(&r->mu);
         free(j);
+        sj->refs = 1;
+        scan_unref(sj, 0);
         return NULL;
     }
     if (r->tail) r->tail->next = j;
@@ -752,11 +777,22 @@ static void *op_blit(void *rp, uint32_t res_id, HvGpu3dBox src, uint64_t *serial
     r->tail = j;
     pthread_cond_signal(&r->cv);
     pthread_mutex_unlock(&r->mu);
-    pthread_mutex_lock(&sj.mu);
-    while (!sj.done) pthread_cond_wait(&sj.cv, &sj.mu);
-    pthread_mutex_unlock(&sj.mu);
-    if (serial) *serial = sj.serial;
-    return sj.surf;
+    void *surf = NULL;
+    pthread_mutex_lock(&sj->mu);
+    struct timespec dl;
+    clock_gettime(CLOCK_REALTIME, &dl);
+    dl.tv_sec += BLIT_WAIT_MS / 1000;
+    while (!sj->done)
+        if (pthread_cond_timedwait(&sj->cv, &sj->mu, &dl) != 0) break; // a stuck renderer must not hang the presenter
+    if (sj->done) {
+        surf = sj->surf;
+        if (serial) *serial = sj->serial;
+    } else {
+        sj->gone = 1;
+    }
+    pthread_mutex_unlock(&sj->mu);
+    scan_unref(sj, 0);
+    return surf;
 }
 
 static const HvGpu3dOps ops = {op_capset_info, op_capset, op_submit};
@@ -809,6 +845,15 @@ void hv_vgpu_virgl_destroy(HvVgpuVirgl *r) {
     pthread_cond_destroy(&r->cv);
     atomic_store(&active, NULL);
     free(r);
+}
+
+void hv_vgpu_virgl_abandon(HvVgpuVirgl *r) {
+    if (!r) return;
+    pthread_detach(r->thread); /* nobody joins it; it cleans up EGL and virgl, the struct leaks on purpose */
+    pthread_mutex_lock(&r->mu);
+    r->abandoned = 1, r->stop = 1; // the thread fails what is queued, then cleans up when its job ends
+    pthread_cond_broadcast(&r->cv);
+    pthread_mutex_unlock(&r->mu);
 }
 
 void hv_vgpu_virgl_stats(HvVgpuVirgl *r, HvVgpuVirglStats *out) {

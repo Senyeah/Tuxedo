@@ -2222,7 +2222,10 @@ static void test_gpu3d_basic(HvVirtioGpu *g) {
     q_hdr(0x109, 0), q32(24, 99), q32(28, 1);
     check("capset: unknown id", G3(32), BAD_PARAM);
     q_hdr(0x109, 0), q32(24, 2), q32(28, 0);
-    check("capset: version 0", G3(32), BAD_PARAM);
+    check("capset: version 0 is the newest", g3_cmd(32, NULL, 0, 24 + 64), 0x1103);
+    check("capset: version 0 gives v2's bytes", rd8(G3_RESP(g3_last_head) + 24 + 5) == fk_cap_byte(2, 2, 5), 1);
+    q_hdr(0x109, 0), q32(24, 99), q32(28, 0);
+    check("capset: version 0 of an unknown id", G3(32), BAD_PARAM);
     q_hdr(0x109, 0), q32(24, 2), q32(28, 3);
     check("capset: version past the max", G3(32), BAD_PARAM);
     q_hdr(0x109, 0), q32(24, 1), q32(28, 2);
@@ -2346,7 +2349,13 @@ static void test_gpu3d_basic(HvVirtioGpu *g) {
     check("ctx attach: unknown resource", c_ctx_attach(0x202, 1, 5555), BAD_ID);
     check("ctx attach: resource 0", c_ctx_attach(0x203, 1, 0), BAD_ID);
     c_create2d(7778, 1, 4, 4);
-    check("ctx attach: a 2D resource", c_ctx_attach(0x202, 1, 7778), BAD_ID);
+    {
+        uint64_t before = fk.n;
+        check("ctx attach: a 2D resource is accepted", c_ctx_attach(0x202, 1, 7778), OK);
+        check("ctx detach: a 2D resource is accepted", c_ctx_attach(0x203, 1, 7778), OK);
+        check("ctx attach: a 2D resource stays away from the renderer", fk.n, before);
+        check("ctx attach: a 2D resource, unknown ctx", c_ctx_attach(0x202, 55, 7778), G3_BAD_CTX);
+    }
     c_unref(7778);
 
     /* backing */

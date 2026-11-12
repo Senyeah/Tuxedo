@@ -133,6 +133,7 @@ void hv_virtio_gpu_poll(HvVirtioGpu *g);
 int hv_virtio_gpu_take_dirty(HvVirtioGpu *g, HvVgpuRect *r);
 /* The resource with this id, or NULL. Hold mu while using it from another thread. */
 HvVgpuResource *hv_virtio_gpu_resource(HvVirtioGpu *g, uint32_t id);
-void hv_virtio_gpu_destroy(HvVirtioGpu *g);
+/* 1 when freed; 0 when a stuck renderer made it leave the device (the renderer must be left too). */
+int hv_virtio_gpu_destroy(HvVirtioGpu *g);
 
 #endif

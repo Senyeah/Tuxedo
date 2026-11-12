@@ -1240,7 +1240,7 @@ static void *cpu_thread(void *unused) {
 }
 
 static void usage(void) {
-    fprintf(stderr, "usage: hengevm --board virt (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N] [--display WxH] [--screenshot PNG] [--window]\n"
+    fprintf(stderr, "usage: hengevm --board virt (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N] [--display WxH] [--gpu-accel] [--screenshot PNG] [--window]\n"
                     "       (virt: Ctrl-A x quits, Ctrl-A p and SIGTERM press the power key; exit status 0 shutdown, 3 restart with --no-reboot, 4 panic or engine error)\n");
     fprintf(stderr, "usage: hengevm [--board vmapple] --rom FILE --disk FILE --aux FILE --ecid N [--seed N] [--ram MB] [--log N] [--trace 1] [--screenshot PNG] [--watch VA] [--stats SECONDS [--profile 1]] [--cpus N] [--window] [--no-pvg] [--no-chain] [--break PC [--break-hits N]] [--dump PA LEN FILE] [--aux-offset BYTES] [--install IPSW]\n");
     exit(2);
@@ -1268,7 +1268,7 @@ int main(int argc, char **argv) {
     int board_kind = HV_BOARD_VMAPPLE;
     const char *install_ipsw = NULL;
     const char *share_folder = NULL;
-    int log = 1, trace = 0, use_pvg = 1, no_chain = 0;
+    int log = 1, trace = 0, use_pvg = 1, no_chain = 0, gpu_accel = 0;
     const char *screenshot = NULL;
     uint64_t watch = 0, watch_pa = 0;
     int stats = 0, profile = 0, window = 0;
@@ -1297,6 +1297,10 @@ int main(int argc, char **argv) {
         }
         if (!strcmp(argv[i], "--no-reboot")) {
             no_reboot = 1;
+            continue;
+        }
+        if (!strcmp(argv[i], "--gpu-accel")) {
+            gpu_accel = 1;
             continue;
         }
         if (i + 1 >= argc) usage();
@@ -1353,6 +1357,7 @@ int main(int argc, char **argv) {
         else if ((initrd || append) && !kernel && !dump_dtb) bad = "--initrd and --append need --kernel";
         else if (dump_dtb && initrd) bad = "--dump-dtb writes no initrd range; leave out --initrd";
         else if (install_ipsw) bad = "--install is for the vmapple board";
+        else if (gpu_accel && dump_dtb) bad = "--gpu-accel makes no device tree";
         if (bad) {
             fprintf(stderr, "hengevm: %s\n", bad);
             usage();
@@ -1361,8 +1366,8 @@ int main(int argc, char **argv) {
         virt_shot_path = screenshot;
     } else {
         if (!rom || !disk_path || !aux_path) usage();
-        if (firmware || kernel || initrd || append || dump_dtb || no_reboot) {
-            fprintf(stderr, "hengevm: --firmware, --kernel, --initrd, --append, --dump-dtb and --no-reboot need --board virt\n");
+        if (firmware || kernel || initrd || append || dump_dtb || no_reboot || gpu_accel) {
+            fprintf(stderr, "hengevm: --firmware, --kernel, --initrd, --append, --dump-dtb, --no-reboot and --gpu-accel need --board virt\n");
             usage();
         }
     }
@@ -1373,7 +1378,7 @@ int main(int argc, char **argv) {
                      .kernel = dump_dtb ? NULL : kernel, .initrd = dump_dtb ? NULL : initrd, .cmdline = dump_dtb ? NULL : append,
                      .aux_offset = aux_offset, .ecid = ecid, .seed = seed,
                      .ram_mb = ram_mb, .ncpus = ncpus, .log = log, .no_net = dump_dtb || getenv("HV_NO_NET") != NULL,
-                     .no_sound = dump_dtb != NULL, .installer = install_ipsw != NULL};
+                     .no_sound = dump_dtb != NULL, .installer = install_ipsw != NULL, .accel = gpu_accel};
     set_board_kind(&vc, board_kind);
     if (getenv("HV_JIT_MB")) vc.jit_bytes = (size_t)atoi(getenv("HV_JIT_MB")) << 20; /* debugging: a small region flushes often */
     hv_prof_register = hv_prof_register_thread;
