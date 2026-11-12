@@ -336,9 +336,11 @@ $(IB)/libhengevm.a: $(IOS_OBJ) $(IB)/.gfx-stamp
 ios-lib: $(IB)/libhengevm.a
 .PHONY: ios-lib
 
-# The same engine for the iOS Simulator: build/ios-sim/libhengevm.a, without libslirp (host/net_stub.c).
+# The same engine for the iOS Simulator: build/ios-sim/libhengevm.a.
+# SIM_NET_ROOT: the simulator builds of libslirp and glib (tools/build_sim_net.sh); without it host/net_stub.c, and no guest network.
 ios-sim-lib:
-	$(MAKE) ios-lib IB=build/ios-sim IOS_SDKNAME=iphonesimulator IOS_NET=host/net_stub.c IOS_GFX_DIR=$(GFX_ROOT)/sim \
+	$(MAKE) ios-lib IB=build/ios-sim IOS_SDKNAME=iphonesimulator IOS_GFX_DIR=$(GFX_ROOT)/sim \
+	  $(if $(SIM_NET_ROOT),IOS_NET=host/net_slirp.c IOS_DEPS=$(SIM_NET_ROOT),IOS_NET=host/net_stub.c) \
 	  IOS_SDK='$$(shell xcrun --sdk iphonesimulator --show-sdk-path)' \
 	  IOS_CC='xcrun --sdk iphonesimulator clang -arch arm64 -target arm64-apple-ios17.0-simulator -isysroot $$(IOS_SDK)'
 .PHONY: ios-sim-lib

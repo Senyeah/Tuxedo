@@ -25,6 +25,12 @@ settings:
     HENGE_GFX_DIR: $(SRCROOT)/../build/gfx
     HENGE_GFX_LIBS_: ""
     HENGE_GFX_LIBS_1: "$(HENGE_GFX_DIR)/$(HENGE_GFX_PLATFORM)/lib/libvirglrenderer.a $(HENGE_GFX_DIR)/$(HENGE_GFX_PLATFORM)/lib/libepoxy.a $(HENGE_GFX_DIR)/$(HENGE_GFX_PLATFORM)/lib/libEGL.a $(HENGE_GFX_DIR)/$(HENGE_GFX_PLATFORM)/lib/libGLESv2.a"
+    # The simulator's guest network: HENGE_SIM_NET=1 links the simulator builds of libslirp and glib in
+    # HENGE_SIM_NET_ROOT (tools/build_sim_net.sh). sim_build.sh sets both when they exist; else net_stub.c.
+    HENGE_SIM_NET: ""
+    HENGE_SIM_NET_ROOT: ""
+    HENGE_SIM_NET_LIBS_: ""
+    HENGE_SIM_NET_LIBS_1: "-L$(HENGE_SIM_NET_ROOT)/lib -lslirp -lglib-2.0 -lintl -lpcre2-8"
     ARCHS: arm64
     ONLY_ACTIVE_ARCH: YES
     ENABLE_BITCODE: NO
@@ -234,6 +240,7 @@ targets:
           - "$(inherited)"
           - "-lhengevm"
           - "$(HENGE_GFX_LIBS_$(HENGE_GFX))"
+          - "$(HENGE_SIM_NET_LIBS_$(HENGE_SIM_NET))"
           - "-lc++"
           - "-framework"
           - "QuartzCore"
@@ -258,7 +265,7 @@ targets:
         script: |
           set -e
           cd "$SRCROOT/.."
-          make ios-sim-lib ${HENGE_GFX:+GFX=1} build/henge-agent.gz
+          make ios-sim-lib ${HENGE_GFX:+GFX=1} ${HENGE_SIM_NET:+SIM_NET_ROOT=$HENGE_SIM_NET_ROOT} build/henge-agent.gz
           ./tools/build_ios_restore.sh sim
         basedOnDependencyAnalysis: false
     postBuildScripts:
