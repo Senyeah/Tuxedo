@@ -157,7 +157,8 @@ private struct GPUScreen: UIViewRepresentable {
         private func externalPixels(_ window: UIWindow) -> CGSize {
             let screen = window.windowScene?.screen ?? window.screen
             screen.overscanCompensation = .none
-            let size = screen.currentMode?.size ?? screen.nativeBounds.size
+            var size = screen.currentMode?.size ?? screen.nativeBounds.size
+            if size.width < 1 || size.height < 1 { size = screen.nativeBounds.size } // zero mode would give a tiny guest
             let modes = screen.availableModes.map { "\(Int($0.size.width))x\(Int($0.size.height))" }.joined(separator: " ")
             HengeLog.log("display", "external screen \(Int(size.width))x\(Int(size.height)) px, modes \(modes), overscan insets \(screen.overscanCompensationInsets)")
             return size

@@ -853,6 +853,7 @@ struct SessionView: View {
             }
             let external = await bootExternalMode()
             guard !Task.isCancelled else { return }
+            if mac.followsPhoneScreen, let latest = windowMode { phone = latest } // rotation during the wait
             let boot = external ?? phone
             externalMode = external
             liveMode = boot
@@ -861,6 +862,7 @@ struct SessionView: View {
             henge_vm_set_display(UInt32(boot.w), UInt32(boot.h))
         } else {
             var screen = mac.screen
+            macBootMode = nil // a restart must not keep the last external size
             // macOS reads its size once, so a screen it ran on before gets a short wait to show up.
             if mac.lastExternalScreen != nil, mac.screenWidth == nil, !mac.isRetina, let ext = await bootExternalMode() {
                 guard !Task.isCancelled else { return }
