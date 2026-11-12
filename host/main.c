@@ -1161,9 +1161,9 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--share")) { /* FOLDER: the guest reaches it at http://10.0.2.4/ */
             share_folder = argv[++i];
         }
-        else if (!strcmp(argv[i], "--display")) { /* WxH, in --phone mode */
+        else if (!strcmp(argv[i], "--display")) { /* WxH: virt, or vmapple in --phone mode */
             unsigned w = 0, h = 0;
-            if (sscanf(argv[++i], "%ux%u", &w, &h) == 2 && w && h) hv_pvg_lite_set_mode(w, h);
+            if (sscanf(argv[++i], "%ux%u", &w, &h) == 2 && w && h) hv_vm_set_display_mode(w, h);
         }
         else if (!strcmp(argv[i], "--disk")) disk_path = argv[++i];
         else if (!strcmp(argv[i], "--aux")) aux_path = argv[++i];
