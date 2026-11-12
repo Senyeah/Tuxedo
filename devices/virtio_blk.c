@@ -217,6 +217,20 @@ void hv_virtio_blk_destroy(HvVirtioBlk *b) {
     free(b);
 }
 
+/* The driver reset the device: let the requests in flight finish (they write guest memory) and drop their
+   completions, which belong to queues that are gone. */
+static void device_reset(HvVirtio *v) {
+    HvVirtioBlk *b = v->dev;
+    if (!b) return;
+    while (__atomic_load_n(&b->completed, __ATOMIC_ACQUIRE) != b->submitted) usleep(100);
+    for (uint32_t i = b->published; i != b->submitted; i++) {
+        HvVblkReq *r = &b->ring[i % HV_VBLK_RING];
+        r->pushed = 0;
+        __atomic_store_n(&r->done, 0, __ATOMIC_RELAXED);
+    }
+    b->published = b->submitted;
+}
+
 /* CPU thread: hand finished requests back, in whatever order they finished;
    a slot is reused once it and every slot before it are back. */
 void hv_virtio_blk_poll(HvVirtioBlk *b) {
@@ -248,6 +262,7 @@ HvVirtioBlk *hv_virtio_blk_create(HvMachine *m, HvPcie *bus, HvDisk *disk, int a
     hv_virtio_init(v, m, 2, 0x010000, 1, F_SEG_MAX | F_BLK_SIZE | F_FLUSH | (disk->readonly ? F_RO : 0));
     v->dev = b;
     v->notify = notify;
+    v->reset = device_reset;
     b->disk = disk;
     b->ring = calloc(HV_VBLK_RING, sizeof *b->ring);
     pthread_mutex_init(&b->mu, NULL);

@@ -97,6 +97,16 @@ static void notify(HvVirtio *v, int q) {
     if (any) hv_virtio_interrupt(v);
 }
 
+/* A restart or re-probe drops what piled up for the old driver; the first probe keeps early events. */
+static void device_reset(HvVirtio *v) {
+    HvVirtioInput *d = v->dev;
+    if (!d) return;
+    pthread_mutex_lock(&d->mu);
+    if (d->driver_up) d->head = d->tail;
+    d->driver_up = 0;
+    pthread_mutex_unlock(&d->mu);
+}
+
 void hv_virtio_input_send(HvVirtioInput *d, uint16_t type, uint16_t code, int32_t value) {
     if (!d) return;
     pthread_mutex_lock(&d->mu);
@@ -119,6 +129,7 @@ void hv_virtio_input_poll(HvVirtioInput *d) {
     static HvVirtqElem e;
     int any = 0;
     pthread_mutex_lock(&d->mu);
+    d->driver_up = 1;
     while (d->head != d->tail) {
         if (hv_virtq_pop(v, EVENTQ, &e) <= 0) break; /* no buffer posted: keep it for later */
         uint32_t i = d->head++ % HV_VINPUT_RING;
@@ -142,6 +153,7 @@ HvVirtioInput *hv_virtio_input_create(HvMachine *m, HvPcie *bus, int kind) {
     v->dev = d;
     v->notify = notify;
     v->config_write = config_write;
+    v->reset = device_reset;
     v->config_len = 8 + 128;
     d->kind = kind;
     pthread_mutex_init(&d->mu, NULL);

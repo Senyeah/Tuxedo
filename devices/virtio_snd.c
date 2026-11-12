@@ -293,12 +293,25 @@ static void notify(HvVirtio *v, int q) {
     } /* event queue: kept for events we never send */
 }
 
+/* The driver reset the device: the stream goes back to unconfigured and held buffers are dropped. */
+static void device_reset(HvVirtio *v) {
+    HvVirtioSnd *d = v->dev;
+    if (!d) return;
+    if (d->running && d->backend.stop) d->backend.stop(d->backend.opaque);
+    d->running = d->prepared = 0;
+    d->channels = d->format = d->rate = d->frame_bytes = d->rate_hz = 0;
+    d->buffer_bytes = d->period_bytes = 0;
+    d->phead = d->pcopy = d->ptail = 0; /* their elements belong to queues that are gone */
+    atomic_store(&d->consumed, atomic_load(&d->written));
+}
+
 HvVirtioSnd *hv_virtio_snd_create(HvMachine *m, HvPcie *bus) {
     HvVirtioSnd *d = calloc(1, sizeof *d);
     HvVirtio *v = &d->vio;
     hv_virtio_init(v, m, 25, 0x040100, 4, 0); /* sound device, multimedia audio */
     v->dev = d;
     v->notify = notify;
+    v->reset = device_reset;
     uint32_t jacks = 1, streams = 1, chmaps = 1;
     memcpy(v->config, &jacks, 4);
     memcpy(v->config + 4, &streams, 4);
