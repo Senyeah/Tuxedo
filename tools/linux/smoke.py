@@ -17,6 +17,10 @@ root disk (E9). After autologin it checks systemd, the disk, the page size, the
 CPU count, the network (10.0.2.15, ping 10.0.2.2, DNS), the virtio entropy
 device, the RTC and dmesg errors, writes 256 MB and syncs, powers off, boots the
 clone again and compares the checksum.
+--uboot: the same checks on the same clone, booted by U-Boot (u-boot.bin in flash) through
+extlinux.conf instead of a direct kernel boot (E10). The first boot is unattended and times
+U-Boot's steps; the second stops the countdown, checks pci, virtio info and bootflow scan -l
+at the U-Boot prompt, then boots and compares the checksum. --qemu runs it on QEMU with TCG.
 Exit 1 on any failed check; the last 200 lines of console output go to stderr.
 """
 import argparse
@@ -51,6 +55,12 @@ DMESG_ALLOW = [
 # --disk, seconds: three times the slowest of five runs at 1 CPU (login 10.6 s, the 256 MB write 1.6 s,
 # poweroff 1.7 s), with the same 5 s floor (E9 findings). 4 CPUs are faster.
 DISK_LIMITS = {"login": 32, "running": 5, "command": 5, "network": 5, "write": 5, "poweroff": 6}
+# --uboot, seconds: three times the slowest of five runs at 1 CPU (kernel to login 9.5 s; the longest
+# U-Boot step is its 2 s countdown), with the 5 s floor for the banner (under 1 s) and commands (0.4 s) (E10 findings).
+UBOOT_LIMITS = {"banner": 5, "uboot step": 6, "uboot command": 5, "login": 29}
+# QEMU runs U-Boot under TCG only (hvf aborts on it), which is several times slower.
+QEMU_TCG_SCALE = 4
+UBOOT_PROMPT = r"=> "
 
 
 def linux_dir():
@@ -87,8 +97,14 @@ class Fail(Exception):
     pass
 
 
-def command(args, kernel, initrd, tmp, append=APPEND, disk=None):
+def command(args, kernel, initrd, tmp, append=APPEND, disk=None, firmware=None):
     """argv for the machine under test. hengevm's stderr goes to a file so the console stays clean."""
+    if args.qemu and firmware:
+        return [QEMU, "-M", "virt,gic-version=3,highmem=off,its=off", "-accel", "tcg", "-cpu", "max",
+                "-smp", str(args.cpus), "-m", str(args.ram), "-nographic", "-bios", firmware,
+                "-drive", f"if=none,file={disk},format=raw,id=d0", "-device", "virtio-blk-pci,drive=d0",
+                "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-device", "virtio-rng-pci",
+                "-device", "qemu-xhci", "-device", "usb-kbd"]
     if args.qemu:
         argv = [QEMU, "-M", "virt,gic-version=3,highmem=off", "-accel", "hvf", "-cpu", "host",
                 "-smp", str(args.cpus), "-m", str(args.ram), "-nographic",
@@ -105,8 +121,9 @@ def command(args, kernel, initrd, tmp, append=APPEND, disk=None):
         if r.returncode != 0:
             raise Fail(f"hengevm --dump-dtb failed: {r.stderr.strip()}")
         return argv + ["-dtb", dtb]
-    argv = [args.hengevm, "--board", "virt", "--kernel", kernel, "--initrd", initrd, "--append", append,
-            "--ram", str(args.ram), "--cpus", str(args.cpus), "--log", str(args.log)]
+    boot = ["--firmware", firmware] if firmware else ["--kernel", kernel, "--initrd", initrd, "--append", append]
+    argv = [args.hengevm, "--board", "virt"] + boot + ["--ram", str(args.ram), "--cpus", str(args.cpus),
+                                                        "--log", str(args.log)]
     if disk:
         argv += ["--disk", disk]
     if args.no_reboot:
@@ -230,10 +247,11 @@ def check(p, cmd, limit, ok, what):
     return out.strip()
 
 
-def login(p, append):
-    end = time.monotonic() + DISK_LIMITS["login"]
+def login(p, append, limit=DISK_LIMITS["login"]):
+    end = time.monotonic() + limit
     left = lambda: max(0.1, end - time.monotonic())
-    expect(p, "Kernel command line: " + re.escape(append) + r"\r*\n", left(), "boot")
+    if append:  # extlinux.conf says quiet, which hides this line
+        expect(p, "Kernel command line: " + re.escape(append) + r"\r*\n", left(), "boot")
     expect(p, r"\(automatic login\)", left(), "autologin")
     expect(p, SHELL, left(), "autologin")
     # Quiet the console first: kernel lines in the middle of output break the parsing. The marker
@@ -242,22 +260,82 @@ def login(p, append):
     expect(p, MARK + r"42\r*\n", DISK_LIMITS["command"], "quiet the console")
 
 
-def poweroff(p, stderr, args, times, key):
+def poweroff(p, stderr, args, times, key, scale=1):
     t = time.monotonic()
     p.sendline("sudo poweroff")
-    expect(p, pexpect.EOF, DISK_LIMITS["poweroff"], "poweroff")
+    expect(p, pexpect.EOF, DISK_LIMITS["poweroff"] * scale, "poweroff")
     times[key] = time.monotonic() - t
     stopped(p, 0, "guest shutdown", stderr, args)
+
+
+def uboot_boot(p, times, scale):
+    """U-Boot from the banner to the kernel, unattended; times each step (the P2 baseline)."""
+    t0 = time.monotonic()
+    expect(p, r"U-Boot 20\d\d\.\d\d", UBOOT_LIMITS["banner"] * scale, "U-Boot banner")
+    times["banner"] = time.monotonic() - t0
+    # Read-only flash 1 holds no saved environment (risk row 1).
+    expect(p, r"bad CRC, using default environment", UBOOT_LIMITS["uboot step"] * scale, "U-Boot environment")
+    steps = [("devices", r"Hit any key to stop autoboot"),
+             ("countdown", r"Scanning global bootmeth 'efi_mgr'"),
+             ("efi_mgr", r"Booting bootflow '\S+' with extlinux"),
+             ("extlinux", r"Starting kernel \.\.\.")]
+    for name, pattern in steps:
+        t = time.monotonic()
+        expect(p, pattern, UBOOT_LIMITS["uboot step"] * scale, f"U-Boot {name}")
+        times[name] = time.monotonic() - t
+
+
+def uboot_cmd(p, cmd, scale):
+    p.sendline(cmd)
+    expect(p, re.escape(cmd) + r"\r*\n", UBOOT_LIMITS["uboot command"] * scale, cmd)
+    expect(p, UBOOT_PROMPT, UBOOT_LIMITS["uboot command"] * scale, cmd)
+    return p.before.replace("\r", "")
+
+
+def uboot_checks(p, image, times, scale):
+    """Stops the countdown and checks U-Boot's view of the board against QEMU's (build/linux/ref)."""
+    t = time.monotonic()
+    expect(p, r"Hit any key to stop autoboot", UBOOT_LIMITS["banner"] * scale, "U-Boot countdown")
+    p.send(" ")
+    expect(p, UBOOT_PROMPT, UBOOT_LIMITS["uboot step"] * scale, "U-Boot prompt")
+    times["uboot prompt"] = time.monotonic() - t
+    t = time.monotonic()
+    pci = uboot_cmd(p, "pci", scale)
+    # Henge's virtio is modern only (0x104x); QEMU's is transitional (0x100x).
+    for what, pattern in [("host bridge", r"00\.00\.00\s+0x1b36\s+0x0008\s+Bridge"),
+                          ("virtio block", r"0x1af4\s+0x10(42|01)\s+Mass storage"),
+                          ("virtio network", r"0x1af4\s+0x10(41|00)\s+Network"),
+                          ("virtio entropy", r"0x1af4\s+0x10(44|05)\s"),
+                          ("xHCI", r"0x1b36\s+0x000d\s+Serial bus")]:
+        if not re.search(pattern, pci):
+            raise Fail(f"U-Boot pci: no {what}:\n{pci}")
+    info = uboot_cmd(p, "virtio info", scale)
+    mb = f"{os.path.getsize(image) / (1 << 20):.1f} MB"
+    if "VirtIO Block Device" not in info or f"Capacity: {mb}" not in info:
+        raise Fail(f"U-Boot virtio info: no {mb} block device:\n{info}")
+    scan = uboot_cmd(p, "bootflow scan -l", scale)
+    for what, pattern in [("extlinux on the disk",
+                           r"extlinux\s+ready\s+virtio\s+1\s+\S+\s+/boot/extlinux/extlinux\.conf"),
+                          ("DHCP", r"DHCP client bound to address 10\.0\.2\.15"),
+                          ("every bootflow valid", r"\((\d+) bootflows, \1 valid\)")]:
+        if not re.search(pattern, scan):
+            raise Fail(f"U-Boot bootflow scan -l: no {what}:\n{scan}")
+    times["uboot commands"] = time.monotonic() - t
+    p.sendline("boot")
+    expect(p, r"Starting kernel \.\.\.", UBOOT_LIMITS["uboot step"] * scale, "U-Boot boot")
 
 
 def disk(args, times):
     d = args.linux_dir or linux_dir()
     kernel, initrd, image = (os.path.join(d, f) for f in ("Image", "initrd.img", "debian-console.img"))
-    for f in (kernel, initrd, image, image[:-4] + ".partuuid"):
+    firmware = os.path.join(d, "u-boot.bin") if args.uboot else None
+    for f in [image, image[:-4] + ".partuuid"] + ([firmware] if args.uboot else [kernel, initrd]):
         if not os.path.exists(f):
             raise Fail(f"missing {f} (set HENGE_LINUX_OUT or --linux-dir)")
     partuuid = open(image[:-4] + ".partuuid").read().strip()
     append = f"console=ttyAMA0 earlycon=pl011,0x9000000 root=PARTUUID={partuuid} rw"
+    scale = QEMU_TCG_SCALE if args.uboot and args.qemu else 1
+    limit = lambda k: DISK_LIMITS[k] * scale
     with tempfile.TemporaryDirectory(prefix="smoke-", dir=args.work_dir) as tmp:
         clone = os.path.join(tmp, "disk.img")
         # The shared image never changes: the guest writes to a clone that costs no space until then.
@@ -267,60 +345,72 @@ def disk(args, times):
                        f"{r.stderr.strip()}")
         stderr = lambda: open(os.path.join(tmp, "stderr"), errors="replace").read() if not args.qemu else ""
         for boot_no in (1, 2):
-            argv = command(args, kernel, initrd, tmp, append, clone)
+            argv = command(args, kernel, initrd, tmp, append, clone, firmware)
             tail = Tail()
             t0 = time.monotonic()
             p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200))
             p.logfile_read = tail
             try:
-                login(p, append)
+                if args.uboot:
+                    if boot_no == 1:
+                        uboot_boot(p, times, scale)
+                    else:
+                        uboot_checks(p, image, times, scale)
+                    t = time.monotonic()
+                    login(p, None, UBOOT_LIMITS["login"] * scale)
+                    times["kernel to login" + (" again" if boot_no == 2 else "")] = time.monotonic() - t
+                else:
+                    login(p, append)
                 times["login" if boot_no == 1 else "login again"] = time.monotonic() - t0
                 if boot_no == 2:
                     t = time.monotonic()
-                    check(p, "sha256sum /var/tmp/t", DISK_LIMITS["write"],
+                    check(p, "sha256sum /var/tmp/t", limit("write"),
                           lambda o: o.split()[:1] == [digest], "checksum after a power off")
                     times["checksum"] = time.monotonic() - t
-                    poweroff(p, stderr, args, times, "poweroff again")
+                    poweroff(p, stderr, args, times, "poweroff again", scale)
                     return
+                if args.uboot:  # extlinux.conf, not --append, gave the command line
+                    check(p, "cat /proc/cmdline", limit("command"),
+                          lambda o: f"root=PARTUUID={partuuid}" in o.split(), "extlinux command line")
                 t = time.monotonic()
                 check(p, "systemctl is-system-running --wait || systemctl --failed --no-pager",
-                      DISK_LIMITS["running"], lambda o: o == "running", "systemd")
+                      limit("running"), lambda o: o == "running", "systemd")
                 times["running"] = time.monotonic() - t
                 t = time.monotonic()
-                check(p, "lsblk -rno NAME,TYPE,MOUNTPOINTS /dev/vda", DISK_LIMITS["command"],
+                check(p, "lsblk -rno NAME,TYPE,MOUNTPOINTS /dev/vda", limit("command"),
                       lambda o: "vda1 part /" in o.split("\n"), "root on virtio-blk")
-                check(p, "getconf PAGESIZE", DISK_LIMITS["command"], lambda o: o == "16384", "page size")
-                check(p, "nproc", DISK_LIMITS["command"], lambda o: o == str(args.cpus), "CPU count")
-                check(p, "uname -m", DISK_LIMITS["command"], lambda o: o == "aarch64", "machine")
+                check(p, "getconf PAGESIZE", limit("command"), lambda o: o == "16384", "page size")
+                check(p, "nproc", limit("command"), lambda o: o == str(args.cpus), "CPU count")
+                check(p, "uname -m", limit("command"), lambda o: o == "aarch64", "machine")
                 year = str(time.gmtime().tm_year)
-                check(p, "date -u +%Y", DISK_LIMITS["command"], lambda o: o == year, "RTC")
-                check(p, "cat /sys/class/misc/hw_random/rng_current", DISK_LIMITS["command"],
+                check(p, "date -u +%Y", limit("command"), lambda o: o == year, "RTC")
+                check(p, "cat /sys/class/misc/hw_random/rng_current", limit("command"),
                       lambda o: o.startswith("virtio_rng"), "entropy device")
                 check(p, "sudo dd if=/dev/hwrng bs=64 count=1 status=none | od -An -v -tx1 | tr -d ' \\n'",
-                      DISK_LIMITS["command"], lambda o: len(o) == 128 and o.strip("0") != "", "bytes from /dev/hwrng")
+                      limit("command"), lambda o: len(o) == 128 and o.strip("0") != "", "bytes from /dev/hwrng")
                 times["commands"] = time.monotonic() - t
                 t = time.monotonic()
                 # DHCP can finish after systemd says running.
                 check(p, "for i in $(seq 40); do ip -4 -o addr show scope global | grep -q 'inet 10\\.0\\.2\\.15/' "
-                      "&& break; sleep 0.1; done; ip -4 -o addr show scope global", DISK_LIMITS["network"],
+                      "&& break; sleep 0.1; done; ip -4 -o addr show scope global", limit("network"),
                       lambda o: "inet 10.0.2.15/24" in o, "address")
-                check(p, "sudo ping -c1 -W5 10.0.2.2", DISK_LIMITS["network"], lambda o: " 0% packet loss" in o,
+                check(p, "sudo ping -c1 -W5 10.0.2.2", limit("network"), lambda o: " 0% packet loss" in o,
                       "ping the host")
-                check(p, "getent hosts deb.debian.org", DISK_LIMITS["network"],
+                check(p, "getent hosts deb.debian.org", limit("network"),
                       lambda o: re.search(r"^[0-9a-f.:]+\s.*\bdeb\.debian\.org$", o, re.M), "name resolution")
                 times["network"] = time.monotonic() - t
-                errors = check(p, "sudo dmesg --level=err,crit,alert,emerg", DISK_LIMITS["command"],
+                errors = check(p, "sudo dmesg --level=err,crit,alert,emerg", limit("command"),
                                lambda o: True, "dmesg")
                 bad = [l for l in errors.split("\n") if l and not any(re.search(a, l) for a in DMESG_ALLOW)]
                 if bad:
                     raise Fail("kernel errors not on the allow list:\n" + "\n".join(bad))
                 t = time.monotonic()
                 out = check(p, "dd if=/dev/urandom of=/var/tmp/t bs=1M count=256 status=none && sync && "
-                            "sha256sum /var/tmp/t", DISK_LIMITS["write"],
+                            "sha256sum /var/tmp/t", limit("write"),
                             lambda o: re.match(r"[0-9a-f]{64}\s", o), "write 256 MB")
                 digest = out.split()[0]
                 times["write"] = time.monotonic() - t
-                poweroff(p, stderr, args, times, "poweroff")
+                poweroff(p, stderr, args, times, "poweroff", scale)
             except Fail:
                 report(p, tail, stderr)
                 raise
@@ -330,7 +420,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--direct", action="store_true", help="direct kernel boot to the initramfs")
     ap.add_argument("--disk", action="store_true", help="with --direct: boot a clone of debian-console.img")
-    ap.add_argument("--work-dir", help="--disk: where the clone goes (the image's APFS volume; default TMPDIR)")
+    ap.add_argument("--uboot", action="store_true", help="boot a clone of debian-console.img through U-Boot")
+    ap.add_argument("--work-dir", help="--disk, --uboot: where the clone goes (the image's APFS volume; default TMPDIR)")
     ap.add_argument("--qemu", action="store_true", help="run the checks on QEMU instead of hengevm")
     ap.add_argument("--henge-dtb", action="store_true", help="with --qemu: boot QEMU with hengevm --dump-dtb's tree")
     ap.add_argument("--cpus", type=int, default=1)
@@ -340,22 +431,24 @@ def main():
     ap.add_argument("--fatal", action="store_true", help="SIGILL at the prompt must give vm.c's crash report")
     ap.add_argument("--log", type=int, default=1, help="hengevm --log level")
     ap.add_argument("--runs", type=int, default=1, help="boot this many times; all must pass")
-    ap.add_argument("--linux-dir", help="directory with Image and initrd.img")
+    ap.add_argument("--linux-dir", help="directory with Image, initrd.img, u-boot.bin and debian-console.img")
     ap.add_argument("--hengevm", default=os.path.join(ROOT, "build", "hengevm"))
     args = ap.parse_args()
-    if not args.direct:
-        ap.error("only --direct exists so far")
+    if args.direct == args.uboot:
+        ap.error("give one of --direct and --uboot")
+    if args.uboot and (args.disk or args.henge_dtb):
+        ap.error("--uboot boots the disk already, and --henge-dtb is for --qemu --direct")
     if args.henge_dtb and not args.qemu:
         ap.error("--henge-dtb needs --qemu")
     if args.fatal and args.qemu:
         ap.error("--fatal is for hengevm")
-    if args.disk and (args.no_reboot or args.fatal):
-        ap.error("--disk does not take --no-reboot or --fatal")
+    if (args.disk or args.uboot) and (args.no_reboot or args.fatal):
+        ap.error("--disk and --uboot do not take --no-reboot or --fatal")
     worst = {}
     for i in range(args.runs):
         times = {}
         try:
-            (disk if args.disk else direct)(args, times)
+            (disk if args.disk or args.uboot else direct)(args, times)
         except Fail as e:
             print(f"smoke: run {i + 1}: FAIL: {e}", file=sys.stderr)
             sys.exit(1)

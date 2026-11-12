@@ -123,6 +123,11 @@ test-linux-disk: $(B)/hengevm
 	uv run tools/linux/smoke.py --direct --disk $(SMOKE_ARGS)
 .PHONY: test-linux-disk
 
+# The same checks with U-Boot (build/linux/u-boot.bin) in flash, booting the disk through extlinux.conf.
+test-linux-uboot: $(B)/hengevm
+	uv run tools/linux/smoke.py --uboot $(SMOKE_ARGS)
+.PHONY: test-linux-uboot
+
 test-vm-lifecycle: $(B)/test_vm_lifecycle
 	$(B)/test_vm_lifecycle
 .PHONY: test-vm-lifecycle
