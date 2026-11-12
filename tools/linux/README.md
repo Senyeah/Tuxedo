@@ -9,7 +9,7 @@ Every script runs inside the builder container, so no cross compiler is needed.
 - `Dockerfile`: the builder image (`debian:trixie` with the build tools).
 - `build-uboot.sh`, `build-image.sh`, `customize.sh`, `rootfs/`: see Order.
 - `customize-desktop.sh`, `rootfs-desktop/`: extra files for the desktop image (`build-image.sh --desktop`).
-- `rootfs/usr/local/lib/henge/`, `rootfs/etc/systemd/system/henge-*.service` (G8): the grow and first-boot units, in both images. `grow-check.py` tests them.
+- `henge-guest/` (G9): the source of the `henge-guest` Debian package. It holds the grow and first-boot scripts (`/usr/lib/henge/`) and units (`/usr/lib/systemd/system/henge-*.service`, G8), and enables them in `postinst`. `build-guest-pkg.sh` builds the `.deb` on its own; `build-image.sh` builds it too and installs it in both images. P6 (shared folder) and P7 (clipboard) add their files here. `grow-check.py` tests the units.
 - `run.sh`: runs a command in the builder image. `build/linux/` is mounted at `/out`, the repo's `tools/linux/` at `/tools` (read only), and a named volume at `/work` for source trees.
 
 `run.sh` builds the image on first use. Set `HENGE_LINUX_OUT` to change the artefact directory. The default is the shared `$HOME/Repos/Henge/build/linux`, so all worktrees see the same files.
@@ -29,6 +29,8 @@ Options of `qemu-ref.sh`: `--accel hvf|tcg` (default `tcg`), `--its-off`, `--dtb
 `qemu-check.py` drives it with pexpect (`uv run`): it checks page size, CPU count, network, run-time VA size and power off, and saves the reference output to `build/linux/ref/`. Use `--direct --accel hvf` for the fast check and the default for the full U-Boot path.
 
 ## First boot and disk growth (G8)
+
+Both units come from the `henge-guest` package. Raise `Version` in `henge-guest/DEBIAN/control` when a file in it changes. `smoke.py --disk` and `--uboot` check `dpkg-query` and `systemctl is-enabled` for the package and its units.
 
 - `henge-grow.service` runs on every boot. `henge-grow` finds the root partition from sysfs, moves the backup GPT header to the end of the disk (`sgdisk -e`), runs `growpart` and then `resize2fs` on the mounted root. When the disk has not grown it changes nothing. The app grows the disk file, and the next boot grows the guest.
 - `henge-firstboot.service` runs once, while `/var/lib/henge/firstboot-done` is missing. It runs `systemd-machine-id-setup` if `/etc/machine-id` is empty, then writes the marker.

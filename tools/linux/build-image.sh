@@ -52,8 +52,14 @@ mkdir -p "$WORK"
 rm -rf "$ROOT" "$FSIMG" "$IMG"
 mkdir -p "$ROOT"
 
+# Installed by a hook after the other packages: apt cannot see a local file in the chroot
+rm -f "$WORK"/henge-guest_*.deb
+sh /tools/build-guest-pkg.sh --inner "$WORK" >/dev/null
+GUEST_DEB=$(ls "$WORK"/henge-guest_*.deb)
+
 # The desktop files are copied after the packages, so they replace the packages' own defaults
-set -- --customize-hook='cp /tools/customize.sh "$1/tmp/customize.sh"; chroot "$1" sh -e /tmp/customize.sh; rm -f "$1/tmp/customize.sh"'
+set -- --customize-hook='cp "'"$GUEST_DEB"'" "$1/tmp/henge-guest.deb"; chroot "$1" dpkg -i /tmp/henge-guest.deb; rm -f "$1/tmp/henge-guest.deb"' \
+    --customize-hook='cp /tools/customize.sh "$1/tmp/customize.sh"; chroot "$1" sh -e /tmp/customize.sh; rm -f "$1/tmp/customize.sh"'
 if [ "$DESKTOP" = 1 ]; then
     set -- "$@" \
         --customize-hook='cp -a /tools/rootfs-desktop/. "$1"/' \
