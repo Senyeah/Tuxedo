@@ -21,10 +21,17 @@ clone again and compares the checksum.
 extlinux.conf instead of a direct kernel boot (E10). The first boot is unattended and times
 U-Boot's steps; the second stops the countdown, checks pci, virtio info and bootflow scan -l
 at the U-Boot prompt, then boots and compares the checksum. --qemu runs it on QEMU with TCG.
+--stress, with --uboot or --direct --disk: the several-CPU checks (E11). One boot of a clone of --image
+(default debian-console.img), then the CPU count, no CPU that failed to come online, stress-ng --cpu N
+--vm 2 --vm-bytes 256M for 60 s, and make -jN of cproject.sh's project, whose program must print the
+checksum that the same project gives on the Mac. No kernel warning may appear. stress-ng, gcc and make
+are installed with apt (network through slirp) when the image has none.
 Exit 1 on any failed check; the last 200 lines of console output go to stderr.
 """
 import argparse
+import base64
 import collections
+import gzip
 import os
 import re
 import signal
@@ -36,6 +43,8 @@ import time
 import pexpect
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+CPROJECT = os.path.join(ROOT, "tools", "linux", "cproject.sh")
+CPROJECT_UNITS = 48
 QEMU = os.environ.get("QEMU", "/opt/homebrew/bin/qemu-system-aarch64")
 APPEND = "console=ttyAMA0 earlycon=pl011,0x9000000 break=top"
 PROMPT = r"\(initramfs\) "
@@ -61,6 +70,14 @@ UBOOT_LIMITS = {"banner": 5, "uboot step": 6, "uboot command": 5, "login": 29}
 # QEMU runs U-Boot under TCG only (hvf aborts on it), which is several times slower.
 QEMU_TCG_SCALE = 4
 UBOOT_PROMPT = r"=> "
+# --stress, seconds. The install depends on snapshot.debian.org (105 s at 4 CPUs); stress-ng runs for 60 s.
+STRESS_LIMITS = {"install": 900, "stress": 180, "build": 600}
+STRESS_PACKAGES = "stress-ng build-essential"
+KERNEL_BAD = (r"WARNING:|BUG:|Oops|Call trace:|soft lockup|hard LOCKUP|rcu: INFO|detected stall|"
+              r"blocked for more than|failed to come online|Unable to handle|Internal error|segfault|"
+              r"unhandled|Out of memory")
+# Warning-level lines that --stress allows: sudo's audit records hit printk's rate limit (E11).
+STRESS_ALLOW = DMESG_ALLOW + [r"kauditd_printk_skb: \d+ callbacks suppressed"]
 
 
 def linux_dir():
@@ -416,11 +433,110 @@ def disk(args, times):
                 raise
 
 
+def send_file(p, path, dest):
+    """Copies a host file into the guest over the console, in lines the tty accepts."""
+    data = base64.b64encode(gzip.compress(open(path, "rb").read())).decode()
+    lines = [f": > {dest}.b64"] + [f"echo {data[i:i + 1024]} >> {dest}.b64" for i in range(0, len(data), 1024)]
+    for line in lines + [f"base64 -d {dest}.b64 | gunzip > {dest} && rm {dest}.b64"]:
+        check(p, line, DISK_LIMITS["command"], lambda o: True, "send " + dest)
+
+
+def cproject_sum(tmp, units):
+    """What the guest's ./prog must print: the same project built on the Mac."""
+    d = os.path.join(tmp, "cproject")
+    r = subprocess.run(f"sh '{CPROJECT}' '{d}' {units} && make -s -C '{d}' -j4 >/dev/null && '{d}/prog'",
+                       shell=True, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise Fail(f"cproject.sh on the Mac failed: {r.stderr.strip()[-2000:]}")
+    return r.stdout.strip()
+
+
+def kernel_bad(p, what):
+    out = check(p, "sudo dmesg", DISK_LIMITS["command"], lambda o: True, "dmesg")
+    bad = [l for l in out.split("\n") if re.search(KERNEL_BAD, l)]
+    if bad:
+        raise Fail(f"kernel warnings {what}:\n" + "\n".join(bad[:40]))
+
+
+def stress(args, times):
+    d = args.linux_dir or linux_dir()
+    kernel, initrd = os.path.join(d, "Image"), os.path.join(d, "initrd.img")
+    image = args.image or os.path.join(d, "debian-console.img")
+    partuuid = os.path.join(d, "debian-console.partuuid")
+    firmware = os.path.join(d, "u-boot.bin") if args.uboot else None
+    for f in [image, partuuid] + ([firmware] if args.uboot else [kernel, initrd]):
+        if not os.path.exists(f):
+            raise Fail(f"missing {f} (set HENGE_LINUX_OUT or --linux-dir)")
+    append = f"console=ttyAMA0 earlycon=pl011,0x9000000 root=PARTUUID={open(partuuid).read().strip()} rw"
+    n, scale = args.cpus, QEMU_TCG_SCALE if args.uboot and args.qemu else 1
+    cmd = DISK_LIMITS["command"]
+    with tempfile.TemporaryDirectory(prefix="smoke-", dir=args.work_dir) as tmp:
+        want = cproject_sum(tmp, CPROJECT_UNITS)
+        clone = os.path.join(tmp, "disk.img")
+        r = subprocess.run(["/bin/cp", "-c", image, clone], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise Fail(f"cannot clone {image} into {tmp} (it needs the same APFS volume; see --work-dir): "
+                       f"{r.stderr.strip()}")
+        stderr = lambda: open(os.path.join(tmp, "stderr"), errors="replace").read() if not args.qemu else ""
+        argv = command(args, kernel, initrd, tmp, append, clone, firmware)
+        tail = Tail()
+        t0 = time.monotonic()
+        p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200))
+        p.logfile_read = tail
+        try:
+            if args.uboot:
+                uboot_boot(p, {}, scale)
+                login(p, None, UBOOT_LIMITS["login"] * scale)
+            else:
+                login(p, append)
+            times["login"] = time.monotonic() - t0
+            check(p, "nproc", cmd, lambda o: o == str(n), "CPU count")
+            up = f"smp: Brought up 1 node, {n} CPU" + ("s" if n > 1 else "")
+            check(p, "sudo dmesg | grep -E 'smp: Brought up|failed to come online'", cmd,
+                  lambda o: o.endswith(up) and o.count("\n") == 0, "CPUs online")
+            kernel_bad(p, "at boot")
+            _, rc = sh(p, "command -v stress-ng gcc make >/dev/null", cmd)
+            if rc != 0:
+                t = time.monotonic()
+                apt = "sudo DEBIAN_FRONTEND=noninteractive apt-get -q -o Acquire::Check-Valid-Until=false"
+                check(p, f"{{ {apt} update && {apt} install -y --no-install-recommends {STRESS_PACKAGES}; }} "
+                      ">/var/tmp/apt.log 2>&1 || { tail -n 20 /var/tmp/apt.log; false; }",
+                      STRESS_LIMITS["install"] * scale, lambda o: True, "install " + STRESS_PACKAGES)
+                times["install"] = time.monotonic() - t
+            # From here only the workloads' kernel lines count.
+            check(p, "sudo dmesg -C", cmd, lambda o: True, "dmesg -C")
+            t = time.monotonic()
+            out = check(p, f"stress-ng --cpu {n} --vm 2 --vm-bytes 256M --timeout 60s --metrics-brief 2>&1",
+                        STRESS_LIMITS["stress"] * scale, lambda o: "successful run completed" in o, "stress-ng")
+            times["stress-ng"] = time.monotonic() - t
+            # bogo ops/s (real time) per stressor, to compare runs
+            for m in re.finditer(r"metrc: \[\d+\]\s+(cpu|vm)\s+\d+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+([\d.]+)", out):
+                print(f"smoke: stress-ng {m.group(1)}: {m.group(2)} bogo ops/s")
+            kernel_bad(p, "after stress-ng")
+            send_file(p, CPROJECT, "/var/tmp/cproject.sh")
+            t = time.monotonic()
+            check(p, f"sh /var/tmp/cproject.sh /var/tmp/proj {CPROJECT_UNITS} && make -s -C /var/tmp/proj -j{n} "
+                  f"2>&1 && /var/tmp/proj/prog", STRESS_LIMITS["build"] * scale,
+                  lambda o: o.split("\n")[-1] == want, f"make -j{n} (./prog must print {want})")
+            times["make"] = time.monotonic() - t
+            kernel_bad(p, "after make")
+            errors = check(p, "sudo dmesg --level=warn,err,crit,alert,emerg", cmd, lambda o: True, "dmesg")
+            bad = [l for l in errors.split("\n") if l and not any(re.search(a, l) for a in STRESS_ALLOW)]
+            if bad:
+                raise Fail("kernel warnings during the workloads:\n" + "\n".join(bad[:40]))
+            poweroff(p, stderr, args, times, "poweroff", scale)
+        except Fail:
+            report(p, tail, stderr)
+            raise
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--direct", action="store_true", help="direct kernel boot to the initramfs")
     ap.add_argument("--disk", action="store_true", help="with --direct: boot a clone of debian-console.img")
     ap.add_argument("--uboot", action="store_true", help="boot a clone of debian-console.img through U-Boot")
+    ap.add_argument("--stress", action="store_true", help="with --uboot or --direct --disk: the E11 checks")
+    ap.add_argument("--image", help="--stress: the disk to clone (default debian-console.img)")
     ap.add_argument("--work-dir", help="--disk, --uboot: where the clone goes (the image's APFS volume; default TMPDIR)")
     ap.add_argument("--qemu", action="store_true", help="run the checks on QEMU instead of hengevm")
     ap.add_argument("--henge-dtb", action="store_true", help="with --qemu: boot QEMU with hengevm --dump-dtb's tree")
@@ -442,13 +558,17 @@ def main():
         ap.error("--henge-dtb needs --qemu")
     if args.fatal and args.qemu:
         ap.error("--fatal is for hengevm")
+    if args.stress and not (args.disk or args.uboot):
+        ap.error("--stress needs --uboot or --direct --disk")
+    if args.image and not args.stress:
+        ap.error("--image is for --stress")
     if (args.disk or args.uboot) and (args.no_reboot or args.fatal):
         ap.error("--disk and --uboot do not take --no-reboot or --fatal")
     worst = {}
     for i in range(args.runs):
         times = {}
         try:
-            (disk if args.disk or args.uboot else direct)(args, times)
+            (stress if args.stress else disk if args.disk or args.uboot else direct)(args, times)
         except Fail as e:
             print(f"smoke: run {i + 1}: FAIL: {e}", file=sys.stderr)
             sys.exit(1)

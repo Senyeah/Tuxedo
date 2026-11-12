@@ -128,6 +128,12 @@ test-linux-uboot: $(B)/hengevm
 	uv run tools/linux/smoke.py --uboot $(SMOKE_ARGS)
 .PHONY: test-linux-uboot
 
+# Four CPUs under stress-ng and make -j4 (E11). Installs stress-ng and gcc in the clone with apt unless
+# SMOKE_ARGS has --image with them already.
+test-linux-smp: $(B)/hengevm
+	uv run tools/linux/smoke.py --uboot --stress --cpus 4 $(SMOKE_ARGS)
+.PHONY: test-linux-smp
+
 test-vm-lifecycle: $(B)/test_vm_lifecycle
 	$(B)/test_vm_lifecycle
 .PHONY: test-vm-lifecycle
