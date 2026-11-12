@@ -9,6 +9,7 @@ Every script runs inside the builder container, so no cross compiler is needed.
 - `Dockerfile`: the builder image (`debian:trixie` with the build tools).
 - `build-uboot.sh`, `build-image.sh`, `customize.sh`, `rootfs/`: see Order.
 - `customize-desktop.sh`, `rootfs-desktop/`: extra files for the desktop image (`build-image.sh --desktop`).
+- `rootfs/usr/local/lib/henge/`, `rootfs/etc/systemd/system/henge-*.service` (G8): the grow and first-boot units, in both images. `grow-check.py` tests them.
 - `run.sh`: runs a command in the builder image. `build/linux/` is mounted at `/out`, the repo's `tools/linux/` at `/tools` (read only), and a named volume at `/work` for source trees.
 
 `run.sh` builds the image on first use. Set `HENGE_LINUX_OUT` to change the artefact directory. The default is the shared `$HOME/Repos/Henge/build/linux`, so all worktrees see the same files.
@@ -27,6 +28,18 @@ Options of `qemu-ref.sh`: `--accel hvf|tcg` (default `tcg`), `--its-off`, `--dtb
 
 `qemu-check.py` drives it with pexpect (`uv run`): it checks page size, CPU count, network, run-time VA size and power off, and saves the reference output to `build/linux/ref/`. Use `--direct --accel hvf` for the fast check and the default for the full U-Boot path.
 
+## First boot and disk growth (G8)
+
+- `henge-grow.service` runs on every boot. `henge-grow` finds the root partition from sysfs, moves the backup GPT header to the end of the disk (`sgdisk -e`), runs `growpart` and then `resize2fs` on the mounted root. When the disk has not grown it changes nothing. The app grows the disk file, and the next boot grows the guest.
+- `henge-firstboot.service` runs once, while `/var/lib/henge/firstboot-done` is missing. It runs `systemd-machine-id-setup` if `/etc/machine-id` is empty, then writes the marker.
+- `grow-check.py` (`uv run`) clones an image, grows the clone to 16 GB (sparse), boots it through U-Boot, checks the grown partition, filesystem and GPT, boots it again unchanged, grows it by 4 GB more and boots a third time. `--qemu` uses QEMU TCG. Otherwise it uses `build/hengevm`. `--image`, `--firmware` and `--work-dir` choose files.
+
+## Packaging and catalogue (G7)
+
+- `package-image.sh --image FILE --kind console|desktop` packs the raw image with `build/hvsparse`, compresses it with `compression_tool -encode -a lzfse` to `debian-<kind>-<date>.hvsparse.lzfse`, then decodes and unpacks the result and checks the SHA-256 against the image (`--no-verify` skips this). It copies the firmware to `u-boot-<sha12>.bin` and adds or replaces the entry `debian-<kind>` in `linux-images.json`. Output goes to `build/linux/dist/`; `--out DIR` changes it. The manifest next to the image gives the kernel string and is checked against `image_sha256`. `--firmware`, `--date` and `--min-build` override the defaults (`build/linux/u-boot.bin`, today in GMT+12, the Info.plist build plus one).
+- `linux-images.json` is `{"images": [...]}`. Each entry has `id`, `name`, `version`, `kind`, `diskURL`, `diskBytes` (download), `diskSHA256`, `unpackedBytes` (the `.hvsparse` file, the data to write), `logicalBytes` (the disk), `firmwareURL`, `firmwareBytes`, `firmwareSHA256`, `kernel`, `minBuild`. The two URLs are relative to the catalogue's URL.
+- `serve.sh` serves `build/linux/dist/` on the LAN address (`--bind`, `--port`, `--dir`). It asks before it opens the port; `--yes` skips the question. It answers `Range` requests, which `http.server` does not, because the app resumes downloads with them. Stop it with Ctrl-C.
+
 ## Checks on the Mac
 
 - `dtb-compare.py` (T2, `make test-linux-dtb`) compares Henge's device tree with QEMU's.
@@ -40,10 +53,10 @@ Options of `qemu-ref.sh`: `--accel hvf|tcg` (default `tcg`), `--its-off`, `--dtb
 
 ## Desktop
 
-The desktop image is variant A of G6: labwc on Wayland with the pixman renderer, and one foot terminal. It needs no OpenGL.
+The desktop image is variant A of G6: labwc on Wayland and one foot terminal. It runs with pixman, or with gles2 when the GPU is virgl.
 
 - Autologin on tty1 runs `/usr/local/bin/henge-session` from `/etc/profile.d/henge-desktop.sh`. The serial console stays a plain shell. If labwc stops, tty1 keeps a shell.
-- The renderer is `pixman`. To change it, write `gles2` or `pixman` into `/etc/henge/renderer`. The session reads the file at every start. Without the file it uses `pixman`.
+- The renderer is chosen at every session start: `gles2` if `/dev/dri/renderD128` exists and `eglinfo -B` names virgl, else `pixman`. To force one, write `gles2` or `pixman` into `/etc/henge/renderer`. The choice is printed on tty1 and written to `$XDG_RUNTIME_DIR/henge-session.log` as `renderer=...`.
 - labwc runs `/etc/xdg/labwc/autostart`. It starts foot and, if `/etc/henge/bench.sh` is executable, runs it once in the background with `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR` and `WLR_RENDERER` set. Its output goes to `$XDG_RUNTIME_DIR/henge-bench.log`. The user `henge` is in the `dialout` group, so the script can also write to `/dev/ttyAMA0`.
 - `$XDG_RUNTIME_DIR/henge-times` (`/run/user/1000/henge-times`) holds the guest uptime in seconds at login, when labwc is up and when the terminal's shell starts.
 - The touchpad has tap to click and natural scrolling (`/etc/xdg/labwc/rc.xml`).
