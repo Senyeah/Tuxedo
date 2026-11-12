@@ -34,6 +34,12 @@ Options of `qemu-ref.sh`: `--accel hvf|tcg` (default `tcg`), `--its-off`, `--dtb
 - `henge-firstboot.service` runs once, while `/var/lib/henge/firstboot-done` is missing. It runs `systemd-machine-id-setup` if `/etc/machine-id` is empty, then writes the marker.
 - `grow-check.py` (`uv run`) clones an image, grows the clone to 16 GB (sparse), boots it through U-Boot, checks the grown partition, filesystem and GPT, boots it again unchanged, grows it by 4 GB more and boots a third time. `--qemu` uses QEMU TCG. Otherwise it uses `build/hengevm`. `--image`, `--firmware` and `--work-dir` choose files.
 
+## Packaging and catalogue (G7)
+
+- `package-image.sh --image FILE --kind console|desktop` packs the raw image with `build/hvsparse`, compresses it with `compression_tool -encode -a lzfse` to `debian-<kind>-<date>.hvsparse.lzfse`, then decodes and unpacks the result and checks the SHA-256 against the image (`--no-verify` skips this). It copies the firmware to `u-boot-<sha12>.bin` and adds or replaces the entry `debian-<kind>` in `linux-images.json`. Output goes to `build/linux/dist/`; `--out DIR` changes it. The manifest next to the image gives the kernel string and is checked against `image_sha256`. `--firmware`, `--date` and `--min-build` override the defaults (`build/linux/u-boot.bin`, today in GMT+12, the Info.plist build plus one).
+- `linux-images.json` is `{"images": [...]}`. Each entry has `id`, `name`, `version`, `kind`, `diskURL`, `diskBytes` (download), `diskSHA256`, `unpackedBytes` (the `.hvsparse` file, the data to write), `logicalBytes` (the disk), `firmwareURL`, `firmwareBytes`, `firmwareSHA256`, `kernel`, `minBuild`. The two URLs are relative to the catalogue's URL.
+- `serve.sh` serves `build/linux/dist/` on the LAN address (`--bind`, `--port`, `--dir`). It asks before it opens the port; `--yes` skips the question. It answers `Range` requests, which `http.server` does not, because the app resumes downloads with them. Stop it with Ctrl-C.
+
 ## Checks on the Mac
 
 - `dtb-compare.py` (T2, `make test-linux-dtb`) compares Henge's device tree with QEMU's.
