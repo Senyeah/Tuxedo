@@ -158,6 +158,11 @@ test-linux-mode: $(B)/hengevm
 	uv run tools/linux/mode-check.py $(MODE_ARGS)
 .PHONY: test-linux-mode
 
+# R5: the desktop follows a mode line (labwc framebuffer size, wlr-randr scale). DISPLAY_ARGS="--image FILE" for a rebuilt desktop image.
+test-linux-display: $(B)/hengevm
+	uv run tools/linux/display-check.py $(DISPLAY_ARGS)
+.PHONY: test-linux-display
+
 test-vm-lifecycle: $(B)/test_vm_lifecycle
 	$(B)/test_vm_lifecycle
 .PHONY: test-vm-lifecycle
