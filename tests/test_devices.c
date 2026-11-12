@@ -662,6 +662,10 @@ static void test_phys_ptr_bounds(void) {
     uint64_t wrap = (0 - (base + 16)) + base + 8; /* pa + len wraps to base + 8 */
     check("ptr: wrapping length", hv_phys_ptr(&m, base + 16, wrap) == NULL, 1);
     check("ptr: wrapping length at the end", hv_phys_ptr(&m, end - 1, 0 - (end - 1) + base) == NULL, 1);
+    uint8_t zb[8] = {0};
+    check("write: zero length at RAM start", hv_phys_write(&m, base, zb, 0), 0);
+    check("write: zero length at the end", hv_phys_write(&m, end - 4, zb, 0), 0);
+    check("write: 5 bytes at the end", hv_phys_write(&m, end - 4, zb, 5) != 0, 1);
     hv_dma_written(&m, base + 16, wrap); /* must return and touch nothing */
     hv_dma_written(&m, base, ~0ull);
 }

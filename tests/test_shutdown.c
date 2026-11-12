@@ -70,41 +70,42 @@ static void power_request(uint32_t function, int caller) {
     free(code);
 }
 
-static void *power_on(void *unused) {
-    (void)unused;
-    hv_exception_insn(&cpus[0], 0xd4000002, 0x10000);
-    atomic_store(&finished[0], 1);
-    return NULL;
-}
-
+/* CPU 0 retries CPU_ON against a target that never parks; a halt must end hv_run. */
 static void stop_during_cpu_on(void) {
-    if (hv_machine_init(&machine, 4 << 20)) exit(1);
+    uint32_t *code = aligned_alloc(16384, 16384);
+    if (!code || hv_machine_init(&machine, 4 << 20)) exit(1);
+    code[0] = 0xd4000002; /* hvc #0 */
+    code[1] = 0x14000000; /* b . */
+    hv_machine_add_ram(&machine, 0x10000, 16384, code, 1);
     for (int i = 0; i < 2; i++) {
         hv_cpu_reset_index(&cpus[i], &machine, i);
         cpus[i].mpidr = i;
     }
-    /* CPU_ON is waiting for a target that has not reached its CPU_OFF wait. */
-    cpus[1].off = 1;
+    cpus[1].off = 1; /* off, never parked */
+    cpus[0].pc = 0x10000;
     cpus[0].x[0] = 0xc4000003;
     cpus[0].x[1] = 1;
     atomic_store(&finished[0], 0);
     pthread_t thread;
-    pthread_create(&thread, NULL, power_on, NULL);
+    pthread_create(&thread, NULL, run_cpu, &cpus[0]);
     usleep(20000);
+    check("CPU_ON keeps retrying while the target is not parked", !atomic_load(&finished[0]) && cpus[0].x[0] == 0xc4000003);
     hv_machine_halt(&machine, HV_HALT_SHUTDOWN);
     for (int n = 0; n < 500 && !atomic_load(&finished[0]); n++) usleep(1000);
-    check("shutdown cancels a pending CPU_ON", atomic_load(&finished[0]));
-    /* Release even the old implementation so a regression reports failure. */
-    __atomic_store_n(&cpus[1].parked_off, 1, __ATOMIC_SEQ_CST);
-    pthread_join(thread, NULL);
+    check("shutdown ends a CPU_ON retry loop", atomic_load(&finished[0]));
+    hv_cpu_wake(&cpus[0]); /* a failed run must still free the thread */
+    void *result;
+    pthread_join(thread, &result);
+    check("retrying CPU returns HALT", (intptr_t)result == HV_EXIT_HALT);
     check("CPU_ON cannot clear shutdown", cpus[1].halted == HV_HALT_SHUTDOWN && cpus[1].off);
-    check("CPU_ON does not report success", cpus[0].x[0] != 0); /* the CPU leaves at the halt, so it may never see DENIED */
     /* Also cover the target that was already parked when the request arrived. */
+    __atomic_store_n(&cpus[1].parked_off, 1, __ATOMIC_SEQ_CST);
     cpus[0].x[0] = 0xc4000003;
     cpus[0].x[1] = 1;
     hv_exception_insn(&cpus[0], 0xd4000002, 0x10000);
     check("a stopped CPU stays stopped", cpus[1].halted == HV_HALT_SHUTDOWN && cpus[1].off);
     hv_machine_free(&machine);
+    free(code);
 }
 
 int main(void) {

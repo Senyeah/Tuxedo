@@ -574,7 +574,7 @@ int hv_phys_read(HvMachine *m, uint64_t pa, void *buf, unsigned len) {
 int hv_phys_write(HvMachine *m, uint64_t pa, const void *buf, unsigned len) {
     HvRam *r = hv_ram_lookup(m, pa);
     if (r && ram_fits(r, pa, len)) {
-        if (r->readonly) return 0; /* ROM: writes are ignored */
+        if (r->readonly || !len) return 0; /* ROM: writes are ignored; len 0 would wrap `last` */
         uint64_t off = pa - r->pa;
         uint64_t first = off >> HV_TLB_PAGE_BITS, last = (off + len - 1) >> HV_TLB_PAGE_BITS;
         for (uint64_t pg = first; pg <= last; pg++)

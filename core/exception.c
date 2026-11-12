@@ -162,7 +162,7 @@ static uint64_t psci(HvCpu *cpu, uint64_t fn, int *retry) {
         if (cpu->halted || t->halted) return (uint64_t)-3;   /* DENIED: machine is stopping */
         if (!__atomic_load_n(&t->parked_off, __ATOMIC_SEQ_CST)) { /* still on its way out of CPU_OFF */
             /* Never wait in here: a flush while parked would free this block's code. */
-            if (!cpu->m->big_lock_on) sched_yield();
+            sched_yield(); /* the big lock is handed on by the dispatcher after the exit */
             *retry = 1;
             return 0;
         }
