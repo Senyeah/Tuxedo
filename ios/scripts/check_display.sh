@@ -9,11 +9,20 @@ SOURCES=()
 while IFS= read -r source; do SOURCES+=("$source"); done < <(find ios/Henge -name '*.swift' -print | sort)
 SOURCES+=(ios/HengeJITHelper/HengeJITMessages.swift)
 
+# SwiftTerm, at the version in ios/project.yml, built for the device from its own checkout.
+ST_DIR="$OUT/SwiftTerm-src"
+if [ ! -d "$ST_DIR" ]; then
+  git clone -q --depth 1 --branch v1.99.1 https://github.com/migueldeicaza/SwiftTerm "$ST_DIR"
+fi
+swift build -q --package-path "$ST_DIR" --product SwiftTerm --sdk "$IOS_SDK" --triple arm64-apple-ios17.0 \
+  --scratch-path "$OUT/swiftterm" >/dev/null 2>&1
+ST_MODULE=$(dirname "$(find "$OUT/swiftterm" -name SwiftTerm.swiftmodule -print -quit)")
+
 # Compile the complete Swift app against the real SDK, keeping the iOS 17 deployment target.
 # Linking/package export still require the dependencies described in ios/README.md.
 xcrun swiftc -emit-object -whole-module-optimization -swift-version 5 \
   -target arm64-apple-ios17.0 -sdk "$IOS_SDK" \
-  -import-objc-header ios/Henge/HengeBridge.h -Ihost -Icore -Idevices \
+  -import-objc-header ios/Henge/HengeBridge.h -Ihost -Icore -Idevices -I "$ST_MODULE" \
   "${SOURCES[@]}" -o "$OUT/Henge.o"
 
 # Compile the renderer for both consumers. Suppress only warnings already present upstream.

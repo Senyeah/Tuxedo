@@ -20,7 +20,8 @@ struct SessionView: View {
     @State private var log: [String] = []
     @State private var started = Date()
     @State private var thermalState = ProcessInfo.processInfo.thermalState
-    @AppStorage("henge.cpus") private var cpus = 4
+    @AppStorage("henge.cpus") private var globalCpus = 4
+    private var cpus: Int { mac.cpuCount(fallback: globalCpus) }
     @AppStorage("henge.matchScreenColors") private var matchScreenColors = true
     @AppStorage("henge.display.brightness") private var screenBrightness = 1.0
     @AppStorage("henge.cursor.scale") private var cursorScale = Device.isPad ? 1 : 3
@@ -41,12 +42,21 @@ struct SessionView: View {
     @AppStorage("henge.tips.stillWallpaperShown") private var stillWallpaperTipShown = false
     @State private var showWallpaperTip = false
     @State private var confirmStop = false
+    @State private var shutdownAsked: Date? // Linux: when the power button was pressed
+    @State private var shutdownOverdue = false
     @State private var zoomCentre = CGPoint(x: 0.5, y: 0.5) // where the zoomed view is, 0...1 of the Mac's screen
     @State private var map: UIImage?
     @State private var zoomFollowing: Task<Void, Never>?
     @State private var helperRunning = false
     @State private var shown = CGSize(width: 0.5, height: 0.5) // how much of the Mac's screen the zoomed view shows
     @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var console = ConsoleModel()
+    // Linux starts on the console: U-Boot draws on the GPU at once, so "until the GPU draws" would never show it.
+    @State private var consoleChoice = ConsoleChoice.console
+
+    private enum ConsoleChoice { case screen, console }
+
+    private var consoleShown: Bool { mac.guest == .linux && consoleChoice == .console }
 
 
     var body: some View {
@@ -55,11 +65,13 @@ struct SessionView: View {
             let full = CGSize(width: geo.size.width + insets.leading + insets.trailing,
                               height: geo.size.height + insets.top + insets.bottom)
             let landscape = full.width > full.height
-            let layout = Layout(full: full, insets: insets, landscape: landscape, zoomed: zoomed, typing: typing, centre: zoomCentre, aspect: mac.aspect)
+            let layout = Layout(full: full, insets: insets, landscape: landscape, zoomed: zoomed && !consoleShown, typing: typing,
+                                centre: zoomCentre, aspect: mac.aspect, console: consoleShown)
             ZStack(alignment: .topLeading) {
                 (landscape || zoomed ? Color.black : Desk.page)
                 // One view in every layout: it holds the layer the engine draws into.
-                BootDisplay(display: display, role: .device)
+                BootDisplay(display: display, role: .device, guest: mac.guest, console: console,
+                            showConsole: consoleShown, typing: $typing)
                     .opacity(display.isExternal ? 0 : 1)
                     .overlay {
                         if display.isExternal && state != 2 {
@@ -84,15 +96,17 @@ struct SessionView: View {
                     }
                     .position(x: layout.screen.midX, y: layout.screen.midY)
                 if state != 2 {
-                    Trackpad()
-                        .frame(width: layout.touch.width, height: layout.touch.height)
-                        .position(x: layout.touch.midX, y: layout.touch.midY)
-                    if inputMode == .volumeButtons && volumeMode == .intercept {
-                        // The capture interaction must live in the SwiftUI hierarchy to receive
-                        // the volume-button events; it passes touches through to the trackpad.
-                        CaptureInteractionView()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .allowsHitTesting(false)
+                    if !consoleShown { // the console takes touches itself
+                        Trackpad()
+                            .frame(width: layout.touch.width, height: layout.touch.height)
+                            .position(x: layout.touch.midX, y: layout.touch.midY)
+                        if inputMode == .volumeButtons && volumeMode == .intercept {
+                            // The capture interaction must live in the SwiftUI hierarchy to receive
+                            // the volume-button events; it passes touches through to the trackpad.
+                            CaptureInteractionView()
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .allowsHitTesting(false)
+                        }
                     }
                     if !layout.fillsPhone {
                         uprightControls(layout)
@@ -119,7 +133,7 @@ struct SessionView: View {
                             .transition(.opacity)
                             .allowsHitTesting(false)
                     }
-                    if showWallpaperTip && !showRevealHint && !pointerRefused {
+                    if showWallpaperTip && mac.guest == .mac && !showRevealHint && !pointerRefused {
                         Label("For more speed, give this Mac a still wallpaper and set its screen saver to Never in System Settings.", systemImage: "speedometer")
                             .font(.system(size: 15, weight: .medium))
                             .foregroundStyle(.white)
@@ -133,13 +147,14 @@ struct SessionView: View {
                     }
                 }
                 if state == 2 {
-                    StoppedMacView(outcome: henge_vm_exit_outcome(), reason: String(cString: henge_vm_exit_reason()),
+                    StoppedMacView(kind: mac.guest, outcome: henge_vm_exit_outcome(), reason: String(cString: henge_vm_exit_reason()),
                                    start: { bootAttempt += 1 }, close: close)
                         .frame(width: min(layout.touch.width - 32, 360))
                         .position(x: layout.touch.midX, y: layout.fillsPhone ? layout.touch.midY : layout.pad.midY)
                 }
                 if let error { errorCard(error, layout) }
-                KeyboardCatcher(active: $typing).frame(width: 0, height: 0)
+                if shutdownAsked != nil && state != 2 { shutdownCard(layout) }
+                KeyboardCatcher(active: $typing, suspended: consoleShown).frame(width: 0, height: 0)
             }
             .frame(width: full.width, height: full.height)
             .ignoresSafeArea()
@@ -167,7 +182,9 @@ struct SessionView: View {
         .confirmationDialog("Shut down \(mac.name)?", isPresented: $confirmStop, titleVisibility: .visible) {
             Button("Shut Down", role: .destructive) { finish() }
         } message: {
-            Text("This turns the Mac off at once. Anything not saved on it is lost.")
+            Text(mac.guest == .linux
+                 ? "\(mac.name) is asked to shut down, as if you pressed its power button. It can take a few seconds."
+                 : "This turns the Mac off at once. Anything not saved on it is lost.")
         }
         .onChange(of: zoomed) { on in
             zoomFollowing?.cancel()
@@ -197,6 +214,7 @@ struct SessionView: View {
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
             zoomFollowing?.cancel()
+            console.stop()
             StickyKeys.shared.releaseAll()
             HardwareKeys.releaseAll()
             HardwareMouse.shared.stop()
@@ -208,7 +226,7 @@ struct SessionView: View {
     }
 
     /// When there is something of the app's to point at, iPadOS gets its own pointer back.
-    private var pointerNeeded: Bool { state == 2 || showDetails || confirmStop || error != nil }
+    private var pointerNeeded: Bool { state == 2 || showDetails || confirmStop || error != nil || shutdownAsked != nil }
 
     // MARK: Layout
 
@@ -226,10 +244,29 @@ struct SessionView: View {
             CGSize(width: min(touch.width / max(screen.width, 1), 1), height: min(touch.height / max(screen.height, 1), 1))
         }
 
-        init(full: CGSize, insets: EdgeInsets, landscape: Bool, zoomed: Bool, typing: Bool, centre: CGPoint, aspect: CGFloat) {
+        init(full: CGSize, insets: EdgeInsets, landscape: Bool, zoomed: Bool, typing: Bool, centre: CGPoint, aspect: CGFloat,
+             console: Bool) {
             self.insets = insets
             let big = full.height >= 600 // an iPad on its side, or a window on one
-            if zoomed {
+            if console && landscape {
+                // Below the control pill; insets.bottom holds the keyboard while it is up.
+                let top = insets.top + 58
+                screen = CGRect(x: insets.leading, y: top, width: full.width - insets.leading - insets.trailing,
+                                height: max(full.height - insets.bottom - top, 100))
+                touch = CGRect(origin: .zero, size: full)
+                fillsPhone = true
+                toolsY = 0
+                pad = .zero
+            } else if console {
+                // The console takes the room the trackpad has; the bar sits under it, above the keyboard.
+                let top = insets.top + 6
+                let height = max(full.height - insets.bottom - top - 54 - 20, 100)
+                screen = CGRect(x: 8, y: top, width: full.width - 16, height: height)
+                touch = screen
+                fillsPhone = false
+                toolsY = screen.maxY + 10
+                pad = screen
+            } else if zoomed {
                 // Upright, as tall as the device. On its side, bigger than it fits: a big screen needs less.
                 let height = landscape ? full.height * (big ? 1.5 : 2) : max(full.height - insets.bottom, full.width / aspect)
                 let width = height * aspect
@@ -282,15 +319,27 @@ struct SessionView: View {
     // MARK: Upright
 
     @ViewBuilder private func uprightControls(_ layout: Layout) -> some View {
-        if !typing && !controlsHidden {
+        if (!typing || consoleShown) && !controlsHidden {
             HStack {
-                tool("eye.slash", "Hide controls") { hideControls() }
-                Spacer()
-                tool("keyboard", "Keyboard") { typing = true }
+                if consoleShown {
+                    viewSwitch()
+                } else {
+                    tool("eye.slash", "Hide controls") { hideControls() }
+                    Spacer()
+                    if mac.guest == .linux {
+                        viewSwitch()
+                        Spacer()
+                    }
+                }
+                tool("keyboard", "Keyboard") { typing.toggle() }
                 Spacer()
                 pasteTool
                 Spacer()
-                tool("plus.magnifyingglass", "Zoom in") { zoomed = true }
+                if consoleShown {
+                    fitTool()
+                } else {
+                    tool("plus.magnifyingglass", "Zoom in") { zoomed = true }
+                }
                 Spacer()
                 tool("info.circle", "Details") { showDetails = true }
                 Spacer()
@@ -303,7 +352,7 @@ struct SessionView: View {
             .position(x: layout.pad.midX, y: layout.toolsY + 27)
             .transition(.opacity)
         }
-        trackpadPanel(layout)
+        if !consoleShown { trackpadPanel(layout) }
     }
 
     private func trackpadPanel(_ layout: Layout) -> some View {
@@ -346,7 +395,7 @@ struct SessionView: View {
     /// The system's paste button: iOS asks no permission for it, as it would if the app read the clipboard itself.
     private var pasteTool: some View {
         PasteButton(payloadType: String.self) { texts in
-            if let text = texts.first { Sharing.paste(text) }
+            if let text = texts.first { Sharing.paste(text, guest: mac.guest, console: consoleShown) }
         }
         .labelStyle(.iconOnly)
         .buttonBorderShape(.circle)
@@ -361,6 +410,27 @@ struct SessionView: View {
         revealHintsShown += 1
         showRevealHint = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { showRevealHint = false }
+    }
+
+    /// Linux: the screen and the serial console are both always there; this shows the other one.
+    private func viewSwitch(tint: Color = Desk.text) -> some View {
+        tool(consoleShown ? "display" : "terminal", consoleShown ? "Show the screen" : "Show the console", tint: tint) {
+            zoomed = false
+            controlsHidden = false
+            consoleChoice = consoleShown ? .screen : .console
+        }
+    }
+
+    /// Tells the guest the console's size, on request only.
+    private func fitTool(tint: Color = Desk.text) -> some View {
+        Button { console.fit() } label: {
+            Text("Fit")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Fit the console to the view")
     }
 
     private func tool(_ symbol: String, _ label: String, tint: Color = Desk.text, action: @escaping () -> Void) -> some View {
@@ -380,10 +450,19 @@ struct SessionView: View {
         let landscape = layout.touch.width > layout.touch.height
         let top = layout.insets.top + (landscape ? 8 : 6)
         let pill = HStack(spacing: 4) {
-            tool("eye.slash", "Hide controls", tint: .white) { hideControls() }
+            if consoleShown {
+                viewSwitch(tint: .white)
+            } else {
+                tool("eye.slash", "Hide controls", tint: .white) { hideControls() }
+                if mac.guest == .linux { viewSwitch(tint: .white) }
+            }
             tool("keyboard", "Keyboard", tint: .white) { typing.toggle() }
             pasteTool
-            tool(zoomed ? "minus.magnifyingglass" : "plus.magnifyingglass", zoomed ? "Zoom out" : "Zoom in", tint: zoomed ? Desk.accentLight : .white) { zoomed.toggle() }
+            if consoleShown {
+                fitTool(tint: .white)
+            } else {
+                tool(zoomed ? "minus.magnifyingglass" : "plus.magnifyingglass", zoomed ? "Zoom out" : "Zoom in", tint: zoomed ? Desk.accentLight : .white) { zoomed.toggle() }
+            }
             tool("info.circle", "Details", tint: .white) { showDetails = true }
             Rectangle().fill(Color.white.opacity(0.3)).frame(width: 1, height: 22).padding(.horizontal, 4)
             tool("power", "Shut down", tint: Desk.bad) { stopTapped() }
@@ -456,9 +535,32 @@ struct SessionView: View {
 
     private func errorCard(_ text: String, _ layout: Layout) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("This Mac could not start").font(.system(size: 17, weight: .semibold))
+            Text(mac.guest == .linux ? "This machine could not start" : "This Mac could not start").font(.system(size: 17, weight: .semibold))
             Text(text).font(.system(size: 14)).foregroundStyle(Desk.dim)
             Button("Close") { close() }.font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.accentLight)
+        }
+        .padding(18)
+        .frame(width: min(layout.touch.width, 390) - 32, alignment: .leading)
+        .background(Desk.raised, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .position(x: (layout.fillsPhone ? layout.touch.midX : layout.pad.midX), y: layout.fillsPhone ? layout.touch.midY : layout.pad.midY)
+    }
+
+    /// Shown while the guest is asked to power off; "Turn off now" appears if it takes too long.
+    private func shutdownCard(_ layout: Layout) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                ProgressView()
+                Text("Shutting down…").font(.system(size: 17, weight: .semibold))
+            }
+            if shutdownOverdue {
+                Text("\(mac.name) is taking a while. You can turn it off now; anything not saved on it is lost.")
+                    .font(.system(size: 14)).foregroundStyle(Desk.dim)
+                Button("Turn off now") {
+                    henge_vm_stop()
+                    close()
+                }
+                .font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.bad)
+            }
         }
         .padding(18)
         .frame(width: min(layout.touch.width, 390) - 32, alignment: .leading)
@@ -469,7 +571,7 @@ struct SessionView: View {
     private var phase: String {
         switch state {
         case 0: return error == nil ? "Starting…" : "Not started"
-        case 1: return userCode ? "macOS is running" : "Booting"
+        case 1: return userCode ? (mac.guest == .linux ? "Debian is running" : "macOS is running") : "Booting"
         case 3: return "Finishing shutdown…"
         default: return "Stopped (\(String(cString: henge_vm_exit_reason())))"
         }
@@ -506,8 +608,8 @@ struct SessionView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Sharing") {
-                    LabeledContent("Clipboard and folder", value: helperRunning ? "On" : "Not set up")
-                    if !helperRunning {
+                    LabeledContent("Clipboard and folder", value: mac.guest == .linux ? "Not available" : helperRunning ? "On" : "Not set up")
+                    if mac.guest == .mac && !helperRunning {
                         Button("Type the Set Up Command") {
                             showDetails = false
                             Task {
@@ -516,11 +618,17 @@ struct SessionView: View {
                             }
                         }
                     }
+                    if mac.guest == .linux {
+                        Text("Sharing with a Debian machine is not set up yet. The paste button types the text into the guest.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    } else {
                     Text(helperRunning
                          ? "Put files in Files, Henge, Shared to see them in the Henge folder in this Mac's home folder. What you copy on the Mac is copied here too, and the paste button pastes from here into the Mac."
                          : "Once for each Mac: open Terminal on the Mac, tap this, then press Return. When macOS asks about henge-agent and local networks, choose Allow. It types \(Sharing.setUpCommand) and needs the Mac's keyboard layout to be U.S.")
                         .font(.footnote).foregroundStyle(.secondary)
+                    }
                 }
+                if mac.guest == .mac {
                 Section("Lighter macOS") {
                     Button("Type the Lighter macOS Command") {
                         showDetails = false
@@ -538,6 +646,7 @@ struct SessionView: View {
                     }
                     Text("Less drawing for the emulated CPUs: window and Dock animations, desktop widgets, the screen saver and a moving wallpaper go. Open Terminal on the Mac, tap the button and press Return, then log out and back in. Also turn on Reduce Motion and Reduce Transparency in the Mac's System Settings, Accessibility. Undo puts it back, apart from the wallpaper. Needs the Mac's keyboard layout to be U.S.")
                         .font(.footnote).foregroundStyle(.secondary)
+                }
                 }
                 Section("Log") {
                     VStack(alignment: .leading, spacing: 1) {
@@ -578,6 +687,13 @@ struct SessionView: View {
         zoomCentre = CGPoint(x: 0.5, y: 0.5)
         map = nil
         showWallpaperTip = false
+        shutdownAsked = nil
+        shutdownOverdue = false
+        consoleChoice = .console
+        if mac.guest == .linux {
+            console.reset()
+            console.start()
+        }
         while henge_vm_state() == 3 && !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
@@ -587,7 +703,7 @@ struct SessionView: View {
         let ram = GuestMemory.prepare(mac)
         HengeLog.log("session", "available memory \(henge_available_memory() >> 20) MB")
         guard ram >= 1024 else {
-            error = "There is not room for this Mac's memory: it needs a few GB of free storage."
+            error = "There is not room for this \(mac.guest == .linux ? "machine" : "Mac")'s memory: it needs a few GB of free storage."
             return
         }
         var buffer = [CChar](repeating: 0, count: 256)
@@ -595,13 +711,20 @@ struct SessionView: View {
         Sharing.prepare()
         EngineTuning.apply()
         henge_vm_set_display(UInt32(mac.screen.width), UInt32(mac.screen.height))
-        if mac.isRetina {
-            henge_vm_set_display_mm(UInt32(Device.retinaMM.width), UInt32(Device.retinaMM.height))
-        } else {
-            henge_vm_set_display_mm(0, 0)
+        let rc: Int32
+        switch mac.guest {
+        case .mac:
+            if mac.isRetina {
+                henge_vm_set_display_mm(UInt32(Device.retinaMM.width), UInt32(Device.retinaMM.height))
+            } else {
+                henge_vm_set_display_mm(0, 0)
+            }
+            HengeLog.log("session", "screen \(mac.screen.width)x\(mac.screen.height) retina \(mac.isRetina)")
+            rc = henge_vm_boot(mac.rom.path, mac.disk.path, mac.aux.path, mac.ecid, mac.seed, ram, Int32(cpus), &buffer, buffer.count)
+        case .linux:
+            HengeLog.log("session", "linux screen \(mac.screen.width)x\(mac.screen.height)")
+            rc = henge_vm_boot_linux(mac.firmware.path, mac.disk.path, ram, Int32(cpus), &buffer, buffer.count)
         }
-        HengeLog.log("session", "screen \(mac.screen.width)x\(mac.screen.height) retina \(mac.isRetina)")
-        let rc = henge_vm_boot(mac.rom.path, mac.disk.path, mac.aux.path, mac.ecid, mac.seed, ram, Int32(cpus), &buffer, buffer.count)
         if rc != 0 {
             error = String(cString: buffer)
             return
@@ -620,6 +743,7 @@ struct SessionView: View {
                 try? await Task.sleep(nanoseconds: 100_000_000)
                 continue
             }
+            if let asked = shutdownAsked, Date().timeIntervalSince(asked) >= 30 { shutdownOverdue = true }
             cpusOn = henge_vm_cpus_on()
             userCode = userCode || henge_vm_guest_el0() != 0
             let now = Date(), blocks = henge_vm_blocks()
@@ -644,8 +768,13 @@ struct SessionView: View {
                 HardwareKeys.releaseAll()
                 HardwareMouse.shared.stop()
                 UIApplication.shared.isIdleTimerDisabled = false
-                HengeLog.log("session", "showing stopped Mac: \(String(cString: henge_vm_exit_reason()))")
-                if henge_vm_exit_outcome() == Int32(HENGE_VM_OUTCOME_RESTART.rawValue) && henge_vm_can_start() != 0 {
+                let outcome = henge_vm_exit_outcome()
+                if shutdownAsked != nil && outcome == Int32(HENGE_VM_OUTCOME_SHUTDOWN.rawValue) {
+                    close() // the person asked for it: no stopped card
+                    break
+                }
+                HengeLog.log("session", "showing stopped machine: \(String(cString: henge_vm_exit_reason()))")
+                if outcome == Int32(HENGE_VM_OUTCOME_RESTART.rawValue) && henge_vm_can_start() != 0 {
                     bootAttempt += 1
                 }
                 break
@@ -659,7 +788,7 @@ struct SessionView: View {
                 lastGPUFrames = gpuFrames
                 JITBootstrap.releaseLingeringDebugger()
             }
-            if tick == 60 && !stillWallpaperTipShown { // about when the desktop is up after a login
+            if tick == 60 && mac.guest == .mac && !stillWallpaperTipShown { // about when the desktop is up after a login
                 stillWallpaperTipShown = true
                 showWallpaperTip = true
                 DispatchQueue.main.asyncAfter(deadline: .now() + 10) { showWallpaperTip = false }
@@ -677,6 +806,12 @@ struct SessionView: View {
     private func finish() {
         if state == 1 {
             MacPreview.saveNow(for: mac)
+            if mac.guest == .linux {
+                henge_vm_power_button()
+                shutdownAsked = Date()
+                shutdownOverdue = false
+                return // the run loop closes the view when the guest is off
+            }
             henge_vm_stop()
         }
         close()

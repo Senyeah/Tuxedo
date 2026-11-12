@@ -45,7 +45,8 @@ enum Device {
     static let memoryChoices = 1...16
 
     /// What a choice risks on this device, if anything. An install always gets at least 2 GB (Installer.install).
-    static func memoryNote(_ gb: Int) -> String? {
+    static func memoryNote(_ gb: Int, guest: GuestKind = .mac) -> String? {
+        if guest == .linux { return gb > suggestedRAMGB ? "More than \(suggestedRAMGB) GB is a lot for this \(name): iOS may close Henge when Linux gets busy." : nil }
         if gb < 4 { return "macOS has little room under 4 GB, so it can be very slow." }
         if gb > suggestedRAMGB { return "More than \(suggestedRAMGB) GB is a lot for this \(name): iOS may close Henge when macOS gets busy." }
         return nil

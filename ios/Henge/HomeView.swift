@@ -46,11 +46,12 @@ struct HomeView: View {
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
                         Button("Install macOS…") { tab = .install }
-                        Button("Bring in a Mac from a computer…") { picking = true }
+                        Button("Install Linux…") { tab = .install } // the Linux install view comes with I9
+                        Button("Bring in a machine from a computer…") { picking = true }
                     } label: {
                         Image(systemName: "plus")
                     }
-                    .accessibilityLabel("Add a Mac")
+                    .accessibilityLabel("Add a machine")
                 }
             }
             .fileImporter(isPresented: $picking, allowedContentTypes: [.folder]) { result in
@@ -91,11 +92,13 @@ struct HomeView: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: 190)
                 .background(Desk.raised.opacity(0.5), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            Text("No Mac yet").font(.system(size: 24, weight: .bold))
-            Text("Install macOS on this \(Device.name), or bring in a Mac made on a computer.")
+            Text("No machine yet").font(.system(size: 24, weight: .bold))
+            Text("Install macOS or Linux on this \(Device.name), or bring in a machine made on a computer.")
                 .font(.system(size: 15)).foregroundStyle(Desk.dim).multilineTextAlignment(.center)
             Button("Install macOS") { tab = .install }.buttonStyle(DeskButtonStyle())
-            Button("Bring in a Mac") { picking = true }
+            Button("Install Linux") { tab = .install }
+                .font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.accentLight)
+            Button("Bring in a machine") { picking = true }
                 .font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.accentLight)
         }
         .padding(14)
@@ -105,7 +108,7 @@ struct HomeView: View {
     @ViewBuilder private func others(besides shown: VirtualMac) -> some View {
         let rest = machines.all.filter { $0.id != shown.id }
         if !rest.isEmpty {
-            DeskHeading("Other Macs")
+            DeskHeading(MachineList.othersHeading(machines.all))
             VStack(spacing: 0) {
                 ForEach(rest) { other in
                     Button { chosen = other.id } label: {
@@ -143,7 +146,7 @@ extension VirtualMac {
 
     var summary: String {
         var parts: [String] = []
-        if let osName { parts.append(osName) }
+        if let osName { parts.append(osName) } else if guest == .linux { parts.append("Linux") }
         parts.append("\(ramMB / 1024) GB")
         return parts.joined(separator: " · ")
     }
@@ -176,7 +179,7 @@ private struct MacHero: View {
                     }
                     .padding(.top, 15)
                     .padding(.horizontal, 5)
-                    Text("\(mac.summary) · \(cpus) CPUs")
+                    Text("\(mac.summary) · \(mac.cpuCount(fallback: cpus)) CPUs")
                         .font(.system(size: 15))
                         .foregroundStyle(Desk.dim)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -213,7 +216,7 @@ private struct MacHero: View {
             if let image = UIImage(contentsOfFile: MacPreview.file(for: mac).path) {
                 Image(uiImage: image).resizable().aspectRatio(contentMode: .fill)
             } else {
-                Image(systemName: "macwindow.on.rectangle")
+                Image(systemName: mac.guest == .linux ? "terminal" : "macwindow.on.rectangle")
                     .font(.system(size: 46, weight: .light))
                     .foregroundStyle(Desk.faint)
             }
