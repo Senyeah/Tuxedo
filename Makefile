@@ -3,18 +3,35 @@ CC = clang
 CFLAGS = -std=c11 -Wall -Wextra -O2 -g -Icore -Ihost -Idevices
 B = build
 
+# GFX=1 adds the virtio GPU's virgl renderer (devices/vgpu_virgl.m, A5): ANGLE, libepoxy and virglrenderer from
+# tools/gfx/build-deps.sh. Without it nothing here needs them. A worktree shares the main checkout's build/gfx.
+GFX ?=
+ifndef GFX_ROOT
+GFX_ROOT := $(or $(patsubst %/.git,%,$(shell git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)),$(CURDIR))/build/gfx
+endif
+GFX_DIR ?= $(GFX_ROOT)/macos
+GFX_LIBS = $(addprefix $(GFX_DIR)/lib/,libvirglrenderer.a libepoxy.a libEGL.a libGLESv2.a)
+GFX_FRAMEWORKS = -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework CoreFoundation -framework IOKit -framework AppKit -lc++
+GFX_OBJ = $(if $(GFX),$(B)/vgpu_virgl.o)
+GFX_LDLIBS = $(if $(GFX),$(GFX_LIBS) $(GFX_FRAMEWORKS))
+# $(call GFX_CHECK,dir): stop with a plain message when the libraries are missing or libepoxy lacks the static-GL patch.
+define GFX_CHECK
+@test -f $(1)/lib/libvirglrenderer.a || { echo "graphics libraries missing in $(1): run tools/gfx/build-deps.sh" >&2; exit 1; }
+@nm $(1)/lib/libepoxy.a 2>/dev/null | grep -q _epoxy_henge_static_gl || { echo "$(1)/lib/libepoxy.a lacks the static-GL patch: run tools/gfx/build-deps.sh --only epoxy" >&2; exit 1; }
+endef
+
 CORE = $(B)/classify.o $(B)/operands.o $(B)/translate.o $(B)/dispatch.o $(B)/mmu.o $(B)/memop.o \
        $(B)/exception.o $(B)/sysreg.o $(B)/machine.o
 HOST = $(B)/jit_region.o $(B)/enter.o $(B)/disk.o
 DEV = $(B)/pvg_lite.o $(B)/pvg_metal.o $(B)/vgpu_metal.o $(B)/gicv3.o $(B)/timer.o $(B)/pl011.o $(B)/pl031.o $(B)/cfg.o $(B)/bdif.o $(B)/pcie.o \
-      $(B)/virtio.o $(B)/virtio_blk.o $(B)/virtio_net.o $(B)/virtio_rng.o $(B)/virtio_input.o $(B)/virtio_gpu.o $(B)/virtio_snd.o $(B)/virtio_usb.o $(B)/virtio_balloon.o $(B)/xhci.o $(B)/vmapple.o $(B)/aes.o $(B)/pl061.o $(B)/metallib.o $(B)/fdt.o $(B)/guest_ram.o $(B)/virt.o $(B)/virt_fdt.o
+      $(B)/virtio.o $(B)/virtio_blk.o $(B)/virtio_net.o $(B)/virtio_rng.o $(B)/virtio_input.o $(B)/virtio_gpu.o $(B)/virtio_snd.o $(B)/virtio_usb.o $(B)/virtio_balloon.o $(B)/xhci.o $(B)/vmapple.o $(B)/aes.o $(B)/pl061.o $(B)/metallib.o $(B)/fdt.o $(B)/guest_ram.o $(B)/virt.o $(B)/virt_fdt.o $(GFX_OBJ)
 ENGINE = $(CORE) $(HOST)
 VM = $(B)/vm.o $(B)/linux_boot.o
-METAL_LIBS = -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers
+METAL_LIBS = -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers $(GFX_LDLIBS)
 
 TESTS = $(B)/test_classify $(B)/test_jit_region $(B)/test_operands $(B)/test_jit $(B)/test_mem \
         $(B)/test_mmu $(B)/test_exc $(B)/test_devices $(B)/test_shutdown $(B)/test_big_lock $(B)/test_fdt $(B)/test_console $(B)/test_virt \
-        $(B)/test_vgpu_metal
+        $(B)/test_vgpu_metal $(if $(GFX),$(B)/test_vgpu_virgl)
 
 all: $(TESTS) $(B)/hengevm $(B)/hengevm-ref $(B)/hvsparse
 
@@ -31,6 +48,10 @@ $(B)/pvg_metal.o: devices/pvg_metal.m devices/*.h core/*.h host/*.h | $(B)
 # The virtio GPU's presenter (Metal, both platforms).
 $(B)/vgpu_metal.o: devices/vgpu_metal.m devices/*.h core/*.h host/*.h | $(B)
 	$(CC) $(CFLAGS) -fobjc-arc -c $< -o $@
+# The virgl renderer (GFX=1, or the test below).
+$(B)/vgpu_virgl.o: devices/vgpu_virgl.m devices/*.h core/*.h host/*.h | $(B)
+	$(call GFX_CHECK,$(GFX_DIR))
+	$(CC) $(CFLAGS) -fobjc-arc -Wno-unused-parameter -I$(GFX_DIR)/include -c $< -o $@
 $(B)/virt_window.o: host/virt_window.m host/*.h | $(B)
 	$(CC) -fobjc-arc -O2 -g -Wall -Wextra -Icore -Ihost -Idevices -c $< -o $@
 $(B)/pvg_mac.o: devices/pvg_mac.m devices/*.h core/*.h host/*.h | $(B)
@@ -70,7 +91,7 @@ $(B)/share.o: host/share.c host/share.h
 $(B)/hengevm: host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(B)/mac-restore/libhengerestore.a
 	$(CC) $(CFLAGS) host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(B)/mac-restore/libhengerestore.a -lz -framework Foundation -framework CFNetwork -framework Security -framework SystemConfiguration -framework IOKit $(SLIRP_LIBS) -framework AudioToolbox -framework ParavirtualizedGraphics -framework Metal -framework IOSurface \
 	    -framework Foundation -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers -framework CoreFoundation \
-	    -framework AppKit -framework QuartzCore -o $@
+	    -framework AppKit -framework QuartzCore $(GFX_LDLIBS) -o $@
 
 # mmu.c: no SIMD (hv_tlb_refill runs with the guest's SIMD registers live).
 $(B)/mmu.o: core/mmu.c core/*.h host/*.h | $(B)
@@ -189,9 +210,10 @@ IOS_CC = xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=17.0 -isy
 IOS_DEPS ?= $(if $(wildcard ios/deps/include/slirp/libslirp.h),$(CURDIR)/ios/deps,$(HOME)/Documents/Coding/Husk/build/ios-arm64/sysroot)
 IOS_CFLAGS = -std=c11 -Wall -Wextra -O2 -g -Icore -Ihost -Idevices -I$(IOS_DEPS)/include/slirp
 IB = build/ios
+IOS_GFX_DIR ?= $(GFX_ROOT)/ios
 IOS_SRC = $(wildcard core/*.c) host/prof_ios.c host/jit_region.c host/disk.c host/vm.c host/linux_boot.c $(IOS_NET) host/dns_proxy.c host/share.c host/audio_mac.c host/hvsparse.c host/usb_host.c \
           $(filter-out devices/pvg_mac.m,$(wildcard devices/*.c))
-IOS_OBJ = $(patsubst %.c,$(IB)/%.o,$(IOS_SRC)) $(IB)/host/enter.o $(IB)/devices/pvg_metal.o $(IB)/devices/vgpu_metal.o
+IOS_OBJ = $(patsubst %.c,$(IB)/%.o,$(IOS_SRC)) $(IB)/host/enter.o $(IB)/devices/pvg_metal.o $(IB)/devices/vgpu_metal.o $(if $(GFX),$(IB)/devices/vgpu_virgl.o)
 
 $(IB)/core/mmu.o: core/mmu.c core/*.h host/*.h devices/*.h
 	@mkdir -p $(dir $@)
@@ -205,6 +227,10 @@ $(IB)/devices/pvg_metal.o: devices/pvg_metal.m devices/*.h core/*.h host/*.h
 $(IB)/devices/vgpu_metal.o: devices/vgpu_metal.m devices/*.h core/*.h host/*.h
 	@mkdir -p $(dir $@)
 	$(IOS_CC) $(IOS_CFLAGS) -fobjc-arc -c $< -o $@
+$(IB)/devices/vgpu_virgl.o: devices/vgpu_virgl.m devices/*.h core/*.h host/*.h
+	$(call GFX_CHECK,$(IOS_GFX_DIR))
+	@mkdir -p $(dir $@)
+	$(IOS_CC) $(IOS_CFLAGS) -fobjc-arc -Wno-unused-parameter -I$(IOS_GFX_DIR)/include -c $< -o $@
 $(IB)/host/enter.o: host/enter.S
 	@mkdir -p $(dir $@)
 	$(IOS_CC) -c $< -o $@
@@ -216,7 +242,7 @@ ios-lib: $(IB)/libhengevm.a
 
 # The same engine for the iOS Simulator: build/ios-sim/libhengevm.a, without libslirp (host/net_stub.c).
 ios-sim-lib:
-	$(MAKE) ios-lib IB=build/ios-sim IOS_SDKNAME=iphonesimulator IOS_NET=host/net_stub.c \
+	$(MAKE) ios-lib IB=build/ios-sim IOS_SDKNAME=iphonesimulator IOS_NET=host/net_stub.c IOS_GFX_DIR=$(GFX_ROOT)/sim \
 	  IOS_SDK='$$(shell xcrun --sdk iphonesimulator --show-sdk-path)' \
 	  IOS_CC='xcrun --sdk iphonesimulator clang -arch arm64 -target arm64-apple-ios17.0-simulator -isysroot $$(IOS_SDK)'
 .PHONY: ios-sim-lib
@@ -276,16 +302,45 @@ test-display-routing: $(B)/test_display_targets $(B)/test_display_router $(B)/te
 
 # Host renderer smoke test: virglrenderer on ANGLE (Metal) with an IOSurface. Not part of make test.
 # Libraries come from tools/gfx/build-deps.sh; skipped (exit 0) when GFX_DIR is missing.
-GFX_DIR ?= $HOME/Repos/Henge/build/gfx/macos
-GFX_LIBS = $(GFX_DIR)/lib/libvirglrenderer.a $(GFX_DIR)/lib/libepoxy.a $(GFX_DIR)/lib/libEGL.a $(GFX_DIR)/lib/libGLESv2.a
-GFX_FRAMEWORKS = -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework CoreFoundation -framework IOKit -framework AppKit -lc++
 $(B)/test_virgl_host: tests/test_virgl_host.m $(GFX_LIBS) | $(B)
+	$(call GFX_CHECK,$(GFX_DIR))
 	$(CC) $(CFLAGS) -fobjc-arc -Wno-unused-parameter -I$(GFX_DIR)/include tests/test_virgl_host.m $(GFX_LIBS) $(GFX_FRAMEWORKS) -o $@
 
 test-virgl-host:
 	@if [ -d "$(GFX_DIR)" ]; then $(MAKE) --no-print-directory $(B)/test_virgl_host GFX_DIR="$(GFX_DIR)" && $(B)/test_virgl_host; \
 	else echo "test-virgl-host: skipped: no graphics libraries in $(GFX_DIR)"; fi
 .PHONY: test-virgl-host
+
+# A5: the real virgl renderer behind the virtio GPU, driven through its control queue. Same libraries; with GFX=1 it
+# is also part of make test. Skipped (exit 0) when GFX_DIR is missing.
+$(B)/test_vgpu_virgl: tests/test_vgpu_virgl.c $(ENGINE) $(filter-out $(B)/vgpu_virgl.o,$(DEV)) $(B)/vgpu_virgl.o $(VM) $(B)/audio_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/usb_host.o $(GFX_LIBS)
+	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) $(GFX_FRAMEWORKS) -framework AudioToolbox -o $@
+
+test-vgpu-virgl:
+	@if [ -d "$(GFX_DIR)" ]; then $(MAKE) --no-print-directory $(B)/test_vgpu_virgl GFX_DIR="$(GFX_DIR)" && ulimit -s 65520 && $(B)/test_vgpu_virgl; \
+	else echo "test-vgpu-virgl: skipped: no graphics libraries in $(GFX_DIR)"; fi
+.PHONY: test-vgpu-virgl
+
+# A5: both iOS libraries with the renderer, linked with the static graphics libraries. The device binary is only linked.
+# The simulator binary runs when a simulator is booted (xcrun simctl spawn).
+IOS_GFX_FW = -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework CoreFoundation -framework UIKit -lc++
+IOS_GFX_LIBS = $(addprefix $(GFX_ROOT)/$(1)/lib/,libvirglrenderer.a libepoxy.a libEGL.a libGLESv2.a)
+ios-gfx-probe:
+	$(MAKE) ios-lib GFX=1
+	$(MAKE) ios-sim-lib GFX=1
+	xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=17.0 -fobjc-arc -Icore -Ihost -Idevices tests/gfx_ios_probe.m \
+	  build/ios/libhengevm.a $(call IOS_GFX_LIBS,ios) $(IOS_GFX_FW) -o $(B)/gfx_probe_ios
+	xcrun --sdk iphonesimulator clang -arch arm64 -target arm64-apple-ios17.0-simulator -fobjc-arc -Icore -Ihost -Idevices tests/gfx_ios_probe.m \
+	  build/ios-sim/libhengevm.a $(call IOS_GFX_LIBS,sim) $(IOS_GFX_FW) -o $(B)/gfx_probe_sim
+	@if xcrun simctl list devices booted | grep -q Booted; then xcrun simctl spawn booted $(CURDIR)/$(B)/gfx_probe_sim; \
+	else echo "ios-gfx-probe: no booted simulator: the simulator binary is linked, not run"; fi
+.PHONY: ios-gfx-probe
+
+# Link flags for an app that links libhengevm.a built with GFX=1 (IOS_GFX_TARGET=sim for the simulator).
+IOS_GFX_TARGET ?= ios
+ios-gfx-ldflags:
+	@echo "$(call IOS_GFX_LIBS,$(IOS_GFX_TARGET)) $(IOS_GFX_FW)"
+.PHONY: ios-gfx-ldflags
 
 # The machine list: lists from before Linux guests still decode, and a Linux folder is recovered like a Mac's.
 $(B)/test_machine_model: ios/Henge/MachineModel.swift tests/test_machine_model.swift | $(B)

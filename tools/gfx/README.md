@@ -2,7 +2,7 @@
 
 Static libraries for the accelerated-graphics plan ([LINUX-PLAN-10](../../LINUX-PLAN-10-accelerated-graphics.md), task A2): ANGLE (EGL and OpenGL ES on Metal), libepoxy and virglrenderer.
 
-The Makefile does not use them yet. Task A5 wires them in behind `GFX=1`.
+`make GFX=1` links them into the Mac tool, the tests and the iOS libraries (task A5). See [Using them](#using-them-gfx1).
 
 ## Use
 
@@ -10,6 +10,7 @@ The Makefile does not use them yet. Task A5 wires them in behind `GFX=1`.
 tools/gfx/build-deps.sh                  # all three targets
 tools/gfx/build-deps.sh --target ios     # one target: macos, ios or sim
 tools/gfx/build-deps.sh --check          # verify with vtool, exit 0 only if macos and ios are right
+tools/gfx/build-deps.sh --only epoxy     # rebuild one library (epoxy or virgl) in about a minute, no ANGLE sync
 ```
 
 Needs Xcode, `uv` and `pkg-config` (`brew install pkgconf`). Nothing is installed system-wide. Python tools (meson, ninja) go into a uv venv.
@@ -61,11 +62,38 @@ The source says yes. In UTM's WebKit tree, `DisplayMtl::getMaxSupportedESVersion
 - On macOS, ANGLE compiles its internal Metal shaders at build time and needs Apple's separate Metal Toolchain download. The script turns that off in `metal_backend.gni` so the shaders are compiled at run time, as iOS always does. No download, same shaders.
 - Link line for the app: `-framework Metal -framework QuartzCore -framework IOSurface -framework CoreGraphics -framework CoreFoundation -framework Foundation`, plus `-framework AppKit` on macOS or `-framework UIKit` on iOS, and the C++ runtime (`-lc++`).
 
-## Open points for A3 and A5
+## libepoxy and the missing frameworks
 
-- libepoxy opens EGL and GLESv2 with `dlopen("EGL.framework/EGL")` and `dlopen("GLESv2.framework/GLESv2")` on Apple platforms (`src/dispatch_common.c`). With static libraries there is no such framework. A5 must change the two names in `dispatch_common.c`, or call `epoxy` with the library handles already loaded, or export the EGL and GLES symbols from the main binary and `dlopen(NULL)`. This is the main cost of static linking. The alternative is dynamic frameworks, as UTM does.
-- ANGLE's entry points are built with `ANGLE_EXPORT=` and `EGLAPI=` empty (its static configuration). Check visibility if a `dlopen` route is chosen.
-- virglrenderer's `libvirglrenderer.a` needs `libepoxy.a` and the ANGLE libraries at the final link.
+libepoxy opens the GL libraries with `dlopen("EGL.framework/EGL")` and `dlopen("GLESv2.framework/GLESv2")`, and on Apple platforms also the system `OpenGL.framework`. With static ANGLE there is no such framework, and ANGLE's entry points are hidden from `dlsym` (`ANGLE_EXPORT` and `EGLAPI` are empty in the static configuration).
+
+The fix is a patch to libepoxy, `libepoxy-static-gl.patch`, which `build-deps.sh` applies after it pins the source (it checks first, so a second run does nothing). On Apple platforms with EGL, `get_dlopen_handle` gives every library name one sentinel handle, and `do_dlsym` answers a lookup on that handle with ANGLE's `eglGetProcAddress`. ANGLE returns the core GLES functions and the EGL functions from it. The patch calls ANGLE's symbol through an assembler label, because libepoxy's own header renames `eglGetProcAddress` to its wrapper inside that file, and the wrapper calls `do_dlsym` again.
+
+Why a patch and not a shim in Henge: a `dlopen` and `dlsym` of our own, as `tests/test_virgl_host.m` had until A5, replaces the system ones for every caller in the process. The app and the tool use `dlopen` for other things. The patch changes only libepoxy, in the same way on macOS, iOS and the simulator, and an unpatched `libepoxy.a` is easy to detect (it lacks the symbol `epoxy_henge_static_gl`; the Makefile stops with a message).
+
+A libepoxy built before A5 must be rebuilt: `tools/gfx/build-deps.sh --only epoxy`.
+
+## Using them (GFX=1)
+
+```sh
+make GFX=1                    # hengevm and every test link the renderer (devices/vgpu_virgl.m)
+make GFX=1 test               # also runs test_vgpu_virgl
+make test-vgpu-virgl          # the renderer behind the virtio GPU, driven through its control queue (skips without libraries)
+make ios-lib GFX=1 IOS_DEPS=/opt/homebrew
+make ios-sim-lib GFX=1
+make ios-gfx-probe            # links device and simulator binaries; runs the simulator one in a booted simulator
+make -s ios-gfx-ldflags       # link flags for an app that uses libhengevm.a built with GFX=1 (IOS_GFX_TARGET=sim for the simulator)
+```
+
+`GFX_ROOT` (default: `build/gfx` of the main checkout, also from a worktree) and `GFX_DIR` (default: `$GFX_ROOT/macos`) say where the libraries are. The iOS libraries use `$GFX_ROOT/ios` and `$GFX_ROOT/sim`. Without `GFX=1` nothing needs the libraries.
+
+Link line for an app: the four libraries, `-framework Metal -framework QuartzCore -framework IOSurface -framework CoreGraphics -framework CoreFoundation -framework Foundation`, `-framework UIKit` (iOS) or `-framework AppKit` and `-framework IOKit` (macOS), and `-lc++`. The app project needs no `-ObjC` or `-force_load`: nothing refers to the renderer by name until the board creates it, and the linker takes `vgpu_virgl.o` from `libhengevm.a` only then.
+
+virglrenderer keeps global state, so one renderer can live in a process at a time. `hv_vgpu_virgl_create` returns NULL for a second one.
+
+## Not decided here
+
+- ANGLE's WebKit patches (see Pins) are still not applied. A5's test runs 3D commands through the pinned build and they work.
+- virglrenderer's own log lines (the first 32 warnings) go to stderr. `HV_VIRGL_VERBOSE=1` shows all of them.
 
 ## Libraries
 
