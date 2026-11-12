@@ -442,8 +442,21 @@ static void test_vm(void) {
     vm->tick(vm, hv_vm_cpu(0));
     check("tick moves console input into the UART", rd32(vm, VIRT_UART), 'o');
     check("second byte", rd32(vm, VIRT_UART), 'k');
+    /* the power key: rising edge on pin 3, high for 100 ms */
+    uint32_t key = 1u << VIRT_GPIO_POWER, pin = VIRT_GPIO + (key << 2);
+    wr32(vm, VIRT_GPIO + 0x40c, key);
+    wr32(vm, VIRT_GPIO + 0x410, key);
+    check("power key starts low", rd32(vm, pin), 0);
+    hv_vm_power_button();
+    usleep(50000);
+    check("power key is high", rd32(vm, pin), key);
+    check("power key raises its SPI", hv_vm_devs()->gic->level[32 + VIRT_IRQ_GPIO], 1);
+    usleep(150000);
+    check("power key is released", rd32(vm, pin), 0);
     hv_vm_destroy();
     check("no virt board after destroy", hv_vm_virt() == NULL, 1);
+    hv_vm_power_button(); /* no machine: nothing happens */
+    usleep(20000);
 
     char kernel[256];
     snprintf(kernel, sizeof kernel, "%s/Image", dir);

@@ -26,6 +26,11 @@ at the U-Boot prompt, then boots and compares the checksum. --qemu runs it on QE
 --vm 2 --vm-bytes 256M for 60 s, and make -jN of cproject.sh's project, whose program must print the
 checksum that the same project gives on the Mac. No kernel warning may appear. stress-ng, gcc and make
 are installed with apt (network through slirp) when the image has none.
+--power, with --uboot or --direct --disk (E12): after the --disk checks, four boots of a fresh clone. Each writes 64 MB
+without sync and then ends the machine a different way, and the next boot must find the file whole and the root filesystem
+clean (no journal recovery): sudo reboot (hengevm builds the machine again; the guest comes back), the power key as SIGTERM
+(Debian shuts down by itself, exit status 0), the power key as Ctrl-A p, and two SIGTERMs (the second stops the machine at
+once). --qemu has no Ctrl-A p, and the key goes through the monitor.
 Exit 1 on any failed check; the last 200 lines of console output go to stderr.
 """
 import argparse
@@ -70,6 +75,9 @@ UBOOT_LIMITS = {"banner": 5, "uboot step": 6, "uboot command": 5, "login": 29}
 # QEMU runs U-Boot under TCG only (hvf aborts on it), which is several times slower.
 QEMU_TCG_SCALE = 4
 UBOOT_PROMPT = r"=> "
+# --power, seconds. Measured at 1 CPU (E12 findings): sudo reboot to the U-Boot banner, the power key to the exit,
+# the second SIGTERM to the exit.
+POWER_LIMITS = {"restart": 60, "power key": 60, "stop": 5}
 # --stress, seconds. The install depends on snapshot.debian.org (105 s at 4 CPUs); stress-ng runs for 60 s.
 STRESS_LIMITS = {"install": 900, "stress": 180, "build": 600}
 STRESS_PACKAGES = "stress-ng build-essential"
@@ -116,14 +124,15 @@ class Fail(Exception):
 
 def command(args, kernel, initrd, tmp, append=APPEND, disk=None, firmware=None):
     """argv for the machine under test. hengevm's stderr goes to a file so the console stays clean."""
+    mon = ["-monitor", f"unix:{os.path.join(tmp, 'mon')},server,nowait"] if args.qemu and args.power else []
     if args.qemu and firmware:
-        return [QEMU, "-M", "virt,gic-version=3,highmem=off,its=off", "-accel", "tcg", "-cpu", "max",
+        return [QEMU, "-M", "virt,gic-version=3,highmem=off,its=off", "-accel", "tcg", "-cpu", "max"] + mon + [
                 "-smp", str(args.cpus), "-m", str(args.ram), "-nographic", "-bios", firmware,
                 "-drive", f"if=none,file={disk},format=raw,id=d0", "-device", "virtio-blk-pci,drive=d0",
                 "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-device", "virtio-rng-pci",
                 "-device", "qemu-xhci", "-device", "usb-kbd"]
     if args.qemu:
-        argv = [QEMU, "-M", "virt,gic-version=3,highmem=off", "-accel", "hvf", "-cpu", "host",
+        argv = [QEMU, "-M", "virt,gic-version=3,highmem=off", "-accel", "hvf", "-cpu", "host"] + mon + [
                 "-smp", str(args.cpus), "-m", str(args.ram), "-nographic",
                 "-kernel", kernel, "-initrd", initrd] + (["-no-reboot"] if args.no_reboot else [])
         if disk:
@@ -433,6 +442,129 @@ def disk(args, times):
                 raise
 
 
+def power_key(p, tmp, args, how):
+    """Presses the guest's power key: SIGTERM or Ctrl-A p for hengevm, the monitor's system_powerdown for QEMU."""
+    if args.qemu:
+        import socket
+        s = socket.socket(socket.AF_UNIX)
+        s.connect(os.path.join(tmp, "mon"))
+        s.sendall(b"system_powerdown\n")
+        time.sleep(0.2)  # QEMU acts on the line before it sees the close
+        s.close()
+    elif how == "sigterm":
+        os.kill(p.pid, signal.SIGTERM)
+    else:
+        p.send("\x01p")
+
+
+def power(args, times):
+    d = args.linux_dir or linux_dir()
+    kernel, initrd, image = (os.path.join(d, f) for f in ("Image", "initrd.img", "debian-console.img"))
+    firmware = os.path.join(d, "u-boot.bin") if args.uboot else None
+    for f in [image, image[:-4] + ".partuuid"] + ([firmware] if args.uboot else [kernel, initrd]):
+        if not os.path.exists(f):
+            raise Fail(f"missing {f} (set HENGE_LINUX_OUT or --linux-dir)")
+    partuuid = open(image[:-4] + ".partuuid").read().strip()
+    append = f"console=ttyAMA0 earlycon=pl011,0x9000000 root=PARTUUID={partuuid} rw"
+    scale = QEMU_TCG_SCALE if args.uboot and args.qemu else 1
+    lim = lambda k: POWER_LIMITS[k] * scale
+    cmd = DISK_LIMITS["command"]
+    with tempfile.TemporaryDirectory(prefix="smoke-", dir=args.work_dir) as tmp:
+        clone = os.path.join(tmp, "disk.img")
+        r = subprocess.run(["/bin/cp", "-c", image, clone], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise Fail(f"cannot clone {image} into {tmp} (it needs the same APFS volume; see --work-dir): "
+                       f"{r.stderr.strip()}")
+        stderr = lambda: open(os.path.join(tmp, "stderr"), errors="replace").read() if not args.qemu else ""
+        st = {}
+
+        def start():
+            argv = command(args, kernel, initrd, tmp, append, clone, firmware)
+            st["tail"] = Tail()
+            st["p"] = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200))
+            st["p"].logfile_read = st["tail"]
+
+        def up(what):
+            """From a start or a restart to the shell; returns the seconds it took."""
+            t = time.monotonic()
+            if args.uboot:
+                uboot_boot(st["p"], {}, scale)
+                login(st["p"], None, UBOOT_LIMITS["login"] * scale)
+            else:
+                login(st["p"], append)
+            return time.monotonic() - t
+
+        def clean(p, name, digest):
+            check(p, f"sha256sum /var/tmp/{name}", cmd, lambda o: o.split()[:1] == [digest], "file after " + what)
+            check(p, "sudo dmesg | grep -E 'EXT4-fs \\(vda1\\): (recovery|orphan)' || echo clean", cmd,
+                  lambda o: o == "clean", "root filesystem after " + what)
+
+        def write(p, name):
+            out = check(p, f"dd if=/dev/urandom of=/var/tmp/{name} bs=1M count=64 status=none && sha256sum "
+                        f"/var/tmp/{name}", DISK_LIMITS["write"], lambda o: re.match(r"[0-9a-f]{64}\s", o),
+                        "write 64 MB without sync")
+            return out.split()[0]
+
+        def ends(how, key, want_line, what_t):
+            """Ends the running machine; it must exit 0 with hengevm's stop line."""
+            p = st["p"]
+            t = time.monotonic()
+            power_key(p, tmp, args, how)
+            expect(p, pexpect.EOF, lim(key), what_t)
+            times[what_t] = time.monotonic() - t
+            stopped(p, 0, want_line, stderr, args)
+
+        try:
+            start()
+            up("first boot")
+            p = st["p"]
+            what, digest = "sudo reboot", write(p, "r1")
+            t = time.monotonic()
+            p.sendline("sudo reboot")
+            if args.uboot:
+                expect(p, r"U-Boot 20\d\d\.\d\d", lim("restart"), "restart")
+                times["reboot to banner"] = time.monotonic() - t
+                # the banner has gone; take the rest of U-Boot's steps as uboot_boot does
+                expect(p, r"Starting kernel \.\.\.", UBOOT_LIMITS["uboot step"] * 3 * scale, "U-Boot after the restart")
+                login(p, None, UBOOT_LIMITS["login"] * scale)
+            else:
+                expect(p, "Kernel command line: ", lim("restart"), "restart")
+                times["reboot to kernel"] = time.monotonic() - t
+                login(p, None)
+            times["reboot to login"] = time.monotonic() - t
+            if not args.qemu and "hengevm: guest restart" not in stderr():
+                raise Fail("no 'hengevm: guest restart' line on stderr")
+            clean(p, "r1", digest)
+
+            what, digest = "the power key (SIGTERM)", write(p, "r2")
+            ends("sigterm", "power key", "guest shutdown", "power key")
+            start()
+            up(what)
+            p = st["p"]
+            clean(p, "r2", digest)
+
+            if not args.qemu:
+                what, digest = "the power key (Ctrl-A p)", write(p, "r3")
+                ends("ctrl-a", "power key", "guest shutdown", "ctrl-a p")
+                start()
+                up(what)
+                p = st["p"]
+                clean(p, "r3", digest)
+                # the second SIGTERM stops the machine without the guest
+                t = time.monotonic()
+                os.kill(p.pid, signal.SIGTERM)
+                time.sleep(0.3)  # the first is the power key; the dispatch source takes both in turn
+                os.kill(p.pid, signal.SIGTERM)
+                expect(p, pexpect.EOF, lim("stop"), "second SIGTERM")
+                times["second SIGTERM"] = time.monotonic() - t
+                stopped(p, 0, "interrupted", stderr, args)
+            else:
+                ends("sigterm", "power key", "guest shutdown", "power key again")
+        except Fail:
+            report(st["p"], st["tail"], stderr)
+            raise
+
+
 def send_file(p, path, dest):
     """Copies a host file into the guest over the console, in lines the tty accepts."""
     data = base64.b64encode(gzip.compress(open(path, "rb").read())).decode()
@@ -538,6 +670,7 @@ def main():
     ap.add_argument("--stress", action="store_true", help="with --uboot or --direct --disk: the E11 checks")
     ap.add_argument("--image", help="--stress: the disk to clone (default debian-console.img)")
     ap.add_argument("--work-dir", help="--disk, --uboot: where the clone goes (the image's APFS volume; default TMPDIR)")
+    ap.add_argument("--power", action="store_true", help="with --uboot or --direct --disk: the E12 checks")
     ap.add_argument("--qemu", action="store_true", help="run the checks on QEMU instead of hengevm")
     ap.add_argument("--henge-dtb", action="store_true", help="with --qemu: boot QEMU with hengevm --dump-dtb's tree")
     ap.add_argument("--cpus", type=int, default=1)
@@ -560,6 +693,10 @@ def main():
         ap.error("--fatal is for hengevm")
     if args.stress and not (args.disk or args.uboot):
         ap.error("--stress needs --uboot or --direct --disk")
+    if args.power and not (args.disk or args.uboot):
+        ap.error("--power needs --uboot or --direct --disk")
+    if args.power and args.stress:
+        ap.error("--power and --stress are separate runs")
     if args.image and not args.stress:
         ap.error("--image is for --stress")
     if (args.disk or args.uboot) and (args.no_reboot or args.fatal):
@@ -569,6 +706,8 @@ def main():
         times = {}
         try:
             (stress if args.stress else disk if args.disk or args.uboot else direct)(args, times)
+            if args.power:
+                power(args, times)
         except Fail as e:
             print(f"smoke: run {i + 1}: FAIL: {e}", file=sys.stderr)
             sys.exit(1)

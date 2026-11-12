@@ -14,6 +14,7 @@
 #include <string.h>
 #include <stdatomic.h>
 #include <dlfcn.h>
+#include <dispatch/dispatch.h>
 #include <CommonCrypto/CommonDigest.h>
 #include <termios.h>
 
@@ -898,7 +899,21 @@ static void console_out(void *opaque, uint8_t c) {
     (void)r;
 }
 
-/* Stdin to the guest's UART. Ctrl-A x quits and Ctrl-A Ctrl-A sends one Ctrl-A, as in QEMU. */
+/* SIGTERM presses the power key; a second one stops the machine at once. */
+static void sigterm_as_power_key(void) {
+    static dispatch_source_t src;
+    static int taken;
+    signal(SIGTERM, SIG_IGN);
+    src = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGTERM, 0,
+                                 dispatch_queue_create("henge.sigterm", DISPATCH_QUEUE_SERIAL));
+    dispatch_source_set_event_handler(src, ^{
+        if (taken++) on_signal(SIGTERM);
+        else hv_vm_power_button();
+    });
+    dispatch_resume(src);
+}
+
+/* Stdin to the guest's UART. Ctrl-A x quits, Ctrl-A p presses the power key and Ctrl-A Ctrl-A sends one Ctrl-A. */
 static void *stdin_thread(void *unused) {
     (void)unused;
     uint8_t in[256], out[256];
@@ -920,6 +935,7 @@ static void *stdin_thread(void *unused) {
                 hv_vm_stop();
                 return NULL;
             }
+            if (c == 'p' || c == 'P') hv_vm_power_button();
             if (c == 1) out[k++] = 1;
         }
         if (k) hv_vm_console_input(out, k);
@@ -1087,7 +1103,7 @@ static void *cpu_thread(void *unused) {
 
 static void usage(void) {
     fprintf(stderr, "usage: hengevm --board virt (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N]\n"
-                    "       (virt: Ctrl-A x quits; exit status 0 shutdown, 3 restart with --no-reboot, 4 panic or engine error)\n");
+                    "       (virt: Ctrl-A x quits, Ctrl-A p and SIGTERM press the power key; exit status 0 shutdown, 3 restart with --no-reboot, 4 panic or engine error)\n");
     fprintf(stderr, "usage: hengevm [--board vmapple] --rom FILE --disk FILE --aux FILE --ecid N [--seed N] [--ram MB] [--log N] [--trace 1] [--screenshot PNG] [--watch VA] [--stats SECONDS [--profile 1]] [--cpus N] [--window] [--no-pvg] [--no-chain] [--break PC [--break-hits N]] [--dump PA LEN FILE] [--aux-offset BYTES] [--install IPSW]\n");
     exit(2);
 }
@@ -1253,6 +1269,7 @@ int main(int argc, char **argv) {
     signal(SIGTERM, on_signal);
     if (virt) {
         signal(SIGHUP, on_signal);
+        sigterm_as_power_key();
         hv_vm_console_set_output(console_out, NULL);
         tty_raw();
     }

@@ -671,6 +671,23 @@ void hv_vm_mouse_button(int button, int down) {
     dispatch_async_f(pointer_queue(), (void *)(intptr_t)(button << 1 | !!down), button_now);
 }
 
+static void power_now(void *ctx) {
+    (void)ctx;
+    if (atomic_load(&input_stopping) || !devs.gpio) return;
+    hv_dev_lock(&m);
+    hv_pl061_set_input(devs.gpio, 3, 1);
+    hv_dev_unlock(&m);
+    usleep(100000);
+    hv_dev_lock(&m);
+    hv_pl061_set_input(devs.gpio, 3, 0);
+    hv_dev_unlock(&m);
+}
+
+/* On the pointer queue so hv_vm_destroy waits for the release (stop_pointer). */
+void hv_vm_power_button(void) {
+    dispatch_async_f(pointer_queue(), NULL, power_now);
+}
+
 /* The guest takes a wheel event as 8 bits: -200 arrives as +56, the wrong way. So big moves go in pieces. */
 static void wheel(uint16_t axis, int amount) {
     while (amount) {

@@ -98,6 +98,8 @@ void hv_vm_mouse_move(int dx, int dy);
 void hv_vm_mouse_button(int button, int down); /* 0 left, 1 right, 2 middle */
 void hv_vm_mouse_wheel(int dy);
 void hv_vm_mouse_hwheel(int dx);
+/* The virt board's power key: GPIO pin 3 high for 100 ms. Any thread; no effect before a machine exists. */
+void hv_vm_power_button(void);
 /* The Magic Trackpad 2 on the USB bus: a finger on it. phase: 0 down, 1 move, 2 up; id a
    stable 1..15 per touch; x, y in sensor units (HV_TP_SENSOR_* in devices/xhci.h).
    ts_ms is the touch sample's own clock in ms (see hv_xhci_touch). */

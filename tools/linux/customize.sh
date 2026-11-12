@@ -23,7 +23,7 @@ U_BOOT_UPDATE="true"
 U_BOOT_ALTERNATIVES="default"
 U_BOOT_TIMEOUT="10"
 U_BOOT_ROOT="root=PARTUUID=$PARTUUID"
-U_BOOT_PARAMETERS="rw console=tty0 console=ttyAMA0 quiet"
+U_BOOT_PARAMETERS="rw console=tty0 console=ttyAMA0 quiet panic=-1"
 EOT
 
 update-initramfs -u -k all
