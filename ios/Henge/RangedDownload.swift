@@ -6,6 +6,8 @@ import Foundation
 final class RangedDownload: NSObject, URLSessionDataDelegate {
     let url: URL
     let part: URL
+    /// Names the server in error texts.
+    let source: String
     /// Bytes in `part` and the whole file's size once known, on the delegate's queue.
     private let progress: (Int64, Int64) -> Void
     private var handle: FileHandle?
@@ -16,9 +18,10 @@ final class RangedDownload: NSObject, URLSessionDataDelegate {
     private var task: URLSessionDataTask?
     private var session: URLSession?
 
-    init(url: URL, part: URL, progress: @escaping (Int64, Int64) -> Void) {
+    init(url: URL, part: URL, source: String = "Apple's server", progress: @escaping (Int64, Int64) -> Void) {
         self.url = url
         self.part = part
+        self.source = source
         self.progress = progress
     }
 
@@ -85,7 +88,7 @@ final class RangedDownload: NSObject, URLSessionDataDelegate {
                 let start = Int64(range.split(separator: " ").last?.split(separator: "-").first ?? "") ?? -1
                 total = Int64(range.split(separator: "/").last ?? "") ?? 0
                 guard start == have else {
-                    throw NSError(domain: "Henge", code: 5, userInfo: [NSLocalizedDescriptionKey: "Apple's server sent the wrong part of the file."])
+                    throw NSError(domain: "Henge", code: 5, userInfo: [NSLocalizedDescriptionKey: "\(source) sent the wrong part of the file."])
                 }
             case 200: // the whole file: start again
                 total = response.expectedContentLength
@@ -104,7 +107,7 @@ final class RangedDownload: NSObject, URLSessionDataDelegate {
                 finish(nil)
                 return
             default:
-                throw NSError(domain: "Henge", code: 3, userInfo: [NSLocalizedDescriptionKey: "Apple's server answered \(status)."])
+                throw NSError(domain: "Henge", code: 3, userInfo: [NSLocalizedDescriptionKey: "\(source) answered \(status)."])
             }
             let h = try FileHandle(forWritingTo: part)
             try h.truncate(atOffset: UInt64(have))
