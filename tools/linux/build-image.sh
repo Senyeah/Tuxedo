@@ -1,36 +1,71 @@
 #!/bin/sh
-# Build the Debian console disk image. Runs on the Mac, builds inside the container.
+# Build the Debian disk image: the console image, or with --desktop the desktop image.
+# Runs on the Mac, builds inside the container.
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 
-if [ "${1:-}" != "--inner" ]; then
+INNER=0
+DESKTOP=0
+for arg in "$@"; do
+    case $arg in
+        --inner) INNER=1 ;;
+        --desktop) DESKTOP=1 ;;
+        *) echo "usage: build-image.sh [--desktop]" >&2; exit 2 ;;
+    esac
+done
+
+if [ "$INNER" = 0 ]; then
+    if [ "$DESKTOP" = 1 ]; then
+        exec "$HERE/run.sh" sh /tools/build-image.sh --inner --desktop
+    fi
     exec "$HERE/run.sh" sh /tools/build-image.sh --inner
 fi
 
 . /tools/versions.env
 
 MIRROR=${DEBIAN_MIRROR:-https://snapshot.debian.org/archive/debian/$DEBIAN_SNAPSHOT/}
-ROOT=/work/rootfs
-FSIMG=/work/root.ext4
-IMG=/work/debian-console.img
 SIZE_MB=3072
 PKGS="linux-image-arm64-16k,systemd-sysv,udev,dbus,kmod,initramfs-tools,u-boot-menu,zstd,iproute2,iputils-ping,systemd-resolved,systemd-timesyncd,ca-certificates,sudo,less,nano,procps,cloud-guest-utils,e2fsprogs"
 
 # Fixed IDs keep the image and extlinux.conf the same between builds
-PARTUUID=${HENGE_PARTUUID:-5e1d9a4c-0c1e-4c7b-9f1a-6a3c0d2b7e11}
-FSUUID=${HENGE_FSUUID:-a3f1c2d4-7b6e-4d58-8c91-2e0b5f4a9d33}
+if [ "$DESKTOP" = 1 ]; then
+    NAME=debian-desktop
+    WORK=/work/G6
+    # Variant A: labwc on Wayland. mesa and glmark2 are for the graphics tests (A1)
+    PKGS="$PKGS,labwc,foot,fonts-dejavu-core,libpam-systemd,xkb-data,mesa-utils,mesa-utils-bin,glmark2-es2-wayland,libgl1-mesa-dri"
+    PARTUUID=${HENGE_PARTUUID:-9c4e7a21-3d58-4b0f-a6c2-1f8d5e90b3a7}
+    FSUUID=${HENGE_FSUUID:-6d0b8e35-c1a2-47f9-9e64-b7a13c52d80f}
+else
+    NAME=debian-console
+    WORK=/work
+    PARTUUID=${HENGE_PARTUUID:-5e1d9a4c-0c1e-4c7b-9f1a-6a3c0d2b7e11}
+    FSUUID=${HENGE_FSUUID:-a3f1c2d4-7b6e-4d58-8c91-2e0b5f4a9d33}
+fi
 export PARTUUID
 
+ROOT=$WORK/rootfs
+FSIMG=$WORK/root.ext4
+IMG=$WORK/$NAME.img
+
+mkdir -p "$WORK"
 rm -rf "$ROOT" "$FSIMG" "$IMG"
 mkdir -p "$ROOT"
+
+# The desktop files are copied after the packages, so they replace the packages' own defaults
+set -- --customize-hook='cp /tools/customize.sh "$1/tmp/customize.sh"; chroot "$1" sh -e /tmp/customize.sh; rm -f "$1/tmp/customize.sh"'
+if [ "$DESKTOP" = 1 ]; then
+    set -- "$@" \
+        --customize-hook='cp -a /tools/rootfs-desktop/. "$1"/' \
+        --customize-hook='cp /tools/customize-desktop.sh "$1/tmp/customize-desktop.sh"; chroot "$1" sh -e /tmp/customize-desktop.sh; rm -f "$1/tmp/customize-desktop.sh"'
+fi
 
 # Snapshot Release files carry an old Valid-Until date
 mmdebstrap --mode=root --variant=minbase --arch=arm64 \
     --aptopt='Acquire::Check-Valid-Until "false"' \
     --include="$PKGS" \
     --setup-hook='cp -a /tools/rootfs/. "$1"/' \
-    --customize-hook='cp /tools/customize.sh "$1/tmp/customize.sh"; chroot "$1" sh -e /tmp/customize.sh; rm -f "$1/tmp/customize.sh"' \
+    "$@" \
     "$DEBIAN_SUITE" "$ROOT" "deb $MIRROR $DEBIAN_SUITE main"
 
 # The vmlinuz format decides what G4 must do
@@ -51,32 +86,39 @@ mke2fs -q -t ext4 -L henge-root -U "$FSUUID" -E root_owner=0:0,hash_seed="$FSUUI
 dd if="$FSIMG" of="$IMG" bs=1M seek=1 conv=notrunc,sparse status=none
 rm -f "$FSIMG"
 
-# Direct-boot kernel and initrd for the tests
-cp -L "$ROOT/boot/initrd.img-$KVER" /out/initrd.img
-cp "$ROOT/boot/config-$KVER" /out/config-debian-16k
-case "$VMLINUZ_FILE" in
-    *"gzip compressed"*) zcat "$VMLINUZ" > /out/Image ;;
-    *) cp "$VMLINUZ" /out/Image ;;
-esac
-IMAGE_FILE=$(file -b /out/Image)
+# Direct-boot kernel and initrd for the tests. The desktop image has the same kernel, so it keeps the console image's files.
+if [ "$DESKTOP" = 0 ]; then
+    cp -L "$ROOT/boot/initrd.img-$KVER" /out/initrd.img
+    cp "$ROOT/boot/config-$KVER" /out/config-debian-16k
+    case "$VMLINUZ_FILE" in
+        *"gzip compressed"*) zcat "$VMLINUZ" > /out/Image ;;
+        *) cp "$VMLINUZ" /out/Image ;;
+    esac
+    IMAGE_FILE=$(file -b /out/Image)
+else
+    IMAGE_FILE=$VMLINUZ_FILE
+fi
 
-cp "$IMG" /out/debian-console.img
-echo "$PARTUUID" > /out/debian-console.partuuid
+# Copy then rename, so an image that is in use is never changed half way
+cp "$IMG" "/out/$NAME.img.tmp"
+mv "/out/$NAME.img.tmp" "/out/$NAME.img"
+echo "$PARTUUID" > "/out/$NAME.partuuid"
 
 {
     echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "mirror=$MIRROR"
     echo "suite=$DEBIAN_SUITE"
+    [ "$DESKTOP" = 1 ] && echo "variant=A (labwc, foot, pixman renderer, no GL needed)"
     echo "kernel_version=$KVER"
     echo "vmlinuz_file=$VMLINUZ_FILE"
     echo "image_file=$IMAGE_FILE"
     echo "partuuid=$PARTUUID"
-    echo "image_sha256=$(sha256sum /out/debian-console.img | cut -d' ' -f1)"
+    echo "image_sha256=$(sha256sum /out/$NAME.img | cut -d' ' -f1)"
     echo "[extlinux.conf]"
     cat "$ROOT/boot/extlinux/extlinux.conf"
     echo "[kernel config]"
     grep -E 'CONFIG_ARM64_(4K|16K|64K)_PAGES|CONFIG_ARM64_VA_BITS|CONFIG_ARM64_PA_BITS' "$ROOT/boot/config-$KVER"
     echo "[packages]"
     chroot "$ROOT" dpkg-query -W
-} > /out/debian-console.manifest
-head -14 /out/debian-console.manifest
+} > "/out/$NAME.manifest"
+head -14 "/out/$NAME.manifest"
