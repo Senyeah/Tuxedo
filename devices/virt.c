@@ -27,6 +27,7 @@ static uint64_t tick_locked(HvMachine *m, HvCpu *cpu) {
     hv_xhci_poll(b->usb);
     hv_virtio_input_poll(b->keyboard);
     hv_virtio_input_poll(b->mouse);
+    hv_virtio_gpu_poll(b->gpu);
     hv_virtio_snd_poll(b->snd);
     hv_virtio_balloon_poll(b->balloon);
     return deadline;
@@ -63,6 +64,7 @@ int hv_virt_create(HvVirt *b, HvMachine *m, HvCpu *cpus, int ncpus, uint64_t ram
     b->usb = hv_xhci_create(m, b->pcie);
     b->keyboard = hv_virtio_input_create(m, b->pcie, HV_VINPUT_KEYBOARD);
     b->mouse = hv_virtio_input_create(m, b->pcie, HV_VINPUT_MOUSE);
+    b->gpu = hv_virtio_gpu_create(m, b->pcie, 1920, 1080);
     if (!getenv("HV_NO_SOUND")) b->snd = hv_virtio_snd_create(m, b->pcie);
     if (root && !b->blk) return -1;
     if (getenv("HV_BALLOON")) {
@@ -141,6 +143,7 @@ void hv_virt_destroy(HvVirt *b) {
     free(b->balloon);
     if (b->keyboard) { pthread_mutex_destroy(&b->keyboard->mu); free(b->keyboard); }
     if (b->mouse) { pthread_mutex_destroy(&b->mouse->mu); free(b->mouse); }
+    hv_virtio_gpu_destroy(b->gpu);
     if (b->usb) { pthread_mutex_destroy(&b->usb->mu); free(b->usb); }
     if (b->gic) { pthread_mutex_destroy(&b->gic->mu); free(b->gic); }
     free(b->net);

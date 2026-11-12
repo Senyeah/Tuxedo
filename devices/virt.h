@@ -12,6 +12,7 @@
 #include "pl061.h"
 #include "virtio_balloon.h"
 #include "virtio_blk.h"
+#include "virtio_gpu.h"
 #include "virtio_input.h"
 #include "virtio_net.h"
 #include "virtio_snd.h"
@@ -55,6 +56,7 @@ typedef struct HvVirt {
     HvVirtioNet *net;
     HvXhci *usb;
     HvVirtioInput *keyboard, *mouse;
+    HvVirtioGpu *gpu;
     HvVirtioSnd *snd;
     HvVirtioBalloon *balloon; /* HV_BALLOON=MB, as on vmapple */
     uint8_t *flash0, *flash1;
