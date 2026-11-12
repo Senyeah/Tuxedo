@@ -9,7 +9,7 @@ Every script runs inside the builder container, so no cross compiler is needed.
 - `Dockerfile`: the builder image (`debian:trixie` with the build tools).
 - `build-uboot.sh`, `build-image.sh`, `customize.sh`, `rootfs/`: see Order.
 - `customize-desktop.sh`, `rootfs-desktop/`: extra files for the desktop image (`build-image.sh --desktop`).
-- `henge-guest/` (G9): the source of the `henge-guest` Debian package. It holds the grow and first-boot scripts (`/usr/lib/henge/`) and units (`/usr/lib/systemd/system/henge-*.service`, G8), and enables them in `postinst`. `build-guest-pkg.sh` builds the `.deb` on its own; `build-image.sh` builds it too and installs it in both images. P6 adds the shared-folder mount (`home-henge-Henge.mount` and `.automount`, `/etc/henge/davfs2.conf`); P7 (clipboard) adds its files here. `grow-check.py` tests the grow units and `share-check.py` the shared folder.
+- `henge-guest/` (G9): the source of the `henge-guest` Debian package. It holds the grow and first-boot scripts (`/usr/lib/henge/`) and units (`/usr/lib/systemd/system/henge-*.service`, G8), and enables them in `postinst`. `build-guest-pkg.sh` builds the `.deb` on its own; `build-image.sh` builds it too and installs it in both images. P6 adds the shared-folder mount (`home-henge-Henge.mount` and `.automount`, `/etc/henge/davfs2.conf`); P7 adds the clipboard helper (`henge-clipboard` and a user unit). `grow-check.py` tests the grow units, `share-check.py` the shared folder and `clipboard-check.py` the clipboard.
 - `run.sh`: runs a command in the builder image. `build/linux/` is mounted at `/out`, the repo's `tools/linux/` at `/tools` (read only), and a named volume at `/work` for source trees.
 
 `run.sh` builds the image on first use. Set `HENGE_LINUX_OUT` to change the artefact directory. The default is the shared `$HOME/Repos/Henge/build/linux`, so all worktrees see the same files.
@@ -45,6 +45,16 @@ Both units come from the `henge-guest` package. Raise `Version` in `henge-guest/
 - Files belong to `henge:henge`. davfs2 caches in `/var/cache/davfs2` and shows its own `lost+found` in the folder's root; it cannot be hidden.
 - Locks: the server accepts `LOCK` and `UNLOCK` and enforces nothing, and davfs2 is content with that (`use_locks` stays on). The check sees no davfs2 message about locks.
 - `share-check.py` (`uv run`) boots a clone of `--image` with `--share`, and checks the mount, create, rename, delete, names with spaces and non-ASCII characters, a 100 MB copy each way, and a write right before poweroff. A second boot without `--share` checks that the machine still reaches `running` and that a visit to the folder fails in time. `--size-mb`, `--cpus`, `--image`, `--firmware` and `--work-dir` choose the run.
+
+## Clipboard (P7)
+
+`henge-clipboard` (`/usr/lib/henge/`, run by the user unit `henge-clipboard.service`) speaks the same `/.henge/clipboard` protocol as the macOS helper `tools/henge-agent.m`, so `host/share.c` and the app's "helper running" test (`henge_share_agent_seen`, a poll in the last 40 s) work unchanged. The desktop image's labwc `autostart` imports `WAYLAND_DISPLAY` and `DISPLAY` into the user manager and starts the unit, so it runs only on the desktop; the console image has no clipboard (the app writes pasted text to the console).
+
+- Device to guest: a `GET ?since=N` that the server holds up to 25 s, as in macOS. The first request uses `since=0`; the answer that comes back at once is what the device held before the helper started, and is dropped (macOS uses a huge `since` for this, which blinds it for the first 25 s). News goes to `wl-copy`.
+- Guest to device: Wayland uses `wl-paste --type text --watch` (one base64 line per change); X11 (`HENGE_CLIPBOARD=x11`, or `DISPLAY` without `WAYLAND_DISPLAY`) looks with `xclip` once a second, as the macOS helper does. Text that was just set from the device is not sent back, and a clipboard with the `x-kde-passwordManagerHint` type (password managers) is not sent. Clipboards over 16 MB or not valid UTF-8 are not sent. Not tested: the password manager type, as `wl-copy` cannot offer two types.
+- The app's paste button sets the device clipboard, waits 0.8 s and sends Ctrl-V; its menu chooses Ctrl-Shift-V for terminals.
+- The desktop package list adds `wl-clipboard`, `xclip` and `python3`; the package only recommends them.
+- `clipboard-check.py` (`uv run`, `make test-linux-clipboard`) boots a clone of the desktop image with `--share` and `HV_INPUT_FILE` (`clip TEXT` and `getclip`), and checks each of the points above, plus the X11 mode through XWayland. `--image`, `--hengevm`, `--cpus` and `--work-dir` choose the run.
 
 ## Packaging and catalogue (G7)
 
