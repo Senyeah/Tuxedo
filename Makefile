@@ -140,21 +140,23 @@ test: all
 $(B):
 	mkdir -p $(B)
 
-clean:
-	rm -rf $(B)
+clean: # keeps build/linux: guest artefacts take minutes to rebuild
+	find $(B) -mindepth 1 -maxdepth 1 ! -name linux -exec rm -rf {} + 2>/dev/null || true
 
 .PHONY: all test clean
 
 # ---- iOS: the engine as a static library for the Henge app (ios/) ----
 # make ios-lib -> build/ios/libhengevm.a. Networking links the arm64 iOS builds
 # of libslirp and glib from Husk's sysroot (scripts there make them); see ios/README.md.
+IOS_SDKNAME = iphoneos
+IOS_NET ?= host/net_slirp.c
 IOS_SDK = $(shell xcrun --sdk iphoneos --show-sdk-path)
 IOS_CC = xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=17.0 -isysroot $(IOS_SDK)
 # ios/deps/include/slirp first when it holds libslirp's headers (they are all the engine takes from there).
 IOS_DEPS ?= $(if $(wildcard ios/deps/include/slirp/libslirp.h),$(CURDIR)/ios/deps,$(HOME)/Documents/Coding/Husk/build/ios-arm64/sysroot)
 IOS_CFLAGS = -std=c11 -Wall -Wextra -O2 -g -Icore -Ihost -Idevices -I$(IOS_DEPS)/include/slirp
 IB = build/ios
-IOS_SRC = $(wildcard core/*.c) host/prof_ios.c host/jit_region.c host/disk.c host/vm.c host/linux_boot.c host/net_slirp.c host/dns_proxy.c host/share.c host/audio_mac.c host/hvsparse.c host/usb_host.c \
+IOS_SRC = $(wildcard core/*.c) host/prof_ios.c host/jit_region.c host/disk.c host/vm.c host/linux_boot.c $(IOS_NET) host/dns_proxy.c host/share.c host/audio_mac.c host/hvsparse.c host/usb_host.c \
           $(filter-out devices/pvg_mac.m,$(wildcard devices/*.c))
 IOS_OBJ = $(patsubst %.c,$(IB)/%.o,$(IOS_SRC)) $(IB)/host/enter.o $(IB)/devices/pvg_metal.o
 
@@ -172,9 +174,16 @@ $(IB)/host/enter.o: host/enter.S
 	$(IOS_CC) -c $< -o $@
 $(IB)/libhengevm.a: $(IOS_OBJ)
 	rm -f $@
-	xcrun --sdk iphoneos libtool -static -o $@ $(IOS_OBJ)
+	xcrun --sdk $(IOS_SDKNAME) libtool -static -o $@ $(IOS_OBJ)
 ios-lib: $(IB)/libhengevm.a
 .PHONY: ios-lib
+
+# The same engine for the iOS Simulator: build/ios-sim/libhengevm.a, without libslirp (host/net_stub.c).
+ios-sim-lib:
+	$(MAKE) ios-lib IB=build/ios-sim IOS_SDKNAME=iphonesimulator IOS_NET=host/net_stub.c \
+	  IOS_SDK='$$(shell xcrun --sdk iphonesimulator --show-sdk-path)' \
+	  IOS_CC='xcrun --sdk iphonesimulator clang -arch arm64 -target arm64-apple-ios17.0-simulator -isysroot $$(IOS_SDK)'
+.PHONY: ios-sim-lib
 
 # The restore stack, built from the same sources and with the same stand-ins as iOS.
 $(B)/mac-restore/libhengerestore.a: tools/build_ios_restore.sh host/libusb_shim.c host/install.c host/curl_shim.m $(wildcard third_party/*/src/*.c) $(wildcard third_party/libirecovery/src/*.c)
