@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <mach/mach.h>
+#include <mach/vm_map.h>
 
 #include "timer.h"
 
@@ -46,13 +48,6 @@ int hv_virt_create(HvVirt *b, HvMachine *m, HvCpu *cpus, int ncpus, uint64_t ram
     b->cpu = cpus;
     b->ncpus = ncpus < 1 ? 1 : ncpus > HV_MAX_CPUS ? HV_MAX_CPUS : ncpus;
     if (hv_guest_ram_alloc(&b->mem, ram_size) != 0) return -1;
-    b->flash0 = hv_host_mem_alloc(VIRT_FLASH_SIZE);
-    b->flash1 = hv_host_mem_alloc(VIRT_FLASH_SIZE);
-    if (!b->flash0 || !b->flash1) return -1;
-    memset(b->flash1, 0xff, VIRT_FLASH_SIZE); /* erased: U-Boot finds no saved environment */
-    /* Read-only: a flash probe cannot damage the firmware. */
-    hv_machine_add_ram(m, VIRT_FLASH0, VIRT_FLASH_SIZE, b->flash0, 1);
-    hv_machine_add_ram(m, VIRT_FLASH1, VIRT_FLASH_SIZE, b->flash1, 1);
     hv_machine_add_ram(m, VIRT_MEM, ram_size, b->mem.host, 0);
 
     b->gic = hv_gicv3_create(m, VIRT_GIC_DIST, VIRT_GIC_REDIST);
@@ -81,7 +76,37 @@ int hv_virt_create(HvVirt *b, HvMachine *m, HvCpu *cpus, int ncpus, uint64_t ram
     return 0;
 }
 
+/* 64 MB of 0xff from one shared block, so erased flash costs 1 MB of footprint. */
+static uint8_t *erased_flash(void) {
+    enum { BLOCK = 1u << 20 };
+    vm_address_t base = 0;
+    if (vm_allocate(mach_task_self(), &base, VIRT_FLASH_SIZE, VM_FLAGS_ANYWHERE) != KERN_SUCCESS) return NULL;
+    memset((void *)base, 0xff, BLOCK);
+    for (vm_address_t off = BLOCK; off < VIRT_FLASH_SIZE; off += BLOCK) {
+        vm_address_t to = base + off;
+        vm_prot_t cur, max;
+        if (vm_remap(mach_task_self(), &to, BLOCK, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, mach_task_self(), base, FALSE,
+                     &cur, &max, VM_INHERIT_NONE) != KERN_SUCCESS)
+            memset((void *)to, 0xff, BLOCK);
+    }
+    return (uint8_t *)base;
+}
+
+/* Only firmware uses flash (the tree has no flash node), so a direct boot maps none. */
+static int map_flash(HvVirt *b) {
+    if (b->flash0) return 0;
+    b->flash0 = hv_host_mem_alloc(VIRT_FLASH_SIZE);
+    b->flash1 = erased_flash(); /* U-Boot finds no saved environment */
+    if (!b->flash0 || !b->flash1) return -1;
+    /* Read-only: a flash probe cannot damage the firmware. */
+    if (hv_machine_add_ram(b->m, VIRT_FLASH0, VIRT_FLASH_SIZE, b->flash0, 1) != 0 ||
+        hv_machine_add_ram(b->m, VIRT_FLASH1, VIRT_FLASH_SIZE, b->flash1, 1) != 0)
+        return -1;
+    return 0;
+}
+
 int hv_virt_load_firmware(HvVirt *b, const char *path) {
+    if (map_flash(b) != 0) return -1;
     FILE *f = fopen(path, "rb");
     if (!f) return -1;
     size_t n = fread(b->flash0, 1, VIRT_FLASH_SIZE, f);

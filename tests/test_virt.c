@@ -68,6 +68,7 @@ static void test_flash(void) {
     snprintf(path, sizeof path, "%s/firmware", dir);
     static const uint32_t image[] = {0x14000000, 0xd503201f}; /* b . ; nop */
     write_file(path, image, sizeof image);
+    check("no flash before firmware", hv_phys_ptr(&m, VIRT_FLASH1, 4) == NULL, 1);
     check("firmware loads", hv_virt_load_firmware(&b, path), 0);
     check("firmware at 0", rd32(&m, VIRT_FLASH0), 0x14000000);
     wr32(&m, VIRT_FLASH0, 0);
@@ -76,6 +77,9 @@ static void test_flash(void) {
     check("flash 1 reads erased at its end", rd32(&m, VIRT_FLASH1 + VIRT_FLASH_SIZE - 4), 0xffffffff);
     wr32(&m, VIRT_FLASH1, 0);
     check("a write to flash 1 changes nothing", rd32(&m, VIRT_FLASH1), 0xffffffff);
+    uint64_t erased = 0;
+    for (uint64_t off = 0; off < VIRT_FLASH_SIZE; off += 4096) erased += rd32(&m, VIRT_FLASH1 + off) == 0xffffffff;
+    check("flash 1 is erased throughout", erased, VIRT_FLASH_SIZE / 4096);
     write_file(path, NULL, VIRT_FLASH_SIZE + 1);
     check("firmware over 64 MB is refused", hv_virt_load_firmware(&b, path) != 0, 1);
 }
@@ -346,6 +350,7 @@ static void test_vm(void) {
         check("direct: x0 is the tree", hv_vm_cpu(0)->x[0], VIRT_MEM + (126 << 20));
         check("direct: tree there", rd32(vm, VIRT_MEM + (126 << 20)), 0xedfe0dd0);
         check("direct: cpu 1 waits for CPU_ON", hv_vm_cpu(1)->off, 1);
+        check("direct: no flash mapped", hv_phys_ptr(vm, VIRT_FLASH0, 4) == NULL, 1);
     }
     hv_vm_destroy();
     HvVmConfig both = direct;

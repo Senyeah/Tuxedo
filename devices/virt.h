@@ -65,7 +65,7 @@ typedef struct HvVirt {
 /* Builds the machine around m and ncpus CPUs (cpus is an array). root and mac may be NULL (no device then). */
 int hv_virt_create(HvVirt *b, HvMachine *m, HvCpu *cpus, int ncpus, uint64_t ram_size, HvDisk *root,
                    const uint8_t mac[6]);
-/* Copies a firmware file of at most 64 MB into flash 0. */
+/* Maps both flash regions and copies a firmware file of at most 64 MB into flash 0. */
 int hv_virt_load_firmware(HvVirt *b, const char *path);
 /* Every CPU: EL1, MMU off, interrupts masked, at 0; all but CPU 0 off until PSCI CPU_ON. */
 void hv_virt_reset(HvVirt *b);
