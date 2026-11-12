@@ -35,12 +35,12 @@ static uint8_t *alloc_no_footprint(uint64_t size, const char *what) {
         }
         if (entry != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), entry);
         if (kr != KERN_SUCCESS) {
-            fprintf(stderr, "hengevm: %s outside the footprint refused: %s\n", what, mach_error_string(kr));
+            if (what) fprintf(stderr, "hengevm: %s outside the footprint refused: %s\n", what, mach_error_string(kr));
             vm_deallocate(mach_task_self(), base, size);
             return NULL;
         }
     }
-    fprintf(stderr, "hengevm: %s (%llu MB) is outside the footprint\n", what, (unsigned long long)(size >> 20));
+    if (what) fprintf(stderr, "hengevm: %s (%llu MB) is outside the footprint\n", what, (unsigned long long)(size >> 20));
     return (uint8_t *)base;
 }
 
@@ -115,7 +115,7 @@ void hv_guest_ram_free(HvGuestRam *r) {
 }
 
 uint8_t *hv_host_mem_alloc(uint64_t size) {
-    uint8_t *p = getenv("HV_RAM_NO_LEDGER") ? NULL : alloc_no_footprint(size, "flash");
+    uint8_t *p = getenv("HV_RAM_NO_LEDGER") ? NULL : alloc_no_footprint(size, NULL);
     if (p) return p;
     p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     return p == MAP_FAILED ? NULL : p;

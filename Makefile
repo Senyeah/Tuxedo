@@ -7,12 +7,12 @@ CORE = $(B)/classify.o $(B)/operands.o $(B)/translate.o $(B)/dispatch.o $(B)/mmu
        $(B)/exception.o $(B)/sysreg.o $(B)/machine.o
 HOST = $(B)/jit_region.o $(B)/enter.o $(B)/disk.o
 DEV = $(B)/pvg_lite.o $(B)/pvg_metal.o $(B)/gicv3.o $(B)/timer.o $(B)/pl011.o $(B)/pl031.o $(B)/cfg.o $(B)/bdif.o $(B)/pcie.o \
-      $(B)/virtio.o $(B)/virtio_blk.o $(B)/virtio_net.o $(B)/virtio_input.o $(B)/virtio_snd.o $(B)/virtio_usb.o $(B)/virtio_balloon.o $(B)/xhci.o $(B)/vmapple.o $(B)/aes.o $(B)/pl061.o $(B)/metallib.o $(B)/fdt.o $(B)/guest_ram.o
+      $(B)/virtio.o $(B)/virtio_blk.o $(B)/virtio_net.o $(B)/virtio_input.o $(B)/virtio_snd.o $(B)/virtio_usb.o $(B)/virtio_balloon.o $(B)/xhci.o $(B)/vmapple.o $(B)/aes.o $(B)/pl061.o $(B)/metallib.o $(B)/fdt.o $(B)/guest_ram.o $(B)/virt.o $(B)/virt_fdt.o
 ENGINE = $(CORE) $(HOST)
 METAL_LIBS = -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers
 
 TESTS = $(B)/test_classify $(B)/test_jit_region $(B)/test_operands $(B)/test_jit $(B)/test_mem \
-        $(B)/test_mmu $(B)/test_exc $(B)/test_devices $(B)/test_shutdown $(B)/test_fdt $(B)/test_console
+        $(B)/test_mmu $(B)/test_exc $(B)/test_devices $(B)/test_shutdown $(B)/test_fdt $(B)/test_console $(B)/test_virt
 
 all: $(TESTS) $(B)/hengevm $(B)/hengevm-ref $(B)/hvsparse
 
@@ -100,6 +100,9 @@ $(B)/test_vm_lifecycle: tests/test_vm_lifecycle.c ios/Henge/Native/henge-vm.c $(
 	$(CC) $(CFLAGS) -Iios/Henge/Native $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -o $@
 
 $(B)/test_console: tests/test_console.c $(ENGINE) $(DEV) $(B)/vm.o $(B)/audio_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/usb_host.o
+	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -o $@
+
+$(B)/test_virt: tests/test_virt.c $(ENGINE) $(DEV) $(B)/vm.o $(B)/audio_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/usb_host.o
 	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -o $@
 
 test-vm-lifecycle: $(B)/test_vm_lifecycle
