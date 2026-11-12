@@ -184,6 +184,11 @@ test-linux-display: $(B)/hengevm
 	uv run tools/linux/display-check.py $(DISPLAY_ARGS)
 .PHONY: test-linux-display
 
+# P6: the shared folder (~/Henge, davfs2) against --share. SHARE_ARGS="--image FILE" for an image that has davfs2.
+test-linux-share: $(B)/hengevm
+	uv run tools/linux/share-check.py $(SHARE_ARGS)
+.PHONY: test-linux-share
+
 test-vm-lifecycle: $(B)/test_vm_lifecycle
 	$(B)/test_vm_lifecycle
 .PHONY: test-vm-lifecycle

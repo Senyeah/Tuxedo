@@ -1,10 +1,10 @@
 Package: henge-guest
-Version: 1.0.0
+Version: 1.1.0
 Architecture: all
 Maintainer: Henge <henge@localhost>
 Section: admin
 Priority: optional
-Depends: systemd, util-linux, cloud-guest-utils, gdisk, e2fsprogs
+Depends: systemd, util-linux, cloud-guest-utils, gdisk, e2fsprogs, davfs2
 Description: Henge guest tools
  Grows the root partition and file system to the disk on every boot,
- and does the one-time first-boot setup.
+ does the one-time first-boot setup, and mounts the shared folder at ~/Henge.
