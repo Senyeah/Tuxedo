@@ -206,11 +206,14 @@ def main():
         desktop_up(p, "boot 2")
         before = scenes(p)
         p.send("\x01s")
-        wait_stderr(errfile, r"hengevm: paused \(Ctrl-A s resumes\)", 30)
-        time.sleep(2)
-        n = len(re.findall(r"gpu held after the pause", open(errfile, errors="replace").read()))
-        if n < 4:
-            raise Fail("the rebuilt machine did not hold the GPU in its pause")
+        end = time.time() + 30
+        while True:
+            n = len(re.findall(r"gpu held after the pause", open(errfile, errors="replace").read()))
+            if n >= 4:
+                break
+            if time.time() > end:
+                raise Fail("the rebuilt machine did not hold the GPU in its pause")
+            time.sleep(0.2)
         # Power off while paused: the first SIGTERM is the power key (the paused guest cannot answer), the second stops.
         t0 = time.time()
         os.kill(p.pid, signal.SIGTERM)

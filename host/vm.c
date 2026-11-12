@@ -583,8 +583,9 @@ static uint64_t mono_ms(void) {
 }
 #endif
 
-/* Under pause_mu, after the CPUs stop: no guest work can start now. iOS kills an app that commits Metal work in the
-   background, so the renderer finishes what it holds, then the presenter stops. Resume starts the presenter again. */
+/* Under pause_mu, after the CPUs stop: no guest work can start now. iOS fails Metal work committed in the
+   background (and the context can be lost), so the renderer finishes what it holds, then the presenter stops.
+   Resume starts the presenter again. */
 static void gpu_hold_locked(int on) {
     if (gpu_gone || on == gpu_held) return;
     gpu_held = on;
@@ -684,6 +685,22 @@ static void sound_stopped(void) {
     });
 }
 
+/* Pauses if the app is in the background and policy says so; a machine not ready yet is tried again. */
+static void background_pause(int tries) {
+    if (!atomic_load(&in_background)) return;
+    int accel = 0;
+#ifdef HV_GFX
+    pthread_mutex_lock(&pause_mu);
+    accel = !gpu_gone && virgl;
+    pthread_mutex_unlock(&pause_mu);
+#endif
+    if (!hv_vm_background_pauses(accel, hv_audio_playing()) || atomic_load(&vm_paused)) return;
+    if (hv_vm_pause() == 0 || tries <= 0) return;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 200 * NSEC_PER_MSEC), background_queue(), ^{
+        background_pause(tries - 1);
+    });
+}
+
 void hv_vm_set_background(int on) {
     atomic_store(&in_background, on); /* before the check: a stream that stops meanwhile still pauses */
     dispatch_sync(background_queue(), ^{
@@ -691,13 +708,7 @@ void hv_vm_set_background(int on) {
             hv_vm_resume();
             return;
         }
-        int accel = 0;
-#ifdef HV_GFX
-        pthread_mutex_lock(&pause_mu);
-        accel = !gpu_gone && virgl;
-        pthread_mutex_unlock(&pause_mu);
-#endif
-        if (hv_vm_background_pauses(accel, hv_audio_playing())) hv_vm_pause();
+        background_pause(25);
     });
 }
 
@@ -810,6 +821,7 @@ int hv_vm_start(int cpu0, void (*on_exit)(int reason)) {
         if (!primary_started) goto failed;
     }
     pthread_attr_destroy(&attr);
+    if (atomic_load(&in_background)) dispatch_async(background_queue(), ^{ background_pause(25); }); /* started while in the background */
     return 0;
 failed:
     pthread_attr_destroy(&attr);

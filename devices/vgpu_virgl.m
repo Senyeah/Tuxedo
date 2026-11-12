@@ -860,7 +860,7 @@ static int op_capset(void *rp, uint32_t id, uint32_t version, void *out, uint32_
 
 static void op_submit(void *rp, const HvGpu3dReq *req, void *cookie) {
     HvVgpuVirgl *r = rp;
-    Job *j = malloc(sizeof *j);
+    Job *j = calloc(1, sizeof *j); // scan and barrier must be NULL
     if (!j) {
         finish(cookie, HV_GPU3D_ERR_NOMEM);
         return;
