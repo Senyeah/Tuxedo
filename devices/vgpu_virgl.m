@@ -813,7 +813,6 @@ static void *thread_main(void *arg) {
                 (unsigned long long)st.cache_hits, (unsigned long long)st.cache_misses, (unsigned long long)st.cache_stores);
     }
     @autoreleasepool { renderer_stop(r); }
-    eglReleaseThread(); // else ANGLE keeps this thread's state for good, a little at each restart
     if (r->abandoned) atomic_store(&active, NULL); // the struct stays: late callers may still read it
     return NULL;
 }
