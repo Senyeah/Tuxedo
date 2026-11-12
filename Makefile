@@ -174,6 +174,18 @@ test-linux-input: $(B)/hengevm
 	uv run tools/linux/input-check.py $(INPUT_ARGS)
 .PHONY: test-linux-input
 
+# A8: the desktop image with --gpu-accel (virgl): renderer string, glmark2 against the saved software score, no virtio_gpu error.
+# Builds hengevm with GFX=1 in its own directory so the objects of a plain build are not mixed in. Skipped when GFX_DIR is missing.
+# ACCEL_ARGS="--save-baseline" measures the software path and rewrites tools/linux/accel-baseline.json.
+ACCEL_B ?= build/accel
+test-linux-accel:
+	@if [ ! -d "$(GFX_DIR)" ]; then echo "test-linux-accel: skipped: no graphics libraries in $(GFX_DIR)"; exit 0; fi; \
+	mkdir -p $(ACCEL_B) && \
+	{ [ -f $(ACCEL_B)/mac-restore/libhengerestore.a ] || { $(MAKE) build/mac-restore/libhengerestore.a && cp -R build/mac-restore $(ACCEL_B)/ && touch $(ACCEL_B)/mac-restore/libhengerestore.a; }; } && \
+	$(MAKE) GFX=1 B=$(ACCEL_B) $(ACCEL_B)/hengevm && \
+	uv run tools/linux/accel-check.py --hengevm $(ACCEL_B)/hengevm $(ACCEL_ARGS)
+.PHONY: test-linux-accel
+
 test-vm-lifecycle: $(B)/test_vm_lifecycle
 	$(B)/test_vm_lifecycle
 .PHONY: test-vm-lifecycle
