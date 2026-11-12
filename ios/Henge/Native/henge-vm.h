@@ -19,6 +19,11 @@ size_t henge_vm_console_read(uint8_t *buf, size_t cap);
 void henge_vm_console_write(const uint8_t *buf, size_t n);
 /* Presses the guest's power key (GPIO pin 3) for 100 ms: Debian shuts down cleanly. */
 void henge_vm_power_button(void);
+/* The app went to the background (1) or came back (0). The machine pauses, at once or when its sound stops, and
+   the guest's clock skips the time the app was away (hv_vm_set_background). Main thread; at most 2 s. */
+void henge_vm_set_background(int on);
+/* The machine is paused. */
+int henge_vm_paused(void);
 /* The running machine's board (the engine's HV_BOARD_* values), or -1 when none runs. */
 enum HengeVmBoard { HENGE_VM_BOARD_MAC = 0, HENGE_VM_BOARD_LINUX = 1 };
 int henge_vm_board_kind(void);

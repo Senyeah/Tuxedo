@@ -301,6 +301,17 @@ void henge_vm_power_button(void) {
                    ^{ power_pin(0, gen); });
 }
 
+void henge_vm_set_background(int on) {
+    if (!on) { /* also when the machine stopped meanwhile: the flag must not pause the next one */
+        hv_vm_set_background(0);
+        return;
+    }
+    if (!lock_running()) return;
+    hv_vm_set_background(1);
+    pthread_rwlock_unlock(&api_lock);
+}
+int henge_vm_paused(void) { return hv_vm_paused(); }
+
 int henge_vm_board_kind(void) {
     if (!lock_running()) return -1;
     int kind = hv_vm_board() ? HENGE_VM_BOARD_MAC : hv_vm_virt() ? HENGE_VM_BOARD_LINUX : -1;
