@@ -57,8 +57,8 @@ struct SettingsView: View {
                     LabeledContent("Henge's limit", value: ByteText.string(UInt64(Entitlements.memoryLimitAtLaunch)))
                     LabeledContent("Free for Henge", value: ByteText.string(UInt64(henge_available_memory())))
                     Text(Entitlements.increasedMemory
-                         ? "A Mac's memory is kept out of this limit once JIT is on. If iOS refuses that, it uses free storage instead."
-                         : "This install isn't signed with the increased memory limit entitlement. Reinstall Henge with a certificate that has it. Export your Mac first if the reinstall replaces the app's data.")
+                         ? "A machine's memory is kept out of this limit once JIT is on. If iOS refuses that, it uses free storage instead."
+                         : "This install isn't signed with the increased memory limit entitlement. Reinstall Henge with a certificate that has it. Export your machines first if the reinstall replaces the app's data.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 .listRowBackground(Desk.card)
@@ -74,9 +74,9 @@ struct SettingsView: View {
                             Slider(value: $scrollSpeed, in: 0.1...1.5)
                         }
                         Toggle("Swap physical right and middle buttons", isOn: $swapMouseButtons)
-                        Text("Only enable this if your physical mouse's right and middle buttons are reversed in the Mac. Touch controls stay unchanged. Restart the Mac session to apply.")
+                        Text("Only enable this if your physical mouse's right and middle buttons are reversed in the guest. Touch controls stay unchanged. Restart the session to apply.")
                             .font(.footnote).foregroundStyle(.secondary)
-                        Text("A Magic Keyboard or a Bluetooth mouse moves the Mac's pointer. Pointer speed changes apply the next time a Mac starts; scroll speed changes apply immediately.")
+                        Text("A Magic Keyboard or a Bluetooth mouse moves the guest's pointer. Pointer speed changes apply the next time a machine starts; scroll speed changes apply immediately.")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     .listRowBackground(Desk.card)
@@ -97,7 +97,7 @@ struct SettingsView: View {
                             .pickerStyle(.menu)
                             Toggle("Swap buttons", isOn: $swapButtons)
                         }
-                        Text("Henge is able to emulate a Magic Trackpad, allowing you to perform native macOS gestures using your device's touchscreen.\n\n\(inputDescription)")
+                        Text("Henge is able to emulate a Magic Trackpad, allowing you to use native gestures, such as two-finger scrolling, on your device's touchscreen.\n\n\(inputDescription)")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     .listRowBackground(Desk.card)
@@ -118,7 +118,7 @@ struct SettingsView: View {
                     }
                     Text("A bigger code cache empties less often and takes more memory; Henge picks 1.5 GB where there is room for it. Applies the next time Henge opens. If JIT stops turning on, choose 1 GB.")
                         .font(.footnote).foregroundStyle(.secondary)
-                    Text("macOS draws a frame for every refresh: 30 Hz leaves the most of the emulated CPU to apps, at the cost of choppier animation; 60 Hz is smoother. Faster disk writes order them without waiting for a full sync; a sudden power loss could lose the last ones. Quicker wake keeps an idle CPU watching for work for 50 µs, at some battery cost. Superblocks let translated code run past conditional branches. Changes apply the next time a Mac starts.")
+                    Text("The refresh rate is for Macs only. macOS draws a frame for every refresh: 30 Hz leaves the most of the emulated CPU to apps, at the cost of choppier animation; 60 Hz is smoother. Faster disk writes order them without waiting for a full sync; a sudden power loss could lose the last ones. Quicker wake keeps an idle CPU watching for work for 50 µs, at some battery cost. Superblocks let translated code run past conditional branches. Changes apply the next time a machine starts.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 .listRowBackground(Desk.card)
@@ -127,7 +127,7 @@ struct SettingsView: View {
                         ForEach(DeskAppearance.allCases) { Text($0.title).tag($0) }
                     }
                     .pickerStyle(.segmented)
-                    Text("System follows the \(Device.name)'s Light or Dark setting. Henge stays dark while a Mac is running.")
+                    Text("System follows the \(Device.name)'s Light or Dark setting. Henge stays dark while a machine is running.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 .listRowBackground(Desk.card)

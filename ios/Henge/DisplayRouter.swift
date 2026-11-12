@@ -6,13 +6,17 @@ import QuartzCore
 @MainActor
 final class DisplayRouter: ObservableObject {
     @Published private(set) var isExternal = false
+    /// The pixels of the external screen that shows the guest; nil on the phone or when the screen did not say.
+    @Published private(set) var externalPixels: CGSize?
 
     private var targets = DisplayTargetSelection()
     private var layers: [UUID: CAMetalLayer] = [:]
+    private var screens: [UUID: CGSize] = [:]
     private var selected: UUID?
 
-    func connect(_ id: UUID, layer: CAMetalLayer, role: DisplayTargetSelection.Role) {
+    func connect(_ id: UUID, layer: CAMetalLayer, role: DisplayTargetSelection.Role, screenPixels: CGSize? = nil) {
         layers[id] = layer
+        screens[id] = screenPixels
         targets.connect(id, role: role)
         updateTarget()
     }
@@ -21,6 +25,7 @@ final class DisplayRouter: ObservableObject {
         targets.disconnect(id)
         updateTarget()
         layers.removeValue(forKey: id)
+        screens.removeValue(forKey: id)
     }
 
     /// Re-present the latest frame after layout or a return from the background,
@@ -37,6 +42,8 @@ final class DisplayRouter: ObservableObject {
             sendTarget()
         }
         if isExternal != targets.isExternal { isExternal = targets.isExternal }
+        let pixels = targets.isExternal ? selected.flatMap { screens[$0] } : nil
+        if externalPixels != pixels { externalPixels = pixels }
     }
 
     private func sendTarget() {

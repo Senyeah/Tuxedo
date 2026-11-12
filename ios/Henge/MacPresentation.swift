@@ -6,6 +6,8 @@ import QuartzCore
 struct MacPresentation: Identifiable {
     let display: DisplayRouter
     let aspect: CGFloat
+    /// What runs: a Linux machine says it is starting on the external screen until it draws.
+    var isLinux = false
 
     var id: ObjectIdentifier { ObjectIdentifier(display) }
 

@@ -5,6 +5,25 @@ enum GuestKind: String, Codable, Hashable {
     case mac, linux
 }
 
+/// A size in pixels, saved with a machine.
+struct PixelSize: Codable, Hashable {
+    var width: Int
+    var height: Int
+}
+
+extension PixelSize {
+    /// Physical size in mm at 264 ppi, which makes macOS see a Retina panel and draw at 2x.
+    var denseMM: (width: Int, height: Int) {
+        (Int((Double(width) / 264 * 25.4).rounded()), Int((Double(height) / 264 * 25.4).rounded()))
+    }
+}
+
+/// The fixed sizes the screen choices offer (R9).
+enum ScreenPreset {
+    static let qhd = PixelSize(width: 2560, height: 1440)
+    static let fhd = PixelSize(width: 1920, height: 1080)
+}
+
 /// A machine brought over or made here: its files, and the identity it was installed with.
 /// Linux machines keep ecid and seed at 0; they only mean something for a Mac.
 struct VirtualMac: Identifiable, Codable, Hashable {
@@ -27,6 +46,12 @@ struct VirtualMac: Identifiable, Codable, Hashable {
     var guest: GuestKind { kind ?? .mac }
     /// This machine's own CPU count. Missing: the global henge.cpus setting.
     var cpus: Int?
+    /// The external screen this machine last ran on; a Mac boots at its size when that screen is there again.
+    var lastExternalScreen: PixelSize?
+    /// R9: the "External display" choice. Linux boots at the remembered external size when no screen is there; a Mac boots at it.
+    var screenFollowsExternal: Bool?
+    /// R9: macOS "Sharp text (HiDPI)". Missing: on only for an external screen taller than 1440 px.
+    var sharpText: Bool?
 
     var directory: URL { MachinePaths.directory(for: id) }
     var rom: URL { directory.appendingPathComponent("AVPBooter.vmapple2.bin") }

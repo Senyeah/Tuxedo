@@ -45,6 +45,9 @@ struct BootDisplay: View {
                           matchScreenColors: matchScreenColors, brightness: screenBrightness)
                     .allowsHitTesting(false)
             }
+            if role == .external && guest == .linux && !gpuLive && !stopped {
+                Text("Starting the machine…").font(.title2).foregroundStyle(.white.opacity(0.8))
+            }
             if let console, showConsole { ConsoleView(model: console, typing: typing) }
         }
         .task {
@@ -143,11 +146,22 @@ private struct GPUScreen: UIViewRepresentable {
             if !attached {
                 attached = true
                 lastSize = bounds.size
-                display.connect(id, layer: metal, role: role)
+                display.connect(id, layer: metal, role: role, screenPixels: role == .external ? externalPixels(window) : nil)
             } else if lastSize != bounds.size {
                 lastSize = bounds.size
                 display.refresh(id)
             }
+        }
+
+        /// The external screen's current mode: the guest sizes to it, and the monitor must not resample it again.
+        private func externalPixels(_ window: UIWindow) -> CGSize {
+            let screen = window.windowScene?.screen ?? window.screen
+            screen.overscanCompensation = .none
+            var size = screen.currentMode?.size ?? screen.nativeBounds.size
+            if size.width < 1 || size.height < 1 { size = screen.nativeBounds.size } // zero mode would give a tiny guest
+            let modes = screen.availableModes.map { "\(Int($0.size.width))x\(Int($0.size.height))" }.joined(separator: " ")
+            HengeLog.log("display", "external screen \(Int(size.width))x\(Int(size.height)) px, modes \(modes), overscan insets \(screen.overscanCompensationInsets)")
+            return size
         }
 
         func detach() {

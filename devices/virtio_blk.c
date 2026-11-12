@@ -10,16 +10,21 @@
 #define F_RO (1ull << 5)
 #define F_BLK_SIZE (1ull << 6)
 #define F_FLUSH (1ull << 9)
+#define F_DISCARD (1ull << 13)
 
 #define T_IN 0
 #define T_OUT 1
 #define T_FLUSH 4
 #define T_GET_ID 8
+#define T_DISCARD 11
 #define T_APPLE_BARRIER 0x10000
 
 #define S_OK 0
 #define S_IOERR 1
 #define S_UNSUPP 2
+
+#define DISCARD_MAX_SEGS 32
+#define DISCARD_MAX_SECTORS (4u << 20) /* 2 GiB per segment */
 
 /* Disk I/O straight between the file and the guest's buffers: the
    segments of one direction, skipping `off` bytes of them, `len` bytes in all.
@@ -81,6 +86,21 @@ static int handle(HvVirtioBlk *b, HvVirtqElem *e, uint32_t *written) {
         uint32_t n = data < 20 ? data : 20;
         hv_virtq_write(v, e, 0, id, n);
         *written = n;
+        break;
+    }
+    case T_DISCARD: {
+        struct { uint64_t sector; uint32_t num, flags; } seg[DISCARD_MAX_SEGS];
+        uint32_t rlen = readable(e), n = rlen > sizeof hdr ? (rlen - (uint32_t)sizeof hdr) / (uint32_t)sizeof seg[0] : 0;
+        if (!(b->vio.features & F_DISCARD)) status = S_UNSUPP;
+        else if (!n || n > DISCARD_MAX_SEGS || (rlen - sizeof hdr) % sizeof seg[0] ||
+                 hv_virtq_read(v, e, sizeof hdr, seg, n * (uint32_t)sizeof seg[0]) != n * sizeof seg[0]) status = S_IOERR;
+        for (uint32_t i = 0; status == S_OK && i < n; i++) {
+            if (seg[i].flags) status = S_UNSUPP; /* the unmap bit is for write-zeroes only */
+            else if (seg[i].num > DISCARD_MAX_SECTORS || seg[i].sector > b->disk->size / 512 ||
+                     seg[i].num > b->disk->size / 512 - seg[i].sector ||
+                     hv_disk_discard(b->disk, seg[i].sector * 512, (uint64_t)seg[i].num * 512) != 0) status = S_IOERR;
+            else __atomic_fetch_add(&b->discarded, (uint64_t)seg[i].num * 512, __ATOMIC_RELAXED);
+        }
         break;
     }
     case T_APPLE_BARRIER: /* a no-op here, as in QEMU: requests complete in order */
@@ -259,7 +279,10 @@ HvVirtioBlk *hv_virtio_blk_create(HvMachine *m, HvPcie *bus, HvDisk *disk, int a
     HvVirtioBlk *b = calloc(1, sizeof *b);
     if (!b) return NULL;
     HvVirtio *v = &b->vio;
-    hv_virtio_init(v, m, 2, 0x010000, 1, F_SEG_MAX | F_BLK_SIZE | F_FLUSH | (disk->readonly ? F_RO : 0));
+    /* Off for the macOS guest: Apple's driver has not been checked against it. */
+    int can_discard = !apple_variant && !disk->readonly && disk->hole;
+    hv_virtio_init(v, m, 2, 0x010000, 1, F_SEG_MAX | F_BLK_SIZE | F_FLUSH | (disk->readonly ? F_RO : 0) |
+                    (can_discard ? F_DISCARD : 0));
     v->dev = b;
     v->notify = notify;
     v->reset = device_reset;
@@ -290,6 +313,12 @@ HvVirtioBlk *hv_virtio_blk_create(HvMachine *m, HvPcie *bus, HvDisk *disk, int a
     memcpy(v->config + 12, &seg_max, 4);
     memcpy(v->config + 20, &blk_size, 4);
     memcpy(v->config + 34, &num_queues, 2);
+    if (can_discard) {
+        uint32_t max_sectors = DISCARD_MAX_SECTORS, max_segs = DISCARD_MAX_SEGS, align = disk->hole / 512;
+        memcpy(v->config + 36, &max_sectors, 4);
+        memcpy(v->config + 40, &max_segs, 4);
+        memcpy(v->config + 44, &align, 4);
+    }
     memcpy(v->config + 60, &apple_type, 4);
     v->config_len = 96;
     if (apple_variant) {

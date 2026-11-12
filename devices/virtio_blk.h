@@ -30,7 +30,7 @@ typedef struct HvVblkReq {
 typedef struct HvVirtioBlk {
     HvVirtio vio;
     HvDisk *disk;
-    uint64_t requests, errors;
+    uint64_t requests, errors, discarded; /* discarded: bytes the guest asked to drop */
     HvVblkReq *ring;
     uint32_t submitted;  /* CPU thread: requests handed to the worker */
     uint32_t completed;  /* workers: requests done (in any order) */

@@ -314,6 +314,8 @@ static void test_virtio_blk(HvDisk *aux) {
     uint64_t ring = setup_virtio(slot, bar, VMAPPLE_MEM + 0x100000);
     check("blk capacity", rd32(bar + 0x2000), (uint32_t)(aux->size / 512));
     check("apple type in max_secure_erase_sectors", rd32(bar + 0x2000 + 60), HV_VBLK_AUX);
+    wr32(bar + 0x00, 0);
+    check("macOS disk does not offer discard", (rd32(bar + 0x04) >> 13) & 1, 0);
 
     uint64_t hdr = VMAPPLE_MEM + 0x200000, data = hdr + 0x1000, status = hdr + 0x3000;
     /* read sectors 5-6 */

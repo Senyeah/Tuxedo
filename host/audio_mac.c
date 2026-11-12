@@ -12,9 +12,13 @@
 #else
 #define HV_OUTPUT_UNIT kAudioUnitSubType_DefaultOutput
 #endif
+#include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
 
 static AudioComponentInstance unit;
+static int capture_fd = -1; /* HV_SND_CAPTURE=path: what the host plays, silence included, for tests */
 static int unit_running;
 static unsigned cur_channels, cur_format, cur_rate;
 
@@ -22,13 +26,23 @@ static OSStatus render(void *ref, AudioUnitRenderActionFlags *flags, const Audio
                        UInt32 frames, AudioBufferList *io) {
     (void)flags, (void)ts, (void)bus, (void)frames;
     HvVirtioSnd *d = ref;
-    for (UInt32 i = 0; i < io->mNumberBuffers; i++)
+    for (UInt32 i = 0; i < io->mNumberBuffers; i++) {
         hv_virtio_snd_pull(d, io->mBuffers[i].mData, io->mBuffers[i].mDataByteSize);
+        if (capture_fd >= 0) (void)!write(capture_fd, io->mBuffers[i].mData, io->mBuffers[i].mDataByteSize);
+    }
     return noErr;
 }
 
 static int start(void *opaque, unsigned channels, unsigned format, unsigned rate_hz) {
     HvVirtioSnd *d = opaque;
+    const char *cap = getenv("HV_SND_CAPTURE");
+    if (cap) {
+        char fmt[1100];
+        snprintf(fmt, sizeof fmt, "%s.fmt", cap);
+        FILE *f = fopen(fmt, "w");
+        if (f) fprintf(f, "%u %u %u\n", channels, format, rate_hz), fclose(f);
+        if (capture_fd < 0) capture_fd = open(cap, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    }
     if (unit && (channels != cur_channels || format != cur_format || rate_hz != cur_rate)) {
         AudioOutputUnitStop(unit);
         AudioUnitUninitialize(unit);
@@ -85,4 +99,5 @@ void hv_audio_detach(void) {
     }
     unit_running = 0;
     cur_channels = cur_format = cur_rate = 0;
+    if (capture_fd >= 0) close(capture_fd), capture_fd = -1;
 }

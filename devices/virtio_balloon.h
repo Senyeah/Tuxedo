@@ -11,6 +11,8 @@
    footprint, so this is the one way to get it back from a running Mac when iOS runs short.
    Pages are 4 KB in the protocol (num_pages, actual and the page numbers), 16 KB on the host: a host page is
    given back once all four of its quarters are in the balloon. */
+#define HV_VIRTIO_BALLOON_F_DEFLATE_ON_OOM (1ull << 2) /* the guest deflates before its kernel kills a process */
+
 typedef struct HvVirtioBalloon {
     HvVirtio vio;
     uint8_t *ram;

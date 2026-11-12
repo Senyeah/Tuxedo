@@ -4,6 +4,8 @@ import UIKit
 extension VirtualMac {
     var isRetina: Bool { Device.isPad && (retina ?? false) }
     var screen: (width: Int, height: Int) { isRetina ? Device.retinaScreen : (screenWidth ?? 1920, screenHeight ?? 1080) }
+    /// A phone's Linux machine with no chosen size takes the phone's safe area at scale 2; rotation changes it.
+    var followsPhoneScreen: Bool { guest == .linux && !Device.isPad && screenWidth == nil }
     var aspect: CGFloat { CGFloat(screen.width) / CGFloat(screen.height) }
 }
 
@@ -210,7 +212,7 @@ final class Machines: ObservableObject {
         let free = (try? Self.root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?.volumeAvailableCapacityForImportantUsage ?? 0
         let needed = Int64(used) + (256 << 20)
         if free > 0 && free < needed {
-            throw message("Exporting \(mac.name) needs about \(ByteText.string(UInt64(needed))) free; this \(Device.name) has \(ByteText.string(UInt64(free))). Deleting a downloaded macOS installer (Install macOS, swipe it) frees about 16 GB.")
+            throw message("Exporting \(mac.name) needs about \(ByteText.string(UInt64(needed))) free; this \(Device.name) has \(ByteText.string(UInt64(free))). \(mac.guest == .linux ? "Deleting a downloaded Linux image (Install, Linux, the trash button) frees space." : "Deleting a downloaded macOS installer (Install macOS, swipe it) frees about 16 GB.")")
         }
         try fm.createDirectory(at: partial, withIntermediateDirectories: true)
         do {
@@ -291,4 +293,9 @@ final class Machines: ObservableObject {
     private func message(_ text: String) -> NSError {
         NSError(domain: "Henge", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
     }
+}
+
+extension Device {
+    /// Pixels per point of the panel: the scale the display layer draws at.
+    static var nativeScale: CGFloat { UIScreen.main.nativeScale }
 }

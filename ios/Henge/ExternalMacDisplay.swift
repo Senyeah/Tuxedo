@@ -11,7 +11,7 @@ struct ExternalMacDisplay: View {
         GeometryReader { geometry in
             let aspect = presentation.aspect
             let width = min(geometry.size.width, geometry.size.height * aspect)
-            BootDisplay(display: presentation.display, role: .external, surface: surface)
+            BootDisplay(display: presentation.display, role: .external, surface: surface, guest: presentation.isLinux ? .linux : .mac)
                 .frame(width: width, height: width / aspect)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }

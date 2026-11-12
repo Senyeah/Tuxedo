@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <sched.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1368,6 +1369,51 @@ static int blk_request(Vdev *d, uint32_t type, uint64_t sector, const Seg *data,
     return r < 0 ? -1 : *status;
 }
 
+static uint64_t file_blocks(const char *path) {
+    struct stat st;
+    return stat(path, &st) == 0 ? (uint64_t)st.st_blocks : 0;
+}
+
+static void set_dseg(uint8_t *p, uint64_t sector, uint32_t num, uint32_t flags) {
+    memcpy(p, &sector, 8);
+    memcpy(p + 8, &num, 4);
+    memcpy(p + 12, &flags, 4);
+}
+
+/* P4: a discard punches a hole in the file for the whole host blocks inside the range. */
+static void test_blk_discard(Vdev *d, const char *disk_path) {
+    uint8_t *w = ram(VD_BUF), *r = ram(VD_BUF + 0x2000), *seg = ram(VD_BUF + 0x6000);
+    for (int i = 0; i < 0x4000; i++) w[i] = (uint8_t)(i * 7 + 1);
+    Seg out[1] = {{VD_BUF, 0x4000, 0}}, dseg[1] = {{VD_BUF + 0x6000, 16, 0}}, in[1] = {{VD_BUF + 0x2000, 512, 1}};
+    check("blk discard: write 16 KB", blk_request(d, 1, 64, out, 1, NULL), 0);
+    check("blk discard: flush", blk_request(d, 4, 0, NULL, 0, NULL), 0);
+    uint64_t before = file_blocks(disk_path), done = b.blk->discarded;
+    set_dseg(seg, 66, 60, 0); /* inside: bytes 36864..61440 */
+    check("blk discard: a range", blk_request(d, 11, 0, dseg, 1, NULL), 0);
+    check("blk discard: the bytes are counted", b.blk->discarded, done + 60 * 512);
+    check("blk discard: the file gave back 6 host blocks", before - file_blocks(disk_path), 6 * 4096 / 512);
+    check("blk discard: the block before the range stays", blk_request(d, 0, 64, in, 1, NULL), 0);
+    check("blk discard: its data", memcmp(r, w, 512), 0);
+    check("blk discard: the partial block at the start stays", blk_request(d, 0, 72, in, 1, NULL), 0);
+    check("blk discard: block 9 reads as zeros", all_zero(r, 512), 1);
+    check("blk discard: block 8 stays", blk_request(d, 0, 70, in, 1, NULL), 0);
+    check("blk discard: its data in the middle", memcmp(r, w + 6 * 512, 512), 0);
+    before = file_blocks(disk_path);
+    set_dseg(seg, 1, 2, 0);
+    check("blk discard: less than a block is a no-op", blk_request(d, 11, 0, dseg, 1, NULL), 0);
+    check("blk discard: nothing was given back", file_blocks(disk_path), before);
+    set_dseg(seg, 2048, 1, 0);
+    check("blk discard: past the end fails", blk_request(d, 11, 0, dseg, 1, NULL), 1);
+    set_dseg(seg, 2040, 16, 0);
+    check("blk discard: over the end fails", blk_request(d, 11, 0, dseg, 1, NULL), 1);
+    set_dseg(seg, 64, 8, 1);
+    check("blk discard: the unmap flag is unsupported", blk_request(d, 11, 0, dseg, 1, NULL), 2);
+    set_dseg(seg, 64, 8, 0);
+    Seg odd[1] = {{VD_BUF + 0x6000, 12, 0}};
+    check("blk discard: a torn segment fails", blk_request(d, 11, 0, odd, 1, NULL), 1);
+    check("blk discard: no segments fails", blk_request(d, 11, 0, NULL, 0, NULL), 1);
+}
+
 /* The root disk (E9): requests through the queue reach the file. */
 static void test_blk(const char *disk_path) {
     Vdev d;
@@ -1380,6 +1426,10 @@ static void test_blk(const char *disk_path) {
     uint32_t f = rd32(&m, bar + 0x04);
     check("blk: flush offered", (f >> 9) & 1, 1);
     check("blk: not read-only", (f >> 5) & 1, 0);
+    check("blk: discard offered", (f >> 13) & 1, 1);
+    check("blk: max discard sectors", rd32(&m, bar + 0x2000 + 36), 4u << 20);
+    check("blk: max discard segments", rd32(&m, bar + 0x2000 + 40), 32);
+    check("blk: discard alignment is a host block", rd32(&m, bar + 0x2000 + 44) * 512, 4096);
     check("blk: capacity in sectors", rd32(&m, bar + 0x2000), 2048);
     check("blk: capacity high word", rd32(&m, bar + 0x2004), 0);
 
@@ -1420,6 +1470,7 @@ static void test_blk(const char *disk_path) {
     check("blk: flush", blk_request(&d, 4, 0, NULL, 0, NULL), 0);
     check("blk: barrier", blk_request(&d, 0x10000, 0, NULL, 0, NULL), 0);
     check("blk: unknown type", blk_request(&d, 0x77, 0, NULL, 0, NULL), 2);
+    test_blk_discard(&d, disk_path);
     memset(r, 0, 32);
     Seg id[1] = {{VD_BUF + 0x2000, 20, 1}};
     check("blk: get id", blk_request(&d, 8, 0, id, 1, &len), 0);
@@ -1709,11 +1760,21 @@ static void test_create_limits(void) {
     check("create: xHCI follows", vb.usb->pci.slot, 2);
     check("create: E0PD in ID_AA64MMFR2 (no forced KPTI under KASLR)", mm.id.mmfr2 >> 60 & 15, 1);
     check("create: PAuth stays advertised (P3: clearing it was no faster)", mm.id.isar1, hv_id_regs_vmapple().isar1);
+    check("create: no balloon without HV_BALLOON", vb.balloon == NULL, 1);
     check("create: tree needs room", hv_virt_place_fdt(&vb, (const uint8_t *)"x", 100u << 20), -1);
     check("create: no tree", hv_virt_place_fdt(&vb, NULL, 4), -1);
     check("create: a missing firmware file", hv_virt_load_firmware(&vb, "/nonexistent/firmware") != 0, 1);
     hv_virt_destroy(&vb);
     hv_machine_free(&mm);
+
+    setenv("HV_BALLOON", "0", 1);
+    if (hv_machine_init(&mm, 1 << 20) == 0 && hv_virt_create(&vb, &mm, cc, 1, 64ull << 20, NULL, NULL) == 0) {
+        check("balloon: HV_BALLOON adds it", vb.balloon != NULL, 1);
+        check("balloon: Linux may deflate it on OOM", vb.balloon && (vb.balloon->vio.features & HV_VIRTIO_BALLOON_F_DEFLATE_ON_OOM) != 0, 1);
+        hv_virt_destroy(&vb);
+        hv_machine_free(&mm);
+    }
+    unsetenv("HV_BALLOON");
 
     if (hv_machine_init(&mm, 1 << 20) == 0) {
         check("create: too many CPUs are capped", hv_virt_create(&vb, &mm, cc, HV_MAX_CPUS + 2, 64ull << 20, NULL, NULL), 0);

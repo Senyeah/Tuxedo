@@ -184,6 +184,26 @@ test-linux-display: $(B)/hengevm
 	uv run tools/linux/display-check.py $(DISPLAY_ARGS)
 .PHONY: test-linux-display
 
+# P6: the shared folder (~/Henge, davfs2) against --share. SHARE_ARGS="--image FILE" for an image that has davfs2.
+test-linux-share: $(B)/hengevm
+	uv run tools/linux/share-check.py $(SHARE_ARGS)
+.PHONY: test-linux-share
+
+# P7: the clipboard helper in the desktop image against the host's clipboard. CLIP_ARGS="--image FILE" for an image that has henge-guest 1.2.
+test-linux-clipboard: $(B)/hengevm
+	uv run tools/linux/clipboard-check.py $(CLIP_ARGS)
+.PHONY: test-linux-clipboard
+
+# P10: the guest's virtio_balloon binds, inflate returns host memory, deflate restores it. BALLOON_ARGS="--load --overshoot --cpus 4" adds the package build and OOM runs.
+test-linux-balloon: $(B)/hengevm
+	uv run tools/linux/balloon-check.py $(BALLOON_ARGS)
+.PHONY: test-linux-balloon
+
+# P8: snd_virtio binds, speaker-test and a 60 s file reach the host's audio backend whole and in time. SOUND_ARGS=--pipewire adds pw-play.
+test-linux-sound: $(B)/hengevm
+	uv run tools/linux/sound-check.py $(SOUND_ARGS)
+.PHONY: test-linux-sound
+
 test-vm-lifecycle: $(B)/test_vm_lifecycle
 	$(B)/test_vm_lifecycle
 .PHONY: test-vm-lifecycle
