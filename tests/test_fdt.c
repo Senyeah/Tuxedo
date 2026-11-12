@@ -158,6 +158,187 @@ static void test_errors(void) {
     CHECK(bad(f));
 }
 
+/* The structure of a 40-deep tree closes as many nodes as it opens. */
+static void test_layout_depth_only(const uint8_t *b) {
+    uint32_t o = rd32(b + 8), end = rd32(b + 12);
+    int depth = 0, max = 0;
+    for (;;) {
+        uint32_t t = rd32(b + o);
+        o += 4;
+        if (t == 1) { depth++; if (depth > max) max = depth; o += ((uint32_t)strlen((const char *)b + o) + 1 + 3) & ~3u; }
+        else if (t == 2) depth--;
+        else { CHECK(t == 9); break; }
+    }
+    CHECK(depth == 0 && max == 41 && o == end);
+}
+
+/* What each mistake says, and the argument checks the first error test does not reach. */
+static void test_messages(void) {
+    HvFdt *f = hv_fdt_new();
+    hv_fdt_begin(f, "");
+    hv_fdt_prop_str(f, "x", NULL);
+    CHECK(hv_fdt_error(f) && strstr(hv_fdt_error(f), "string is NULL"));
+    CHECK(bad(f));
+
+    f = hv_fdt_new();
+    hv_fdt_begin(f, "");
+    hv_fdt_prop_u32(f, "", 1);
+    CHECK(hv_fdt_error(f) && strstr(hv_fdt_error(f), "name is empty"));
+    CHECK(bad(f));
+
+    f = hv_fdt_new();
+    hv_fdt_begin(f, "");
+    hv_fdt_prop_u32(f, NULL, 1);
+    CHECK(hv_fdt_error(f) && strstr(hv_fdt_error(f), "name is empty"));
+    CHECK(bad(f));
+
+    f = hv_fdt_new();
+    hv_fdt_begin(f, NULL);
+    CHECK(hv_fdt_error(f) && strstr(hv_fdt_error(f), "node name is NULL"));
+    CHECK(bad(f));
+
+    f = hv_fdt_new();
+    hv_fdt_begin(f, "");
+    hv_fdt_prop_strs(f, "x", NULL, 2);
+    CHECK(hv_fdt_error(f) && strstr(hv_fdt_error(f), "bad string list"));
+    CHECK(bad(f));
+
+    f = hv_fdt_new();
+    hv_fdt_begin(f, "");
+    hv_fdt_prop_strs(f, "x", NULL, -1);
+    CHECK(hv_fdt_error(f) && strstr(hv_fdt_error(f), "bad string list"));
+    CHECK(bad(f));
+
+    f = hv_fdt_new();
+    hv_fdt_begin(f, "");
+    const char *with_null[2] = {"a", NULL};
+    hv_fdt_prop_strs(f, "x", with_null, 2);
+    CHECK(hv_fdt_error(f) && strstr(hv_fdt_error(f), "string is NULL"));
+    CHECK(bad(f));
+
+    f = hv_fdt_new();
+    hv_fdt_begin(f, "");
+    hv_fdt_prop_cells(f, "x", NULL, 3);
+    CHECK(hv_fdt_error(f) && strstr(hv_fdt_error(f), "bad cell list"));
+    CHECK(bad(f));
+
+    f = hv_fdt_new();
+    hv_fdt_begin(f, "");
+    uint32_t one = 1;
+    hv_fdt_prop_cells(f, "x", &one, -1);
+    CHECK(hv_fdt_error(f) && strstr(hv_fdt_error(f), "bad cell list"));
+    CHECK(bad(f));
+
+    f = hv_fdt_new();
+    hv_fdt_begin(f, "");
+    hv_fdt_begin(f, "");
+    CHECK(hv_fdt_error(f) && strstr(hv_fdt_error(f), "bad node name"));
+    CHECK(bad(f));
+
+    f = hv_fdt_new();
+    hv_fdt_begin(f, "");
+    hv_fdt_end(f);
+    hv_fdt_begin(f, "");
+    CHECK(hv_fdt_error(f) && strstr(hv_fdt_error(f), "second root"));
+    CHECK(bad(f));
+
+    f = hv_fdt_new();
+    hv_fdt_prop_u32(f, "x", 1);
+    CHECK(hv_fdt_error(f) && strstr(hv_fdt_error(f), "outside a node"));
+    CHECK(hv_fdt_phandle(f) == 0);
+    CHECK(bad(f));
+
+    f = hv_fdt_new();
+    CHECK(hv_fdt_phandle(f) == 0);                  /* a phandle outside a node is an error */
+    CHECK(hv_fdt_error(f) && strstr(hv_fdt_error(f), "phandle outside a node"));
+    CHECK(bad(f));
+
+    f = hv_fdt_new();
+    hv_fdt_begin(f, "");
+    hv_fdt_end(f);
+    hv_fdt_end(f);
+    hv_fdt_prop_u32(f, "late", 1);                  /* after an error nothing changes it */
+    CHECK(strstr(hv_fdt_error(f), "end without begin"));
+    CHECK(bad(f));
+
+    CHECK(hv_fdt_error(NULL) != NULL);              /* a failed new is reported */
+    f = hv_fdt_new();
+    CHECK(hv_fdt_error(f) == NULL);
+    free(hv_fdt_finish(f, NULL));                   /* a NULL size is allowed, here after an error */
+}
+
+/* The header of a tree with a root and nothing else, and the odd property shapes. */
+static void test_shapes(void) {
+    HvFdt *f = hv_fdt_new();
+    hv_fdt_begin(f, "");
+    hv_fdt_end(f);
+    uint32_t size = 0;
+    uint8_t *b = hv_fdt_finish(f, &size);
+    CHECK(b != NULL);
+    if (b) {
+        CHECK(rd32(b + 20) == 17);                  /* version */
+        CHECK(rd32(b + 24) == 16);                  /* last compatible version */
+        CHECK(rd32(b + 28) == 0);                   /* boot CPU */
+        CHECK(rd32(b + 32) == 0);                   /* no strings */
+        CHECK(rd32(b + 36) == 16);                  /* BEGIN_NODE, an empty name, END_NODE, END */
+        CHECK(size == 40 + 16 + 16);
+        CHECK(rd32(b + 4) == size);
+        free(b);
+    }
+
+    f = hv_fdt_new();
+    hv_fdt_begin(f, "");
+    hv_fdt_prop_str(f, "empty", "");
+    hv_fdt_prop_empty(f, "flag");
+    const char *none[1] = {NULL};
+    hv_fdt_prop_strs(f, "nostrings", none, 0);      /* an empty list is an empty property */
+    hv_fdt_prop_cells(f, "nocells", NULL, 0);
+    hv_fdt_prop(f, "zero", NULL, 0);
+    hv_fdt_prop_u64(f, "big", 0xffffffffffffffffull);
+    const char *two[2] = {"", "b"};
+    hv_fdt_prop_strs(f, "list", two, 2);
+    hv_fdt_end(f);
+    b = hv_fdt_finish(f, &size);
+    CHECK(b != NULL);
+    if (b) {
+        uint32_t o = rd32(b + 8), str = rd32(b + 12);
+        o += 8;                                      /* BEGIN_NODE and the empty root name, padded */
+        struct { uint32_t len; } want[7] = {{1}, {0}, {0}, {0}, {0}, {8}, {3}};
+        for (int i = 0; i < 7; i++) {
+            CHECK(rd32(b + o) == 3);
+            CHECK(rd32(b + o + 4) == want[i].len);
+            o += 12 + ((want[i].len + 3) & ~3u);
+        }
+        CHECK(rd32(b + o) == 2 && rd32(b + o + 4) == 9 && o + 8 == str);
+        CHECK(rd32(b + 32) == strlen("empty") + 1 + 5 + 10 + 8 + 5 + 4 + 5);
+        free(b);
+    }
+
+    f = hv_fdt_new();
+    hv_fdt_begin(f, "");
+    for (int i = 0; i < 40; i++) hv_fdt_begin(f, "n");
+    for (int i = 0; i < 40; i++) hv_fdt_end(f);
+    hv_fdt_end(f);
+    b = hv_fdt_finish(f, &size);
+    CHECK(b != NULL);                                /* deep nesting is fine */
+    if (b) test_layout_depth_only(b);
+    free(b);
+
+    f = hv_fdt_new();
+    hv_fdt_begin(f, "");
+    hv_fdt_begin(f, "a");
+    hv_fdt_prop_u32(f, "x", 1);
+    hv_fdt_end(f);
+    hv_fdt_begin(f, "b");
+    hv_fdt_prop_u32(f, "x", 2);                      /* siblings may use the same property name */
+    hv_fdt_end(f);
+    hv_fdt_end(f);
+    b = hv_fdt_finish(f, &size);
+    CHECK(b != NULL);
+    if (b) CHECK(rd32(b + 32) == 2);                 /* one name, once */
+    free(b);
+}
+
 static void test_growth(void) {
     HvFdt *f = hv_fdt_new();
     hv_fdt_begin(f, "");
@@ -182,6 +363,8 @@ int main(void) {
     CHECK(b != NULL);
     if (b) test_layout(b, size);
     test_errors();
+    test_messages();
+    test_shapes();
     test_growth();
 
     char *out = NULL;
