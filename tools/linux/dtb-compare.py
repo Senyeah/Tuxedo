@@ -180,6 +180,24 @@ def run_case(tmp, ncpus, ram_mb, verbose):
     return not errors
 
 
+def check_options(tmp):
+    """--dump-dtb keeps --append in /chosen and refuses --initrd, which it cannot place."""
+    tool = os.path.join(ROOT, "build", "hengevm")
+    path, append = os.path.join(tmp, "append.dtb"), "console=ttyAMA0 break=top"
+    r = subprocess.run([tool, "--board", "virt", "--dump-dtb", path, "--append", append], capture_output=True, text=True)
+    dts = subprocess.run(["dtc", "-I", "dtb", "-O", "dts", path], capture_output=True, text=True).stdout if r.returncode == 0 else ""
+    errors = []
+    if f'bootargs = "{append}";' not in dts:
+        errors.append(f"--dump-dtb --append: no bootargs line (exit {r.returncode}: {r.stderr.strip()})")
+    r = subprocess.run([tool, "--board", "virt", "--dump-dtb", path, "--initrd", path], capture_output=True, text=True)
+    if r.returncode != 2 or "--initrd" not in r.stderr:
+        errors.append(f"--dump-dtb --initrd: exit {r.returncode}, expected a usage error")
+    print(f"--dump-dtb options: {'FAIL' if errors else 'ok'}")
+    for e in errors:
+        print("  ", e)
+    return not errors
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--cpus", type=int, nargs="+", default=[1, 2, 4])
@@ -191,6 +209,7 @@ def main():
             sys.exit(f"missing tool: {tool} (run make build/hengevm)")
     with tempfile.TemporaryDirectory() as tmp:
         results = [run_case(tmp, c, r, args.verbose) for c in args.cpus for r in args.ram_mb]
+        results.append(check_options(tmp))
     sys.exit(0 if all(results) else 1)
 
 

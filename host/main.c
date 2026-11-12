@@ -1197,6 +1197,7 @@ int main(int argc, char **argv) {
         if (!firmware && !kernel && !dump_dtb) bad = "--board virt needs --firmware or --kernel";
         else if (firmware && kernel) bad = "--firmware and --kernel cannot be used together";
         else if ((initrd || append) && !kernel && !dump_dtb) bad = "--initrd and --append need --kernel";
+        else if (dump_dtb && initrd) bad = "--dump-dtb writes no initrd range; leave out --initrd";
         else if (install_ipsw) bad = "--install is for the vmapple board";
         if (bad) {
             fprintf(stderr, "hengevm: %s\n", bad);
