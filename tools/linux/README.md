@@ -21,4 +21,6 @@ Keep source trees in `/work`, not on the Mac filesystem. It is case-insensitive 
 3. `build-image.sh` (G3, K1, G4) makes `debian-console.img`, `Image`, `initrd.img`, `config-debian-16k`, `debian-console.partuuid` and `debian-console.manifest` (kernel format, extlinux.conf, kernel config lines, package list). It takes about 6 minutes. `customize.sh` runs inside the new root filesystem and `rootfs/` is copied into it first. Set `DEBIAN_MIRROR` to use another mirror, for example `http://deb.debian.org/debian/`.
 4. `qemu-ref.sh` (G5) boots the result on QEMU's `virt` machine.
 
-Step 4 does not exist yet.
+Options of `qemu-ref.sh`: `--accel hvf|tcg` (default `tcg`), `--its-off`, `--dtb FILE`, `--gpu`, `--direct` (boot `Image` and `initrd.img` with `-kernel`). `hvf` works only with `--direct`, because U-Boot aborts under `hvf`; `hvf` also forces the ITS off. The disk opens with `snapshot=on`, so the shared image never changes.
+
+`qemu-check.py` drives it with pexpect (`uv run`): it checks page size, CPU count, network, run-time VA size and power off, and saves the reference output to `build/linux/ref/`. Use `--direct --accel hvf` for the fast check and the default for the full U-Boot path.
