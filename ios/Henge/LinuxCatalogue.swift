@@ -25,6 +25,9 @@ struct LinuxImage: Codable, Identifiable, Hashable {
     func spaceNeeded(alreadyDownloaded: Int64 = 0) -> Int64 {
         max(downloadBytes - alreadyDownloaded, 0) + unpackedBytes + (1 << 30)
     }
+
+    /// Free space for the unpack alone: the decoded file and the disk both exist for a while.
+    var unpackSpaceNeeded: Int64 { 2 * unpackedBytes + (1 << 30) }
 }
 
 enum LinuxCatalogue {
@@ -82,6 +85,13 @@ enum LinuxCatalogue {
         let needed = image.spaceNeeded(alreadyDownloaded: alreadyDownloaded)
         if free > 0 && free < needed {
             throw LinuxError.text("This install needs about \(sizeText(needed)) free; this device has \(sizeText(free)).")
+        }
+    }
+
+    static func checkUnpackSpace(_ image: LinuxImage, free: Int64) throws {
+        let needed = image.unpackSpaceNeeded
+        if free > 0 && free < needed {
+            throw LinuxError.text("Unpacking needs about \(sizeText(needed)) free; this device has \(sizeText(free)).")
         }
     }
 

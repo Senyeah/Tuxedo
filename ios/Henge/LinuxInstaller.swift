@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// The Linux side of the Install view: the catalogue and the downloads. Unpacking and creating the machine come with I8.
+/// The Linux side of the Install view: the catalogue, the downloads, and making a machine from one.
 @MainActor
 final class LinuxInstaller: ObservableObject {
     static let shared = LinuxInstaller()
@@ -18,7 +18,19 @@ final class LinuxInstaller: ObservableObject {
         case downloading
         case checking
         case downloaded
+        case decoding
+        case unpacking
+        case finishing
+        case installed(UUID)
         case failed(String)
+    }
+
+    /// What the user chose for the new machine.
+    struct Options {
+        var name: String
+        var ramMB: Int
+        var diskBytes: Int64
+        var keepDownload: Bool
     }
 
     @Published private(set) var catalogue: Catalogue = .none
@@ -31,7 +43,7 @@ final class LinuxInstaller: ObservableObject {
 
     nonisolated static var folder: URL { LinuxDownload.folder(root: MachinePaths.root) }
 
-    var busy: Bool { phase == .downloading || phase == .checking }
+    var busy: Bool { [.downloading, .checking, .decoding, .unpacking, .finishing].contains(phase) }
 
     func refresh() async {
         guard let url = LinuxCatalogue.configuredURL else { catalogue = .none; return }
@@ -48,7 +60,12 @@ final class LinuxInstaller: ObservableObject {
 
     func reset() { if !busy { phase = .idle; current = nil } }
 
-    func download(_ image: LinuxImage) {
+    func download(_ image: LinuxImage) { run(image, options: nil) }
+
+    /// Downloads what is missing, then unpacks it into a new machine in the list.
+    func install(_ image: LinuxImage, options: Options) { run(image, options: options) }
+
+    private func run(_ image: LinuxImage, options: Options?) {
         guard !busy else { return }
         current = image
         phase = .downloading
@@ -63,11 +80,12 @@ final class LinuxInstaller: ObservableObject {
             defer { UIApplication.shared.isIdleTimerDisabled = false; endGrace() }
             do {
                 try LinuxCatalogue.checkBuild(image, appBuild: LinuxCatalogue.appBuild)
+                if let options { try LinuxUnpack.checkDisk(options.diskBytes, for: image) }
                 try checkSpace(image)
                 Machines.excludeFromBackup(Machines.root)
                 HengeLog.log("linux", "downloading \(image.id) \(image.version)")
                 let throttle = ProgressThrottle()
-                _ = try await LinuxDownload.fetch(image, in: Self.folder) { stage, have, total in
+                let files = try await LinuxDownload.fetch(image, in: Self.folder) { stage, have, total in
                     guard throttle.allow(stage == .check || have >= total) else { return }
                     Task { @MainActor in
                         let me = LinuxInstaller.shared
@@ -79,12 +97,51 @@ final class LinuxInstaller: ObservableObject {
                 }
                 Machines.excludeFromBackup(Self.folder)
                 HengeLog.log("linux", "\(image.id) downloaded and checked")
-                phase = .downloaded
+                guard let options else { phase = .downloaded; return }
+                let mac = try await make(image, files: files, options: options)
+                phase = .installed(mac.id)
             } catch {
                 HengeLog.log("linux", "failed: \(error.localizedDescription)")
                 phase = .failed(error.localizedDescription)
             }
         }
+    }
+
+    /// Unpacks into a new machine folder, lists it, and deletes the download unless it is kept.
+    private func make(_ image: LinuxImage, files: LinuxDownload.Files, options: Options) async throws -> VirtualMac {
+        try checkUnpackSpace(image)
+        let name = options.name.trimmingCharacters(in: .whitespaces)
+        var mac = VirtualMac(name: name.isEmpty ? "Debian" : name, ecid: 0, seed: 0, ramMB: options.ramMB, diskBytes: options.diskBytes)
+        mac.kind = .linux
+        mac.osName = image.name
+        phase = .decoding
+        received = 0
+        expected = image.diskBytes
+        let throttle = ProgressThrottle()
+        let dir = mac.directory, bytes = options.diskBytes, planned = mac
+        HengeLog.log("linux", "making \(mac.name): \(ByteText.string(UInt64(bytes))) disk, \(options.ramMB) MB")
+        try await Task.detached {
+            try LinuxUnpack.make(image, files: files, into: dir, mac: planned, diskBytes: bytes) { stage, done, total in
+                guard throttle.allow(done >= total) else { return }
+                Task { @MainActor in
+                    let me = LinuxInstaller.shared
+                    guard me.busy, me.current?.id == image.id else { return }
+                    me.phase = stage == .decode ? .decoding : .unpacking
+                    me.received = done
+                    me.expected = total
+                }
+            }
+        }.value
+        phase = .finishing
+        mac.diskBytes = mac.logicalDiskBytes
+        Machines.shared.add(mac)
+        if !options.keepDownload {
+            var others: [LinuxImage] = []
+            if case .loaded(let all) = catalogue { others = all }
+            LinuxDownload.delete(image, in: Self.folder, others: others)
+        }
+        HengeLog.log("linux", "made \(mac.name) (\(mac.id)), \(ByteText.string(UInt64(mac.diskBytes))) disk")
+        return mac
     }
 
     func deleteDownload(_ image: LinuxImage) {
@@ -99,6 +156,12 @@ final class LinuxInstaller: ObservableObject {
         let free = (try? URL(fileURLWithPath: NSHomeDirectory()).resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
             .volumeAvailableCapacityForImportantUsage ?? 0
         try LinuxCatalogue.checkSpace(image, free: free, alreadyDownloaded: LinuxDownload.present(image, in: Self.folder))
+    }
+
+    private func checkUnpackSpace(_ image: LinuxImage) throws {
+        let free = (try? URL(fileURLWithPath: NSHomeDirectory()).resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
+            .volumeAvailableCapacityForImportantUsage ?? 0
+        try LinuxCatalogue.checkUnpackSpace(image, free: free)
     }
 
     private func endGrace() {
@@ -152,6 +215,16 @@ struct LinuxImagesSection: View {
         .task(id: catalogueURL) { await linux.refresh() }
     }
 
+    private static func verb(_ phase: LinuxInstaller.Phase) -> String {
+        switch phase {
+        case .checking: return "Checking"
+        case .decoding: return "Decompressing"
+        case .unpacking: return "Unpacking"
+        case .finishing: return "Finishing"
+        default: return "Downloading"
+        }
+    }
+
     private func note(_ text: String) -> some View {
         Text(text).font(.system(size: 14)).foregroundStyle(Desk.dim).padding(17)
     }
@@ -165,7 +238,7 @@ struct LinuxImagesSection: View {
                 .font(.system(size: 13)).foregroundStyle(Desk.dim)
             if mine, linux.busy {
                 DeskBar(fraction: linux.expected > 0 ? Double(linux.received) / Double(linux.expected) : 0, height: 8)
-                Text("\(linux.phase == .checking ? "Checking" : "Downloading") \(ByteText.string(linux.received)) of \(ByteText.string(linux.expected))")
+                Text("\(Self.verb(linux.phase)) \(ByteText.string(linux.received)) of \(ByteText.string(linux.expected))")
                     .font(.system(size: 13)).foregroundStyle(Desk.dim)
             } else if mine, case .failed(let text) = linux.phase {
                 Text(text).font(.system(size: 13)).foregroundStyle(.red)
