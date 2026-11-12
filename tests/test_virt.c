@@ -377,6 +377,68 @@ static void test_vm(void) {
     hv_vm_destroy();
 }
 
+/* The host layer's display calls reach the virtio GPU and its presenter. */
+static void test_vm_display(void) {
+    char error[256];
+    hv_vm_set_display_mode(1280, 800); /* before the board exists: kept and applied at create */
+    HvVmConfig c = {.board = HV_BOARD_VIRT, .ram_mb = 64, .ncpus = 1, .no_net = 1, .no_sound = 1, .jit_bytes = 8 << 20};
+    if (hv_vm_create(&c, error, sizeof error) != 0) {
+        printf("  FAIL display create: %s\n", error);
+        failures++;
+        hv_vm_destroy();
+        return;
+    }
+    HvMachine *vm = hv_vm_machine();
+    HvVirtioGpu *g = hv_vm_virt()->gpu;
+    check("display: the board has one", hv_vm_devs()->display != NULL, 1);
+    check("display: no boot framebuffer on virt", hv_vm_boot_display(&(HvBootDisplay){0}), (uint64_t)-1);
+    int x = 0, y = 0;
+    check("display: no pointer before a cursor", hv_vm_pointer(&x, &y), (uint64_t)-1);
+    uint8_t px[4 * 2 * 4];
+    check("display: no snapshot before a scanout", hv_vm_snapshot(px, 4, 2), (uint64_t)-1);
+    check("display: no frames without a layer", hv_vm_gpu_frames(), 0);
+    hv_vm_set_display_layer(NULL);
+    vm->tick(vm, hv_vm_cpu(0));
+    check("display: stored mode width", g->width, 1280);
+    check("display: stored mode height", g->height, 800);
+    hv_vm_set_display_mode(1024, 768);
+    vm->tick(vm, hv_vm_cpu(0));
+    check("display: mode while running", (uint64_t)g->width << 32 | g->height, 1024ull << 32 | 768);
+
+    pthread_mutex_lock(&g->mu);
+    g->cursor.resource = 9, g->cursor.x = 100, g->cursor.y = -2, g->cursor.hot_x = 3, g->cursor.hot_y = 4;
+    pthread_mutex_unlock(&g->mu);
+    check("display: pointer", hv_vm_pointer(&x, &y), 0);
+    check("display: pointer x is the hot spot", (uint64_t)x, 103);
+    check("display: pointer y is the hot spot", (uint64_t)y, 2);
+
+    if (!g->on_flush) {
+        printf("  no Metal device: presenter cases skipped\n");
+    } else {
+        /* A 4 x 2 BGRX scanout, as RESOURCE_FLUSH leaves it. */
+        uint8_t *pixels = malloc(sizeof px);
+        for (uint32_t k = 0; k < sizeof px; k++) pixels[k] = (uint8_t)(k * 9 + 5);
+        pthread_mutex_lock(&g->mu);
+        g->res[0] = (HvVgpuResource){.id = 7, .format = HV_VGPU_B8G8R8X8, .width = 4, .height = 2, .pixels = pixels};
+        g->scanout_res = 7, g->scanout = (HvVgpuRect){0, 0, 4, 2};
+        g->dirty = g->scanout, g->dirty_set = 1;
+        pthread_mutex_unlock(&g->mu);
+        g->on_flush(g->opaque);
+        int got = -1;
+        for (int n = 0; n < 2000 && got != 0; n++) {
+            got = hv_vm_snapshot(px, 4, 2);
+            if (got) usleep(1000);
+        }
+        check("display: snapshot after a flush", (uint64_t)got, 0);
+        int same = 1;
+        for (uint32_t k = 0; k < sizeof px; k++) same &= px[k] == ((k & 3) == 3 ? 255 : pixels[k]);
+        check("display: snapshot pixels", same, 1);
+    }
+    hv_vm_destroy();
+    check("display: none after destroy", hv_vm_snapshot(px, 4, 2), (uint64_t)-1);
+    hv_vm_set_display_mode(1920, 1080);
+}
+
 /* The virtio GPU, driven through PCI the way Linux's virtio_gpu driver does. */
 #define GPU_SLOT 6
 #define GPU_CFG (VIRT_PCIE_ECAM + ((uint64_t)GPU_SLOT << 15))
@@ -939,6 +1001,7 @@ int main(void) {
     }
     setenv("HV_NO_SOUND", "1", 1);
     test_vm();
+    test_vm_display();
     char cmd[300];
     snprintf(cmd, sizeof cmd, "rm -rf %s", dir);
     system(cmd);
