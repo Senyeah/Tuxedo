@@ -1,0 +1,12 @@
+#!/bin/sh
+# Start labwc. WLR_RENDERER comes from /etc/henge/renderer, or is pixman.
+renderer=pixman
+if [ -r /etc/henge/renderer ]; then
+    r=$(head -n 1 /etc/henge/renderer | tr -d ' \t\r')
+    [ -n "$r" ] && renderer=$r
+fi
+export WLR_RENDERER=$renderer
+# Debian has no locale set; foot warns without a UTF-8 one
+export LANG=C.UTF-8
+echo "login $(cut -d' ' -f1 /proc/uptime)" > "${XDG_RUNTIME_DIR:-/tmp}/henge-times"
+labwc
