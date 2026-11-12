@@ -9,9 +9,16 @@ DD=build/ios-sim-app
 make ios-sim-lib build/henge-agent.gz
 tools/build_ios_restore.sh sim
 (cd ios && xcodegen generate)
-xcodebuild -project ios/Henge.xcodeproj -scheme HengeSim -skipPackagePluginValidation \
-  -destination 'generic/platform=iOS Simulator' -configuration Debug -derivedDataPath "$DD" build \
-  | grep -E 'error:|BUILD (SUCCEEDED|FAILED)' || true
+LOG="$DD/build.log"
+mkdir -p "$DD"
+# The old Henge.app survives a failed build, so the exit code decides, not the bundle.
+if ! xcodebuild -project ios/Henge.xcodeproj -scheme HengeSim -skipPackagePluginValidation \
+  -destination 'generic/platform=iOS Simulator' -configuration Debug -derivedDataPath "$DD" build >"$LOG" 2>&1; then
+  grep -E 'error:' "$LOG" >&2 || tail -20 "$LOG" >&2
+  echo "build failed (log: $LOG)" >&2
+  exit 1
+fi
+grep -E 'BUILD SUCCEEDED' "$LOG"
 APP="$DD/Build/Products/Debug-iphonesimulator/Henge.app"
 [ -d "$APP" ] || { echo "build failed: no $APP" >&2; exit 1; }
 
