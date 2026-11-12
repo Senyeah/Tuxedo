@@ -331,7 +331,6 @@ void hv_virtio_gpu_3d_done(void *cookie, uint32_t status) {
     if (!p) return;
     HvVirtioGpu *g = p->g;
     pthread_mutex_lock(&g->cmu);
-    HvMachine *m = g->vio.m; /* read under cmu: a destroy may free g once it is released */
     if (p->orphan) { /* a reset gave up on it */
         g->norphan--;
         pthread_mutex_unlock(&g->cmu);
@@ -344,9 +343,9 @@ void hv_virtio_gpu_3d_done(void *cookie, uint32_t status) {
         g->nopen--, g->done3d++;
         __atomic_store_n(&g->kick, 1, __ATOMIC_RELEASE);
         pthread_cond_broadcast(&g->ccv);
+        hv_machine_wake(g->vio.m); /* under cmu: a destroy waits for it, then may free g and the machine */
     }
     pthread_mutex_unlock(&g->cmu);
-    hv_machine_wake(m);
 }
 
 HvVgpuRes3d *hv_virtio_gpu_res3d(HvVirtioGpu *g, uint32_t id) {
@@ -591,7 +590,7 @@ static uint32_t attach_3d(HvVirtioGpu *g, const HvVirtqElem *e, const uint8_t *r
         pend_free(p);
         return status;
     }
-    p->gen = r->gen;
+    p->gen = r->attach_gen = ++g->gen3d;
     r->pieces = pieces;
     p->req.res_id = r->id, p->req.ctx_id = 0, p->req.ranges = p->ranges, p->req.nranges = n;
     r->has_backing = 1, r->npieces = n, r->backing_len = total;
@@ -735,7 +734,7 @@ static void complete_3d(HvVirtioGpu *g) {
             }
             else if (p->req.type == HV_GPU3D_ATTACH_BACKING) {
                 HvVgpuRes3d *r = hv_virtio_gpu_res3d(g, p->req.res_id);
-                if (r && r->gen == p->gen && r->has_backing) res3d_drop_backing(g, r);
+                if (r && r->attach_gen == p->gen && r->has_backing) res3d_drop_backing(g, r);
             }
             pthread_mutex_unlock(&g->mu);
         }
@@ -818,7 +817,7 @@ static int reset_3d(HvVirtioGpu *g) {
 }
 
 int hv_virtio_gpu_set_3d(HvVirtioGpu *g, const HvGpu3dOps *ops, void *renderer) {
-    if (!g || (g->vio.status & 4)) return -1;
+    if (!g || (g->vio.status & (4 | 8))) return -1; /* DRIVER_OK or FEATURES_OK: the guest may be using ops3d */
     if (ops && (!ops->capset_info || !ops->capset || !ops->submit)) return -1;
     reset_3d(g);
     g->ops3d = NULL, g->ncaps = 0;
@@ -1089,6 +1088,9 @@ int hv_virtio_gpu_take_dirty(HvVirtioGpu *g, HvVgpuRect *r) {
 void hv_virtio_gpu_destroy(HvVirtioGpu *g) {
     if (!g) return;
     int clean = reset_3d(g); /* the renderer drops its pointers into guest RAM; it must outlive this call */
+    pthread_mutex_lock(&g->cmu);
+    clean = clean && !g->norphan;
+    pthread_mutex_unlock(&g->cmu);
     if (!clean) return; /* a stuck renderer may still call done() with a request of ours (now or from an earlier reset): leak the device */
     for (int i = 0; i < HV_VGPU_MAX_RESOURCES; i++) {
         free(g->res[i].pixels);

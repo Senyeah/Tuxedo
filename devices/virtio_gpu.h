@@ -57,7 +57,7 @@ typedef struct HvVgpuResource {
 
 /* A resource the renderer owns: no host pixels here. */
 typedef struct HvVgpuRes3d {
-    uint64_t gen;
+    uint64_t gen, attach_gen; /* of the create, and of the latest attach */
     uint32_t id;
     uint32_t target, format, bind, width, height, depth, array_size, last_level, nr_samples, flags;
     int has_backing;
@@ -117,8 +117,9 @@ typedef struct HvVirtioGpu {
 } HvVirtioGpu;
 
 HvVirtioGpu *hv_virtio_gpu_create(HvMachine *m, HvPcie *bus, uint32_t width, uint32_t height);
-/* Offer VIRGL and answer the 3D commands through `ops` (NULL turns it off). Only with the guest stopped or before the
-   driver binds: it drops every context and resource first, and waits for the renderer to finish them. 0 or -1. */
+/* Offer VIRGL and answer the 3D commands through `ops` (NULL turns it off). Only before the driver sets FEATURES_OK
+   (status 0 after a reset), with the CPUs stopped: it drops every context and resource first, and waits for the
+   renderer to finish them. -1 once FEATURES_OK or DRIVER_OK is set. 0 or -1. */
 int hv_virtio_gpu_set_3d(HvVirtioGpu *g, const HvGpu3dOps *ops, void *renderer);
 /* Renderer, any thread: the request behind `cookie` finished with an HV_GPU3D_* status. Exactly once per submit. */
 void hv_virtio_gpu_3d_done(void *cookie, uint32_t status);

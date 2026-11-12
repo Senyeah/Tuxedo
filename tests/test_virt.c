@@ -1497,6 +1497,10 @@ static void test_gpu3d_basic(HvVirtioGpu *g) {
     check("nothing reached the renderer", fk.n, calls);
     check("no ctx made", g->nctx, 0);
     check("set_3d while the driver runs is refused", hv_virtio_gpu_set_3d(g, NULL, NULL), (uint64_t)-1);
+    wr8(GPU_BAR + 0x14, 0);
+    wr8(GPU_BAR + 0x14, 1 | 2 | 8);
+    check("set_3d after FEATURES_OK is refused too", hv_virtio_gpu_set_3d(g, NULL, NULL), (uint64_t)-1);
+    check("and the renderer stays", g->ops3d != NULL, 1);
     gpu3d_setup(1);
 
     /* capsets */
@@ -1974,6 +1978,49 @@ static void test_gpu3d_fences(HvVirtioGpu *g) {
     check("the new resource 900 keeps its backing", r9 && r9->has_backing && r9->npieces == 1, 1);
     c_unref(900);
 
+    /* a refused attach must not undo a later attach on the same resource (detach, attach again) */
+    check("create 902", c_create(0, 902, 2, 1, 8, 8, 1, 1, 0, 0), OK);
+    fk.hold = 1, fk.nheld = 0;
+    g3_next = 0;
+    g3_nreaped = 0;
+    q_hdr(0x106, 0), q32(24, 902), q32(28, 1);
+    g3_post(32, &ls, 1, 24); /* A1: the renderer refuses it */
+    q_hdr(0x107, 0), q32(24, 902);
+    g3_post(32, NULL, 0, 24);
+    q_hdr(0x106, 0), q32(24, 902), q32(28, 1);
+    int h2 = g3_post(32, &ls, 1, 24); /* A2: the renderer takes it */
+    fk.fail = HV_GPU3D_ERR_PARAM;
+    g3_kick();
+    g3_poll();
+    fk.hold = 0;
+    fk_release_all();
+    g3_poll();
+    HvVgpuRes3d *r2 = hv_virtio_gpu_res3d(g, 902);
+    check("A2 was answered OK", g3_status(h2), OK);
+    check("902 keeps the backing of A2", r2 && r2->has_backing && r2->npieces == 1 && g->backing3d >= 1, 1);
+    check("a transfer on 902 works", c_transfer(0x205, 0, 902, (HvGpu3dBox){0, 0, 0, 8, 8, 1}, 0, 0, 0, 0), OK);
+    c_unref(902);
+
+    /* a transfer from the host tells the JIT about the backing; one to the host does not */
+    HvRam *bkram = hv_ram_lookup(&m, G3_BK);
+    if (bkram) {
+        uint64_t pg = (G3_BK - bkram->pa) >> HV_TLB_PAGE_BITS, other = (G3_BK + 0x20000 - bkram->pa) >> HV_TLB_PAGE_BITS;
+        uint64_t a = G3_BK;
+        uint32_t l = 0x4000;
+        check("create 903", c_create(0, 903, 2, 1, 8, 8, 1, 1, 0, 0), OK);
+        check("attach 903", c_attach(903, 1, 1, &a, &l, 1), OK);
+        bkram->code_pages[pg] = 1, bkram->code_pages[other] = 1;
+        check("transfer to host", c_transfer(0x205, 0, 903, (HvGpu3dBox){0, 0, 0, 8, 8, 1}, 0, 0, 0, 0), OK);
+        check("to host: code in the backing stays", bkram->code_pages[pg], 1);
+        check("transfer from host", c_transfer(0x206, 0, 903, (HvGpu3dBox){0, 0, 0, 8, 8, 1}, 0, 0, 0, 0), OK);
+        check("from host: code in the backing is invalidated", bkram->code_pages[pg], 0);
+        check("from host: code elsewhere stays", bkram->code_pages[other], 1);
+        bkram->code_pages[other] = 0;
+        c_unref(903);
+    } else {
+        check("RAM of the backing found", 0, 1);
+    }
+
     /* the backing may not sit in read-only RAM */
     void *ro = NULL;
     if (posix_memalign(&ro, 0x4000, 0x10000) == 0) {
@@ -2172,6 +2219,52 @@ static void test_gpu3d_off(HvVirtioGpu *g) {
     check("2D still works after it", c_create2d(1, 2, 16, 16), OK);
     check("nothing lost", g3_lost, 0);
     c_unref(1);
+}
+
+/* A fresh board with the fake renderer on, the driver bound. Needs the old board destroyed and the machine freed. */
+static HvDisk *board_root; /* the board's slots depend on its disk */
+static HvVirtioGpu *gpu3d_board(void) {
+    static const uint8_t mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
+    if (hv_machine_init(&m, 4 << 20) != 0 || hv_virt_create(&b, &m, cpus, 1, 64ull << 20, board_root, mac) != 0) {
+        check("board for the destroy cases", 1, 0);
+        return NULL;
+    }
+    hv_virt_reset(&b);
+    fk.ram_lo = (uint64_t)(uintptr_t)ram(VIRT_MEM);
+    fk.ram_hi = fk.ram_lo + b.mem.size;
+    g3dev = b.gpu;
+    wr8(GPU_BAR + 0x14, 0);
+    check("set_3d on the new board", hv_virtio_gpu_set_3d(b.gpu, &fk_ops, &fk), 0);
+    gpu3d_setup(1);
+    return b.gpu;
+}
+
+/* Runs last: it destroys the board and builds its own. */
+static void test_gpu3d_destroy(void) {
+    /* destroy sends UNREF and CTX_DESTROY for what is left, to a renderer that is still on */
+    HvVirtioGpu *g = gpu3d_board();
+    if (!g) return;
+    check("a context", c_ctx_create(21, 0, "d"), OK);
+    check("a resource", c_create(0, 950, 2, 1, 8, 8, 1, 1, 0, 0), OK);
+    uint64_t unrefs = fk_count(0x102), destroys = fk_count(0x201);
+    hv_virt_destroy(&b);
+    check("destroy: the resource went to the renderer", fk_count(0x102) - unrefs, 1);
+    check("destroy: the context went to the renderer", fk_count(0x201) - destroys, 1);
+    hv_machine_free(&m);
+
+    /* a reset that gave up on a stuck request, then destroy: the device is kept, so the late done() is safe */
+    g = gpu3d_board();
+    if (!g) return;
+    check("a context to abandon", c_ctx_create(22, 0, "o"), OK);
+    fk.hold = 1, fk.nheld = 0;
+    g->drain_ms = 50;
+    wr8(GPU_BAR + 0x14, 0); /* the driver resets while the renderer is stuck */
+    check("the reset left an orphan", g->norphan >= 1, 1);
+    fk.hold = 0;
+    hv_virt_destroy(&b); /* nothing is open now, but the orphan still points at the device */
+    fk_release_all();
+    check("the late done() found a live device", g->norphan, 0);
+    hv_machine_free(&m);
 }
 
 /* ---- fuzz: random 3D requests, from a driver and through a renderer on its own thread ---- */
@@ -2436,6 +2529,7 @@ int main(void) {
         printf("cannot build the board\n");
         return 1;
     }
+    board_root = &root;
     hv_virt_reset(&b);
     test_memory_map();
     test_flash();
@@ -2446,6 +2540,8 @@ int main(void) {
     test_gpu_fuzz(b.gpu);
     test_gpu3d(b.gpu);
     hv_virt_destroy(&b);
+    hv_machine_free(&m);
+    test_gpu3d_destroy();
     test_linux_boot();
     hv_disk_close(&root);
     if (have_dtc()) {
