@@ -229,14 +229,21 @@ def install(vm, args):
     vm.need("sudo usermod -aG audio henge && id henge", lambda o: "audio" in o, "audio group")
     vm.p.sendline("sudo reboot")
     vm.login()
+    # first boot after apt: let systemd jobs and apt timers finish before the timed play
+    vm.need("systemctl is-system-running --wait >/dev/null 2>&1; while pgrep -x 'apt|apt-get|dpkg|unattended-upgr' "
+            ">/dev/null; do sleep 2; done; sleep 5; echo settled", lambda o: o.endswith("settled"), "system settles", 180)
     vm.need("sox -n -r 48000 -c 2 -b 16 /var/tmp/music.wav synth 60 sine 440 sine 660 vol 0.5 && ls -l /var/tmp/music.wav",
             lambda o: True, "make the music file", 180)
 
 
 def pipewire(vm):
     # The serial login has no user session; linger starts one, and the shell then talks to its manager
-    vm.need("sudo loginctl enable-linger henge; for i in $(seq 30); do [ -S /run/user/$(id -u)/bus ] && break; sleep 1; done; "
-            "ls /run/user/$(id -u)/bus", lambda o: o.endswith("/bus"), "user session manager (linger)", 90)
+    # enable-linger is async and can lose to the boot; start the user manager by hand too
+    vm.need("sudo loginctl enable-linger henge; sudo systemctl start user@$(id -u).service; "
+            "for i in $(seq 60); do [ -S /run/user/$(id -u)/bus ] && break; sleep 1; done; "
+            "ls /run/user/$(id -u)/bus 2>&1 || { systemctl status user@$(id -u).service 2>&1 | tail -8; "
+            "dpkg -l libpam-systemd dbus-user-session 2>&1 | tail -3; }",
+            lambda o: o.endswith("/bus"), "user session manager (linger)", 150)
     vm.need("export XDG_RUNTIME_DIR=/run/user/$(id -u) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus; "
             "systemctl --user start pipewire wireplumber; sleep 3; systemctl --user is-active pipewire wireplumber | sort -u",
             lambda o: o == "active", "pipewire and wireplumber run as user services", 60)
