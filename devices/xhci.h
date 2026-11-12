@@ -63,6 +63,8 @@ typedef struct HvXhci {
     uint32_t rhead, rtail;
     uint8_t state[8];      /* modifiers, reserved, six keys: the current report */
     uint64_t delivered;
+    uint32_t kbd_idle_ms;  /* SET_IDLE: send the current report this often; 0 only on change */
+    uint32_t kbd_sent_ms;  /* when the keyboard last sent a report */
     /* Magic Trackpad 2: the fingers on the pad and their reports (Apple
        multitouch format, report ID 2: 12-byte prefix plus 9 bytes a finger). */
     struct HvTpFinger {

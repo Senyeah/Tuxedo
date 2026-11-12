@@ -7,13 +7,13 @@ CORE = $(B)/classify.o $(B)/operands.o $(B)/translate.o $(B)/dispatch.o $(B)/mmu
        $(B)/exception.o $(B)/sysreg.o $(B)/machine.o
 HOST = $(B)/jit_region.o $(B)/enter.o $(B)/disk.o
 DEV = $(B)/pvg_lite.o $(B)/pvg_metal.o $(B)/gicv3.o $(B)/timer.o $(B)/pl011.o $(B)/pl031.o $(B)/cfg.o $(B)/bdif.o $(B)/pcie.o \
-      $(B)/virtio.o $(B)/virtio_blk.o $(B)/virtio_net.o $(B)/virtio_input.o $(B)/virtio_snd.o $(B)/virtio_usb.o $(B)/virtio_balloon.o $(B)/xhci.o $(B)/vmapple.o $(B)/aes.o $(B)/pl061.o $(B)/metallib.o $(B)/fdt.o $(B)/guest_ram.o $(B)/virt.o $(B)/virt_fdt.o
+      $(B)/virtio.o $(B)/virtio_blk.o $(B)/virtio_net.o $(B)/virtio_rng.o $(B)/virtio_input.o $(B)/virtio_snd.o $(B)/virtio_usb.o $(B)/virtio_balloon.o $(B)/xhci.o $(B)/vmapple.o $(B)/aes.o $(B)/pl061.o $(B)/metallib.o $(B)/fdt.o $(B)/guest_ram.o $(B)/virt.o $(B)/virt_fdt.o
 ENGINE = $(CORE) $(HOST)
 VM = $(B)/vm.o $(B)/linux_boot.o
 METAL_LIBS = -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers
 
 TESTS = $(B)/test_classify $(B)/test_jit_region $(B)/test_operands $(B)/test_jit $(B)/test_mem \
-        $(B)/test_mmu $(B)/test_exc $(B)/test_devices $(B)/test_shutdown $(B)/test_fdt $(B)/test_console $(B)/test_virt
+        $(B)/test_mmu $(B)/test_exc $(B)/test_devices $(B)/test_shutdown $(B)/test_big_lock $(B)/test_fdt $(B)/test_console $(B)/test_virt
 
 all: $(TESTS) $(B)/hengevm $(B)/hengevm-ref $(B)/hvsparse
 
@@ -90,6 +90,9 @@ $(B)/test_mmu: tests/test_mmu.c $(ENGINE)
 $(B)/test_shutdown: tests/test_shutdown.c $(ENGINE)
 	$(CC) $(CFLAGS) $^ -o $@
 
+$(B)/test_big_lock: tests/test_big_lock.c $(ENGINE)
+	$(CC) $(CFLAGS) $^ -o $@
+
 $(B)/test_fdt: tests/test_fdt.c $(B)/fdt.o
 	$(CC) $(CFLAGS) $^ -o $@
 
@@ -117,6 +120,27 @@ test-linux-direct: $(B)/hengevm
 	uv run tools/linux/smoke.py --direct --no-reboot $(SMOKE_ARGS)
 	uv run tools/linux/smoke.py --direct --fatal $(SMOKE_ARGS)
 .PHONY: test-linux-direct
+
+# The same kernel on a clone of debian-console.img: disk, network, entropy, and a write kept over a power off.
+test-linux-disk: $(B)/hengevm
+	uv run tools/linux/smoke.py --direct --disk $(SMOKE_ARGS)
+.PHONY: test-linux-disk
+
+# The same checks with U-Boot (build/linux/u-boot.bin) in flash, booting the disk through extlinux.conf.
+test-linux-uboot: $(B)/hengevm
+	uv run tools/linux/smoke.py --uboot $(SMOKE_ARGS)
+.PHONY: test-linux-uboot
+
+# Four CPUs under stress-ng and make -j4 (E11). Installs stress-ng and gcc in the clone with apt unless
+# SMOKE_ARGS has --image with them already.
+test-linux-smp: $(B)/hengevm
+	uv run tools/linux/smoke.py --uboot --stress --cpus 4 $(SMOKE_ARGS)
+.PHONY: test-linux-smp
+
+# T3: the U-Boot boot, every check after login, then restart and the power key (E12). SMOKE_ARGS="--runs 5 --cpus 4" etc.
+test-linux-smoke: $(B)/hengevm
+	uv run tools/linux/smoke.py --uboot --power $(SMOKE_ARGS)
+.PHONY: test-linux-smoke
 
 test-vm-lifecycle: $(B)/test_vm_lifecycle
 	$(B)/test_vm_lifecycle

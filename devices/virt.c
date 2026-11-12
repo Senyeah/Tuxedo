@@ -60,6 +60,7 @@ int hv_virt_create(HvVirt *b, HvMachine *m, HvCpu *cpus, int ncpus, uint64_t ram
     /* A fixed order keeps each device in the same slot. */
     if (root) b->blk = hv_virtio_blk_create(m, b->pcie, root, HV_VBLK_PLAIN);
     if (mac) b->net = hv_virtio_net_create(m, b->pcie, mac);
+    b->rng = hv_virtio_rng_create(m, b->pcie);
     b->usb = hv_xhci_create(m, b->pcie);
     b->keyboard = hv_virtio_input_create(m, b->pcie, HV_VINPUT_KEYBOARD);
     b->mouse = hv_virtio_input_create(m, b->pcie, HV_VINPUT_MOUSE);
@@ -144,6 +145,7 @@ void hv_virt_destroy(HvVirt *b) {
     if (b->usb) { pthread_mutex_destroy(&b->usb->mu); free(b->usb); }
     if (b->gic) { pthread_mutex_destroy(&b->gic->mu); free(b->gic); }
     free(b->net);
+    free(b->rng);
     free(b->pcie);
     free(b->uart);
     free(b->rtc);

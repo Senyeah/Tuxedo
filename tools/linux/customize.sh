@@ -18,12 +18,13 @@ ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 mkdir -p /etc/systemd/system/getty.target.wants
 ln -sf /usr/lib/systemd/system/serial-getty@.service /etc/systemd/system/getty.target.wants/serial-getty@ttyAMA0.service
 
+# panic=-1 reboots at once: a boot panic loops unless hengevm has --no-reboot
 cat > /etc/default/u-boot <<EOT
 U_BOOT_UPDATE="true"
 U_BOOT_ALTERNATIVES="default"
 U_BOOT_TIMEOUT="10"
 U_BOOT_ROOT="root=PARTUUID=$PARTUUID"
-U_BOOT_PARAMETERS="rw console=tty0 console=ttyAMA0 quiet"
+U_BOOT_PARAMETERS="rw console=tty0 console=ttyAMA0 quiet panic=-1"
 EOT
 
 update-initramfs -u -k all

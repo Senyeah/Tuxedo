@@ -50,13 +50,13 @@ static void test_memory_map(void) {
     check("PL061 PeriphID0", rd32(&m, VIRT_GPIO + 0xfe0), 0x61);
     check("GIC distributor PIDR2", rd32(&m, VIRT_GIC_DIST + 0xffe8), 0x3b);
     check("GIC redistributor 0 PIDR2", rd32(&m, VIRT_GIC_REDIST + 0xffe8), 0x3b);
-    static const uint32_t ids[] = {0x00081b36, 0x10421af4, 0x10411af4, 0x000d1b36, 0x10521af4, 0x10521af4, 0x10591af4};
-    for (int s = 0; s < 7; s++) {
+    static const uint32_t ids[] = {0x00081b36, 0x10421af4, 0x10411af4, 0x10441af4, 0x000d1b36, 0x10521af4, 0x10521af4, 0x10591af4};
+    for (int s = 0; s < 8; s++) {
         char what[48];
         snprintf(what, sizeof what, "ECAM slot %d vendor and device", s);
         check(what, rd32(&m, VIRT_PCIE_ECAM + ((uint64_t)s << 15)), ids[s]);
     }
-    check("ECAM slot 7 is empty", rd32(&m, VIRT_PCIE_ECAM + (7ull << 15)), 0xffffffff);
+    check("ECAM slot 8 is empty", rd32(&m, VIRT_PCIE_ECAM + (8ull << 15)), 0xffffffff);
     check("ECAM bus 1 is empty", rd32(&m, VIRT_PCIE_ECAM + (1ull << 20)), 0xffffffff);
     check("PCI I/O window reads as all ones", rd32(&m, VIRT_PCIE_PIO + 0x10), 0xffffffff);
     wr32(&m, VIRT_PCIE_PIO + 0x10, 0);
@@ -84,21 +84,127 @@ static void test_flash(void) {
     check("firmware over 64 MB is refused", hv_virt_load_firmware(&b, path) != 0, 1);
 }
 
-/* Slots 1 (disk) and 5 (mouse) share INTx line 1, SPI 4. */
+/* Slots 1 (disk) and 5 (keyboard) share INTx line 1, SPI 4. */
 static void test_pci_intx(void) {
-    HvPciDev *disk = b.pcie->dev[1], *mouse = b.pcie->dev[5];
+    HvPciDev *disk = b.pcie->dev[1], *kbd = b.pcie->dev[5];
     int intid = 32 + VIRT_IRQ_PCIE + 1;
     hv_pci_set_intx(disk, 1);
     check("slot 1 raises SPI 4", b.gic->level[intid], 1);
-    hv_pci_set_intx(mouse, 1);
+    hv_pci_set_intx(kbd, 1);
     hv_pci_set_intx(disk, 0);
     check("slot 5 keeps SPI 4 up", b.gic->level[intid], 1);
     check("slot 5 leaves SPI 3 low", b.gic->level[32 + VIRT_IRQ_PCIE], 0);
-    hv_pci_set_intx(mouse, 0);
+    hv_pci_set_intx(kbd, 0);
     check("SPI 4 drops when both are low", b.gic->level[intid], 0);
     hv_pci_set_intx(b.pcie->dev[3], 1);
     check("slot 3 raises SPI 6", b.gic->level[32 + VIRT_IRQ_PCIE + 3], 1);
     hv_pci_set_intx(b.pcie->dev[3], 0);
+}
+
+static void wr64(HvMachine *mm, uint64_t pa, uint64_t v) { hv_phys_write(mm, pa, &v, 8); }
+static uint64_t rd64(HvMachine *mm, uint64_t pa) {
+    uint64_t v = 0;
+    hv_phys_read(mm, pa, &v, 8);
+    return v;
+}
+static void put_trb(uint64_t pa, uint64_t param, uint32_t status, uint32_t control) {
+    wr64(&m, pa, param);
+    wr32(&m, pa + 8, status);
+    wr32(&m, pa + 12, control | 1); /* cycle 1 */
+}
+
+/* The xHCI as Linux's xhci_hcd drives it on the keyboard's port. */
+static void test_xhci(void) {
+    enum { XECP = 0x800, OP = 0x40, RT = 0x1000, DB = 0x2000 };
+    uint64_t cfg = VIRT_PCIE_ECAM + (4ull << 15), bar = VIRT_PCIE_MMIO + 0x100000;
+    wr32(&m, cfg + 0x10, (uint32_t)bar);
+    wr32(&m, cfg + 0x14, 0);
+    wr32(&m, cfg + 0x04, 0x6);
+    /* xhci_hcd gives up ("No ports on the roothubs?") if a protocol's ports run past the last. */
+    uint32_t ports = rd32(&m, bar + 4) >> 24, proto = rd32(&m, bar + XECP + 8);
+    check("xHCI USB 2 protocol starts at port 1", proto & 0xff, 1);
+    check("xHCI USB 2 protocol covers every port", (proto >> 8) & 0xff, ports);
+
+    uint64_t mem = VIRT_MEM + 0x200000, dcbaa = mem, cmd = mem + 0x1000, erst = mem + 0x2000, ev = mem + 0x3000;
+    uint64_t out = mem + 0x4000, in = mem + 0x5000, ep0 = mem + 0x6000, buf = mem + 0x7000;
+    memset(hv_phys_ptr(&m, mem, 0x8000), 0, 0x8000);
+    wr32(&m, bar + OP, 2); /* HCRST */
+    wr64(&m, bar + OP + 0x30, dcbaa);
+    wr64(&m, bar + OP + 0x18, cmd | 1);
+    wr64(&m, erst, ev);
+    wr32(&m, erst + 8, 64);
+    wr32(&m, bar + RT + 0x28, 1);
+    wr32(&m, bar + RT + 0x30, (uint32_t)erst);
+    wr32(&m, bar + RT + 0x34, 0);
+    wr32(&m, bar + OP, 1); /* run */
+    put_trb(cmd, 0, 0, 9u << 10); /* Enable Slot */
+    wr32(&m, bar + DB, 0);
+    wr64(&m, dcbaa + 8, out);
+    wr32(&m, in + 4, 3);                 /* add the slot and ep0 */
+    wr32(&m, in + 32 + 4, 1u << 16);     /* root port 1: the keyboard */
+    wr32(&m, in + 64 + 4, 64u << 16 | 4u << 3); /* control endpoint, 64 bytes */
+    wr64(&m, in + 64 + 8, ep0 | 1);
+    put_trb(cmd + 16, in, 0, 11u << 10 | 1u << 24); /* Address Device, slot 1 */
+    wr32(&m, bar + DB, 0);
+    /* GET_DESCRIPTOR (device), then (device qualifier), which a full-speed device stalls */
+    const uint64_t dev = 0x0012000001000680ull, qual = 0x000a000006000680ull;
+    put_trb(ep0, dev, 8, 2u << 10 | 1u << 6 | 3u << 16);
+    put_trb(ep0 + 16, buf, 18, 3u << 10 | 1u << 16);
+    put_trb(ep0 + 32, 0, 0, 4u << 10 | 1u << 5);
+    put_trb(ep0 + 48, qual, 8, 2u << 10 | 1u << 6 | 3u << 16);
+    put_trb(ep0 + 64, buf, 10, 3u << 10 | 1u << 16);
+    put_trb(ep0 + 80, 0, 0, 4u << 10 | 1u << 5);
+    wr32(&m, bar + DB + 4, 1);
+    check("device descriptor read", rd32(&m, buf) & 0xffff, 0x0112);
+    int stall = 0;
+    for (int i = 0; i < 64 && (rd32(&m, ev + 16u * i + 12) & 1); i++)
+        if ((rd32(&m, ev + 16u * i + 12) >> 10 & 0x3f) == 32 && rd32(&m, ev + 16u * i + 8) >> 24 == 6)
+            stall = rd64(&m, ev + 16u * i) == ep0 + 48;
+    check("the qualifier's setup stage stalls", stall, 1);
+    check("ep0 halted", rd32(&m, out + 32) & 7, 2);
+    /* xhci_hcd skips the stalled TD from here; a stale pointer sent it back to the one before. */
+    check("ep0 dequeue at the stalled TRB", rd64(&m, out + 32 + 8), (ep0 + 48) | 1);
+
+    /* U-Boot's keyboard poll waits 5 s for each report unless the keyboard keeps SET_IDLE. */
+    uint64_t intr = mem + 0x7800;
+    put_trb(cmd + 32, 0, 0, 14u << 10 | 1u << 16 | 1u << 24);             /* Reset Endpoint, ep0 */
+    put_trb(cmd + 48, (ep0 + 96) | 1, 0, 16u << 10 | 1u << 16 | 1u << 24); /* Set TR Dequeue past the stall */
+    wr32(&m, in, 0);
+    wr32(&m, in + 4, 1u << 3 | 1);                 /* add the slot and EP1 IN (DCI 3) */
+    wr32(&m, in + 128 + 4, 8u << 16 | 7u << 3);    /* interrupt IN, 8 bytes */
+    wr64(&m, in + 128 + 8, intr | 1);
+    put_trb(cmd + 64, in, 0, 12u << 10 | 1u << 24); /* Configure Endpoint */
+    wr32(&m, bar + DB, 0);
+    put_trb(intr, buf + 0x100, 8, 1u << 10 | 1u << 5);
+    memset(hv_phys_ptr(&m, buf + 0x100, 8), 0xee, 8);
+    wr32(&m, bar + DB + 4, 3);
+    hv_xhci_poll(b.usb);
+    check("no report without a change or an idle rate", rd32(&m, buf + 0x100), 0xeeeeeeee);
+    const uint64_t set_idle = 0x000000000a000a21ull, get_idle = 0x00010000000002a1ull; /* 40 ms */
+    put_trb(ep0 + 96, set_idle, 8, 2u << 10 | 1u << 6);
+    put_trb(ep0 + 112, 0, 0, 4u << 10 | 1u << 16 | 1u << 5);
+    put_trb(ep0 + 128, get_idle, 8, 2u << 10 | 1u << 6 | 3u << 16);
+    put_trb(ep0 + 144, buf + 0x200, 1, 3u << 10 | 1u << 16);
+    put_trb(ep0 + 160, 0, 0, 4u << 10 | 1u << 5);
+    wr32(&m, bar + DB + 4, 1);
+    check("GET_IDLE gives SET_IDLE's rate", rd32(&m, buf + 0x200) & 0xff, 0x0a);
+    hv_xhci_poll(b.usb);
+    check("an idle report carries the current state", rd32(&m, buf + 0x100), 0);
+    put_trb(intr + 16, buf + 0x108, 8, 1u << 10 | 1u << 5);
+    memset(hv_phys_ptr(&m, buf + 0x108, 8), 0xee, 8);
+    wr32(&m, bar + DB + 4, 3);
+    hv_xhci_poll(b.usb);
+    check("no second report inside the idle time", rd32(&m, buf + 0x108), 0xeeeeeeee);
+    usleep(60 * 1000);
+    hv_xhci_poll(b.usb);
+    check("a report again after the idle time", rd32(&m, buf + 0x108), 0);
+    int done = 0;
+    for (int i = 0; i < 64 && (rd32(&m, ev + 16u * i + 12) & 1); i++)
+        if ((rd32(&m, ev + 16u * i + 12) >> 10 & 0x3f) == 32 && rd32(&m, ev + 16u * i + 8) >> 24 == 1)
+            done += rd64(&m, ev + 16u * i) == intr || rd64(&m, ev + 16u * i) == intr + 16;
+    check("both idle reports complete their transfers", done, 2);
+    wr32(&m, bar + OP, 0);
+    wr32(&m, cfg + 0x04, 0);
 }
 
 static int have_dtc(void) { return system("dtc --version >/dev/null 2>&1") == 0; }
@@ -336,8 +442,25 @@ static void test_vm(void) {
     vm->tick(vm, hv_vm_cpu(0));
     check("tick moves console input into the UART", rd32(vm, VIRT_UART), 'o');
     check("second byte", rd32(vm, VIRT_UART), 'k');
+    /* the power key: rising edge on pin 3, high for 100 ms */
+    uint32_t key = 1u << VIRT_GPIO_POWER, pin = VIRT_GPIO + (key << 2);
+    wr32(vm, VIRT_GPIO + 0x40c, key);
+    wr32(vm, VIRT_GPIO + 0x410, key);
+    check("power key starts low", rd32(vm, pin), 0);
+    check("power key accepted", hv_vm_power_button(), 1);
+    for (int i = 0; i < 100 && !rd32(vm, pin); i++) usleep(10000); /* the queue may be slow under load */
+    check("power key is high", rd32(vm, pin), key);
+    check("power key raises its SPI", hv_vm_devs()->gic->level[32 + VIRT_IRQ_GPIO], 1);
+    for (int i = 0; i < 100 && rd32(vm, pin); i++) usleep(10000);
+    check("power key is released", rd32(vm, pin), 0);
+    /* destroy must wait for a release that is under way */
+    check("second press accepted", hv_vm_power_button(), 1);
+    for (int i = 0; i < 100 && !rd32(vm, pin); i++) usleep(10000);
+    check("second press is high", rd32(vm, pin), key);
     hv_vm_destroy();
     check("no virt board after destroy", hv_vm_virt() == NULL, 1);
+    check("no machine: key refused", hv_vm_power_button(), 0);
+    usleep(20000);
 
     char kernel[256];
     snprintf(kernel, sizeof kernel, "%s/Image", dir);
@@ -396,6 +519,7 @@ int main(void) {
     test_memory_map();
     test_flash();
     test_pci_intx();
+    test_xhci();
     test_reset();
     hv_virt_destroy(&b);
     test_linux_boot();

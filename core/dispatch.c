@@ -488,8 +488,8 @@ static int wait_for_interrupt(HvCpu *cpu) {
     }
     p->wake_pending = 0;
     pthread_mutex_unlock(&p->wake_mu);
+    hv_big_lock(m); /* parked meanwhile: the holder may wait for this CPU (see run_loop) */
     unpark(cpu);
-    hv_big_lock(m);
     m->stats.wfi++;
     m->stats.wfi_ticks += mach_absolute_time() - t0;
     m->tick(m, cpu);
@@ -845,8 +845,8 @@ static void wait_while_off(HvCpu *cpu) {
     }
     __atomic_store_n(&cpu->parked_off, 0, __ATOMIC_SEQ_CST);
     pthread_mutex_unlock(&p->wake_mu);
-    unpark(cpu);
     hv_big_lock(m);
+    unpark(cpu);
 }
 
 /* Dropping every translation: the CPU that finds a flush pending waits until
@@ -961,7 +961,12 @@ static int run_loop(HvCpu *cpu, int one) {
             /* Give another CPU its turn. Whatever it does in between may touch
                what this CPU's exclusive monitor watches, so the monitor clears. */
             cpu->excl_addr = ~0ull;
+            /* Parked while queued: the holder's TLBIs and flushes wait for CPUs that are not. */
+            park(cpu);
             hv_big_yield(m);
+            /* Kicks that came while queued are stale: a full turn, not one block. */
+            __atomic_store_n(&cpu->exit_req, 0, __ATOMIC_RELAXED);
+            unpark(cpu);
         }
         /* Ticks take the device lock, so not every few blocks: on a kick (the 1 ms
            kicker, a device with work for CPU 0, an interrupt raised for this

@@ -14,6 +14,7 @@
 #include "virtio_blk.h"
 #include "virtio_input.h"
 #include "virtio_net.h"
+#include "virtio_rng.h"
 #include "virtio_snd.h"
 #include "xhci.h"
 
@@ -53,6 +54,7 @@ typedef struct HvVirt {
     HvPcie *pcie;
     HvVirtioBlk *blk;
     HvVirtioNet *net;
+    HvVirtioRng *rng;
     HvXhci *usb;
     HvVirtioInput *keyboard, *mouse;
     HvVirtioSnd *snd;

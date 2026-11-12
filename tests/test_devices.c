@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #include "sysreg.h"
+#include "virtio_rng.h"
 #include "vmapple.h"
 
 DECLARE_PROGRAM(p_timer_irq);
@@ -477,6 +478,33 @@ static void test_virtio_balloon(void) {
     check("anonymous: madvise did not fail", a->failed, 0);
 }
 
+/* virtio-rng: a buffer split over two descriptors is filled whole, and an interrupt follows. */
+static void test_virtio_rng(void) {
+    HvVirtioRng *r = hv_virtio_rng_create(&m, board.pcie);
+    int slot = (int)find_slot(0x1af4, 0x1044, 0);
+    check("virtio-rng enumerated", slot >= 0 && slot < 32, 1);
+    if (slot < 0 || slot >= 32) return;
+    check("class: unclassified", rd32(VMAPPLE_PCIE_ECAM + ((uint64_t)slot << 15) + 8) >> 8, 0x00ff00);
+    uint64_t bar = VMAPPLE_PCIE_MMIO + 0x400000;
+    uint64_t q = setup_virtio(slot, bar, VMAPPLE_MEM + 0x1200000), buf = VMAPPLE_MEM + 0x1300000;
+    check("one queue", (wr16(bar + 0x16, 0), rd32(bar + 0x12) & 0xffff), 1);
+    memset(ram(buf), 0, 0x3000);
+    put_desc(q, 0, buf, 0x1000, 1 | 2, 1);
+    put_desc(q, 1, buf + 0x1000, 0x1800, 2, 0);
+    offer(q, 0);
+    wr16(bar + 0x3000, 0);
+    uint32_t used_len;
+    memcpy(&used_len, ram(q + 0x2000 + 8), 4);
+    check("rng element used", used_idx(q), 1);
+    check("rng used length", used_len, 0x2800);
+    int zero_words = 0;
+    for (uint32_t i = 0; i < 0x2800; i += 4) zero_words += rd32(buf + i) == 0;
+    check("rng filled both buffers", zero_words < 4, 1);
+    check("rng past the buffer untouched", rd32(buf + 0x2800), 0);
+    check("rng bytes counted", r->bytes, 0x2800);
+    check("rng ISR", rd8(bar + 0x1000), 1);
+}
+
 /* FIPS-197 appendix C.1: AES-128, key 000102..0f, plaintext 00112233..ff. */
 static void test_aes(void) {
     const uint64_t fifo = VMAPPLE_AES_1 + 0x200, src = VMAPPLE_MEM + 0x500000, dst = src + 0x100;
@@ -602,6 +630,7 @@ int main(void) {
     test_virtio_blk(&aux);
     test_virtio_net();
     test_virtio_balloon();
+    test_virtio_rng();
     test_aes();
     /* MSI frame: valid type register, doorbell pends the INTID */
     check("msi type valid", rd32(VMAPPLE_GIC_MSI + 8) >> 31, 1);
