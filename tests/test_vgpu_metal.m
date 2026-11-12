@@ -215,16 +215,15 @@ static void test_pixels(void) {
     key = 0;
     check("snapshot shows the guest's pixels, X made opaque", wait_shot(p, W1, H1, all1), 1);
 
-    /* All of the host buffer changes, but only a flushed rectangle reaches the screen. */
+    /* R11: a BGRX scanout the size of its resource is drawn from the resource's pixels, so a transfer shows with or without a flush. */
     paint1(1);
     check("transfer all", transfer(1, 0, 0, W1, H1, W1 * 4), OK);
     check("flush a part", flush(1, 8, 4, 16, 8), OK);
-    check("only the flushed rectangle is copied", wait_shot(p, W1, H1, only_flushed), 1);
-    usleep(50000);
-    hv_vgpu_metal_snapshot(p, shot, W1, H1);
-    check("and nothing more later", only_flushed(), 1);
+    key = 1;
+    check("a BGRX scanout is read in place", wait_shot(p, W1, H1, all1), 1);
 
-    uint64_t f0 = hv_vgpu_metal_frames(p);
+    uint64_t f0 = 0;
+    for (double end = now() + 2; now() < end && !f0; usleep(2000)) f0 = hv_vgpu_metal_frames(p);
     check("frames presented to the layer", f0 > 0, 1);
     check("drawable is the scanout's size", CGSizeEqualToSize(layer.drawableSize, CGSizeMake(W1, H1)), 1);
 
@@ -242,6 +241,58 @@ static void test_pixels(void) {
         want_bgr[0] = 0x30, want_bgr[1] = 0x20, want_bgr[2] = 0x10;
         check(i ? "A8R8G8B8 shown as BGRA" : "R8G8B8X8 shown as BGRA", wait_shot(p, 32, 16, flat), 1);
     }
+
+    /* Converted formats go through the shadow, where only a flushed rectangle reaches the screen. */
+    for (uint32_t k = 0; k < 32 * 16; k++) memcpy(ram(FB2) + k * 4, (uint8_t[]){0x70, 0x80, 0x90, 0x99}, 4);
+    transfer(2, 0, 0, 32, 16, 32 * 4);
+    check("scanout to resource 2", scanout(2, 32, 16), OK);
+    want_bgr[0] = 0x90, want_bgr[1] = 0x80, want_bgr[2] = 0x70;
+    check("resource 2 shown", wait_shot(p, 32, 16, flat), 1);
+    for (uint32_t k = 0; k < 32 * 16; k++) memcpy(ram(FB2) + k * 4, (uint8_t[]){0x40, 0x50, 0x60, 0x99}, 4);
+    transfer(2, 0, 0, 32, 16, 32 * 4);
+    flush(2, 0, 0, 16, 16); /* the left half */
+    uint8_t half_new[3] = {0x60, 0x50, 0x40}, half_old[3] = {0x90, 0x80, 0x70};
+    int half_ok = 0;
+    for (double end = now() + 2; now() < end && !half_ok; usleep(2000)) {
+        if (hv_vgpu_metal_snapshot(p, shot, 32, 16)) continue;
+        half_ok = 1;
+        for (uint32_t i = 0; i < 32 * 16; i++) half_ok &= !memcmp(shot + i * 4, i % 32 < 16 ? half_new : half_old, 3);
+    }
+    usleep(50000);
+    hv_vgpu_metal_snapshot(p, shot, 32, 16);
+    for (uint32_t i = 0; i < 32 * 16; i++) half_ok &= !memcmp(shot + i * 4, i % 32 < 16 ? half_new : half_old, 3);
+    check("a converted scanout shows only the flushed rectangle", half_ok, 1);
+
+    /* A width whose rows are not 16-byte multiples cannot be a linear texture: the shadow path shows it. */
+    uint8_t *odd = ram(FB3);
+    for (uint32_t k = 0; k < 30 * 16; k++) memcpy(odd + k * 4, (uint8_t[]){0x11, 0x22, 0x33, 0x44}, 4);
+    check("create 30 x 16", create(8, HV_VGPU_B8G8R8X8, 30, 16), OK);
+    attach(8, FB3, 30 * 16 * 4);
+    transfer(8, 0, 0, 30, 16, 30 * 4);
+    check("scanout to a 30 x 16", scanout(8, 30, 16), OK);
+    want_bgr[0] = 0x11, want_bgr[1] = 0x22, want_bgr[2] = 0x33;
+    int odd_ok = 0;
+    for (double end = now() + 2; now() < end && !odd_ok; usleep(2000)) {
+        if (hv_vgpu_metal_snapshot(p, shot, 30, 16)) continue;
+        odd_ok = 1;
+        for (uint32_t i = 0; i < 30 * 16; i++) odd_ok &= !memcmp(shot + i * 4, want_bgr, 3);
+    }
+    check("a 30 x 16 scanout is shown", odd_ok, 1);
+
+    /* A resource that goes while its pixels are on screen: the GPU's reference keeps them alive. */
+    check("scanout to resource 1 again", scanout(1, W1, H1), OK);
+    key = 1;
+    check("shown in place", wait_shot(p, W1, H1, all1), 1);
+    for (int i = 0; i < 20; i++) {
+        hdr(0x102), req[6] = 1;
+        check("unref the scanout", send(0, 32, 0), OK);
+        check("make it again", create(1, HV_VGPU_B8G8R8X8, W1, H1), OK);
+        attach(1, FB1, W1 * H1 * 4);
+        transfer(1, 0, 0, W1, H1, W1 * 4);
+        scanout(1, W1, H1);
+        usleep(3000);
+    }
+    check("after churn: the picture", wait_shot(p, W1, H1, all1), 1);
 
     /* Back to resource 1, with a cursor: 8 x 8 opaque white at the top left of a 64 x 64 image. */
     check("scanout back", scanout(1, W1, H1), OK);

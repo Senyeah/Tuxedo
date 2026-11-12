@@ -101,6 +101,15 @@ static NSString *const shaders = @"#include <metal_stdlib>\n"
     uint8_t *shadow;
     uint32_t shadow_w, shadow_h;
     BOOL shown_once;
+    /* R11: a BGRA or BGRX scanout the size of its resource is drawn from the resource's own pixels, with no shadow and no upload. */
+    BOOL direct;
+    id<MTLBuffer> dbuf; /* wraps the resource's pixels without a copy; its deallocator drops the reference. Under shadow_mu */
+    id<MTLTexture> dtex; /* linear texture over dbuf; work queue only */
+    HvVgpuPixels *dkey;  /* the pixels dbuf wraps; kept alive by dbuf */
+    NSUInteger linear_align;
+    BOOL stats_env; /* HV_VGPU_STATS */
+    BOOL no_direct; /* HV_VGPU_NO_DIRECT: always the shadow path, to compare */
+    _Atomic uint64_t gpu_ns; /* GPU time of presented frames */
     BOOL mode3d; /* the scanout is a 3D resource: surf3d, not shadow */
     uint32_t res3d, rect3d_x, rect3d_y;
     IOSurfaceRef surf3d;
@@ -110,9 +119,17 @@ static NSString *const shaders = @"#include <metal_stdlib>\n"
     uint8_t *drawn;
     uint32_t drawn_w, drawn_h;
     uint64_t drawn_count;
+    HvVgpuStats stats; /* work queue only; read through hv_vgpu_metal_stats */
 }
 - (void)kick;
 @end
+
+static void print_stats(const HvVgpuStats *s) {
+    fprintf(stderr, "hengevm: vgpu-stats pulls=%llu pull_wait_us=%.0f pull_hold_us=%.0f pull_hold_max_us=%.0f pull_mb=%.1f uploads=%llu upload_us=%.0f upload_max_us=%.0f upload_mb=%.1f\n",
+            (unsigned long long)s->pulls, s->pulls ? s->pull_wait_ns / 1e3 / s->pulls : 0, s->pulls ? s->pull_hold_ns / 1e3 / s->pulls : 0,
+            s->pull_hold_max_ns / 1e3, s->pull_bytes / 1e6, (unsigned long long)s->uploads, s->uploads ? s->upload_ns / 1e3 / s->uploads : 0,
+            s->upload_max_ns / 1e3, s->upload_bytes / 1e6);
+}
 
 static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; }
 
@@ -137,7 +154,9 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
 /* The changed part of the scanout and the cursor, from the device into the shadow copy. */
 - (void)pull {
     HvVirtioGpu *d = g;
+    uint64_t t_wait = now_ns();
     pthread_mutex_lock(&d->mu);
+    uint64_t t_held = now_ns(), conv_bytes = 0;
     HvVgpuRect dirty = d->dirty;
     BOOL had = d->dirty_set;
     d->dirty_set = 0;
@@ -151,9 +170,34 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
         double k = sqrt((double)SHOW_MAX_PIXELS / ((double)SW * SH));
         W = (uint32_t)fmax(1, floor(SW * k)), H = (uint32_t)fmax(1, floor(SH * k));
     }
+    BOOL can_direct = !no_direct && !r3 && r && r->buf && (r->format == HV_VGPU_B8G8R8A8 || r->format == HV_VGPU_B8G8R8X8) && s.x == 0 && s.y == 0 &&
+                      s.width == r->width && s.height == r->height && W == SW && H == SH && linear_align && (r->width * 4ull) % linear_align == 0;
     pthread_mutex_lock(&shadow_mu);
     if (!r3) mode3d = NO;
-    if (r3) {
+    if (can_direct && (!dbuf || dkey != r->buf)) { /* a new resource: wrap it. Rare, so under the device lock */
+        HvVgpuPixels *key = hv_vgpu_pixels_retain(r->buf);
+        id<MTLBuffer> nb = [device newBufferWithBytesNoCopy:hv_vgpu_pixels_data(key) length:hv_vgpu_pixels_len(key)
+                                                    options:MTLResourceStorageModeShared
+                                                deallocator:^(void *p, NSUInteger n) { (void)p, (void)n; hv_vgpu_pixels_release(key); }];
+        MTLTextureDescriptor *t = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:r->width height:r->height mipmapped:NO];
+        t.usage = MTLTextureUsageShaderRead;
+        t.storageMode = MTLStorageModeShared;
+        id<MTLTexture> nt = nb ? [nb newTextureWithDescriptor:t offset:0 bytesPerRow:(NSUInteger)r->width * 4] : nil;
+        if (nt) {
+            dbuf = nb, dtex = nt, dkey = key;
+        } else {
+            if (!nb) hv_vgpu_pixels_release(key); /* nothing took the reference */
+            can_direct = NO;
+        }
+    }
+    if (!can_direct && direct) direct = NO, dbuf = nil, dtex = nil, dkey = NULL; /* the GPU finished with them: present waits for it */
+    if (can_direct) {
+        if (!direct) { /* the shadow and its texture are dead weight now */
+            free(shadow);
+            shadow = NULL, shadow_w = shadow_h = 0, pending_set = NO, tex = nil;
+        }
+        direct = YES, src_w = SW, src_h = SH, shown_once = YES;
+    } else if (r3) {
         /* the blit runs below, without the device lock */
     } else if (!shadow || W != shadow_w || H != shadow_h || SW != src_w || SH != src_h) {
         uint8_t *fresh = calloc((size_t)W * H, 4);
@@ -166,7 +210,7 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
             had = NO; /* keep the old picture */
         }
     }
-    if (!r3 && had && src_w == SW && src_h == SH) {
+    if (!r3 && !can_direct && had && src_w == SW && src_h == SH) {
         dirty = clip(dirty, SW, SH);
         if (W != SW || H != SH) { /* nearest pixel; the rectangle grows to whole shadow pixels */
             uint32_t x0 = (uint32_t)((uint64_t)dirty.x * W / SW), y0 = (uint32_t)((uint64_t)dirty.y * H / SH);
@@ -187,6 +231,7 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
             }
         }
         if (r) shown_once = YES;
+        conv_bytes = (uint64_t)dirty.width * dirty.height * 4;
         if (dirty.width && dirty.height) pending = join(pending, pending_set, dirty), pending_set = YES;
     }
     pthread_mutex_unlock(&shadow_mu);
@@ -206,7 +251,12 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
         }
         cursor_stale = YES;
     }
+    uint64_t t_done = now_ns();
     pthread_mutex_unlock(&d->mu);
+    stats.pulls++, stats.pull_wait_ns += t_held - t_wait, stats.pull_hold_ns += t_done - t_held;
+    if (t_done - t_held > stats.pull_hold_max_ns) stats.pull_hold_max_ns = t_done - t_held;
+    stats.pull_bytes += conv_bytes;
+    if (stats_env && stats.pulls % 64 == 0) print_stats(&stats); /* the VM may exit without a destroy */
     if (r3) [self pull3d:r3 rect:s3 changed:had];
 }
 
@@ -293,12 +343,16 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
     if (mode3d) {
         if (!tex3d) return;
         W = (uint32_t)tex3d.width, H = (uint32_t)tex3d.height;
+    } else if (direct) {
+        if (!dtex) return;
+        W = (uint32_t)dtex.width, H = (uint32_t)dtex.height;
     } else if (!shadow || !W || !H) {
         return;
     }
     [self prepare:target];
-    id<MTLTexture> shown = mode3d ? tex3d : tex;
-    if (!mode3d && (!tex || tex.width != W || tex.height != H)) {
+    BOOL shadowed = !mode3d && !direct;
+    id<MTLTexture> shown = mode3d ? tex3d : direct ? dtex : tex;
+    if (shadowed && (!tex || tex.width != W || tex.height != H)) {
         MTLTextureDescriptor *t = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:W height:H mipmapped:NO];
         t.usage = MTLTextureUsageShaderRead;
         t.storageMode = MTLStorageModeShared;
@@ -307,11 +361,16 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
         pending = (HvVgpuRect){0, 0, W, H}, pending_set = YES;
         shown = tex;
     }
-    if (!mode3d && pending_set) {
+    if (shadowed && pending_set) {
         HvVgpuRect u = clip(pending, W, H);
-        if (u.width && u.height)
+        if (u.width && u.height) {
+            uint64_t t0 = now_ns();
             [tex replaceRegion:MTLRegionMake2D(u.x, u.y, u.width, u.height) mipmapLevel:0
                      withBytes:shadow + ((size_t)u.y * W + u.x) * 4 bytesPerRow:(NSUInteger)W * 4];
+            uint64_t dt = now_ns() - t0;
+            stats.uploads++, stats.upload_ns += dt, stats.upload_bytes += (uint64_t)u.width * u.height * 4;
+            if (dt > stats.upload_max_ns) stats.upload_max_ns = dt;
+        }
         pending_set = NO;
     }
     if (cursor_stale) {
@@ -388,6 +447,9 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
                 dispatch_group_leave(self->completions);
             }];
         }
+        [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
+            atomic_fetch_add(&self->gpu_ns, (uint64_t)((done.GPUEndTime - done.GPUStartTime) * 1e9));
+        }];
         [cb presentDrawable:drawable];
         [cb commit];
         last_cb = cb;
@@ -454,6 +516,9 @@ HvVgpuMetal *hv_vgpu_metal_create(HvVirtioGpu *g) {
             fprintf(stderr, "hengevm: vgpu-metal: pipelines: %s\n", err ? err.localizedDescription.UTF8String : "no memory");
             return NULL;
         }
+        p->stats_env = getenv("HV_VGPU_STATS") != NULL;
+        p->no_direct = getenv("HV_VGPU_NO_DIRECT") != NULL;
+        p->linear_align = [dev minimumLinearTextureAlignmentForPixelFormat:MTLPixelFormatBGRA8Unorm];
         p->work = dispatch_queue_create("hengevm.vgpu", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
         p->completions = dispatch_group_create();
         p->layer_lock = OS_UNFAIR_LOCK_INIT;
@@ -489,6 +554,7 @@ void hv_vgpu_metal_destroy(HvVgpuMetal *m) {
             p->g = NULL;
         });
         dispatch_group_wait(p->completions, DISPATCH_TIME_FOREVER);
+        if (getenv("HV_VGPU_STATS")) print_stats(&p->stats);
     }
 }
 
@@ -502,18 +568,27 @@ void hv_vgpu_metal_set_layer(HvVgpuMetal *m, void *layer) {
     [p kick]; /* a new target needs a frame even if the guest is idle */
 }
 
+void hv_vgpu_metal_stats(HvVgpuMetal *m, HvVgpuStats *out) {
+    memset(out, 0, sizeof *out);
+    if (!m) return;
+    HvVgpuPresenter *p = (__bridge HvVgpuPresenter *)m;
+    dispatch_sync(p->work, ^{ *out = p->stats; });
+    out->gpu_ns = atomic_load(&p->gpu_ns);
+}
+
 uint64_t hv_vgpu_metal_frames(HvVgpuMetal *m) { return m ? atomic_load(&((__bridge HvVgpuPresenter *)m)->frames) : 0; }
 
 int hv_vgpu_metal_snapshot(HvVgpuMetal *m, uint8_t *bgra, uint32_t w, uint32_t h) {
     if (!m || !bgra || !w || !h) return -1;
     HvVgpuPresenter *p = (__bridge HvVgpuPresenter *)m;
     pthread_mutex_lock(&p->shadow_mu);
-    if ((!p->mode3d && !p->shadow) || !p->shown_once) {
+    if ((!p->mode3d && !p->shadow && !p->direct) || !p->shown_once) {
         pthread_mutex_unlock(&p->shadow_mu);
         return -1;
     }
     uint32_t W = p->shadow_w, H = p->shadow_h;
     const uint8_t *base = p->shadow;
+    if (!p->mode3d && p->direct) W = p->src_w, H = p->src_h, base = p->dbuf.contents; /* the guest's pixels, as they are now */
     size_t stride = (size_t)W * 4;
     IOSurfaceRef surf = p->mode3d ? p->surf3d : NULL;
     if (p->mode3d && !surf) {

@@ -46,10 +46,19 @@ typedef struct HvVgpuPiece {
     uint32_t len;
 } HvVgpuPiece;
 
+/* Page-aligned, zeroed pixel memory with a count: the presenter's Metal buffer wraps it without a copy and may outlive the resource. */
+typedef struct HvVgpuPixels HvVgpuPixels;
+HvVgpuPixels *hv_vgpu_pixels_retain(HvVgpuPixels *p);
+void hv_vgpu_pixels_release(HvVgpuPixels *p);
+/* The memory (page aligned) and its length (a page multiple). */
+void *hv_vgpu_pixels_data(const HvVgpuPixels *p);
+size_t hv_vgpu_pixels_len(const HvVgpuPixels *p);
+
 typedef struct HvVgpuResource {
     uint32_t id; /* 0: a free slot */
     uint32_t format, width, height;
     uint8_t *pixels; /* width * 4 bytes a row */
+    HvVgpuPixels *buf; /* owns pixels; NULL when pixels is plain malloc memory (tests) */
     HvVgpuPiece *backing;
     uint32_t npieces;
     uint64_t backing_len;
