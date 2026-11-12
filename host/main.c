@@ -862,9 +862,19 @@ static void tty_restore(void) {
     if (tio_saved) tcsetattr(0, TCSANOW, &saved_tio), tio_saved = 0;
 }
 
-/* tcsetattr is async-signal-safe; the signal then runs its default action. */
-static void on_fatal(int sig) {
+static const int fatal_sigs[] = {SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGFPE, SIGQUIT};
+static struct sigaction prior_fatal[sizeof fatal_sigs / sizeof *fatal_sigs];
+
+/* Restores the tty and runs the handler before ours (vm.c's crash report), then the default action.
+   macOS gives a sent SIGSEGV a fault's si_code, so a fault cannot be told apart and left to recur. */
+static void on_fatal(int sig, siginfo_t *info, void *ctx) {
     tty_restore();
+    for (size_t i = 0; i < sizeof fatal_sigs / sizeof *fatal_sigs; i++) {
+        struct sigaction *p = &prior_fatal[i];
+        if (fatal_sigs[i] != sig) continue;
+        if (p->sa_flags & SA_SIGINFO) p->sa_sigaction(sig, info, ctx);
+        else if (p->sa_handler != SIG_DFL && p->sa_handler != SIG_IGN) p->sa_handler(sig);
+    }
     signal(sig, SIG_DFL);
     raise(sig);
 }
@@ -877,8 +887,9 @@ static void tty_raw(void) {
     if (tcsetattr(0, TCSANOW, &t) != 0) return;
     tio_saved = 1;
     atexit(tty_restore);
-    static const int sigs[] = {SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGFPE, SIGQUIT};
-    for (size_t i = 0; i < sizeof sigs / sizeof *sigs; i++) signal(sigs[i], on_fatal);
+    struct sigaction sa = {.sa_flags = SA_SIGINFO | SA_ONSTACK};
+    sa.sa_sigaction = on_fatal;
+    for (size_t i = 0; i < sizeof fatal_sigs / sizeof *fatal_sigs; i++) sigaction(fatal_sigs[i], &sa, &prior_fatal[i]);
 }
 
 static void console_out(void *opaque, uint8_t c) {
@@ -940,21 +951,34 @@ static void apply_machine_opts(void) {
     m.chain = boot_opts.chain_ok;
 }
 
+static void virt_exit(int r);
+
+/* Off CPU 0's thread, so hv_vm_destroy can join it. */
+static void *rebuild_thread(void *unused) {
+    (void)unused;
+    char err[256];
+    hv_vm_destroy();
+    if (hv_vm_create(&boot_cfg, err, sizeof err) != 0) {
+        fprintf(stderr, "hengevm: %s\n", err);
+        finish("cannot rebuild the machine", EXIT_FAULT);
+    }
+    hv_vm_console_set_output(console_out, NULL); /* hv_vm_destroy cleared it */
+    apply_machine_opts();
+    if (quit_req || interrupted) finish(quit_req ? "quit" : "interrupted", 0); /* a stop while no machine ran */
+    if (hv_vm_start(1, virt_exit) != 0) finish("cannot start the machine", EXIT_FAULT);
+    return NULL;
+}
+
 static void virt_exit(int r) {
     HvCpu *c0 = hv_vm_cpu(0);
     int halted = c0 ? c0->halted : HV_HALT_NONE;
     const char *why;
     int status = stop_status(r, halted, &why);
     if (halted == HV_HALT_RESET && !no_reboot && !quit_req && !interrupted) {
-        char err[256];
         fprintf(stderr, "hengevm: guest restart: building the machine again\n");
-        hv_vm_destroy();
-        if (hv_vm_create(&boot_cfg, err, sizeof err) != 0) {
-            fprintf(stderr, "hengevm: %s\n", err);
-            finish("cannot rebuild the machine", EXIT_FAULT);
-        }
-        apply_machine_opts();
-        if (hv_vm_start(1, virt_exit) != 0) finish("cannot start the machine", EXIT_FAULT);
+        pthread_t t;
+        if (pthread_create(&t, NULL, rebuild_thread, NULL) != 0) finish("cannot rebuild the machine", EXIT_FAULT);
+        pthread_detach(t);
         return;
     }
     finish(why, status);

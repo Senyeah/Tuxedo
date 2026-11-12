@@ -6,15 +6,19 @@
 """Guest smoke test over the serial console.
 
 --direct: direct kernel boot (Image and initrd.img) to the (initramfs) prompt,
-then cat /proc/cpuinfo, uname -m and poweroff -f, which must end hengevm with
-status 0. --qemu runs the same checks on QEMU's virt machine (hvf), and
---qemu --henge-dtb gives QEMU Henge's device tree (E8 step 1).
+then cat /proc/cpuinfo, uname -m, reboot -f to the prompt again, and poweroff -f,
+which must end hengevm with status 0. With --no-reboot, reboot -f must end it
+with status 3 instead. --fatal sends hengevm SIGILL at the prompt instead: its
+crash report must still reach stderr with the terminal in raw mode. --qemu runs
+the same checks on QEMU's virt machine (hvf), and --qemu --henge-dtb gives QEMU
+Henge's device tree (E8 step 1).
 Exit 1 on any failed check; the last 200 lines of console output go to stderr.
 """
 import argparse
 import collections
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -27,7 +31,8 @@ QEMU = os.environ.get("QEMU", "/opt/homebrew/bin/qemu-system-aarch64")
 APPEND = "console=ttyAMA0 earlycon=pl011,0x9000000 break=top"
 PROMPT = r"\(initramfs\) "
 
-# Seconds: three times the slowest of five runs (prompt 2.8 s), at least 5 s per step (E8 findings).
+# Seconds: three times the slowest of five runs (prompt 2.8 s). Commands (0.1 s) and poweroff (0.2 s)
+# get a 5 s floor instead, as three times those is inside scheduling noise (E8 findings).
 LIMITS = {"prompt": 9, "command": 5, "poweroff": 5}
 
 
@@ -69,8 +74,8 @@ def command(args, kernel, initrd, tmp):
     """argv for the machine under test. hengevm's stderr goes to a file so the console stays clean."""
     if args.qemu:
         argv = [QEMU, "-M", "virt,gic-version=3,highmem=off", "-accel", "hvf", "-cpu", "host",
-                "-smp", str(args.cpus), "-m", str(args.ram), "-nographic", "-no-reboot",
-                "-kernel", kernel, "-initrd", initrd]
+                "-smp", str(args.cpus), "-m", str(args.ram), "-nographic",
+                "-kernel", kernel, "-initrd", initrd] + (["-no-reboot"] if args.no_reboot else [])
         if not args.henge_dtb:
             return argv + ["-append", APPEND]
         # Henge's tree carries the command line; QEMU adds only the initrd range.
@@ -81,7 +86,9 @@ def command(args, kernel, initrd, tmp):
             raise Fail(f"hengevm --dump-dtb failed: {r.stderr.strip()}")
         return argv + ["-dtb", dtb]
     argv = [args.hengevm, "--board", "virt", "--kernel", kernel, "--initrd", initrd, "--append", APPEND,
-            "--ram", str(args.ram), "--cpus", str(args.cpus), "--log", str(args.log), "--no-reboot"]
+            "--ram", str(args.ram), "--cpus", str(args.cpus), "--log", str(args.log)]
+    if args.no_reboot:
+        argv.append("--no-reboot")
     if args.phone:
         argv.append("--phone")
     return ["/bin/sh", "-c", 'exec "$@" 2>"$0"', os.path.join(tmp, "stderr")] + argv
@@ -104,6 +111,21 @@ def run_cmd(p, cmd, limit):
     return p.before.replace("\r", "")
 
 
+def stopped(p, status_want, line, stderr, args):
+    """The machine has ended: check its exit status and hengevm's stop line."""
+    p.close()
+    status = p.exitstatus if p.exitstatus is not None else 128 + (p.signalstatus or 0)
+    if status != status_want:
+        raise Fail(f"exit status {status}, expected {status_want}")
+    if not args.qemu and f"hengevm: stopped: {line}" not in stderr():
+        raise Fail(f"no 'hengevm: stopped: {line}' line on stderr")
+
+
+def boot(p):
+    expect(p, "Kernel command line: " + re.escape(APPEND) + r"\r*\n", LIMITS["prompt"], "boot")
+    expect(p, PROMPT, LIMITS["prompt"], "boot")
+
+
 def direct(args, times):
     d = args.linux_dir or linux_dir()
     kernel, initrd = os.path.join(d, "Image"), os.path.join(d, "initrd.img")
@@ -118,9 +140,17 @@ def direct(args, times):
         p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200))
         p.logfile_read = tail
         try:
-            expect(p, "Kernel command line: " + re.escape(APPEND) + r"\r*\n", LIMITS["prompt"], "boot")
-            expect(p, PROMPT, LIMITS["prompt"], "boot")
+            boot(p)
             times["prompt"] = time.monotonic() - t0
+            if args.fatal:
+                os.kill(p.pid, signal.SIGILL)
+                expect(p, pexpect.EOF, LIMITS["poweroff"], "SIGILL")
+                p.close()
+                if p.signalstatus != signal.SIGILL:
+                    raise Fail(f"exit status {p.exitstatus}, signal {p.signalstatus}; expected death by SIGILL")
+                if "hengevm: signal 4 in translated code" not in stderr():
+                    raise Fail("no crash report from vm.c's handler on stderr")
+                return
             t = time.monotonic()
             info = run_cmd(p, "cat /proc/cpuinfo", LIMITS["command"])
             n = len(re.findall(r"^processor\s*:", info, re.M))
@@ -133,15 +163,22 @@ def direct(args, times):
                 raise Fail(f"uname -m printed {arch!r}")
             times["commands"] = time.monotonic() - t
             t = time.monotonic()
+            p.sendline("reboot -f")
+            if args.no_reboot:
+                expect(p, pexpect.EOF, LIMITS["poweroff"], "reboot")
+                times["reboot"] = time.monotonic() - t
+                stopped(p, 0 if args.qemu else 3, "guest restart", stderr, args)
+                return
+            # The second boot must keep the console: the prompt has no newline to flush it.
+            boot(p)
+            times["restart"] = time.monotonic() - t
+            if run_cmd(p, "uname -m", LIMITS["command"]).strip() != "aarch64":
+                raise Fail("uname -m after the restart")
+            t = time.monotonic()
             p.sendline("poweroff -f")
             expect(p, pexpect.EOF, LIMITS["poweroff"], "poweroff")
-            p.close()
             times["poweroff"] = time.monotonic() - t
-            status = p.exitstatus if p.exitstatus is not None else 128 + (p.signalstatus or 0)
-            if status != 0:
-                raise Fail(f"exit status {status} after poweroff, expected 0")
-            if not args.qemu and "hengevm: stopped: guest shutdown" not in stderr():
-                raise Fail("no 'hengevm: stopped: guest shutdown' line on stderr")
+            stopped(p, 0, "guest shutdown", stderr, args)
         except Fail:
             if p.isalive():
                 p.terminate(force=True)
@@ -160,6 +197,8 @@ def main():
     ap.add_argument("--cpus", type=int, default=1)
     ap.add_argument("--ram", type=int, default=2048, help="MB")
     ap.add_argument("--phone", action="store_true", help="pass --phone to hengevm")
+    ap.add_argument("--no-reboot", action="store_true", help="reboot -f must stop the machine (hengevm: status 3)")
+    ap.add_argument("--fatal", action="store_true", help="SIGILL at the prompt must give vm.c's crash report")
     ap.add_argument("--log", type=int, default=1, help="hengevm --log level")
     ap.add_argument("--runs", type=int, default=1, help="boot this many times; all must pass")
     ap.add_argument("--linux-dir", help="directory with Image and initrd.img")
@@ -169,6 +208,8 @@ def main():
         ap.error("only --direct exists so far")
     if args.henge_dtb and not args.qemu:
         ap.error("--henge-dtb needs --qemu")
+    if args.fatal and args.qemu:
+        ap.error("--fatal is for hengevm")
     worst = {}
     for i in range(args.runs):
         times = {}

@@ -114,6 +114,8 @@ test-linux-dtb: $(B)/hengevm
 # Direct kernel boot to the initramfs prompt (needs build/linux/Image and initrd.img, or HENGE_LINUX_OUT, and uv).
 test-linux-direct: $(B)/hengevm
 	uv run tools/linux/smoke.py --direct $(SMOKE_ARGS)
+	uv run tools/linux/smoke.py --direct --no-reboot $(SMOKE_ARGS)
+	uv run tools/linux/smoke.py --direct --fatal $(SMOKE_ARGS)
 .PHONY: test-linux-direct
 
 test-vm-lifecycle: $(B)/test_vm_lifecycle
