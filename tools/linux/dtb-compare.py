@@ -4,7 +4,7 @@
 # ///
 """Compares Henge's virt device tree with QEMU's, node by node.
 
-QEMU: -M virt,gic-version=3,highmem=off,dumpdtb. Henge: build/virt-dtb (hv_virt_build_fdt).
+QEMU: -M virt,gic-version=3,highmem=off,dumpdtb. Henge: build/hengevm --dump-dtb.
 Exit 1 on any difference that is not in the allow lists below.
 """
 import argparse
@@ -99,10 +99,11 @@ def qemu_dtb(path, ncpus, ram_mb):
 
 
 def henge_dtb(path, ncpus, ram_mb):
-    tool = os.path.join(ROOT, "build", "virt-dtb")
-    r = subprocess.run([tool, str(ncpus), str(ram_mb), path], capture_output=True, text=True)
+    tool = os.path.join(ROOT, "build", "hengevm")
+    cmd = [tool, "--board", "virt", "--dump-dtb", path, "--cpus", str(ncpus), "--ram", str(ram_mb)]
+    r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
-        raise RuntimeError("virt-dtb failed: " + r.stderr.strip())
+        raise RuntimeError("hengevm --dump-dtb failed: " + r.stderr.strip())
 
 
 def fmt(v):
@@ -185,9 +186,9 @@ def main():
     ap.add_argument("--ram-mb", type=int, nargs="+", default=[1024, 4096])
     ap.add_argument("-v", "--verbose", action="store_true", help="list allowed differences")
     args = ap.parse_args()
-    for tool in ("dtc", QEMU, os.path.join(ROOT, "build", "virt-dtb")):
+    for tool in ("dtc", QEMU, os.path.join(ROOT, "build", "hengevm")):
         if not (shutil.which(tool) or os.path.exists(tool)):
-            sys.exit(f"missing tool: {tool} (run make build/virt-dtb)")
+            sys.exit(f"missing tool: {tool} (run make build/hengevm)")
     with tempfile.TemporaryDirectory() as tmp:
         results = [run_case(tmp, c, r, args.verbose) for c in args.cpus for r in args.ram_mb]
     sys.exit(0 if all(results) else 1)

@@ -15,6 +15,7 @@
 #include <stdatomic.h>
 #include <dlfcn.h>
 #include <CommonCrypto/CommonDigest.h>
+#include <termios.h>
 
 #include "dispatch.h"
 #include "exception.h"
@@ -23,6 +24,9 @@
 #include "pvg_lite.h"
 #include "vm.h"
 #include "install.h"
+
+/* Set here because the macro below would take the field name. */
+static void set_board_kind(HvVmConfig *c, int kind) { c->board = kind; }
 
 /* The machine lives in vm.c; these name its parts here. */
 #define m (*hv_vm_machine())
@@ -189,7 +193,7 @@ static void prof_dump(const char *path) {
             HvCpu *c0 = hv_vm_cpu(0);
             HvWalk wv;
             hv_mmu_walk(c0, c0->vbar_el1, HV_ACC_READ, 1, &wv);
-            uint8_t *at = memmem(bd->ram, bd->ram_size, sig, sizeof sig);
+            uint8_t *at = bd ? memmem(bd->ram, bd->ram_size, sig, sizeof sig) : NULL;
             if (at && !wv.fsc) fprintf(f, "kslide %llx\n", (unsigned long long)(c0->vbar_el1 + (0x70000000ull + (uint64_t)(at - bd->ram) - wv.pa) - 0xfffffe002b76de80ull));
         }
         qsort(prof_fn, (size_t)prof_nfn, sizeof prof_fn[0], prof_cmp_fn);
@@ -229,6 +233,7 @@ static void prof_dump(const char *path) {
 /* Walks the pointer to a spot on the screen, watching where the display says
    it is, in small steps as a hand makes: macOS accelerates big ones past the target. */
 static void pointer_to(int x, int y) {
+    if (!hv_vm_board()) return;
     const uint8_t *page = hv_pvg_lite_display_page(board.pvg);
     for (int i = 0; page && i < 1500; i++) {
         uint32_t at = *(const volatile uint32_t *)(page + 0xe00);
@@ -243,6 +248,7 @@ static void pointer_to(int x, int y) {
 }
 
 static void click_here(void) {
+    if (!hv_vm_board()) return;
     hv_virtio_input_send(board.mouse, HV_EV_KEY, HV_BTN_LEFT, 1);
     hv_virtio_input_send(board.mouse, HV_EV_SYN, 0, 0);
     usleep(120000);
@@ -251,6 +257,7 @@ static void click_here(void) {
 }
 
 static void key_event(int code, int down) {
+    if (!hv_vm_board()) return;
     hv_xhci_key_linux(board.usb, (uint16_t)code, down);
     hv_virtio_input_send(board.keyboard, HV_EV_KEY, (uint16_t)code, down);
     hv_virtio_input_send(board.keyboard, HV_EV_SYN, 0, 0);
@@ -527,7 +534,12 @@ static void *input_thread(void *unused) {
         at = ftell(f);
         line[strcspn(line, "\n")] = 0;
         int x, y;
-        if (sscanf(line, "click %d %d", &x, &y) == 2) pointer_to(x, y), click_here();
+        static const char *const mac_only[] = {"btn ", "tp ", "tpclick ", "press", "release", "kdump ", "hooksha ", "find ", "grep ", "grepall ", "vdump ", "page "};
+        int skip = 0;
+        for (size_t k = 0; !hv_vm_board() && k < sizeof mac_only / sizeof *mac_only; k++)
+            if (!strncmp(line, mac_only[k], strlen(mac_only[k]))) skip = 1;
+        if (skip) fprintf(stderr, "hengevm: input: %s: needs the vmapple board\n", line);
+        else if (sscanf(line, "click %d %d", &x, &y) == 2) pointer_to(x, y), click_here();
         else if (sscanf(line, "move %d %d", &x, &y) == 2) pointer_to(x, y);
         else if (sscanf(line, "scroll %d %d", &x, &y) == 2) {
             if (y) hv_vm_mouse_wheel(y);
@@ -762,6 +774,7 @@ static void *watch_thread(void *unused) {
     (void)unused;
     int secs = atoi(getenv("HV_WATCH"));
     time_t start = time(NULL);
+    if (!hv_vm_board()) return NULL;
     {
         HvVmapple *bd = hv_vm_board();
         hv_smc_pages = bd->ram_size >> 14;
@@ -795,6 +808,7 @@ static void *watch_thread(void *unused) {
 /* Debugging: HV_TYPE_AT=seconds types "abc" then, to check input end to end without a window. */
 static void *type_thread(void *unused) {
     (void)unused;
+    if (!hv_vm_board()) return NULL;
     sleep((unsigned)atoi(getenv("HV_TYPE_AT")));
     for (int i = 0; i < 60; i++) { /* shake it: macOS enlarges the pointer, so new glyphs get sent */
         hv_virtio_input_send(board.mouse, HV_EV_REL, HV_REL_X, i & 1 ? 120 : -120);
@@ -833,6 +847,117 @@ static void *type_thread(void *unused) {
                 (unsigned long long)board.usb->delivered, (unsigned long long)board.keyboard->delivered, board.mouse ? (unsigned long long)board.mouse->delivered : 0ull);
     }
     return NULL;
+}
+
+/* The virt board's console and exit status. */
+static struct termios saved_tio;
+static volatile sig_atomic_t tio_saved;
+static volatile sig_atomic_t quit_req;
+static int no_reboot;
+static HvVmConfig boot_cfg;
+static struct { int trace, chain_ok; uint64_t watch, watch_pa; int stats, profile; } boot_opts;
+enum { EXIT_RESTART = 3, EXIT_FAULT = 4 };
+
+static void tty_restore(void) {
+    if (tio_saved) tcsetattr(0, TCSANOW, &saved_tio), tio_saved = 0;
+}
+
+/* tcsetattr is async-signal-safe; the signal then runs its default action. */
+static void on_fatal(int sig) {
+    tty_restore();
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+static void tty_raw(void) {
+    if (!isatty(0) || tcgetattr(0, &saved_tio) != 0) return;
+    struct termios t = saved_tio;
+    cfmakeraw(&t);
+    t.c_oflag |= OPOST; /* keep \n to \r\n on output */
+    if (tcsetattr(0, TCSANOW, &t) != 0) return;
+    tio_saved = 1;
+    atexit(tty_restore);
+    static const int sigs[] = {SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGFPE, SIGQUIT};
+    for (size_t i = 0; i < sizeof sigs / sizeof *sigs; i++) signal(sigs[i], on_fatal);
+}
+
+static void console_out(void *opaque, uint8_t c) {
+    (void)opaque;
+    ssize_t r = write(1, &c, 1);
+    (void)r;
+}
+
+/* Stdin to the guest's UART. Ctrl-A x quits and Ctrl-A Ctrl-A sends one Ctrl-A, as in QEMU. */
+static void *stdin_thread(void *unused) {
+    (void)unused;
+    uint8_t in[256], out[256];
+    int ctrl_a = 0;
+    ssize_t n;
+    while ((n = read(0, in, sizeof in)) > 0) {
+        size_t k = 0;
+        for (ssize_t i = 0; i < n; i++) {
+            uint8_t c = in[i];
+            if (!ctrl_a) {
+                if (c == 1) ctrl_a = 1;
+                else out[k++] = c;
+                continue;
+            }
+            ctrl_a = 0;
+            if (c == 'x' || c == 'X') {
+                if (k) hv_vm_console_input(out, k);
+                quit_req = 1;
+                hv_vm_stop();
+                return NULL;
+            }
+            if (c == 1) out[k++] = 1;
+        }
+        if (k) hv_vm_console_input(out, k);
+    }
+    return NULL;
+}
+
+/* Exit status and reason for how CPU 0 ended. r is the engine's exit reason, halted the HvHaltReason. */
+static int stop_status(int r, int halted, const char **why) {
+    if (quit_req || interrupted) return *why = quit_req ? "quit" : "interrupted", 0;
+    if (halted == HV_HALT_SHUTDOWN) return *why = "guest shutdown", 0;
+    if (halted == HV_HALT_RESET) return *why = "guest restart", EXIT_RESTART;
+    if (halted == HV_HALT_PANIC) return *why = "guest panic", EXIT_FAULT;
+    if (r != HV_EXIT_HALT) return *why = reason_name(r), EXIT_FAULT;
+    return *why = "halted", 0;
+}
+
+static void finish(const char *why, int status) {
+    fprintf(stderr, "hengevm: stopped: %s\n", why);
+    exit(status);
+}
+
+static void apply_machine_opts(void) {
+    m.trace = boot_opts.trace;
+    m.watch_va = boot_opts.watch;
+    m.watch_pa = boot_opts.watch_pa;
+    m.stats_interval = boot_opts.stats; /* set after the machine is made, which clears it */
+    if (boot_opts.profile && !m.prof) m.prof = calloc(HV_PROF_RING, sizeof *m.prof);
+    m.chain = boot_opts.chain_ok;
+}
+
+static void virt_exit(int r) {
+    HvCpu *c0 = hv_vm_cpu(0);
+    int halted = c0 ? c0->halted : HV_HALT_NONE;
+    const char *why;
+    int status = stop_status(r, halted, &why);
+    if (halted == HV_HALT_RESET && !no_reboot && !quit_req && !interrupted) {
+        char err[256];
+        fprintf(stderr, "hengevm: guest restart: building the machine again\n");
+        hv_vm_destroy();
+        if (hv_vm_create(&boot_cfg, err, sizeof err) != 0) {
+            fprintf(stderr, "hengevm: %s\n", err);
+            finish("cannot rebuild the machine", EXIT_FAULT);
+        }
+        apply_machine_opts();
+        if (hv_vm_start(1, virt_exit) != 0) finish("cannot start the machine", EXIT_FAULT);
+        return;
+    }
+    finish(why, status);
 }
 
 static void *cpu_thread(void *unused) {
@@ -890,7 +1015,7 @@ static void *cpu_thread(void *unused) {
         fprintf(stderr, "hengevm: %s %llu bytes at %llx to %s\n", p ? "wrote" : "cannot dump", (unsigned long long)a->dump_len,
                 (unsigned long long)a->dump_pa, a->dump_path);
     }
-    if (getenv("HV_RAM_GREP")) { /* debugging: text lines in guest RAM with any of these words (the kernel's log buffer) */
+    if (getenv("HV_RAM_GREP") && hv_vm_board()) { /* debugging: text lines in guest RAM with any of these words (the kernel's log buffer) */
         HvVmapple *bd = hv_vm_board();
         char words[512];
         snprintf(words, sizeof words, "%s", getenv("HV_RAM_GREP"));
@@ -927,12 +1052,19 @@ static void *cpu_thread(void *unused) {
         }
     }
     hv_vm_flush_disks();
-    exit(0);
+    {
+        const char *why;
+        int status = stop_status(r, cpu.halted, &why);
+        if (!hv_vm_virt()) status = 0; /* the Mac's exit status has always been 0 */
+        finish(why, status);
+    }
     return NULL;
 }
 
 static void usage(void) {
-    fprintf(stderr, "usage: hengevm --rom FILE --disk FILE --aux FILE --ecid N [--seed N] [--ram MB] [--log N] [--trace 1] [--screenshot PNG] [--watch VA] [--stats SECONDS [--profile 1]] [--cpus N] [--window] [--no-pvg] [--no-chain] [--break PC [--break-hits N]] [--dump PA LEN FILE] [--aux-offset BYTES] [--install IPSW]\n");
+    fprintf(stderr, "usage: hengevm --board virt (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N]\n"
+                    "       (virt: Ctrl-A x quits; exit status 0 shutdown, 3 restart with --no-reboot, 4 panic or engine error)\n");
+    fprintf(stderr, "usage: hengevm [--board vmapple] --rom FILE --disk FILE --aux FILE --ecid N [--seed N] [--ram MB] [--log N] [--trace 1] [--screenshot PNG] [--watch VA] [--stats SECONDS [--profile 1]] [--cpus N] [--window] [--no-pvg] [--no-chain] [--break PC [--break-hits N]] [--dump PA LEN FILE] [--aux-offset BYTES] [--install IPSW]\n");
     exit(2);
 }
 
@@ -953,7 +1085,9 @@ static void install_progress(int step, double p, void *user) {
 
 int main(int argc, char **argv) {
     const char *rom = NULL, *disk_path = NULL, *aux_path = NULL;
-    uint64_t seed = 0, ecid = 0, ram_mb = 4096, aux_offset = 16384;
+    uint64_t seed = 0, ecid = 0, ram_mb = 0, aux_offset = 16384;
+    const char *firmware = NULL, *kernel = NULL, *initrd = NULL, *append = NULL, *dump_dtb = NULL;
+    int board_kind = HV_BOARD_VMAPPLE;
     const char *install_ipsw = NULL;
     const char *share_folder = NULL;
     int log = 1, trace = 0, use_pvg = 1, no_chain = 0;
@@ -983,8 +1117,23 @@ int main(int argc, char **argv) {
             no_chain = 1;
             continue;
         }
+        if (!strcmp(argv[i], "--no-reboot")) {
+            no_reboot = 1;
+            continue;
+        }
         if (i + 1 >= argc) usage();
-        if (!strcmp(argv[i], "--rom")) rom = argv[++i];
+        if (!strcmp(argv[i], "--board")) {
+            i++;
+            if (!strcmp(argv[i], "virt")) board_kind = HV_BOARD_VIRT;
+            else if (!strcmp(argv[i], "vmapple")) board_kind = HV_BOARD_VMAPPLE;
+            else usage();
+        }
+        else if (!strcmp(argv[i], "--firmware")) firmware = argv[++i];
+        else if (!strcmp(argv[i], "--kernel")) kernel = argv[++i];
+        else if (!strcmp(argv[i], "--initrd")) initrd = argv[++i];
+        else if (!strcmp(argv[i], "--append")) append = argv[++i];
+        else if (!strcmp(argv[i], "--dump-dtb")) dump_dtb = argv[++i];
+        else if (!strcmp(argv[i], "--rom")) rom = argv[++i];
         else if (!strcmp(argv[i], "--share")) { /* FOLDER: the guest reaches it at http://10.0.2.4/ */
             share_folder = argv[++i];
         }
@@ -1018,12 +1167,35 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--install")) install_ipsw = argv[++i];
         else usage();
     }
-    if (!rom || !disk_path || !aux_path) usage();
+    int virt = board_kind == HV_BOARD_VIRT;
+    if (virt) {
+        const char *bad = NULL;
+        if (!firmware && !kernel && !dump_dtb) bad = "--board virt needs --firmware or --kernel";
+        else if (firmware && kernel) bad = "--firmware and --kernel cannot be used together";
+        else if ((initrd || append) && !kernel && !dump_dtb) bad = "--initrd and --append need --kernel";
+        else if (install_ipsw) bad = "--install is for the vmapple board";
+        if (bad) {
+            fprintf(stderr, "hengevm: %s\n", bad);
+            usage();
+        }
+        use_pvg = 0; /* no display on this board yet */
+        window = 0;
+    } else {
+        if (!rom || !disk_path || !aux_path) usage();
+        if (firmware || kernel || initrd || append || dump_dtb || no_reboot) {
+            fprintf(stderr, "hengevm: --firmware, --kernel, --initrd, --append, --dump-dtb and --no-reboot need --board virt\n");
+            usage();
+        }
+    }
+    if (!ram_mb) ram_mb = virt ? 2048 : 4096;
     setvbuf(stderr, NULL, _IONBF, 0);
 
-    HvVmConfig vc = {.rom = rom, .disk = disk_path, .aux = aux_path, .aux_offset = aux_offset, .ecid = ecid, .seed = seed,
-                     .ram_mb = ram_mb, .ncpus = ncpus, .log = log, .no_net = getenv("HV_NO_NET") != NULL,
-                     .installer = install_ipsw != NULL};
+    HvVmConfig vc = {.rom = virt ? (dump_dtb ? NULL : firmware) : rom, .disk = disk_path, .aux = aux_path,
+                     .kernel = dump_dtb ? NULL : kernel, .initrd = initrd, .cmdline = append,
+                     .aux_offset = aux_offset, .ecid = ecid, .seed = seed,
+                     .ram_mb = ram_mb, .ncpus = ncpus, .log = log, .no_net = dump_dtb || getenv("HV_NO_NET") != NULL,
+                     .no_sound = dump_dtb != NULL, .installer = install_ipsw != NULL};
+    set_board_kind(&vc, board_kind);
     if (getenv("HV_JIT_MB")) vc.jit_bytes = (size_t)atoi(getenv("HV_JIT_MB")) << 20; /* debugging: a small region flushes often */
     hv_prof_register = hv_prof_register_thread;
     char err[256];
@@ -1036,14 +1208,29 @@ int main(int argc, char **argv) {
         fprintf(stderr, "hengevm: %s\n", err);
         return 1;
     }
-    m.trace = trace;
-    m.watch_va = watch;
-    m.watch_pa = watch_pa;
-    m.stats_interval = stats; /* set after the machine is made, which clears it */
-    if (profile) m.prof = calloc(HV_PROF_RING, sizeof *m.prof);
-    m.chain = !no_chain && brk == ~0ull; /* breakpoints need every block to come back */
+    if (dump_dtb) { /* the tree for this board, with no firmware or kernel placed */
+        uint32_t size = 0;
+        uint8_t *blob = hv_virt_build_fdt(hv_vm_virt(), append, 0, 0, &size);
+        FILE *df = blob ? fopen(dump_dtb, "wb") : NULL;
+        int ok = df && fwrite(blob, 1, size, df) == size;
+        if (df && fclose(df) != 0) ok = 0;
+        if (!ok) fprintf(stderr, "hengevm: cannot write %s\n", dump_dtb);
+        free(blob);
+        hv_vm_destroy();
+        return ok ? 0 : 1;
+    }
+    boot_cfg = vc;
+    boot_opts.trace = trace, boot_opts.watch = watch, boot_opts.watch_pa = watch_pa;
+    boot_opts.stats = stats, boot_opts.profile = profile;
+    boot_opts.chain_ok = !no_chain && brk == ~0ull; /* breakpoints need every block to come back */
+    apply_machine_opts();
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
+    if (virt) {
+        signal(SIGHUP, on_signal);
+        hv_vm_console_set_output(console_out, NULL);
+        tty_raw();
+    }
     if (install_ipsw) {
         char work[1024];
         snprintf(work, sizeof work, "%s.restore", disk_path);
@@ -1059,19 +1246,30 @@ int main(int argc, char **argv) {
         signal(SIGTERM, on_signal);
     }
     int pvg_on = 0;
-    if (use_pvg) {
+    if (use_pvg && !virt) {
         if (hv_pvg_attach(&board, screenshot) != 0) fprintf(stderr, "hengevm: ParavirtualizedGraphics device unavailable; graphics stays inert\n");
         else pvg_on = 1;
     }
     if (pvg_on) hv_vm_set_poll(hv_pvg_poll);
     run_args = (RunArgs){brk, brk_hits, dump_pa, dump_len, dump_path};
     /* The CPU runs on its own thread: the graphics framework needs the main queue. */
-    hv_vm_start(0, NULL); /* the other CPUs and the kicker; CPU 0 is cpu_thread, for --break */
     pthread_t t;
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setstacksize(&attr, 8u << 20);
-    pthread_create(&t, &attr, cpu_thread, NULL);
+    if (virt && brk == ~0ull && !dump_path) {
+        /* hv_vm_start runs CPU 0 and rebuilds the machine on a restart request. */
+        if (hv_vm_start(1, virt_exit) != 0) {
+            tty_restore();
+            fprintf(stderr, "hengevm: cannot start the machine\n");
+            return 1;
+        }
+        pthread_create(&t, NULL, stdin_thread, NULL);
+    } else {
+        hv_vm_start(0, NULL); /* the other CPUs and the kicker; CPU 0 is cpu_thread, for --break */
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, 8u << 20);
+        pthread_create(&t, &attr, cpu_thread, NULL);
+        if (virt) pthread_create(&t, NULL, stdin_thread, NULL);
+    }
     if (profile) pthread_create(&t, NULL, profile_thread, NULL);
     if (getenv("HV_CLICKS")) {
         pthread_t cl;
