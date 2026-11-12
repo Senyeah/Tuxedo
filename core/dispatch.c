@@ -46,9 +46,7 @@ void hv_flush_blocks(HvMachine *m) {
     if (poison < 0) poison = getenv("HV_JIT_POISON") != NULL;
     m->gen_checks = poison;
     if (poison) {
-        size_t bytes = (size_t)m->jit.capacity * 4;
-        uint32_t *rw = (uint32_t *)((uint8_t *)m->jit.base + m->jit.rw_diff);
-        for (size_t i = 0; i < bytes / 4; i++) rw[i] = 0;
+        hv_jit_zero(&m->jit);
         hv_jit_finish(&m->jit, m->jit.base, m->jit.capacity);
     }
 }

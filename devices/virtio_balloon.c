@@ -112,6 +112,16 @@ static void config_write(HvVirtio *v, uint32_t off, uint64_t val, unsigned size)
     }
 }
 
+/* The driver reset the device: the new driver starts with an empty balloon and reads num_pages again. */
+static void device_reset(HvVirtio *v) {
+    HvVirtioBalloon *b = v->dev;
+    if (!b) return;
+    memset(v->config + CFG_NUM_PAGES, 0, 8);
+    b->applied = 0; /* the next poll tells the new driver the target */
+    if (b->ram_fd < 0 && b->given_back > b->taken_back) madvise(b->ram, b->ram_size, MADV_FREE_REUSE);
+    b->taken_back = b->given_back;
+}
+
 HvVirtioBalloon *hv_virtio_balloon_create(HvMachine *m, HvPcie *bus, uint8_t *ram, uint64_t ram_pa, uint64_t ram_size, int ram_fd) {
     HvVirtioBalloon *b = calloc(1, sizeof *b);
     HvVirtio *v = &b->vio;
@@ -119,6 +129,7 @@ HvVirtioBalloon *hv_virtio_balloon_create(HvMachine *m, HvPcie *bus, uint8_t *ra
     v->dev = b;
     v->notify = notify;
     v->config_write = config_write;
+    v->reset = device_reset;
     v->config_len = 8;
     b->ram = ram, b->ram_pa = ram_pa, b->ram_size = ram_size, b->ram_fd = ram_fd;
     hv_pcie_attach(bus, &v->pci);

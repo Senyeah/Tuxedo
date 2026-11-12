@@ -32,6 +32,7 @@ typedef struct HvVirtioInput {
     pthread_mutex_t mu;
     struct { uint16_t type, code; uint32_t value; } ring[HV_VINPUT_RING];
     uint32_t head, tail; /* under mu */
+    int driver_up;       /* a driver took events since the last reset (under mu) */
     uint64_t delivered, dropped;
 } HvVirtioInput;
 

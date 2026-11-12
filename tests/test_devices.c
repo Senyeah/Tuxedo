@@ -478,6 +478,198 @@ static void test_virtio_balloon(void) {
     check("anonymous: madvise did not fail", a->failed, 0);
 }
 
+
+/* A driver reset (status 0) and a new probe, as in a re-probe or a handoff to another driver: no device may keep state of the old driver. */
+static uint64_t reprobe(int slot, uint64_t bar, uint64_t ring) { return setup_virtio(slot, bar, ring); }
+
+static void test_reset_blk(void) {
+    int slot = (int)find_slot(0x106b, 0x1a00, 0);
+    if (slot < 0 || slot >= 32) return;
+    HvVirtioBlk *b = board.aux_blk;
+    uint64_t bar = VMAPPLE_PCIE_MMIO + 0x100000, ring = VMAPPLE_MEM + 0x100000;
+    uint64_t hdr = VMAPPLE_MEM + 0x2000000, data = hdr + 0x1000, status = hdr + 0x3000;
+    reprobe(slot, bar, ring);
+    uint32_t h[4] = {0, 0, 1, 0};
+    memcpy(ram(hdr), h, 16);
+    put_desc(ring, 0, hdr, 16, 1, 1);
+    put_desc(ring, 1, data, 512, 1 | 2, 2);
+    put_desc(ring, 2, status, 1, 2, 0);
+    offer(ring, 0);
+    wr16(bar + 0x3000, 0);
+    while (__atomic_load_n(&b->completed, __ATOMIC_ACQUIRE) != b->submitted) usleep(100); /* done, not yet published */
+    uint64_t requests_before = b->requests;
+    ring = reprobe(slot, bar, ring);
+    hv_virtio_blk_poll(b);
+    check("reset: the old driver's completion is not pushed to the new queue", used_idx(ring), 0);
+    check("reset: nothing left unpublished", b->published, b->submitted);
+    check("reset: the old completion is not counted", b->requests, requests_before);
+    memset(ram(status), 0xff, 1);
+    put_desc(ring, 0, hdr, 16, 1, 1);
+    put_desc(ring, 1, data, 512, 1 | 2, 2);
+    put_desc(ring, 2, status, 1, 2, 0);
+    offer(ring, 0);
+    wr16(bar + 0x3000, 0);
+    hv_virtio_blk_drain(b);
+    check("reset: a new request completes", used_idx(ring), 1);
+    check("reset: and succeeds", ram(status)[0], 0);
+    check("reset: one request counted", b->requests, requests_before + 1);
+    /* Reset with requests still in flight: it waits for them, and none of their completions survives. */
+    for (int i = 0; i < 50; i++) {
+        uint64_t before = b->requests;
+        ring = reprobe(slot, bar, ring);
+        put_desc(ring, 0, hdr, 16, 1, 1);
+        put_desc(ring, 1, data, 512, 1 | 2, 2);
+        put_desc(ring, 2, status, 1, 2, 0);
+        offer(ring, 0);
+        wr16(bar + 0x3000, 0);
+        ring = reprobe(slot, bar, ring); /* no wait: the worker may still be on it */
+        hv_virtio_blk_poll(b);
+        check("reset: in flight, nothing pushed to the new queue", used_idx(ring), 0);
+        check("reset: in flight, nothing left unpublished", b->published, b->submitted);
+        check("reset: in flight, not counted", b->requests, before);
+    }
+    rd8(bar + 0x1000);
+}
+
+static void test_reset_net_rng(void) {
+    int slot = (int)find_slot(0x1af4, 0x1041, 0);
+    if (slot < 0 || slot >= 32) return;
+    uint64_t bar = VMAPPLE_PCIE_MMIO + 0x200000, buf = VMAPPLE_MEM + 0x2100000;
+    uint64_t ring = reprobe(slot, bar, VMAPPLE_MEM + 0x300000);
+    uint8_t frame[64] = {1};
+    put_desc(ring, 0, buf, 2048, 2, 0);
+    offer(ring, 0);
+    wr8(bar + 0x14, 0);
+    check("reset: net drops frames while no driver runs", hv_virtio_net_receive(board.net, frame, 64), 0);
+    ring = reprobe(slot, bar, VMAPPLE_MEM + 0x300000);
+    check("reset: net has no buffer of the old driver", hv_virtio_net_receive(board.net, frame, 64), 0);
+    put_desc(ring, 0, buf, 2048, 2, 0);
+    offer(ring, 0);
+    wr16(bar + 0x3000, 0);
+    check("reset: net receives again", hv_virtio_net_receive(board.net, frame, 64), 1);
+    check("reset: net MAC kept", rd8(bar + 0x2000 + 5), 0x56);
+
+    int rslot = (int)find_slot(0x1af4, 0x1044, 0);
+    if (rslot < 0 || rslot >= 32) return;
+    uint64_t rbar = VMAPPLE_PCIE_MMIO + 0x400000, rb = VMAPPLE_MEM + 0x2200000;
+    for (int i = 0; i < 2; i++) {
+        uint64_t q = reprobe(rslot, rbar, VMAPPLE_MEM + 0x1200000);
+        memset(ram(rb), 0, 0x1000);
+        put_desc(q, 0, rb, 0x1000, 2, 0);
+        offer(q, 0);
+        wr16(rbar + 0x3000, 0);
+        check("reset: rng fills a buffer after a re-probe", used_idx(q), 1);
+    }
+}
+
+static void test_reset_balloon(void) {
+    int slot = (int)find_slot(0x1af4, 0x1045, 0);
+    if (slot < 0 || slot >= 32 || !board.balloon) return;
+    HvVirtioBalloon *b = board.balloon;
+    uint64_t bar = VMAPPLE_PCIE_MMIO + 0x300000, ring = VMAPPLE_MEM + 0x1000000;
+    check("reset: the old actual is set", hv_virtio_balloon_actual(b), 1 << 20);
+    reprobe(slot, bar, ring);
+    check("reset: actual starts at 0", hv_virtio_balloon_actual(b), 0);
+    check("reset: num_pages starts at 0", rd32(bar + 0x2000), 0);
+    check("reset: nothing counted as held", b->given_back, b->taken_back);
+    rd8(bar + 0x1000);
+    hv_virtio_balloon_poll(b);
+    check("reset: the target is told again", rd32(bar + 0x2000), 256);
+    check("reset: with a config change", rd8(bar + 0x1000) & 2, 2);
+}
+
+/* virtio-snd control request: code, then 20 bytes of parameters. Returns the status. */
+static uint32_t snd_ctl(uint64_t ring, int n, uint32_t code, uint32_t buffer, uint32_t period, int ch, int fmt, int rate) {
+    uint64_t req = VMAPPLE_MEM + 0x2300000, resp = req + 0x100;
+    uint8_t r[24] = {0};
+    memcpy(r, &code, 4);
+    memcpy(r + 8, &buffer, 4);
+    memcpy(r + 12, &period, 4);
+    r[20] = (uint8_t)ch, r[21] = (uint8_t)fmt, r[22] = (uint8_t)rate;
+    memcpy(ram(req), r, sizeof r);
+    memset(ram(resp), 0xff, 8);
+    put_desc(ring, 2 * n, req, sizeof r, 1, (uint16_t)(2 * n + 1));
+    put_desc(ring, 2 * n + 1, resp, 8, 2, 0);
+    offer(ring, (uint16_t)(2 * n));
+    wr16(VMAPPLE_PCIE_MMIO + 0x600000 + 0x3000, 0);
+    uint32_t st;
+    memcpy(&st, ram(resp), 4);
+    return st;
+}
+
+static void test_reset_snd(void) {
+    HvVirtioSnd *d = board.snd;
+    int slot = (int)find_slot(0x1af4, 0x1059, 0);
+    if (!d || slot < 0 || slot >= 32) return;
+    uint64_t bar = VMAPPLE_PCIE_MMIO + 0x600000, ring = VMAPPLE_MEM + 0x2400000;
+    d->backend.start = NULL;
+    reprobe(slot, bar, ring);
+    check("snd: set params", snd_ctl(ring, 0, 0x0101, 16384, 4096, 2, HV_VSND_FMT_S16, HV_VSND_RATE_48000), 0x8000);
+    check("snd: prepare", snd_ctl(ring, 1, 0x0102, 0, 0, 0, 0, 0), 0x8000);
+    check("snd: start", snd_ctl(ring, 2, 0x0104, 0, 0, 0, 0, 0), 0x8000);
+    check("snd: running", d->running, 1);
+    check("snd: no set params while running", snd_ctl(ring, 3, 0x0101, 16384, 4096, 2, HV_VSND_FMT_S16, HV_VSND_RATE_48000), 0x8002);
+    ring = reprobe(slot, bar, ring);
+    check("reset: snd stream stopped", d->running, 0);
+    check("reset: snd stream not prepared", d->prepared, 0);
+    check("reset: snd parameters cleared", d->frame_bytes, 0);
+    check("reset: snd prepare needs params again", snd_ctl(ring, 0, 0x0102, 0, 0, 0, 0, 0), 0x8001);
+    check("reset: snd set params works again", snd_ctl(ring, 1, 0x0101, 16384, 4096, 2, HV_VSND_FMT_S16, HV_VSND_RATE_48000), 0x8000);
+    check("reset: snd start works again", (snd_ctl(ring, 2, 0x0102, 0, 0, 0, 0, 0), snd_ctl(ring, 3, 0x0104, 0, 0, 0, 0, 0)), 0x8000);
+    snd_ctl(ring, 4, 0x0105, 0, 0, 0, 0, 0); /* stop */
+}
+
+static void test_reset_input(void) {
+    int kslot = (int)find_slot(0x1af4, 0x1052, 0), mslot = (int)find_slot(0x1af4, 0x1052, 1);
+    if (!board.keyboard || !board.mouse || kslot < 0 || kslot >= 32 || mslot < 0 || mslot >= 32) return;
+    uint64_t buf = VMAPPLE_MEM + 0x2500000;
+    /* events from before the first probe stay for it (macOS types into the guest while it boots) */
+    uint64_t mbar = VMAPPLE_PCIE_MMIO + 0x580000;
+    hv_virtio_input_send(board.mouse, HV_EV_REL, HV_REL_X, 5);
+    uint64_t mring = reprobe(mslot, mbar, VMAPPLE_MEM + 0x2600000);
+    put_desc(mring, 0, buf, 8, 2, 0);
+    offer(mring, 0);
+    hv_virtio_input_poll(board.mouse);
+    check("first probe keeps early events", rd32(buf + 4), 5);
+    /* a driver has run: what piled up for it is dropped at the next reset */
+    uint64_t kbar = VMAPPLE_PCIE_MMIO + 0x500000;
+    uint64_t kring = reprobe(kslot, kbar, VMAPPLE_MEM + 0x2700000);
+    hv_virtio_input_poll(board.keyboard); /* the driver is up */
+    for (int i = 0; i < 3; i++) hv_virtio_input_send(board.keyboard, HV_EV_KEY, 30, 1);
+    kring = reprobe(kslot, kbar, VMAPPLE_MEM + 0x2700000);
+    check("reset: queued input dropped", board.keyboard->head, board.keyboard->tail);
+    put_desc(kring, 0, buf + 0x100, 8, 2, 0);
+    offer(kring, 0);
+    hv_virtio_input_poll(board.keyboard);
+    check("reset: nothing stale delivered", used_idx(kring), 0);
+    hv_virtio_input_send(board.keyboard, HV_EV_KEY, 31, 1);
+    hv_virtio_input_poll(board.keyboard);
+    check("reset: new input delivered", used_idx(kring), 1);
+    check("reset: the new event's code", rd8(buf + 0x100 + 2), 31);
+}
+
+/* hv_phys_ptr: a length near 2^64 must not wrap back into RAM. */
+static void test_phys_ptr_bounds(void) {
+    uint64_t base = VMAPPLE_MEM, end = VMAPPLE_MEM + RAM_SIZE;
+    check("ptr: start", hv_phys_ptr(&m, base, 1) != NULL, 1);
+    check("ptr: whole RAM", hv_phys_ptr(&m, base, RAM_SIZE) != NULL, 1);
+    check("ptr: one past the RAM", hv_phys_ptr(&m, base, RAM_SIZE + 1) == NULL, 1);
+    check("ptr: last 4 bytes", hv_phys_ptr(&m, end - 4, 4) != NULL, 1);
+    check("ptr: 5 bytes at the end", hv_phys_ptr(&m, end - 4, 5) == NULL, 1);
+    check("ptr: zero length at the end", hv_phys_ptr(&m, end - 1, 0) != NULL, 1);
+    check("ptr: length 2^64-1", hv_phys_ptr(&m, base, ~0ull) == NULL, 1);
+    check("ptr: length 2^64-1 from the end", hv_phys_ptr(&m, end - 1, ~0ull) == NULL, 1);
+    uint64_t wrap = (0 - (base + 16)) + base + 8; /* pa + len wraps to base + 8 */
+    check("ptr: wrapping length", hv_phys_ptr(&m, base + 16, wrap) == NULL, 1);
+    check("ptr: wrapping length at the end", hv_phys_ptr(&m, end - 1, 0 - (end - 1) + base) == NULL, 1);
+    uint8_t zb[8] = {0};
+    check("write: zero length at RAM start", hv_phys_write(&m, base, zb, 0), 0);
+    check("write: zero length at the end", hv_phys_write(&m, end - 4, zb, 0), 0);
+    check("write: 5 bytes at the end", hv_phys_write(&m, end - 4, zb, 5) != 0, 1);
+    hv_dma_written(&m, base + 16, wrap); /* must return and touch nothing */
+    hv_dma_written(&m, base, ~0ull);
+}
+
 /* virtio-rng: a buffer split over two descriptors is filled whole, and an interrupt follows. */
 static void test_virtio_rng(void) {
     HvVirtioRng *r = hv_virtio_rng_create(&m, board.pcie);
@@ -631,6 +823,12 @@ int main(void) {
     test_virtio_net();
     test_virtio_balloon();
     test_virtio_rng();
+    test_phys_ptr_bounds();
+    test_reset_blk();
+    test_reset_net_rng();
+    test_reset_balloon();
+    test_reset_snd();
+    test_reset_input();
     test_aes();
     /* MSI frame: valid type register, doorbell pends the INTID */
     check("msi type valid", rd32(VMAPPLE_GIC_MSI + 8) >> 31, 1);

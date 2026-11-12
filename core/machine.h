@@ -187,6 +187,7 @@ typedef struct HvPerCpu {
     pthread_mutex_t wake_mu;
     pthread_cond_t wake_cv;
     int wake_pending;
+    int on_claim; /* a CPU_ON owns this CPU (set by the caller, kept across the reset) */
     /* Work other CPUs ask of this one (only the owner may touch its TLB and
        branch cache while it runs). Posting bumps req_seq; the owner does the
        work at its next dispatcher entry and publishes ack_seq. */
