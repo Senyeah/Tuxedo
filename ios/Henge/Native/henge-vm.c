@@ -138,7 +138,7 @@ int henge_vm_install(const char *rom, const char *disk, const char *aux, uint64_
     install_step = 0;
     install_progress = 0;
     installer_session = 1;
-    if (hv_install_start(hv_vm_board()->vusb, ipsw, workdir, ecid, on_install_progress, NULL) != 0) {
+    if (!hv_vm_board() || hv_install_start(hv_vm_board()->vusb, ipsw, workdir, ecid, on_install_progress, NULL) != 0) {
         snprintf(err, errlen, "The installer could not start.");
         return failed_start();
     }
@@ -204,11 +204,11 @@ void henge_vm_stop(void) {
 
 long henge_vm_balloon(long target_mb) {
     if (!lock_running()) return -1;
-    HvVmapple *b = hv_vm_board();
+    HvVirtioBalloon *balloon = hv_vm_devs()->balloon;
     long actual = -1;
-    if (b->balloon) {
-        if (target_mb >= 0) hv_virtio_balloon_set_target(b->balloon, (uint64_t)target_mb << 20);
-        actual = (long)(hv_virtio_balloon_actual(b->balloon) >> 20);
+    if (balloon) {
+        if (target_mb >= 0) hv_virtio_balloon_set_target(balloon, (uint64_t)target_mb << 20);
+        actual = (long)(hv_virtio_balloon_actual(balloon) >> 20);
     }
     pthread_rwlock_unlock(&api_lock);
     return actual;

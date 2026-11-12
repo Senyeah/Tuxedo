@@ -10,7 +10,10 @@
 /* The virtual Mac as a host app drives it: build it from files, run it, feed
    it input, stop it. The macOS command-line tool and the iOS app both use this;
    graphics are the host's own business (Mac: hv_pvg_attach before starting). */
+enum { HV_BOARD_VMAPPLE = 0, HV_BOARD_VIRT = 1 };
+
 typedef struct HvVmConfig {
+    int board;                /* HV_BOARD_*; 0 is the virtual Mac */
     const char *rom;          /* AVPBooter.vmapple2.bin */
     const char *disk, *aux;   /* the root disk image and the auxiliary storage */
     uint64_t aux_offset;      /* where the aux image's data starts (16 KB) */
@@ -25,13 +28,29 @@ typedef struct HvVmConfig {
     size_t jit_bytes;         /* 0: 768 MB */
 } HvVmConfig;
 
+/* The devices of any board, for the code that does not care which board it is. */
+typedef struct HvBoardDevs {
+    HvGic *gic;
+    HvPl011 *uart;
+    HvPl061 *gpio;
+    HvXhci *usb;
+    HvVirtioInput *keyboard, *mouse;
+    HvVirtioNet *net;
+    HvVirtioSnd *snd;
+    HvVirtioBalloon *balloon;
+    HvVirtioBlk *blk[2]; /* root, then aux (vmapple only) */
+    uint8_t *ram;
+    uint64_t ram_pa, ram_size;
+} HvBoardDevs;
+
 /* Returns 0, or -1 with a reason in err. */
 int hv_vm_create(const HvVmConfig *cfg, char *err, size_t errlen);
 /* After CPUs stop, detach backends and release the old machine. Borrowed iOS
    JIT memory stays owned by the app and can be attached to the next machine. */
 void hv_vm_destroy(void);
 HvMachine *hv_vm_machine(void);
-HvVmapple *hv_vm_board(void);
+HvVmapple *hv_vm_board(void); /* NULL when the board is not vmapple */
+const HvBoardDevs *hv_vm_devs(void);
 HvCpu *hv_vm_cpu(int index);
 extern void (*hv_prof_register)(void); /* debugging: each thread that will run guest code calls this */
 /* Frames go to this CAMetalLayer, drawn by the GPU, instead of hv_vm_boot_display. */
