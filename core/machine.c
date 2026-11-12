@@ -46,6 +46,20 @@ int hv_knob_set(HvMachine *m, const char *name, int value) {
     return 0;
 }
 
+/* Only features the translator handles. Host features are a superset (Apple M1 and later), so copied instructions always exist. */
+HvIdRegs hv_id_regs_vmapple(void) {
+    return (HvIdRegs){
+        .midr = 0x611f0220ull,  /* Apple; a configuration constant for now */
+        .pfr0 = 0x1100000001110011ull,  /* EL0/EL1 AArch64, FP+AdvSIMD with FP16, GICv3 sysregs, CSV2, CSV3 */
+        .dfr0 = 0x0000000000000006ull,  /* Armv8 debug, no PMU */
+        .isar0 = 0x0011100110212120ull, /* AES+PMULL, SHA1, SHA2/512, CRC32, LSE, RDM, SHA3, DotProd, FHM, FlagM */
+        .isar1 = 0x0000001110211011ull, /* DPB, PAuth (no-op), JSCVT, FCMA, LRCPC2, PACGA, FRINTTS, SB */
+        .mmfr0 = 0x0000000000100025ull, /* 48-bit PA, 16-bit ASID, 4K/16K/64K granules */
+        .mmfr1 = 0x0000000000111000ull, /* HPDS, LOR, PAN */
+        .mmfr2 = 0,
+    };
+}
+
 int hv_machine_init(HvMachine *m, size_t jit_bytes) {
     memset(m, 0, sizeof *m);
     if (hv_jit_region_open(&m->jit, jit_bytes) != 0) return -1;
@@ -60,6 +74,7 @@ int hv_machine_init_jit(HvMachine *m, void *rx, void *rw, size_t jit_bytes) {
 }
 
 static int init_rest(HvMachine *m) {
+    m->id = hv_id_regs_vmapple();
     pthread_mutex_init(&m->big_mu, NULL);
     pthread_cond_init(&m->big_cv, NULL);
     pthread_mutexattr_t ra;

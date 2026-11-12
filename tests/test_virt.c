@@ -1707,7 +1707,8 @@ static void test_create_limits(void) {
     check("create: the other devices are there", vb.rng && vb.usb && vb.keyboard && vb.mouse && vb.gpu, 1);
     check("create: the rng takes the first slot", vb.rng->vio.pci.slot, 1);
     check("create: xHCI follows", vb.usb->pci.slot, 2);
-    check("create: E0PD in ID_AA64MMFR2 (no forced KPTI under KASLR)", mm.id_mmfr2 >> 60 & 15, 1);
+    check("create: E0PD in ID_AA64MMFR2 (no forced KPTI under KASLR)", mm.id.mmfr2 >> 60 & 15, 1);
+    check("create: PAuth stays advertised (P3: clearing it was no faster)", mm.id.isar1, hv_id_regs_vmapple().isar1);
     check("create: tree needs room", hv_virt_place_fdt(&vb, (const uint8_t *)"x", 100u << 20), -1);
     check("create: no tree", hv_virt_place_fdt(&vb, NULL, 4), -1);
     check("create: a missing firmware file", hv_virt_load_firmware(&vb, "/nonexistent/firmware") != 0, 1);

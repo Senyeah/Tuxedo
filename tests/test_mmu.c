@@ -242,15 +242,36 @@ static void e0pd(HvMachine *m, HvCpu *cpu) {
     expect("E0PD0: EL0 reads the upper half", cpu, K, HV_ACC_READ, 0, D + 0x4000, 0);
     cpu->tcr_el1 &= ~(3ull << 55);
 
-    uint64_t keep = m->id_mmfr2;
+    /* The vmapple values, bit for bit (the macOS guest reads these). */
+    static const struct { uint32_t mrs; uint64_t v; const char *n; } vm[] = {
+        {0xd5380001u, 0x611f0220ull, "MIDR_EL1"},
+        {0xd5380401u, 0x1100000001110011ull, "ID_AA64PFR0_EL1"},
+        {0xd5380501u, 0x0000000000000006ull, "ID_AA64DFR0_EL1"},
+        {0xd5380601u, 0x0011100110212120ull, "ID_AA64ISAR0_EL1"},
+        {0xd5380621u, 0x0000001110211011ull, "ID_AA64ISAR1_EL1"},
+        {0xd5380701u, 0x0000000000100025ull, "ID_AA64MMFR0_EL1"},
+        {0xd5380721u, 0x0000000000111000ull, "ID_AA64MMFR1_EL1"},
+        {0xd5380741u, 0, "ID_AA64MMFR2_EL1"},
+    };
+    HvIdRegs keep = m->id;
     cpu->el = 1;
-    cpu->x[1] = 1;
-    hv_sysreg_mrs(cpu, 0xd5380741u, 0); /* mrs x1, id_aa64mmfr2_el1 */
-    check_that(cpu->x[1] == 0, "ID_AA64MMFR2_EL1 is not 0 by default (vmapple)");
-    m->id_mmfr2 = 1ull << 60;
-    hv_sysreg_mrs(cpu, 0xd5380741u, 0);
-    check_that(cpu->x[1] == 1ull << 60, "ID_AA64MMFR2_EL1 does not read as the board's value");
-    m->id_mmfr2 = keep;
+    for (unsigned i = 0; i < sizeof vm / sizeof *vm; i++) {
+        cpu->x[1] = 1;
+        hv_sysreg_mrs(cpu, vm[i].mrs, 0);
+        char what[64];
+        snprintf(what, sizeof what, "%s is not the vmapple value by default", vm[i].n);
+        check_that(cpu->x[1] == vm[i].v, what);
+    }
+    m->id = (HvIdRegs){.midr = 1, .pfr0 = 2, .dfr0 = 3, .isar0 = 4, .isar1 = 5, .mmfr0 = 6, .mmfr1 = 7, .mmfr2 = 1ull << 60};
+    for (unsigned i = 0; i < sizeof vm / sizeof *vm; i++) {
+        cpu->x[1] = 99;
+        hv_sysreg_mrs(cpu, vm[i].mrs, 0);
+        uint64_t want = i == 7 ? 1ull << 60 : i + 1;
+        char what[64];
+        snprintf(what, sizeof what, "%s does not read as the board's value", vm[i].n);
+        check_that(cpu->x[1] == want, what);
+    }
+    m->id = keep;
 }
 
 int main(void) {

@@ -13,15 +13,7 @@
 /* System registers are named by op0:op1:CRn:CRm:op2, which is bits 20..5 of MRS/MSR. */
 #define R(op0, op1, crn, crm, op2) ((op0) << 14 | (op1) << 11 | (crn) << 7 | (crm) << 3 | (op2))
 
-/* ID registers: only features the translator handles. Host features are a
-   superset (Apple M1 and later), so copied instructions always exist. */
-#define ID_AA64PFR0  0x1100000001110011ull /* EL0/EL1 AArch64, FP+AdvSIMD with FP16, GICv3 sysregs, CSV2, CSV3 */
-#define ID_AA64ISAR0 0x0011100110212120ull /* AES+PMULL, SHA1, SHA2/512, CRC32, LSE, RDM, SHA3, DotProd, FHM, FlagM */
-#define ID_AA64ISAR1 0x0000001110211011ull /* DPB, PAuth (no-op), JSCVT, FCMA, LRCPC2, PACGA, FRINTTS, SB */
-#define ID_AA64MMFR0 0x0000000000100025ull /* 48-bit PA, 16-bit ASID, 4K/16K/64K granules */
-#define ID_AA64MMFR1 0x0000000000111000ull /* HPDS, LOR, PAN */
-#define ID_AA64DFR0  0x0000000000000006ull /* Armv8 debug, no PMU */
-#define MIDR         0x611f0220ull         /* Apple; a configuration constant for now */
+
 #define CTR_EL0      0x9444c004ull         /* 64-byte lines, PIPT I-cache, IDC */
 #define CLIDR        0x0a200023ull         /* L1 split, L2 unified */
 #define CNTFRQ       24000000ull
@@ -113,16 +105,16 @@ static int read_reg(HvCpu *cpu, uint32_t reg, uint64_t *v) {
     case R(3, 2, 0, 0, 0): *v = cpu->csselr_el1; return 0;
 
     /* Identification */
-    case R(3, 0, 0, 0, 0): *v = MIDR; return 0;
+    case R(3, 0, 0, 0, 0): *v = m->id.midr; return 0;
     case R(3, 0, 0, 0, 5): *v = cpu->mpidr; return 0;
     case R(3, 0, 0, 0, 6): *v = 0; return 0;                             /* REVIDR */
-    case R(3, 0, 0, 4, 0): *v = ID_AA64PFR0; return 0;
-    case R(3, 0, 0, 5, 0): *v = ID_AA64DFR0; return 0;
-    case R(3, 0, 0, 6, 0): *v = ID_AA64ISAR0; return 0;
-    case R(3, 0, 0, 6, 1): *v = ID_AA64ISAR1; return 0;
-    case R(3, 0, 0, 7, 0): *v = ID_AA64MMFR0; return 0;
-    case R(3, 0, 0, 7, 1): *v = ID_AA64MMFR1; return 0;
-    case R(3, 0, 0, 7, 2): *v = m->id_mmfr2; return 0;
+    case R(3, 0, 0, 4, 0): *v = m->id.pfr0; return 0;
+    case R(3, 0, 0, 5, 0): *v = m->id.dfr0; return 0;
+    case R(3, 0, 0, 6, 0): *v = m->id.isar0; return 0;
+    case R(3, 0, 0, 6, 1): *v = m->id.isar1; return 0;
+    case R(3, 0, 0, 7, 0): *v = m->id.mmfr0; return 0;
+    case R(3, 0, 0, 7, 1): *v = m->id.mmfr1; return 0;
+    case R(3, 0, 0, 7, 2): *v = m->id.mmfr2; return 0;
     case R(3, 3, 0, 0, 1): *v = CTR_EL0; return 0;
     case R(3, 3, 0, 0, 7): *v = 4; return 0;                             /* DCZID: 64-byte DC ZVA */
     case R(3, 1, 0, 0, 1): *v = CLIDR; return 0;

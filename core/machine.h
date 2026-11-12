@@ -216,6 +216,11 @@ enum { HV_PHASE_RUN, HV_PHASE_TRANSLATE, HV_PHASE_HELPER, HV_PHASE_SYNC, HV_PHAS
 #define HV_REQ_TLB_ALL 1u   /* drop the whole TLB and branch cache */
 #define HV_REQ_IJC_RESET 2u /* drop the branch cache (code changed) */
 
+/* The identification registers the guest reads; a board fills them (hv_machine_init gives the vmapple values). */
+typedef struct HvIdRegs {
+    uint64_t midr, pfr0, dfr0, isar0, isar1, mmfr0, mmfr1, mmfr2;
+} HvIdRegs;
+
 typedef struct HvMachine {
     int locks_initialized;
     HvRam ram[HV_MAX_RAM];
@@ -294,7 +299,7 @@ typedef struct HvMachine {
        count (days of uptime) macOS 12 took the user as idle for that long and put itself to sleep while
        still starting up: its window server never drew. */
     uint64_t cntvoff;
-    uint64_t id_mmfr2;   /* the board's ID_AA64MMFR2_EL1 (vmapple: 0) */
+    HvIdRegs id;
 } HvMachine;
 
 static inline uint32_t hv_block_hash(uint64_t va, uint64_t pa, uint32_t flags) {
@@ -309,6 +314,7 @@ static inline HvBlock *hv_block_find(HvMachine *m, uint32_t h, uint64_t va, uint
     return NULL;
 }
 
+HvIdRegs hv_id_regs_vmapple(void);
 int hv_machine_init(HvMachine *m, size_t jit_bytes);
 /* The same with JIT memory the host provides (iOS: the region a debugger granted and its writable alias). */
 int hv_machine_init_jit(HvMachine *m, void *rx, void *rw, size_t jit_bytes);
