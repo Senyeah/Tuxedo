@@ -71,6 +71,7 @@ int hv_virt_create(HvVirt *b, HvMachine *m, HvCpu *cpus, int ncpus, uint64_t ram
     if (root && !b->blk) return -1;
     if (getenv("HV_BALLOON")) {
         b->balloon = hv_virtio_balloon_create(m, b->pcie, b->mem.host, VIRT_MEM, ram_size, b->mem.fd);
+        b->balloon->vio.features |= HV_VIRTIO_BALLOON_F_DEFLATE_ON_OOM; /* Linux only: the Mac's driver is not offered it */
         hv_virtio_balloon_set_target(b->balloon, (uint64_t)atoll(getenv("HV_BALLOON")) << 20);
     }
 

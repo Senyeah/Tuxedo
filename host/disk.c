@@ -4,6 +4,7 @@
 #include "disk.h"
 
 #include <fcntl.h>
+#include <sys/mount.h>
 #include <sys/stat.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -23,6 +24,8 @@ int hv_disk_open(HvDisk *d, const char *path, uint64_t offset, int readonly) {
     d->offset = offset;
     d->size = (uint64_t)st.st_size - offset;
     d->readonly = readonly;
+    struct statfs fs;
+    d->hole = !readonly && fstatfs(d->fd, &fs) == 0 && fs.f_bsize ? fs.f_bsize : 0;
     /* HV_WRITE_CACHE=0: writes skip the host's cache (F_NOCACHE), so a long run of them cannot pile up
        gigabytes of dirty pages; reads stay cached, and the kernel keeps the two coherent. Off by default:
        on the Mac bench big writes took 2-3x as long that way (2 GB + sync 4-6 s -> 9-17 s) and everyday
@@ -83,4 +86,14 @@ int hv_disk_flush(HvDisk *d) {
     case 2: return fcntl(d->fd, F_BARRIERFSYNC) == -1 ? -1 : 0;
     default: return fsync(d->fd);
     }
+}
+
+int hv_disk_discard(HvDisk *d, uint64_t off, uint64_t len) {
+    if (d->readonly || off > d->size || len > d->size - off) return -1;
+    if (!d->hole) return 0; /* a discard is only a hint */
+    uint64_t lo = (d->offset + off + d->hole - 1) / d->hole * d->hole, hi = (d->offset + off + len) / d->hole * d->hole;
+    if (hi <= lo) return 0;
+    struct fpunchhole ph = {.fp_flags = 0, .reserved = 0, .fp_offset = (off_t)lo, .fp_length = (off_t)(hi - lo)};
+    if (fcntl(d->fd, F_PUNCHHOLE, &ph) == 0) return 0;
+    return errno == ENOTSUP ? 0 : -1;
 }

@@ -26,14 +26,14 @@ fi
 
 MIRROR=${DEBIAN_MIRROR:-https://snapshot.debian.org/archive/debian/$DEBIAN_SNAPSHOT/}
 SIZE_MB=3072
-PKGS="linux-image-arm64-16k,systemd-sysv,udev,dbus,kmod,initramfs-tools,u-boot-menu,zstd,iproute2,iputils-ping,systemd-resolved,systemd-timesyncd,ca-certificates,sudo,less,nano,procps,cloud-guest-utils,e2fsprogs,gdisk,davfs2"
+PKGS="linux-image-arm64-16k,systemd-sysv,udev,dbus,kmod,initramfs-tools,u-boot-menu,zstd,iproute2,iputils-ping,systemd-resolved,systemd-timesyncd,ca-certificates,sudo,less,nano,procps,cloud-guest-utils,e2fsprogs,gdisk,davfs2,alsa-utils"
 
 # Fixed IDs keep the image and extlinux.conf the same between builds
 if [ "$DESKTOP" = 1 ]; then
     NAME=debian-desktop
     WORK=/work/G6
     # Variant A: labwc on Wayland. The GL libraries let henge-session pick gles2 when virgl is present (A7)
-    PKGS="$PKGS,labwc,foot,fonts-dejavu-core,libpam-systemd,xkb-data,mesa-utils,mesa-utils-bin,glmark2-es2-wayland,libgl1-mesa-dri,libgles2,libegl1,wlr-randr,wl-clipboard,xclip,python3"
+    PKGS="$PKGS,labwc,foot,fonts-dejavu-core,libpam-systemd,xkb-data,mesa-utils,mesa-utils-bin,glmark2-es2-wayland,libgl1-mesa-dri,libgles2,libegl1,wlr-randr,wl-clipboard,xclip,python3,pipewire,pipewire-bin,pipewire-alsa,wireplumber"
     PARTUUID=${HENGE_PARTUUID:-9c4e7a21-3d58-4b0f-a6c2-1f8d5e90b3a7}
     FSUUID=${HENGE_FSUUID:-6d0b8e35-c1a2-47f9-9e64-b7a13c52d80f}
 else
