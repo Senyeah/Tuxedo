@@ -269,6 +269,7 @@ static uint32_t control(HvVirtioGpu *g, const HvVirtqElem *e, int *wake) {
         case CMD_RESOURCE_DETACH_BACKING: status = cmd_detach(g, req); break;
         default: status = RESP_ERR_UNSPEC; break;
         }
+        if ((type == CMD_SET_SCANOUT || type == CMD_RESOURCE_UNREF) && g->dirty_set) *wake = 1; /* a new picture with no flush */
     }
     if (status >= RESP_ERR_UNSPEC) g->errors++;
     pthread_mutex_unlock(&g->mu);
@@ -323,7 +324,8 @@ static void notify(HvVirtio *v, int q) {
         any = 1;
     }
     if (any) hv_virtio_interrupt(v);
-    if (wake && g->on_flush) g->on_flush(g->opaque);
+    void (*wake_fn)(void *) = __atomic_load_n(&g->on_flush, __ATOMIC_ACQUIRE); /* a presenter may attach while the guest runs */
+    if (wake && wake_fn) wake_fn(__atomic_load_n(&g->opaque, __ATOMIC_RELAXED));
 }
 
 static void config_write(HvVirtio *v, uint32_t off, uint64_t val, unsigned size) {
@@ -341,6 +343,7 @@ static void device_reset(HvVirtio *v) {
         if (g->res[i].id) drop_resource(g, &g->res[i]);
     g->scanout_res = 0;
     g->cursor.resource = 0;
+    g->cursor.updates++; /* the presenter drops the old cursor too */
     scanout_all_dirty(g);
     pthread_mutex_unlock(&g->mu);
     put32(v->config + CFG_EVENTS_READ, 0);

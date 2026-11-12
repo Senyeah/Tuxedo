@@ -62,7 +62,7 @@ typedef struct HvVirtioGpu {
         uint64_t updates;
     } cursor;                /* resource 0: no cursor shown */
     uint64_t errors;         /* commands answered with an error */
-    void (*on_flush)(void *opaque); /* wakes the presenter; called without mu held */
+    void (*on_flush)(void *opaque); /* wakes the presenter; called without mu held. Clear it only with the CPUs stopped. */
     void *opaque;
 } HvVirtioGpu;
 

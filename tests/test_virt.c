@@ -651,7 +651,9 @@ static void test_gpu(HvVirtioGpu *g) {
     check("refused scanouts bind nothing", g->scanout_res, 0);
     HvVgpuRect d;
     hv_virtio_gpu_take_dirty(g, &d);
+    int woke_scanout = woke;
     check("scanout", gpu_scanout(0, 1, 0, 0, FB_W, FB_H), OK);
+    check("a new scanout wakes the presenter", woke, woke_scanout + 1);
     check("scanout bound", g->scanout_res, 1);
     check("a new scanout is all dirty", hv_virtio_gpu_take_dirty(g, &d) && d.width == FB_W && d.height == FB_H, 1);
     check("dirty taken", hv_virtio_gpu_take_dirty(g, &d), 0);
@@ -760,8 +762,10 @@ static void test_gpu(HvVirtioGpu *g) {
     check("detach", gpu_detach(1), OK);
     check("transfer after detach", gpu_transfer(1, 0, 0, 1, 1, 0), UNSPEC);
     check("detach: unknown", gpu_detach(55), BAD_ID);
+    int woke_unref = woke;
     check("unref the scanout's resource", gpu_unref(1), OK);
     check("scanout off", g->scanout_res, 0);
+    check("unref of the shown resource wakes the presenter", woke, woke_unref + 1);
     check("flush after unref", gpu_flush(1, 0, 0, 1, 1), BAD_ID);
 
     /* display size change */
@@ -790,7 +794,9 @@ static void test_gpu(HvVirtioGpu *g) {
 
     /* a driver reset forgets every resource */
     check("resources before reset", hv_virtio_gpu_resource(g, 3) != NULL, 1);
+    uint64_t cursor_updates = g->cursor.updates;
     gpu_setup();
+    check("reset counts as a cursor change", g->cursor.updates > cursor_updates, 1);
     check("reset drops resources", hv_virtio_gpu_resource(g, 3) == NULL && g->hostmem == 0, 1);
     check("ids free again", gpu_create(3, 2, 16, 16), OK);
     check("no request lost", gpu_lost, 0);
