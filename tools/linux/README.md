@@ -22,3 +22,8 @@ Keep source trees in `/work`, not on the Mac filesystem. It is case-insensitive 
 4. `qemu-ref.sh` (G5) boots the result on QEMU's `virt` machine.
 
 Step 4 does not exist yet.
+
+## Checks on the Mac
+
+- `dtb-compare.py` (T2, `make test-linux-dtb`) compares Henge's device tree with QEMU's.
+- `smoke.py --direct` (E8, `make test-linux-direct`) boots `Image` and `initrd.img` on `build/hengevm` to the `(initramfs)` prompt, runs `cat /proc/cpuinfo` and `uname -m`, and powers off. It reads the artefacts from `HENGE_LINUX_OUT`, or from `build/linux` in the main checkout. `--cpus`, `--ram`, `--phone` and `--runs` pass through; `--qemu` runs the same checks on QEMU, and `--qemu --henge-dtb` boots QEMU with Henge's tree. Extra options for the make target go in `SMOKE_ARGS`.

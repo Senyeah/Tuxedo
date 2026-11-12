@@ -111,6 +111,11 @@ test-linux-dtb: $(B)/hengevm
 	uv run tools/linux/dtb-compare.py
 .PHONY: test-linux-dtb
 
+# Direct kernel boot to the initramfs prompt (needs build/linux/Image and initrd.img, or HENGE_LINUX_OUT, and uv).
+test-linux-direct: $(B)/hengevm
+	uv run tools/linux/smoke.py --direct $(SMOKE_ARGS)
+.PHONY: test-linux-direct
+
 test-vm-lifecycle: $(B)/test_vm_lifecycle
 	$(B)/test_vm_lifecycle
 .PHONY: test-vm-lifecycle
