@@ -217,7 +217,7 @@ def install(vm, args):
     pkgs = "alsa-utils sox"
     need = "speaker-test aplay sox"
     if args.pipewire:
-        pkgs += " pipewire pipewire-bin pipewire-alsa wireplumber"
+        pkgs += " pipewire pipewire-bin pipewire-alsa wireplumber libpam-systemd dbus-user-session"
         need += " pw-play wpctl"
     _, rc = vm.sh(f"command -v {need} >/dev/null")
     if rc != 0:
@@ -234,7 +234,11 @@ def install(vm, args):
 
 
 def pipewire(vm):
-    vm.need("systemctl --user start pipewire wireplumber; sleep 3; systemctl --user is-active pipewire wireplumber | sort -u",
+    # The serial login has no user session; linger starts one, and the shell then talks to its manager
+    vm.need("sudo loginctl enable-linger henge; for i in $(seq 30); do [ -S /run/user/$(id -u)/bus ] && break; sleep 1; done; "
+            "ls /run/user/$(id -u)/bus", lambda o: o.endswith("/bus"), "user session manager (linger)", 90)
+    vm.need("export XDG_RUNTIME_DIR=/run/user/$(id -u) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus; "
+            "systemctl --user start pipewire wireplumber; sleep 3; systemctl --user is-active pipewire wireplumber | sort -u",
             lambda o: o == "active", "pipewire and wireplumber run as user services", 60)
     out = vm.need("wpctl status | sed -n 1,25p", lambda o: "Audio" in o, "wpctl status")
     print("  pipewire: " + " | ".join(l.strip() for l in out.splitlines() if "vol:" in l))
