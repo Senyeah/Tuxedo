@@ -26,6 +26,8 @@ static HvMachine m;
 static HvCpu cpus[HV_MAX_CPUS]; /* the board takes them as an array */
 static int ncpus = 1;
 static HvVmapple board = {.ram_fd = -1};
+static int board_kind = HV_BOARD_VMAPPLE;
+static HvBoardDevs devs;
 static _Atomic int input_stopping = 1;
 static void stop_pointer(void);
 /* UI display changes may arrive before or during the background machine creation. */
@@ -47,7 +49,8 @@ static pthread_t primary_thread;
 static int primary_started;
 
 HvMachine *hv_vm_machine(void) { return &m; }
-HvVmapple *hv_vm_board(void) { return &board; }
+HvVmapple *hv_vm_board(void) { return board_kind == HV_BOARD_VMAPPLE ? &board : NULL; }
+const HvBoardDevs *hv_vm_devs(void) { return &devs; }
 HvCpu *hv_vm_cpu(int index) { return index >= 0 && index < ncpus ? &cpus[index] : NULL; }
 int hv_vm_ncpus(void) { return ncpus; }
 
@@ -114,10 +117,83 @@ const char *hv_vm_reason_name(int r) {
     }
 }
 
+/* Console input waits here until the UART's 64-byte FIFO has room. Lock order: device lock, then this. */
+static os_unfair_lock console_lock = OS_UNFAIR_LOCK_INIT;
+static uint8_t *console_queue;
+static size_t console_head, console_len, console_cap;
+static void (*console_out)(void *opaque, uint8_t c);
+static void *console_out_opaque;
+static void (*uart_own_out)(void *opaque, uint8_t c);
+static void *uart_own_opaque;
+
+/* Under the device lock. */
+static void console_apply_output(void) {
+    if (!devs.uart) return;
+    devs.uart->output = console_out ? console_out : uart_own_out;
+    devs.uart->output_opaque = console_out ? console_out_opaque : uart_own_opaque;
+}
+
+static void console_attach(void) {
+    if (!devs.uart) return;
+    uart_own_out = devs.uart->output, uart_own_opaque = devs.uart->output_opaque;
+    console_apply_output();
+}
+
+void hv_vm_console_set_output(void (*out)(void *opaque, uint8_t c), void *opaque) {
+    int live = machine_created && devs.uart;
+    if (live) hv_dev_lock(&m);
+    console_out = out, console_out_opaque = opaque;
+    if (live) console_apply_output();
+    if (live) hv_dev_unlock(&m);
+}
+
+void hv_vm_console_input(const uint8_t *bytes, size_t n) {
+    if (!n) return;
+    os_unfair_lock_lock(&console_lock);
+    if (console_head && console_len + n > console_cap) {
+        memmove(console_queue, console_queue + console_head, console_len - console_head);
+        console_len -= console_head, console_head = 0;
+    }
+    if (console_len + n > console_cap) {
+        size_t cap = console_cap ? console_cap : 4096;
+        while (cap < console_len + n) cap *= 2;
+        uint8_t *grown = realloc(console_queue, cap);
+        if (!grown) {
+            os_unfair_lock_unlock(&console_lock);
+            return;
+        }
+        console_queue = grown, console_cap = cap;
+    }
+    memcpy(console_queue + console_len, bytes, n);
+    console_len += n;
+    os_unfair_lock_unlock(&console_lock);
+    if (!atomic_load(&input_stopping)) hv_machine_wake(&m); /* a CPU in WFI ticks only when woken */
+}
+
+/* Under the device lock, from the board's tick. */
+static void console_pump(void) {
+    if (!devs.uart) return;
+    os_unfair_lock_lock(&console_lock);
+    while (console_head < console_len && hv_pl011_receive(devs.uart, console_queue[console_head])) console_head++;
+    if (console_head == console_len) console_head = console_len = 0;
+    os_unfair_lock_unlock(&console_lock);
+}
+
+static void console_reset(void) {
+    console_out = NULL, console_out_opaque = NULL;
+    uart_own_out = NULL, uart_own_opaque = NULL;
+    os_unfair_lock_lock(&console_lock);
+    free(console_queue);
+    console_queue = NULL;
+    console_head = console_len = console_cap = 0;
+    os_unfair_lock_unlock(&console_lock);
+}
+
 /* Host-side device work on CPU 0's thread each tick. */
 static void board_poll(void) {
     if (extra_poll) extra_poll();
     if (net_on) hv_net_poll();
+    console_pump();
 }
 
 static int fail(char *err, size_t n, const char *msg) {
@@ -141,7 +217,7 @@ static void on_ill(int sig, siginfo_t *info, void *ctx) {
                 (unsigned long long)m.stats.block_flushes, (unsigned long long)uc->uc_mcontext->__ss.__lr, info->si_addr);
         for (int i = 0; i < 29; i++) fprintf(stderr, "x%d=%llx%c", i, (unsigned long long)uc->uc_mcontext->__ss.__x[i], i % 6 == 5 ? '\n' : ' ');
         fprintf(stderr, "\n");
-        fprintf(stderr, "sp=%llx ram %llx size %llx\n", (unsigned long long)uc->uc_mcontext->__ss.__sp, (unsigned long long)(uintptr_t)board.ram, (unsigned long long)board.ram_size);
+        fprintf(stderr, "sp=%llx ram %llx size %llx\n", (unsigned long long)uc->uc_mcontext->__ss.__sp, (unsigned long long)(uintptr_t)devs.ram, (unsigned long long)devs.ram_size);
         {
             uint64_t x7 = uc->uc_mcontext->__ss.__x[7], x28 = uc->uc_mcontext->__ss.__x[28];
             if (x7 >= x28 && x7 < x28 + sizeof(HvCpu)) {
@@ -231,14 +307,51 @@ uint64_t hv_vm_gpu_frames(void) {
     return pvg ? hv_pvg_lite_gpu_frames(pvg) : 0;
 }
 
+static void publish_display(HvPvgLite *pvg) {
+    // The setter and publication share this lock: an older preboot target can
+    // never overwrite a monitor change made while the board was being built.
+    os_unfair_lock_lock(&display_lock);
+    if (display_layer_set && pvg) hv_pvg_lite_set_layer(pvg, (void *)display_layer);
+    atomic_store_explicit(&display_pvg, pvg, memory_order_release);
+    os_unfair_lock_unlock(&display_lock);
+}
+
+static int create_vmapple(const HvVmConfig *c, uint64_t ram_size, char *err, size_t errlen) {
+    if (hv_disk_open(&aux, c->aux, c->aux_offset ? c->aux_offset : 16384, 0) != 0)
+        return fail(err, errlen, "Cannot open the auxiliary storage.");
+    HvCfgParams cfg = {.nr_cpus = (uint32_t)ncpus, .ecid = c->ecid, .seed = c->seed, .mac_en0 = {0x02, 0x48, 0x56, 0x4d, 0x00, 0x01}};
+    if (c->installer) cfg.run_installer1 = cfg.run_installer2 = 1;
+    if (getenv("HV_RUN_INSTALLER")) { /* experiment: "a,b" for the two installer words */
+        unsigned a = 0, b2 = 0;
+        sscanf(getenv("HV_RUN_INSTALLER"), "%u,%u", &a, &b2);
+        cfg.run_installer1 = a, cfg.run_installer2 = b2;
+    }
+    static const uint8_t mac[6] = {0x02, 0x48, 0x56, 0x4d, 0x00, 0x01};
+    if (hv_vmapple_create(&board, &m, cpus, ram_size, &disk, &aux, &cfg, mac) != 0)
+        return fail(err, errlen, "Cannot build the machine (not enough memory for the guest's RAM?).");
+    if (hv_vmapple_load_rom(&board, c->rom) != 0) return fail(err, errlen, "Cannot read the ROM (AVPBooter.vmapple2.bin).");
+    hv_vmapple_reset_cpu(&board);
+    devs = (HvBoardDevs){.gic = board.gic, .uart = board.uart, .gpio = board.gpio, .usb = board.usb,
+                         .keyboard = board.keyboard, .mouse = board.mouse, .net = board.net, .snd = board.snd,
+                         .balloon = board.balloon, .blk = {board.root_blk, board.aux_blk},
+                         .ram = board.ram, .ram_pa = VMAPPLE_MEM, .ram_size = board.ram_size};
+    board.poll = board_poll;
+    if (board.vusb && getenv("HV_VUSB_PROBE")) hv_usb_probe_start(board.vusb);
+    publish_display(board.pvg);
+    return 0;
+}
+
 int hv_vm_create(const HvVmConfig *c, char *err, size_t errlen) {
     if (machine_created) return fail(err, errlen, "The previous machine has not been released.");
     if (primary_started) {
         pthread_join(primary_thread, NULL);
         primary_started = 0;
     }
+    if (c->board == HV_BOARD_VIRT) return fail(err, errlen, "The virt board is not built yet.");
+    if (c->board != HV_BOARD_VMAPPLE) return fail(err, errlen, "Unknown board.");
     if (!c->rom || !c->disk || !c->aux) return fail(err, errlen, "The ROM, disk and auxiliary storage are all needed.");
     machine_created = 1;
+    board_kind = c->board;
     struct sigaction ill = {.sa_flags = SA_SIGINFO | SA_ONSTACK};
     ill.sa_sigaction = on_ill;
     if (!signals_installed) {
@@ -249,8 +362,6 @@ int hv_vm_create(const HvVmConfig *c, char *err, size_t errlen) {
     }
     signal(SIGPIPE, SIG_IGN); /* a guest connection closing at the far end must not end the machine */
     if (hv_disk_open(&disk, c->disk, 0, 0) != 0) return fail(err, errlen, "Cannot open the disk image.");
-    if (hv_disk_open(&aux, c->aux, c->aux_offset ? c->aux_offset : 16384, 0) != 0)
-        return fail(err, errlen, "Cannot open the auxiliary storage.");
     size_t jit = c->jit_bytes ? c->jit_bytes : (size_t)768 << 20;
     int r = c->jit_rx ? hv_machine_init_jit(&m, c->jit_rx, c->jit_rw, jit) : hv_machine_init(&m, jit);
     if (r != 0) return fail(err, errlen, "Cannot set up the JIT region.");
@@ -259,31 +370,13 @@ int hv_vm_create(const HvVmConfig *c, char *err, size_t errlen) {
     if (getenv("HV_SLOW_MEM")) m.slow_mem = 1; /* debugging: every load and store through the helper */
     ncpus = c->ncpus < 1 ? 1 : c->ncpus > HV_MAX_CPUS ? HV_MAX_CPUS : c->ncpus;
     m.big_lock_on = ncpus > 1 && getenv("HV_BIG_LOCK"); /* debugging: one CPU in guest code at a time */
-    HvCfgParams cfg = {.nr_cpus = (uint32_t)ncpus, .ecid = c->ecid, .seed = c->seed, .mac_en0 = {0x02, 0x48, 0x56, 0x4d, 0x00, 0x01}};
-    if (c->installer) cfg.run_installer1 = cfg.run_installer2 = 1;
-    if (getenv("HV_RUN_INSTALLER")) { /* experiment: "a,b" for the two installer words */
-        unsigned a = 0, b2 = 0;
-        sscanf(getenv("HV_RUN_INSTALLER"), "%u,%u", &a, &b2);
-        cfg.run_installer1 = a, cfg.run_installer2 = b2;
-    }
-    static const uint8_t mac[6] = {0x02, 0x48, 0x56, 0x4d, 0x00, 0x01};
-    if (hv_vmapple_create(&board, &m, cpus, (c->ram_mb ? c->ram_mb : 2048) << 20, &disk, &aux, &cfg, mac) != 0)
-        return fail(err, errlen, "Cannot build the machine (not enough memory for the guest's RAM?).");
-    if (hv_vmapple_load_rom(&board, c->rom) != 0) return fail(err, errlen, "Cannot read the ROM (AVPBooter.vmapple2.bin).");
-    hv_vmapple_reset_cpu(&board);
-    if (board.net && !c->no_net) {
-        if (hv_net_attach(&m, board.net) != 0) fprintf(stderr, "hengevm: user-mode network unavailable\n");
+    if (create_vmapple(c, (c->ram_mb ? c->ram_mb : 2048) << 20, err, errlen) != 0) return -1;
+    if (devs.net && !c->no_net) {
+        if (hv_net_attach(&m, devs.net) != 0) fprintf(stderr, "hengevm: user-mode network unavailable\n");
         else net_on = 1;
     }
-    if (board.snd && !c->no_sound) hv_audio_attach(board.snd);
-    board.poll = board_poll;
-    if (board.vusb && getenv("HV_VUSB_PROBE")) hv_usb_probe_start(board.vusb);
-    // The setter and publication share this lock: an older preboot target can
-    // never overwrite a monitor change made while the board was being built.
-    os_unfair_lock_lock(&display_lock);
-    if (display_layer_set && board.pvg) hv_pvg_lite_set_layer(board.pvg, (void *)display_layer);
-    atomic_store_explicit(&display_pvg, board.pvg, memory_order_release);
-    os_unfair_lock_unlock(&display_lock);
+    if (devs.snd && !c->no_sound) hv_audio_attach(devs.snd);
+    console_attach();
     atomic_store(&input_stopping, 0);
     return 0;
 }
@@ -303,7 +396,9 @@ void hv_vm_destroy(void) {
     hv_net_detach();
     net_on = 0;
     hv_audio_detach();
-    hv_vmapple_destroy(&board);
+    console_reset();
+    memset(&devs, 0, sizeof devs);
+    if (board_kind == HV_BOARD_VMAPPLE) hv_vmapple_destroy(&board);
     hv_disk_close(&disk);
     hv_disk_close(&aux);
     hv_machine_free(&m);
@@ -404,8 +499,8 @@ static void *cpu0_thread(void *unused) {
     kicker_started = 0;
     memset(secondary_started, 0, sizeof secondary_started);
     /* A DMA worker can still be writing after the guest CPUs have exited. */
-    hv_virtio_blk_stop(board.root_blk);
-    hv_virtio_blk_stop(board.aux_blk);
+    hv_virtio_blk_stop(devs.blk[0]);
+    hv_virtio_blk_stop(devs.blk[1]);
     hv_audio_detach();
     hv_vm_flush_disks();
     if (exit_cb) exit_cb(r);
@@ -480,27 +575,27 @@ static void stop_pointer(void) {
 static void rctrl_hold(int *owner, int down) {
     os_unfair_lock_lock(&rctrl_lock);
     *owner = down;
-    hv_xhci_key(board.usb, HID_RIGHT_CONTROL, rctrl_user || rctrl_click);
+    hv_xhci_key(devs.usb, HID_RIGHT_CONTROL, rctrl_user || rctrl_click);
     os_unfair_lock_unlock(&rctrl_lock);
 }
 
 void hv_vm_key(uint16_t code, int down) {
     if (code == LINUX_KEY_RIGHTCTRL) rctrl_hold(&rctrl_user, down);
-    else hv_xhci_key_linux(board.usb, code, down);
+    else hv_xhci_key_linux(devs.usb, code, down);
 }
 
 void hv_vm_key_hid(uint8_t usage, int down) {
     if (usage == HID_RIGHT_CONTROL) rctrl_hold(&rctrl_user, down);
-    else hv_xhci_key(board.usb, usage, down);
+    else hv_xhci_key(devs.usb, usage, down);
 }
 
 static void move_now(void *ctx) {
     if (atomic_load(&input_stopping)) return;
     int64_t packed = (int64_t)(intptr_t)ctx;
     int32_t dx = (int32_t)(packed >> 32), dy = (int32_t)packed;
-    if (dx) hv_virtio_input_send(board.mouse, HV_EV_REL, HV_REL_X, dx);
-    if (dy) hv_virtio_input_send(board.mouse, HV_EV_REL, HV_REL_Y, dy);
-    hv_virtio_input_send(board.mouse, HV_EV_SYN, 0, 0);
+    if (dx) hv_virtio_input_send(devs.mouse, HV_EV_REL, HV_REL_X, dx);
+    if (dy) hv_virtio_input_send(devs.mouse, HV_EV_REL, HV_REL_Y, dy);
+    hv_virtio_input_send(devs.mouse, HV_EV_SYN, 0, 0);
 }
 
 void hv_vm_mouse_move(int dx, int dy) {
@@ -512,8 +607,8 @@ static void left_update(void) {
     int down = left_user || left_click;
     if (down == left_sent) return;
     left_sent = down;
-    hv_virtio_input_send(board.mouse, HV_EV_KEY, HV_BTN_LEFT, down);
-    hv_virtio_input_send(board.mouse, HV_EV_SYN, 0, 0);
+    hv_virtio_input_send(devs.mouse, HV_EV_KEY, HV_BTN_LEFT, down);
+    hv_virtio_input_send(devs.mouse, HV_EV_SYN, 0, 0);
 }
 
 static void button_now(void *ctx) {
@@ -535,8 +630,8 @@ static void button_now(void *ctx) {
             rctrl_hold(&rctrl_click, 0);
         }
     } else if (button == 2) {
-        hv_virtio_input_send(board.mouse, HV_EV_KEY, HV_BTN_MIDDLE, down);
-        hv_virtio_input_send(board.mouse, HV_EV_SYN, 0, 0);
+        hv_virtio_input_send(devs.mouse, HV_EV_KEY, HV_BTN_MIDDLE, down);
+        hv_virtio_input_send(devs.mouse, HV_EV_SYN, 0, 0);
     }
 }
 
@@ -549,8 +644,8 @@ void hv_vm_mouse_button(int button, int down) {
 static void wheel(uint16_t axis, int amount) {
     while (amount) {
         int piece = amount > 100 ? 100 : amount < -100 ? -100 : amount;
-        hv_virtio_input_send(board.mouse, HV_EV_REL, axis, piece);
-        hv_virtio_input_send(board.mouse, HV_EV_SYN, 0, 0);
+        hv_virtio_input_send(devs.mouse, HV_EV_REL, axis, piece);
+        hv_virtio_input_send(devs.mouse, HV_EV_SYN, 0, 0);
         amount -= piece;
     }
 }
@@ -563,12 +658,12 @@ void hv_vm_touch(int id, int phase, int x, int y, uint32_t ts_ms) {
     if (x > HV_TP_SENSOR_X) x = HV_TP_SENSOR_X;
     if (y < 0) y = 0;
     if (y > HV_TP_SENSOR_Y) y = HV_TP_SENSOR_Y;
-    hv_xhci_touch(board.usb, id, phase, x, y, ts_ms);
+    hv_xhci_touch(devs.usb, id, phase, x, y, ts_ms);
 }
 
-void hv_vm_touch_frame(uint32_t ts_ms) { hv_xhci_touch_frame(board.usb, ts_ms); }
+void hv_vm_touch_frame(uint32_t ts_ms) { hv_xhci_touch_frame(devs.usb, ts_ms); }
 
-void hv_vm_touch_button(int down) { hv_xhci_touch_button(board.usb, down); }
+void hv_vm_touch_button(int down) { hv_xhci_touch_button(devs.usb, down); }
 
 int hv_vm_pointer(int *x, int *y) {
     HvPvgLite *pvg = atomic_load_explicit(&display_pvg, memory_order_acquire);

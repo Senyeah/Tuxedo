@@ -98,6 +98,10 @@ int main(void) {
     int initial_fds = fds();
     unsigned initial_threads = threads();
     unsigned initial_dead_ports = dead_ports();
+    /* No virt board yet: refused before anything is built. */
+    HvVmConfig virt = {.board = HV_BOARD_VIRT, .disk = disk};
+    check("virt board refused", hv_vm_create(&virt, error, sizeof error) != 0 && strstr(error, "virt"));
+    check("virt refusal leaves nothing to release", hv_vm_board() != NULL && henge_vm_can_start() && fds() == initial_fds);
     /* Missing ROM fails after disks, RAM and device workers were created. */
     for (int i = 0; i < 3; i++) {
         check("failed boot reports an error", henge_vm_boot(rom, disk, aux, 1, 0, 64, 4, error, sizeof error) != 0);
