@@ -146,6 +146,13 @@ struct MachineModelTests {
         precondition(!String(decoding: data, as: UTF8.self).contains("sharpText"))
         precondition(ScreenPreset.fhd.denseMM == (width: 185, height: 104) && ScreenPreset.qhd.denseMM == (width: 246, height: 139))
 
+        // A9: acceleration is off unless chosen, and is left out of the JSON when never chosen.
+        precondition(old[0].accel == nil && chosenBack[0].accel == nil)
+        precondition(!String(decoding: data, as: UTF8.self).contains("accel"))
+        chosen.accel = true
+        let accelBack = MachineList.decode(try JSONEncoder().encode([chosen]), diskExists: { _ in true })!
+        precondition(accelBack[0].accel == true)
+
         print("machine model: ok")
     }
 }

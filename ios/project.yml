@@ -18,6 +18,9 @@ settings:
     # The app's entitlements file. Override on the xcodebuild command line (the JIT helper doesn't use it, so a
     # personal team can sign the app with fewer entitlements without touching the helper).
     HENGE_ENTITLEMENTS: Henge/Henge.entitlements
+    # Where tools/gfx/build-deps.sh put ANGLE, libepoxy and virglrenderer (build/gfx of the main checkout).
+    # sim_build.sh overrides it from a worktree.
+    HENGE_GFX_DIR: $(SRCROOT)/../build/gfx
     ARCHS: arm64
     ONLY_ACTIVE_ARCH: YES
     ENABLE_BITCODE: NO
@@ -72,6 +75,14 @@ targets:
           - "$(inherited)"
           # The engine (make ios-lib) and what its network needs (scripts/fetch_deps.sh).
           - "-lhengevm"
+          # The renderer behind Graphics acceleration (A9): the engine is built with GFX=1.
+          - "$(HENGE_GFX_DIR)/ios/lib/libvirglrenderer.a"
+          - "$(HENGE_GFX_DIR)/ios/lib/libepoxy.a"
+          - "$(HENGE_GFX_DIR)/ios/lib/libEGL.a"
+          - "$(HENGE_GFX_DIR)/ios/lib/libGLESv2.a"
+          - "-lc++"
+          - "-framework"
+          - "QuartzCore"
           # The installer (tools/build_ios_restore.sh): libirecovery, usbmuxd, idevicerestore and their libraries.
           - "-lhengerestore"
           - "-lz"
@@ -102,7 +113,7 @@ targets:
         script: |
           set -e
           cd "$SRCROOT/.."
-          make ios-lib build/henge-agent.gz
+          make ios-lib GFX=1 build/henge-agent.gz
           ./tools/build_ios_restore.sh
         basedOnDependencyAnalysis: false
     postBuildScripts:
@@ -219,6 +230,13 @@ targets:
         OTHER_LDFLAGS:
           - "$(inherited)"
           - "-lhengevm"
+          - "$(HENGE_GFX_DIR)/sim/lib/libvirglrenderer.a"
+          - "$(HENGE_GFX_DIR)/sim/lib/libepoxy.a"
+          - "$(HENGE_GFX_DIR)/sim/lib/libEGL.a"
+          - "$(HENGE_GFX_DIR)/sim/lib/libGLESv2.a"
+          - "-lc++"
+          - "-framework"
+          - "QuartzCore"
           - "-lhengerestore"
           - "-lz"
           - "-liconv"
@@ -240,7 +258,7 @@ targets:
         script: |
           set -e
           cd "$SRCROOT/.."
-          make ios-sim-lib build/henge-agent.gz
+          make ios-sim-lib GFX=1 build/henge-agent.gz
           ./tools/build_ios_restore.sh sim
         basedOnDependencyAnalysis: false
     postBuildScripts:

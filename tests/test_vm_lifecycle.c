@@ -214,10 +214,10 @@ int main(void) {
             {"power key", FW_OFF, 1, HENGE_VM_OUTCOME_SHUTDOWN, "KEY\n"},
         };
         check("no board before a boot", henge_vm_board_kind() == -1);
-        check("missing firmware file fails", henge_vm_boot_linux("/nonexistent/u-boot.bin", disk, 64, 2, error, sizeof error) != 0 &&
+        check("missing firmware file fails", henge_vm_boot_linux("/nonexistent/u-boot.bin", disk, 64, 2, 0, error, sizeof error) != 0 &&
                                                 henge_vm_state() == 0 && henge_vm_can_start() && fds() == initial_fds &&
                                                 threads_settled());
-        check("no firmware fails", henge_vm_boot_linux(NULL, disk, 64, 2, error, sizeof error) != 0 && henge_vm_state() == 0);
+        check("no firmware fails", henge_vm_boot_linux(NULL, disk, 64, 2, 0, error, sizeof error) != 0 && henge_vm_state() == 0);
         for (unsigned i = 0; i < sizeof cases / sizeof *cases; i++) {
             for (int again = 0; again < 2; again++) {
                 Fw f = {0};
@@ -225,13 +225,13 @@ int main(void) {
                 fw_print(&f, cases[i].say);
                 fw_end(&f, cases[i].how);
                 write_file(rom, f.w, f.n * sizeof f.w[0]);
-                int rc = henge_vm_boot_linux(rom, disk, 64, 2, error, sizeof error);
+                int rc = henge_vm_boot_linux(rom, disk, 64, 2, 0, error, sizeof error);
                 if (rc) fprintf(stderr, "virt %s: %s\n", cases[i].name, error);
                 check("virt boots through the bridge", rc == 0);
                 if (rc) break;
                 runs++;
                 check("virt board kind", henge_vm_board_kind() == HENGE_VM_BOARD_LINUX);
-                check("a second start is refused while running", henge_vm_boot_linux(rom, disk, 64, 2, error, sizeof error) != 0 &&
+                check("a second start is refused while running", henge_vm_boot_linux(rom, disk, 64, 2, 0, error, sizeof error) != 0 &&
                                                                   henge_vm_state() == 1);
                 henge_vm_console_write((const uint8_t *)"x", 1); /* nobody reads it; it must not hurt */
                 size_t n;
@@ -269,7 +269,7 @@ int main(void) {
         fw_flood(&f);
         fw_end(&f, FW_OFF);
         write_file(rom, f.w, f.n * sizeof f.w[0]);
-        check("virt flood boots", henge_vm_boot_linux(rom, disk, 64, 2, error, sizeof error) == 0);
+        check("virt flood boots", henge_vm_boot_linux(rom, disk, 64, 2, 0, error, sizeof error) == 0);
         for (int w = 0; w < 10000 && henge_vm_state() != 2; w++) usleep(1000);
         size_t total = 0, got;
         static uint8_t flood[(1 << 18) + 64];

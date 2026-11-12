@@ -58,6 +58,10 @@ struct MacSettingsView: View {
                 DeskHeading("Screen")
                 if mac.guest == .linux && !Device.isPad { linuxScreen } else { macScreen }
                 if mac.guest == .mac && !mac.isRetina { sharpText }
+                if mac.guest == .linux {
+                    DeskHeading("Graphics")
+                    graphics
+                }
 
                 DeskHeading(mac.guest == .linux ? "Disk size" : "Storage")
                 VStack(alignment: .leading, spacing: 11) {
@@ -200,6 +204,17 @@ struct MacSettingsView: View {
             return "The external display's size (\(size)). Without it, \(mac.screen.width) × \(mac.screen.height). \(later)"
         }
         return "\(mac.screen.width) × \(mac.screen.height). \(Device.isPad ? "Performance renders about 30% fewer pixels. " : "")\(later)"
+    }
+
+    private var graphics: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("Graphics acceleration", isOn: Binding(get: { mac.accel ?? false }, set: { mac.accel = $0; save() }))
+                .font(.system(size: 16))
+            Text("The guest draws 3D and its desktop on this \(Device.name)'s GPU (OpenGL ES 3.0). It takes more memory, and a graphics fault can stop the machine. Experimental. Applies the next time this machine starts.")
+                .font(.system(size: 13)).foregroundStyle(Desk.dim)
+        }
+        .padding(17)
+        .deskCard()
     }
 
     private var sharpText: some View {

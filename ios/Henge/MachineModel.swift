@@ -52,6 +52,8 @@ struct VirtualMac: Identifiable, Codable, Hashable {
     var screenFollowsExternal: Bool?
     /// R9: macOS "Sharp text (HiDPI)". Missing: on only for an external screen taller than 1440 px.
     var sharpText: Bool?
+    /// A9: Linux "Graphics acceleration" (virgl). Missing: off.
+    var accel: Bool?
 
     var directory: URL { MachinePaths.directory(for: id) }
     var rom: URL { directory.appendingPathComponent("AVPBooter.vmapple2.bin") }
