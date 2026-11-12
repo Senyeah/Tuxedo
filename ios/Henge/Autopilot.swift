@@ -13,7 +13,7 @@ import UIKit
 ///   type TEXT          typed into the guest's keyboard (the log shows only how long it is)
 ///   console TEXT       a line typed into a Linux machine's console, with Return (the log shows only how long it is)
 ///   console-wait SECONDS TEXT   wait until TEXT is in the console's newest output, or SECONDS pass (the log says which)
-///   console-tail N     the last N characters of the console's newest output, into the log
+///   console-tail N     the last N characters of the console's newest output, into the log (raw guest text: keep henge.log private)
 ///   key CODE           a Linux key code (28 is Return, 1 is Escape)
 ///   cmd KEY            KEY (a character, or space) with Command held
 ///   move X Y, click X Y  the pointer to a spot on the guest's screen (its pixels), and a click there

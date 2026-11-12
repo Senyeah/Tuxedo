@@ -78,9 +78,11 @@ Launch with `simctl`, not under a debugger. Memory figures in Settings read zero
 
 ## Graphics acceleration (Linux machines)
 
-Both app targets link the engine built with `GFX=1` and the static ANGLE, libepoxy and virglrenderer
-from `build/gfx/{ios,sim}` (`tools/gfx/build-deps.sh`; `HENGE_GFX_DIR` says where, and `sim_build.sh`
-sets it from a worktree). A Linux machine has a "Graphics acceleration" switch in its settings, off by
+It is opt-in, as on the Mac. With `HENGE_GFX=1` both app targets build the engine with `GFX=1` and link
+the static ANGLE, libepoxy and virglrenderer from `build/gfx/{ios,sim}` (`tools/gfx/build-deps.sh`).
+`sim_build.sh` and `package_ipa.sh` set `HENGE_GFX` and `HENGE_GFX_DIR` (from the main checkout, also in a
+worktree) when the libraries exist (`scripts/gfx_env.sh`). Without them, and in CI, the app builds with
+no acceleration and the switch shows an error. In Xcode, set both settings by hand. A Linux machine has a "Graphics acceleration" switch in its settings, off by
 default, passed to `henge_vm_boot_linux`. GPU memory (textures, render targets, the scanout's `IOSurface`)
 counts against the app on the phone, unlike guest RAM, and `phys_footprint` in the simulator does not
 show it, so memory figures need the device. ANGLE, libepoxy and virglrenderer licences are in

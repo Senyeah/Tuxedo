@@ -218,6 +218,17 @@ int main(void) {
                                                 henge_vm_state() == 0 && henge_vm_can_start() && fds() == initial_fds &&
                                                 threads_settled());
         check("no firmware fails", henge_vm_boot_linux(NULL, disk, 64, 2, 0, error, sizeof error) != 0 && henge_vm_state() == 0);
+#ifndef HV_GFX
+        {
+            Fw f = {0};
+            fw_end(&f, FW_OFF);
+            write_file(rom, f.w, f.n * sizeof f.w[0]);
+            error[0] = 0;
+            check("acceleration without a GFX engine fails cleanly",
+                  henge_vm_boot_linux(rom, disk, 64, 2, 1, error, sizeof error) != 0 && strstr(error, "no graphics acceleration") &&
+                      henge_vm_state() == 0 && henge_vm_can_start() && fds() == initial_fds && threads_settled());
+        }
+#endif
         for (unsigned i = 0; i < sizeof cases / sizeof *cases; i++) {
             for (int again = 0; again < 2; again++) {
                 Fw f = {0};

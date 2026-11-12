@@ -6,16 +6,15 @@ cd "$(dirname "$0")/../.."
 BUNDLE=com.henge.app
 DD=build/ios-sim-app
 
-# The graphics libraries live in the main checkout's build/gfx, also from a worktree.
-GFX_ROOT="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/build/gfx"
-make ios-sim-lib GFX=1 build/henge-agent.gz
+. ios/scripts/gfx_env.sh
+make ios-sim-lib ${HENGE_GFX:+GFX=1} build/henge-agent.gz
 tools/build_ios_restore.sh sim
 (cd ios && xcodegen generate)
 LOG="$DD/build.log"
 mkdir -p "$DD"
 # The old Henge.app survives a failed build, so the exit code decides, not the bundle.
 if ! xcodebuild -project ios/Henge.xcodeproj -scheme HengeSim -skipPackagePluginValidation \
-  -destination 'generic/platform=iOS Simulator' -configuration Debug -derivedDataPath "$DD" HENGE_GFX_DIR="$GFX_ROOT" build >"$LOG" 2>&1; then
+  -destination 'generic/platform=iOS Simulator' -configuration Debug -derivedDataPath "$DD" HENGE_GFX_DIR="$GFX_ROOT" HENGE_GFX="$HENGE_GFX" build >"$LOG" 2>&1; then
   grep -E 'error:' "$LOG" >&2 || tail -20 "$LOG" >&2
   echo "build failed (log: $LOG)" >&2
   exit 1
