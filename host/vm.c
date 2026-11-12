@@ -63,6 +63,11 @@ static _Atomic int kicker_stopped;
 static pthread_t primary_thread;
 static int primary_started;
 static void sound_stopped(void);
+/* hv_vm_pause: one caller at a time; the kicker sleeps meanwhile. */
+static pthread_mutex_t pause_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t pause_cv = PTHREAD_COND_INITIALIZER;
+static _Atomic int vm_paused, in_background;
+static int gpu_held, gpu_gone = 1; /* under pause_mu; gone: no machine with a GPU */
 
 HvMachine *hv_vm_machine(void) { return &m; }
 HvVmapple *hv_vm_board(void) { return board_kind == HV_BOARD_VMAPPLE ? &board : NULL; }
@@ -451,6 +456,9 @@ static int create_virt(const HvVmConfig *c, uint64_t ram_size, char *err, size_t
     virt.poll = board_poll;
     if (virt.gpu) {
         vgpu = (VgpuDisplay){.gpu = virt.gpu, .presenter = hv_vgpu_metal_create(virt.gpu)};
+        pthread_mutex_lock(&pause_mu);
+        gpu_gone = 0, gpu_held = 0;
+        pthread_mutex_unlock(&pause_mu);
         devs.display = &vgpu_display, devs.display_opaque = &vgpu;
         if (c->accel) {
 #ifdef HV_GFX
@@ -532,6 +540,9 @@ void hv_vm_destroy(void) {
     hv_audio_detach();
     console_reset();
     memset(&devs, 0, sizeof devs);
+    pthread_mutex_lock(&pause_mu); /* a pause in flight finishes first */
+    gpu_gone = 1, gpu_held = 0;
+    pthread_mutex_unlock(&pause_mu);
 #ifdef HV_GFX
     if (virgl) hv_vgpu_metal_set_3d(vgpu.presenter, NULL, NULL);
 #endif
@@ -562,10 +573,34 @@ void hv_vm_destroy(void) {
     machine_created = 0;
 }
 
-/* hv_vm_pause: one caller at a time; the kicker sleeps meanwhile. */
-static pthread_mutex_t pause_mu = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t pause_cv = PTHREAD_COND_INITIALIZER;
-static _Atomic int vm_paused, in_background;
+#define GPU_DRAIN_MS 1500
+
+static uint64_t mono_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
+
+/* Under pause_mu, after the CPUs stop: no guest work can start now. iOS kills an app that commits Metal work in the
+   background, so the renderer finishes what it holds, then the presenter stops. Resume starts the presenter again. */
+static void gpu_hold_locked(int on) {
+    if (gpu_gone || on == gpu_held) return;
+    gpu_held = on;
+    if (!on) {
+        hv_vgpu_metal_resume(vgpu.presenter);
+        return;
+    }
+#ifdef HV_GFX
+    if (virgl) {
+        uint64_t end = mono_ms() + GPU_DRAIN_MS;
+        int slow = hv_virtio_gpu_wait_idle(virt.gpu, GPU_DRAIN_MS) != 0;
+        uint64_t now = mono_ms();
+        if (hv_vgpu_virgl_quiesce(virgl, now < end ? (unsigned)(end - now) : 0) != 0) slow = 1;
+        if (slow) fprintf(stderr, "hengevm: the renderer was still busy after %d ms in the pause\n", GPU_DRAIN_MS);
+    }
+#endif
+    hv_vgpu_metal_pause(vgpu.presenter);
+}
 
 static void *kicker_thread(void *unused) {
     (void)unused;
@@ -593,6 +628,7 @@ int hv_vm_pause(void) {
             atomic_store(&vm_paused, 1);
         }
     }
+    if (r == 0) gpu_hold_locked(1);
     pthread_mutex_unlock(&pause_mu);
     return r;
 }
@@ -600,6 +636,7 @@ int hv_vm_pause(void) {
 double hv_vm_resume(void) {
     pthread_mutex_lock(&pause_mu);
     uint64_t gap = 0;
+    gpu_hold_locked(0); /* before the CPUs: the guest wakes to a drawing presenter */
     if (atomic_load(&vm_paused)) {
         hv_audio_hold(0);
         gap = hv_machine_resume(&m); /* 0 if a stop released it already */
@@ -611,6 +648,24 @@ double hv_vm_resume(void) {
 }
 
 int hv_vm_paused(void) { return atomic_load(&vm_paused); }
+
+int hv_vm_gpu_counts(uint64_t *frames, uint64_t *requests) {
+    pthread_mutex_lock(&pause_mu); /* the machine's teardown waits for it */
+    int have = !gpu_gone;
+    *frames = *requests = 0;
+    if (have) *frames = hv_vgpu_metal_frames(vgpu.presenter);
+#ifdef HV_GFX
+    if (have && virgl) {
+        HvVgpuVirglStats st;
+        hv_vgpu_virgl_stats(virgl, &st);
+        *requests = st.requests;
+    }
+#endif
+    pthread_mutex_unlock(&pause_mu);
+    return have ? gpu_held : -1;
+}
+
+int hv_vm_background_pauses(int accelerated, int sound_playing) { return accelerated || !sound_playing; }
 
 static dispatch_queue_t background_queue(void) {
     static dispatch_queue_t q;
@@ -630,8 +685,17 @@ static void sound_stopped(void) {
 void hv_vm_set_background(int on) {
     atomic_store(&in_background, on); /* before the check: a stream that stops meanwhile still pauses */
     dispatch_sync(background_queue(), ^{
-        if (!on) hv_vm_resume();
-        else if (!hv_audio_playing()) hv_vm_pause();
+        if (!on) {
+            hv_vm_resume();
+            return;
+        }
+        int accel = 0;
+#ifdef HV_GFX
+        pthread_mutex_lock(&pause_mu);
+        accel = !gpu_gone && virgl;
+        pthread_mutex_unlock(&pause_mu);
+#endif
+        if (hv_vm_background_pauses(accel, hv_audio_playing())) hv_vm_pause();
     });
 }
 

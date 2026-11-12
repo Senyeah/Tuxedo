@@ -24,6 +24,7 @@
 #include "pvg.h"
 #include "pvg_lite.h"
 #include "vm.h"
+#include "audio_mac.h"
 #include "install.h"
 #include "virt_window.h"
 #include <ImageIO/ImageIO.h>
@@ -1049,10 +1050,33 @@ static void sigterm_as_power_key(void) {
 }
 
 /* Ctrl-A s and SIGTSTP: what the iOS app does in the background (hv_vm_pause). */
+static void say_gpu(const char *when) {
+    uint64_t frames, requests;
+    int g = hv_vm_gpu_counts(&frames, &requests);
+    if (g >= 0) fprintf(stderr, "hengevm: gpu %s %s: %llu frames, %llu renderer requests\n", g ? "held" : "running", when,
+                        (unsigned long long)frames, (unsigned long long)requests);
+}
+
 static void toggle_pause(void) {
-    if (hv_vm_paused()) fprintf(stderr, "hengevm: resumed; %.1f s hidden from the guest\n", hv_vm_resume());
-    else if (hv_vm_pause() == 0) fprintf(stderr, "hengevm: paused (Ctrl-A s resumes)\n");
-    else fprintf(stderr, "hengevm: cannot pause\n");
+    if (hv_vm_paused()) {
+        say_gpu("before the resume");
+        fprintf(stderr, "hengevm: resumed; %.1f s hidden from the guest\n", hv_vm_resume());
+    } else if (hv_vm_pause() == 0) {
+        fprintf(stderr, "hengevm: paused (Ctrl-A s resumes)\n");
+        say_gpu("after the pause");
+    } else fprintf(stderr, "hengevm: cannot pause\n");
+}
+
+/* Ctrl-A b: the app's background policy (hv_vm_set_background), so a check can run it with the guest playing sound. */
+static void toggle_background(void) {
+    static int away;
+    away = !away;
+    if (!away) say_gpu("before the foreground");
+    int sound = hv_audio_playing();
+    hv_vm_set_background(away);
+    fprintf(stderr, "hengevm: %s with the guest's sound %s: %s\n", away ? "background" : "foreground",
+            sound ? "playing" : "silent", hv_vm_paused() ? "paused" : "running");
+    if (away) say_gpu("after the background");
 }
 
 /* SIGTSTP pauses the machine and then stops the process, as iOS freezes the app; SIGCONT resumes it. */
@@ -1065,20 +1089,23 @@ static void sigtstp_as_suspend(void) {
     tstp = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGTSTP, 0, q);
     dispatch_source_set_event_handler(tstp, ^{
         if (hv_vm_paused() || hv_vm_pause() != 0) return;
+        say_gpu("after the pause");
         fprintf(stderr, "hengevm: paused and stopped (SIGCONT resumes)\n");
         atomic_store(&stopped, 1);
         kill(getpid(), SIGSTOP);
     });
     cont = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGCONT, 0, q);
     dispatch_source_set_event_handler(cont, ^{
-        if (atomic_exchange(&stopped, 0) && hv_vm_paused())
+        if (atomic_exchange(&stopped, 0) && hv_vm_paused()) {
+            say_gpu("before the resume");
             fprintf(stderr, "hengevm: resumed; %.1f s hidden from the guest\n", hv_vm_resume());
+        }
     });
     dispatch_resume(tstp);
     dispatch_resume(cont);
 }
 
-/* Stdin to the guest's UART. Ctrl-A x quits, Ctrl-A p presses the power key, Ctrl-A s pauses or resumes and
+/* Stdin to the guest's UART. Ctrl-A x quits, Ctrl-A p presses the power key, Ctrl-A s pauses or resumes, Ctrl-A b enters or leaves the app's background and
    Ctrl-A Ctrl-A sends one Ctrl-A. */
 static void *stdin_thread(void *unused) {
     (void)unused;
@@ -1103,6 +1130,7 @@ static void *stdin_thread(void *unused) {
             }
             if (c == 'p' || c == 'P') hv_vm_power_button();
             if (c == 's' || c == 'S') toggle_pause();
+            if (c == 'b' || c == 'B') toggle_background();
             if (c == 1) out[k++] = 1;
         }
         if (k) hv_vm_console_input(out, k);
@@ -1273,7 +1301,7 @@ static void *cpu_thread(void *unused) {
 
 static void usage(void) {
     fprintf(stderr, "usage: hengevm --board virt (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N] [--display WxH] [--gpu-accel] [--screenshot PNG] [--window]\n"
-                    "       (virt: Ctrl-A x quits, Ctrl-A p and SIGTERM press the power key, Ctrl-A s pauses and resumes, SIGTSTP pauses and stops until SIGCONT; exit status 0 shutdown, 3 restart with --no-reboot, 4 panic or engine error)\n");
+                    "       (virt: Ctrl-A x quits, Ctrl-A p and SIGTERM press the power key, Ctrl-A s pauses and resumes, Ctrl-A b is the app's background, SIGTSTP pauses and stops until SIGCONT; exit status 0 shutdown, 3 restart with --no-reboot, 4 panic or engine error)\n");
     fprintf(stderr, "usage: hengevm [--board vmapple] --rom FILE --disk FILE --aux FILE --ecid N [--seed N] [--ram MB] [--log N] [--trace 1] [--screenshot PNG] [--watch VA] [--stats SECONDS [--profile 1]] [--cpus N] [--window] [--no-pvg] [--no-chain] [--break PC [--break-hits N]] [--dump PA LEN FILE] [--aux-offset BYTES] [--install IPSW]\n");
     exit(2);
 }

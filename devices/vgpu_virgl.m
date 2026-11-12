@@ -57,9 +57,17 @@ typedef struct ScanJob {
     int done, gone, refs; // gone: the presenter gave up waiting; refs: it and the renderer
 } ScanJob;
 
+// A pause waits on one: the thread runs glFinish when it reaches it, so the GPU holds nothing before the app leaves.
+typedef struct Barrier {
+    pthread_mutex_t mu;
+    pthread_cond_t cv;
+    int done, refs;
+} Barrier;
+
 typedef struct Job {
     struct Job *next;
     ScanJob *scan; // set: not a guest request
+    struct Barrier *barrier; // set: not a guest request either
     HvGpu3dReq req; /* its pointers live until done(), as the device promises */
     void *cookie;
 } Job;
@@ -334,8 +342,11 @@ static void log_error(HvVgpuVirgl *r, const HvGpu3dReq *q, uint32_t st) {
 
 static void execute(HvVgpuVirgl *r, Job *j) {
     const HvGpu3dReq *q = &j->req;
+    static int slow_us = -1; // HV_VIRGL_SLOW_US (testing): a slow renderer keeps a queue, so a pause has something to wait for
+    if (slow_us < 0) slow_us = getenv("HV_VIRGL_SLOW_US") ? atoi(getenv("HV_VIRGL_SLOW_US")) : 0;
     uint64_t t0 = clock_gettime_nsec_np(CLOCK_MONOTONIC);
     uint32_t st = run(r, q);
+    if (slow_us > 0) usleep((useconds_t)slow_us);
     uint64_t dt = clock_gettime_nsec_np(CLOCK_MONOTONIC) - t0;
     atomic_fetch_add(&r->busy_ns, dt);
     if (dt > atomic_load(&r->longest_ns)) atomic_store(&r->longest_ns, dt);
@@ -792,7 +803,16 @@ static void *thread_main(void *arg) {
         pthread_mutex_unlock(&r->mu);
 
         @autoreleasepool {
-            if (j && j->scan) {
+            if (j && j->barrier) {
+                if (!stopping && eglGetCurrentContext() != EGL_NO_CONTEXT) glFinish();
+                Barrier *b = j->barrier;
+                pthread_mutex_lock(&b->mu);
+                b->done = 1;
+                int last = --b->refs == 0;
+                pthread_cond_broadcast(&b->cv);
+                pthread_mutex_unlock(&b->mu);
+                if (last) free(b);
+            } else if (j && j->scan) {
                 if (!stopping) scan_blit(r, j->scan);
                 scan_unref(j->scan, 1); // last touch: the presenter may have left
             } else if (j && stopping) finish(j->cookie, HV_GPU3D_ERR_UNSPEC); // a stop does not run guest requests
@@ -955,6 +975,43 @@ void hv_vgpu_virgl_destroy(HvVgpuVirgl *r) {
     pthread_cond_destroy(&r->cv);
     atomic_store(&active, NULL);
     free(r);
+}
+
+int hv_vgpu_virgl_quiesce(HvVgpuVirgl *r, unsigned wait_ms) {
+    if (!r) return 0;
+    Barrier *b = calloc(1, sizeof *b);
+    Job *j = calloc(1, sizeof *j);
+    if (!b || !j) {
+        free(b), free(j);
+        return -1;
+    }
+    pthread_mutex_init(&b->mu, NULL);
+    pthread_cond_init(&b->cv, NULL);
+    b->refs = 2;
+    j->barrier = b;
+    pthread_mutex_lock(&r->mu);
+    if (r->stop) {
+        pthread_mutex_unlock(&r->mu);
+        free(j), free(b);
+        return 0;
+    }
+    if (r->tail) r->tail->next = j;
+    else r->head = j;
+    r->tail = j;
+    pthread_cond_signal(&r->cv);
+    pthread_mutex_unlock(&r->mu);
+    struct timespec dl;
+    clock_gettime(CLOCK_REALTIME, &dl);
+    dl.tv_sec += wait_ms / 1000, dl.tv_nsec += (long)(wait_ms % 1000) * 1000000L;
+    if (dl.tv_nsec >= 1000000000L) dl.tv_sec++, dl.tv_nsec -= 1000000000L;
+    pthread_mutex_lock(&b->mu);
+    while (!b->done)
+        if (pthread_cond_timedwait(&b->cv, &b->mu, &dl) != 0) break;
+    int ok = b->done;
+    int last = --b->refs == 0;
+    pthread_mutex_unlock(&b->mu);
+    if (last) free(b); // the thread already left it
+    return ok ? 0 : -1;
 }
 
 void hv_vgpu_virgl_abandon(HvVgpuVirgl *r) {

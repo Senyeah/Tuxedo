@@ -360,6 +360,26 @@ static void test_pixels(void) {
         ok = hv_vgpu_metal_drawn(p, drawn, W1, H1) && is1(drawn + (31 * W1 + 63) * 4, 63, 31, 2);
     check("the new layer shows what changed while there was none", ok, 1);
 
+    /* A9c: paused, nothing is drawn or committed, even for a new picture or a new layer; the resume draws once. */
+    hv_vgpu_metal_pause(p);
+    uint64_t f3 = hv_vgpu_metal_frames(p);
+    paint1(4);
+    transfer(1, 0, 0, W1, H1, W1 * 4);
+    flush(1, 0, 0, W1, H1);
+    hv_vgpu_metal_set_layer(p, (__bridge void *)second);
+    usleep(300000);
+    check("no frames while paused", hv_vgpu_metal_frames(p), f3);
+    hv_vgpu_metal_pause(p); /* twice is harmless */
+    hv_vgpu_metal_resume(p);
+    ok = 0;
+    for (double end = now() + 2; now() < end && !ok; usleep(2000))
+        ok = hv_vgpu_metal_frames(p) > f3 && hv_vgpu_metal_drawn(p, drawn, W1, H1) && is1(drawn + (31 * W1 + 63) * 4, 63, 31, 4);
+    check("the resume draws what changed while paused", ok, 1);
+    hv_vgpu_metal_resume(p); /* without a pause: harmless */
+    paint1(2);
+    transfer(1, 0, 0, W1, H1, W1 * 4);
+    flush(1, 0, 0, W1, H1);
+
     /* A scanout larger than the display mode (1920 x 1080) and the presenter's pixel limit. */
     check("create a large resource", create(5, HV_VGPU_B8G8R8X8, BIG_W, BIG_H), OK);
     paint_big(BIG_W / 2, 0, BIG_W / 2, BIG_H);

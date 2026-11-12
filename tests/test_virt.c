@@ -2866,6 +2866,24 @@ static void test_gpu3d_reset(HvVirtioGpu *g) {
     check("reset: nothing pending", g->npend == 0 && g->nopen == 0 && g->pend_bytes == 0, 1);
     check("reset: contexts are gone", c_ctx_destroy(7), G3_BAD_CTX);
 
+    /* wait_idle (the app's pause): 0 when the renderer holds nothing, a time out while it holds a request */
+    check("wait_idle with nothing outstanding", hv_virtio_gpu_wait_idle(g, 0), 0);
+    c_ctx_create(8, 0, "idle");
+    fk.hold = 1, fk.nheld = 0;
+    q_hdr(0x207, 8), q32(24, 8);
+    Seg si = {G3_DATA, 8, 0};
+    int hi = g3_post(32, &si, 1, 24);
+    g3_kick();
+    g3_poll();
+    check("wait_idle: a submit is with the renderer", fk.nheld, 1);
+    check("wait_idle times out while it holds one", hv_virtio_gpu_wait_idle(g, 30), (uint64_t)-1);
+    fk.hold = 0;
+    fk_release_all();
+    check("wait_idle is 0 once it answered", hv_virtio_gpu_wait_idle(g, 1000), 0);
+    g3_poll();
+    check("wait_idle: the answer is delivered after", g3_done(hi), 1);
+    c_ctx_destroy(8);
+
     /* a renderer that never finishes: the reset gives up, and a late answer is harmless */
     c_create(0, 601, 0, 0, 64, 1, 1, 1, 0, 0);
     c_ctx_create(8, 0, "late");

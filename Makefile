@@ -198,6 +198,17 @@ test-linux-accel:
 	uv run tools/linux/accel-check.py --hengevm $(ACCEL_B)/hengevm $(ACCEL_ARGS)
 .PHONY: test-linux-accel
 
+# A9c: a paused accelerated machine sends no work to the renderer: the desktop runs glmark2 on virgl and hengevm pauses (Ctrl-A s,
+# SIGTSTP, Ctrl-A b with guest sound), restarts, and powers off while paused. Builds hengevm with GFX=1 as test-linux-accel does.
+# GPU_PAUSE_ARGS="--seconds 60" holds each pause for a minute.
+test-linux-gpu-pause:
+	@if [ ! -d "$(GFX_DIR)" ]; then echo "test-linux-gpu-pause: skipped: no graphics libraries in $(GFX_DIR)"; exit 0; fi; \
+	mkdir -p $(ACCEL_B) && \
+	{ [ -f $(ACCEL_B)/mac-restore/libhengerestore.a ] || { $(MAKE) build/mac-restore/libhengerestore.a && cp -R build/mac-restore $(ACCEL_B)/ && touch $(ACCEL_B)/mac-restore/libhengerestore.a; }; } && \
+	$(MAKE) GFX=1 B=$(ACCEL_B) $(ACCEL_B)/hengevm && \
+	uv run tools/linux/gpu-pause-check.py --hengevm $(ACCEL_B)/hengevm $(GPU_PAUSE_ARGS)
+.PHONY: test-linux-gpu-pause
+
 # A10: the shader cache. Two hengevm processes share one cache directory: the first writes it, the second reads it and starts the terrain scene at least 2 times faster.
 # STALL_ARGS="--cache off --processes 1" measures without the cache (no check).
 test-linux-shader-cache:

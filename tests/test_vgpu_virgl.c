@@ -549,6 +549,83 @@ static void test_reset(void) {
     check("ctx destroy of a gone context", c_ctx_destroy(1), 0x1204);
 }
 
+static HvVgpuMetal *teardown_pm; // set by test_pause: still paused
+
+/* A9c: the app's pause with the CPUs stopped. Nothing here polls, as a stopped CPU does not: the renderer finishes
+   what it holds, the GPU goes quiet, the presenter stops; guest requests are answered only after the resume. */
+static void pause_gpu(HvVgpuMetal *pm) {
+    check("pause: the renderer holds nothing in time", hv_virtio_gpu_wait_idle(b.gpu, 3000), 0);
+    check("pause: the renderer is quiet in time", hv_vgpu_virgl_quiesce(rend, 3000), 0);
+    hv_vgpu_metal_pause(pm);
+}
+
+static void test_pause(void) {
+    const uint64_t back = BACKING + 0x40000;
+    HvVgpuMetal *pm = hv_vgpu_metal_create(b.gpu);
+    check("pause: the presenter starts", pm != NULL, 1);
+    if (!pm) return;
+    hv_vgpu_metal_set_3d(pm, hv_vgpu_virgl_scanout_ops(), rend);
+    check("pause: ctx", c_ctx_create(30, "pause"), OK);
+    check("pause: res", c_res_create(30, 64, 64), OK);
+    check("pause: backing", c_attach(30, back, 64 * 64 * 4), OK);
+    check("pause: attach", c_ctx_attach(0x202, 30, 30), OK);
+    check("pause: with nothing queued", hv_virtio_gpu_wait_idle(b.gpu, 0), 0);
+    check("pause: quiesce with nothing queued", hv_vgpu_virgl_quiesce(rend, 3000), 0);
+
+    HvVgpuVirglStats s0, s1, s2;
+    hv_vgpu_virgl_stats(rend, &s0);
+    enum { N = 12 };
+    int heads[N];
+    uint32_t dw[32], n = clear_cmd(dw, 30, RED);
+    nreaped = 0;
+    for (int i = 0; i < N; i++) {
+        q_submit(30, dw, n, 900 + i);
+        heads[i] = post(NODATA);
+    }
+    kick(); // the renderer has twelve fenced requests; no CPU polls from here
+    pause_gpu(pm);
+    hv_vgpu_virgl_stats(rend, &s1);
+    check("pause: the renderer ran every request", s1.requests - s0.requests, N);
+    usleep(200000);
+    hv_vgpu_virgl_stats(rend, &s2);
+    check("pause: the renderer runs nothing more", s2.requests, s1.requests);
+    reap();
+    int early = 0;
+    for (int i = 0; i < N; i++) early += answered(heads[i]);
+    check("pause: no answer before a CPU polls", early, 0);
+
+    uint64_t f0 = hv_vgpu_metal_frames(pm);
+    check("pause: a second pause is harmless", (hv_vgpu_metal_pause(pm), 1), 1);
+    check("pause: no frames while paused", hv_vgpu_metal_frames(pm), f0);
+    hv_vgpu_metal_resume(pm);
+    check("pause: the answers arrive after the resume", wait_for(heads[N - 1]), 1);
+    int ok = 0;
+    for (int i = 0; i < N; i++) ok += answered(heads[i]) && rd32(RESP(heads[i])) == OK;
+    check("pause: every answer is OK", ok, N);
+    hv_vgpu_metal_resume(pm); // without a pause: harmless
+    clear_and_read("after the pause", 30, 30, BLUE, back, 950);
+
+    // A device reset while paused: the destroys run, with no long drain.
+    check("pause: res to drop", c_res_create(31, 16, 16), OK);
+    pause_gpu(pm);
+    hv_vgpu_virgl_stats(rend, &s0);
+    uint64_t t0 = now_ms();
+    wr8(GPU_BAR + 0x14, 0);
+    check("reset while paused is quick", now_ms() - t0 < 1500, 1);
+    hv_vgpu_virgl_stats(rend, &s1);
+    check("reset while paused destroys the context and both resources", s1.requests - s0.requests, 3);
+    hv_vgpu_metal_resume(pm);
+    driver_setup();
+    check("pause: ctx again after the reset", c_ctx_create(30, "again"), OK);
+    check("pause: ctx destroy", c_ctx_destroy(30), OK);
+
+    // Teardown while paused, in the host's order: set_3d off, presenter, device, renderer, guest RAM (the caller's).
+    check("pause: a context left for the teardown", c_ctx_create(32, "left"), OK);
+    check("pause: a resource left for the teardown", c_res_create(32, 8, 8), OK);
+    pause_gpu(pm);
+    teardown_pm = pm;
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     alarm(240);
@@ -593,6 +670,7 @@ int main(void) {
     test_isolation();
     test_flood();
     test_reset();
+    test_pause();
     test_scanout();
 
     hv_vgpu_virgl_stats(rend, &st);
@@ -617,7 +695,13 @@ int main(void) {
     // Destroy order: the board (the device resets the renderer), then the renderer, then guest RAM.
     check("a context left live for the destroy", c_ctx_create(9, "left"), OK);
     check("a resource left live for the destroy", c_res_create(9, 8, 8), OK);
+    uint64_t td = now_ms();
+    if (teardown_pm) { // paused: the presenter must not hold up the device's drain
+        hv_vgpu_metal_set_3d(teardown_pm, NULL, NULL);
+        hv_vgpu_metal_destroy(teardown_pm);
+    }
     hv_virt_destroy(&b);
+    check("a destroy while paused is quick (no 5 s drain)", now_ms() - td < 1500, 1);
     hv_vgpu_virgl_destroy(rend);
     hv_machine_free(&m);
 
