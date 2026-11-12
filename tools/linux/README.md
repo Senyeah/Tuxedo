@@ -16,8 +16,8 @@ Keep source trees in `/work`, not on the Mac filesystem. It is case-insensitive 
 ## Order
 
 1. `run.sh uname -m` checks the container. It prints `aarch64`.
-2. `build-uboot.sh` (G2) makes `u-boot.bin` and `u-boot.manifest`.
+2. `build-uboot.sh` (G2) makes `u-boot.bin`, `u-boot.config` and `u-boot.manifest` (tag, commit, SHA-256). It builds `qemu_arm64_defconfig` with no fragment in `/work/u-boot`. Check it with `qemu-system-aarch64 -M virt -cpu cortex-a57 -nographic -bios build/linux/u-boot.bin`.
 3. `build-image.sh` (G3) makes `debian-console.img`, `Image`, `initrd.img`, the partition UUID file and the manifest.
 4. `qemu-ref.sh` (G5) boots the result on QEMU's `virt` machine.
 
-Steps 2 to 4 do not exist yet. This table lists what each task adds.
+Steps 3 and 4 do not exist yet. This table lists what each task adds.
