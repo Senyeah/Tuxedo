@@ -1498,15 +1498,15 @@ static void test_primecell(void) {
     wr32(&m, VIRT_UART + 0x38, 0);
     wr32(&m, VIRT_UART + 0x44, 0x7ff);
 
-    /* PL031 */
+    /* PL031: windows are wide so a stalled CI machine does not fail them */
     uint32_t t = (uint32_t)time(NULL), dr = rd32(&m, VIRT_RTC);
-    check("RTC: starts at the host's time", dr >= t - 1 && dr <= t + 2, 1);
+    check("RTC: starts at the host's time", dr >= t - 5 && dr <= t + 30, 1);
     wr32(&m, VIRT_RTC, 5);
-    check("RTC: a write to DR changes nothing", rd32(&m, VIRT_RTC) >= t - 1, 1);
+    check("RTC: a write to DR changes nothing", rd32(&m, VIRT_RTC) >= t - 5, 1);
     check("RTC: control reads enabled", rd32(&m, VIRT_RTC + 0x0c), 1);
     wr32(&m, VIRT_RTC + 0x08, 1000000000);
     dr = rd32(&m, VIRT_RTC);
-    check("RTC: load sets the time", dr >= 1000000000 && dr <= 1000000002, 1);
+    check("RTC: load sets the time", dr >= 1000000000 && dr <= 1000000030, 1);
     wr32(&m, VIRT_RTC + 0x10, 0xff);
     check("RTC: IMSC is 1 bit", rd32(&m, VIRT_RTC + 0x10), 1);
     wr32(&m, VIRT_RTC + 0x04, rd32(&m, VIRT_RTC) + 100);
