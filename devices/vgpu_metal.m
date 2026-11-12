@@ -4,6 +4,7 @@
 #import <QuartzCore/CAMetalLayer.h>
 #import <QuartzCore/CATransaction.h>
 
+#include <TargetConditionals.h>
 #include <math.h>
 #include <os/lock.h>
 #include <pthread.h>
@@ -518,6 +519,9 @@ HvVgpuMetal *hv_vgpu_metal_create(HvVirtioGpu *g) {
         }
         p->stats_env = getenv("HV_VGPU_STATS") != NULL;
         p->no_direct = getenv("HV_VGPU_NO_DIRECT") != NULL;
+#if TARGET_OS_SIMULATOR
+        p->no_direct = YES; /* the simulator asserts on a linear texture over a shared buffer */
+#endif
         p->linear_align = [dev minimumLinearTextureAlignmentForPixelFormat:MTLPixelFormatBGRA8Unorm];
         p->work = dispatch_queue_create("hengevm.vgpu", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
         p->completions = dispatch_group_create();
