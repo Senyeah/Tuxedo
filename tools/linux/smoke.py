@@ -404,6 +404,10 @@ def disk(args, times):
                       limit("running"), lambda o: o == "running", "systemd")
                 times["running"] = time.monotonic() - t
                 t = time.monotonic()
+                check(p, "dpkg-query -W -f='${db:Status-Abbrev} ${Package}\\n' henge-guest", limit("command"),
+                      lambda o: o == "ii  henge-guest", "henge-guest package")
+                check(p, "systemctl is-enabled henge-firstboot.service henge-grow.service", limit("command"),
+                      lambda o: o.split() == ["enabled", "enabled"], "henge-guest units enabled")
                 check(p, "lsblk -rno NAME,TYPE,MOUNTPOINTS /dev/vda", limit("command"),
                       lambda o: "vda1 part /" in o.split("\n"), "root on virtio-blk")
                 check(p, "getconf PAGESIZE", limit("command"), lambda o: o == "16384", "page size")
