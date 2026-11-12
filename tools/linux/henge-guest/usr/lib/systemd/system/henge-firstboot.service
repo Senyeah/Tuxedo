@@ -8,7 +8,7 @@ Before=multi-user.target systemd-networkd.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/local/lib/henge/henge-firstboot
+ExecStart=/usr/lib/henge/henge-firstboot
 
 [Install]
 WantedBy=multi-user.target

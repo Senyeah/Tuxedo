@@ -1,0 +1,95 @@
+import Foundation
+import CoreGraphics
+
+@main
+struct DisplayModePolicyTests {
+    static func mode(_ px: CGSize, _ insets: DisplayInsets = .zero, scale: CGFloat = 3, cap: CGSize = CGSize(width: 3840, height: 2160)) -> String {
+        let m = DisplayModePolicy.guestMode(pixels: px, insets: insets, scale: scale, cap: cap)
+        return "\(m.w)x\(m.h)"
+    }
+
+    static func main() {
+        // iPhone 18 Pro panel, safe area inferred: sides 62 pt, home bar 20 pt; portrait top 62 pt, bottom 34 pt.
+        let panel = CGSize(width: 2622, height: 1206)
+        let land = DisplayInsets(top: 0, left: 62, bottom: 20, right: 62)
+        let port = DisplayInsets(top: 62, left: 0, bottom: 34, right: 0)
+        precondition(mode(panel, land, cap: panel) == "2248x1144")
+        precondition(mode(CGSize(width: 1206, height: 2622), port, cap: CGSize(width: 2622, height: 2622)) == "1200x2328")
+        // External sizes inside the cap stay as they are.
+        precondition(mode(CGSize(width: 3840, height: 2160)) == "3840x2160")
+        precondition(mode(CGSize(width: 2560, height: 1440)) == "2560x1440")
+        precondition(mode(CGSize(width: 3440, height: 1440)) == "3440x1440")
+        // A TV that is not a multiple of 8 rounds down.
+        precondition(mode(CGSize(width: 1366, height: 768)) == "1360x768")
+        // Insets that leave an odd size round down after they are taken.
+        precondition(mode(CGSize(width: 1000, height: 1000), DisplayInsets(top: 1, left: 3, bottom: 2, right: 4), scale: 1) == "992x992")
+        precondition(mode(CGSize(width: 1000, height: 1000), DisplayInsets(top: 0, left: 0, bottom: 0, right: 0), scale: 1) == "1000x1000")
+        // A cap smaller than the screen wins, per side, and is rounded too.
+        precondition(mode(CGSize(width: 5120, height: 2880), cap: CGSize(width: 3840, height: 2160)) == "3840x2160")
+        precondition(mode(CGSize(width: 3840, height: 2160), cap: CGSize(width: 1930, height: 1085)) == "1928x1080")
+        // Never zero.
+        precondition(mode(CGSize(width: 10, height: 10), DisplayInsets(top: 50, left: 50, bottom: 50, right: 50), scale: 1) == "8x8")
+
+        precondition(DisplayModePolicy.guestScale(shortSide: 1206, isPhone: true) == 2)
+        precondition(DisplayModePolicy.guestScale(shortSide: 2160, isPhone: true) == 2)
+        precondition(DisplayModePolicy.guestScale(shortSide: 1080, isPhone: false) == 1)
+        precondition(DisplayModePolicy.guestScale(shortSide: 1440, isPhone: false) == 1)
+        precondition(DisplayModePolicy.guestScale(shortSide: 1441, isPhone: false) == 2)
+        precondition(DisplayModePolicy.guestScale(shortSide: 2160, isPhone: false) == 2)
+
+        let landscape = GuestMode(w: 2248, h: 1144), portrait = GuestMode(w: 1200, h: 2328)
+        let tv = GuestMode(w: 3840, h: 2160)
+
+        // Rotation: sent after 300 ms, not before.
+        var f = ModeFollower(initial: landscape)
+        precondition(f.orientation(portrait, now: 10) == .init(mode: portrait, at: 10.3))
+        precondition(f.take(now: 10.29) == nil)
+        precondition(f.take(now: 10.3) == portrait)
+        precondition(f.take(now: 11) == nil)
+
+        // Rotate and back within 300 ms: nothing is sent.
+        f = ModeFollower(initial: landscape)
+        f.orientation(portrait, now: 0)
+        precondition(f.orientation(landscape, now: 0.1) == nil)
+        precondition(f.take(now: 5) == nil)
+
+        // A second rotation restarts the debounce.
+        f = ModeFollower(initial: landscape)
+        f.orientation(portrait, now: 0)
+        precondition(f.orientation(GuestMode(w: 1208, h: 2328), now: 0.2)?.at == 0.5)
+        precondition(f.take(now: 0.4) == nil)
+        precondition(f.take(now: 0.5) == GuestMode(w: 1208, h: 2328))
+
+        // External connects: 1 s debounce, then rotation is ignored.
+        f = ModeFollower(initial: landscape)
+        precondition(f.externalDisplay(tv, now: 0) == .init(mode: tv, at: 1))
+        precondition(f.take(now: 1) == tv)
+        precondition(f.orientation(portrait, now: 2) == nil)
+        precondition(f.take(now: 5) == nil)
+        // External goes away: the current orientation's mode (portrait now) returns.
+        precondition(f.externalDisplay(nil, now: 6) == .init(mode: portrait, at: 7))
+        precondition(f.take(now: 7) == portrait)
+
+        // External connects during a rotation: the pending rotation is replaced.
+        f = ModeFollower(initial: landscape)
+        f.orientation(portrait, now: 0)
+        precondition(f.externalDisplay(tv, now: 0.1) == .init(mode: tv, at: 1.1))
+        precondition(f.take(now: 0.5) == nil)
+        precondition(f.take(now: 1.1) == tv)
+        // Unplugged: back to the rotated phone mode.
+        precondition(f.externalDisplay(nil, now: 3) == .init(mode: portrait, at: 4))
+        precondition(f.take(now: 4) == portrait)
+
+        // External goes away before its mode was sent: nothing to undo.
+        f = ModeFollower(initial: landscape)
+        f.externalDisplay(tv, now: 0)
+        precondition(f.externalDisplay(nil, now: 0.5) == nil)
+        precondition(f.take(now: 5) == nil)
+
+        // External with the same mode the guest already has: nothing is sent.
+        f = ModeFollower(initial: tv)
+        precondition(f.externalDisplay(tv, now: 0) == nil)
+
+        print("test_display_mode_policy: ok")
+    }
+}

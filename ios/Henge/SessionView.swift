@@ -48,6 +48,7 @@ struct SessionView: View {
     @State private var map: UIImage?
     @State private var zoomFollowing: Task<Void, Never>?
     @State private var helperRunning = false
+    @AppStorage(Sharing.PasteKeys.storageKey) private var pasteKeys = Sharing.PasteKeys.control.rawValue
     @State private var shown = CGSize(width: 0.5, height: 0.5) // how much of the Mac's screen the zoomed view shows
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var console = ConsoleModel()
@@ -154,7 +155,7 @@ struct SessionView: View {
                 }
                 if let error { errorCard(error, layout) }
                 if shutdownAsked != nil && state != 2 { shutdownCard(layout) }
-                KeyboardCatcher(active: $typing, suspended: consoleShown).frame(width: 0, height: 0)
+                KeyboardCatcher(active: $typing, suspended: consoleShown, linux: mac.guest == .linux).frame(width: 0, height: 0)
             }
             .frame(width: full.width, height: full.height)
             .ignoresSafeArea()
@@ -393,13 +394,29 @@ struct SessionView: View {
     }
 
     /// The system's paste button: iOS asks no permission for it, as it would if the app read the clipboard itself.
+    /// A Linux desktop adds a menu for what to paste with: terminals want Ctrl-Shift-V.
     private var pasteTool: some View {
-        PasteButton(payloadType: String.self) { texts in
-            if let text = texts.first { Sharing.paste(text, guest: mac.guest, console: consoleShown) }
+        HStack(spacing: 0) {
+            PasteButton(payloadType: String.self) { texts in
+                if let text = texts.first {
+                    Sharing.paste(text, guest: mac.guest, console: consoleShown, keys: Sharing.PasteKeys(rawValue: pasteKeys) ?? .control)
+                }
+            }
+            .labelStyle(.iconOnly)
+            .buttonBorderShape(.circle)
+            .tint(Desk.raised)
+            if mac.guest == .linux && !consoleShown {
+                Menu {
+                    Picker("Paste with", selection: $pasteKeys) {
+                        Text("Ctrl-V").tag(Sharing.PasteKeys.control.rawValue)
+                        Text("Ctrl-Shift-V (terminals)").tag(Sharing.PasteKeys.controlShift.rawValue)
+                    }
+                } label: {
+                    Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold)).frame(width: 22, height: 36)
+                }
+                .accessibilityLabel("Paste keys")
+            }
         }
-        .labelStyle(.iconOnly)
-        .buttonBorderShape(.circle)
-        .tint(Desk.raised)
     }
 
     /// Hides the session's controls; four fingers on the screen bring them back. The first few times say so.
@@ -608,7 +625,7 @@ struct SessionView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Sharing") {
-                    LabeledContent("Clipboard and folder", value: mac.guest == .linux ? "Not available" : helperRunning ? "On" : "Not set up")
+                    LabeledContent(mac.guest == .linux ? "Clipboard" : "Clipboard and folder", value: helperRunning ? "On" : mac.guest == .linux ? "Not running" : "Not set up")
                     if mac.guest == .mac && !helperRunning {
                         Button("Type the Set Up Command") {
                             showDetails = false
@@ -619,7 +636,9 @@ struct SessionView: View {
                         }
                     }
                     if mac.guest == .linux {
-                        Text("Sharing with a Debian machine is not set up yet. The paste button types the text into the guest.")
+                        Text(helperRunning
+                             ? "What you copy in the guest is copied here too, and the paste button pastes from here into the guest. The arrow beside it chooses Ctrl-V or Ctrl-Shift-V, which terminals want."
+                             : "The clipboard helper runs on a Debian desktop. Without it, and on the console, the paste button types the text into the guest.")
                             .font(.footnote).foregroundStyle(.secondary)
                     } else {
                     Text(helperRunning

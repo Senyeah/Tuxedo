@@ -12,10 +12,11 @@
 #include <string.h>
 #include <time.h>
 
+#include "drawable_fit.h"
 #include "vgpu_metal.h"
 
 #define FRAME_NS (1000000000ull / 60)
-#define SHOW_MAX_PIXELS (3840u * 2160u) /* larger scanouts are shown scaled down, to bound host memory */
+#define SHOW_MAX_PIXELS (3840u * 2160u) /* not below the policy cap (3840x2160), so a guest at the cap is never resampled */
 #define CURSOR HV_VGPU_CURSOR
 
 static uint64_t now_ns(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
@@ -88,7 +89,7 @@ static NSString *const shaders = @"#include <metal_stdlib>\n"
     BOOL pending_set, cursor_stale, cursor_shown;
     int32_t cursor_x, cursor_y; /* the image's top left, in scanout pixels */
     uint32_t src_w, src_h;      /* the scanout the shadow shows */
-    uint32_t mode_w, mode_h;    /* the drawable is no larger */
+    uint32_t mode_w, mode_h;    /* bounds the drawable if the layer has no size */
     uint64_t cursor_seen, retry_until, retry_generation;
     int blit_retries;
     uint32_t cursor_px[CURSOR * CURSOR];
@@ -309,8 +310,8 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
         [cursor_tex replaceRegion:MTLRegionMake2D(0, 0, CURSOR, CURSOR) mipmapLevel:0 withBytes:cursor_px bytesPerRow:CURSOR * 4];
         cursor_stale = NO;
     }
-    double SW = src_w, SH = src_h, fit = fmin(1, fmin(mode_w / SW, mode_h / SH)); /* no larger than the display */
-    CGSize want = CGSizeMake(fmax(1, round(SW * fit)), fmax(1, round(SH * fit)));
+    double SW = src_w, SH = src_h;
+    CGSize want = hv_drawable_fit(target, SW, SH, mode_w, mode_h); /* the layer bounds it; the mode only if it has no size */
     if (!CGSizeEqualToSize(target.drawableSize, want)) {
         [CATransaction begin];
         [CATransaction setDisableActions:YES];

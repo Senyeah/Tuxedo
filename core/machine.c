@@ -527,9 +527,12 @@ void hv_invalidate_code(HvMachine *m, uint64_t pa) {
     hv_machine_kick_all(m);
 }
 
+/* Written so a len near 2^64 cannot wrap. pa is inside r. */
+static inline int ram_fits(const HvRam *r, uint64_t pa, uint64_t len) { return len <= r->size && pa - r->pa <= r->size - len; }
+
 void hv_dma_written(HvMachine *m, uint64_t pa, uint64_t len) {
     HvRam *r = hv_ram_lookup(m, pa);
-    if (!r || !len || pa + len - r->pa > r->size) return;
+    if (!r || !len || !ram_fits(r, pa, len)) return;
     uint64_t first = (pa - r->pa) >> HV_TLB_PAGE_BITS, last = (pa + len - 1 - r->pa) >> HV_TLB_PAGE_BITS;
     for (uint64_t pg = first; pg <= last; pg++)
         if (__atomic_load_n(&r->code_pages[pg], __ATOMIC_ACQUIRE)) hv_invalidate_code(m, r->pa + (pg << HV_TLB_PAGE_BITS));
@@ -545,7 +548,7 @@ HvMmio *hv_mmio_lookup(HvMachine *m, uint64_t pa) {
 
 void *hv_phys_ptr(HvMachine *m, uint64_t pa, uint64_t len) {
     HvRam *r = hv_ram_lookup(m, pa);
-    if (!r || pa + len - r->pa > r->size) return NULL;
+    if (!r || !ram_fits(r, pa, len)) return NULL;
     return r->host + (pa - r->pa);
 }
 
@@ -570,8 +573,8 @@ int hv_phys_read(HvMachine *m, uint64_t pa, void *buf, unsigned len) {
 
 int hv_phys_write(HvMachine *m, uint64_t pa, const void *buf, unsigned len) {
     HvRam *r = hv_ram_lookup(m, pa);
-    if (r && pa + len - r->pa <= r->size) {
-        if (r->readonly) return 0; /* ROM: writes are ignored */
+    if (r && ram_fits(r, pa, len)) {
+        if (r->readonly || !len) return 0; /* ROM: writes are ignored; len 0 would wrap `last` */
         uint64_t off = pa - r->pa;
         uint64_t first = off >> HV_TLB_PAGE_BITS, last = (off + len - 1) >> HV_TLB_PAGE_BITS;
         for (uint64_t pg = first; pg <= last; pg++)

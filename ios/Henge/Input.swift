@@ -8,11 +8,14 @@ struct KeyboardCatcher: UIViewRepresentable {
     @Binding var active: Bool
     /// The console view holds the keyboard instead.
     var suspended = false
+    /// A Linux guest: the modifier row names Ctrl, Alt and Super.
+    var linux = false
 
     func makeUIView(context: Context) -> Holder { Holder() }
 
     func updateUIView(_ view: Holder, context: Context) {
         view.typer.onHide = { active = false }
+        view.typer.linux = linux
         view.typing = active
         view.suspended = suspended
         DispatchQueue.main.async { view.takeKeyboard() }
@@ -91,8 +94,9 @@ struct KeyboardCatcher: UIViewRepresentable {
 
     final class CatcherView: KeyListener, UIKeyInput {
         var onHide: () -> Void = {}
+        var linux = false { didSet { if linux != oldValue { row.rootView = ModifierRow(linux: linux, hide: { [weak self] in self?.onHide() }) } } }
         private lazy var row: UIHostingController<ModifierRow> = {
-            let host = UIHostingController(rootView: ModifierRow(hide: { [weak self] in self?.onHide() }))
+            let host = UIHostingController(rootView: ModifierRow(linux: linux, hide: { [weak self] in self?.onHide() }))
             host.sizingOptions = []
             host.view.backgroundColor = .clear
             host.view.frame = CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: 56)
@@ -181,7 +185,7 @@ enum Keys {
     }
 }
 
-/// ⌃, ⌥ and ⌘ stay down from a tap until the next key or click, so a shortcut takes one finger.
+/// ⌃, ⌥ and ⌘ (Ctrl, Alt and Super on Linux) stay down from a tap until the next key or click, so a shortcut takes one finger.
 final class StickyKeys: ObservableObject {
     static let shared = StickyKeys()
     @Published private(set) var down: Set<UInt16> = []
@@ -205,6 +209,7 @@ final class StickyKeys: ObservableObject {
 
 /// The keys an on-screen keyboard doesn't have, in the slot above it.
 struct ModifierRow: View {
+    var linux = false
     let hide: () -> Void
     @ObservedObject private var sticky = StickyKeys.shared
 
@@ -212,9 +217,9 @@ struct ModifierRow: View {
         HStack(spacing: 5) {
             HeldKey(label: "esc", code: Keys.escape)
             HeldKey(label: "tab", code: Keys.tab)
-            modifier("⌃", Keys.control, "Control")
-            modifier("⌥", Keys.option, "Option")
-            modifier("⌘", Keys.command, "Command")
+            modifier(linux ? "Ctrl" : "⌃", Keys.control, linux ? "Ctrl" : "Control")
+            modifier(linux ? "Alt" : "⌥", Keys.option, linux ? "Alt" : "Option")
+            modifier(linux ? "Super" : "⌘", Keys.command, linux ? "Super" : "Command")
             HeldKey(label: "←", code: Keys.left)
             HeldKey(label: "↑", code: Keys.up)
             HeldKey(label: "↓", code: Keys.down)
@@ -240,7 +245,8 @@ struct ModifierRow: View {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         } label: {
             Text(symbol)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: symbol.count > 1 ? 11 : 15, weight: .semibold))
+                .minimumScaleFactor(0.7).lineLimit(1)
                 .foregroundStyle(on ? Color.white : Desk.text)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(on ? Desk.accent : Desk.raised, in: RoundedRectangle(cornerRadius: 9, style: .continuous))

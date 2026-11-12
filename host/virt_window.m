@@ -58,6 +58,19 @@ static NSUInteger device_mask(uint16_t k) {
 - (BOOL)wantsUpdateLayer { return YES; }
 - (CALayer *)makeBackingLayer { return screen; }
 
+/* AppKit leaves the layer at scale 1; the drawable is capped by bounds x scale. */
+- (void)syncScale {
+    CGFloat s = self.window ? self.window.backingScaleFactor : 1;
+    if (screen.contentsScale != s) screen.contentsScale = s;
+    hv_vm_set_display_layer((__bridge void *)screen); /* refits the drawable */
+}
+- (void)viewDidMoveToWindow { if (self.window) [self syncScale]; }
+- (void)viewDidChangeBackingProperties { [super viewDidChangeBackingProperties]; [self syncScale]; }
+- (void)setFrameSize:(NSSize)sz {
+    [super setFrameSize:sz];
+    if (self.window) [self syncScale];
+}
+
 - (void)setCapture:(BOOL)on {
     if (on == self.captured) return;
     self.captured = on;

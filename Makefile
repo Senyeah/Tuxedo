@@ -191,6 +191,26 @@ test-linux-accel:
 	uv run tools/linux/accel-check.py --hengevm $(ACCEL_B)/hengevm $(ACCEL_ARGS)
 .PHONY: test-linux-accel
 
+# R3: a mode line in HV_INPUT_FILE changes the guest's display mode (fbcon on the console image).
+test-linux-mode: $(B)/hengevm
+	uv run tools/linux/mode-check.py $(MODE_ARGS)
+.PHONY: test-linux-mode
+
+# R5: the desktop follows a mode line (labwc framebuffer size, wlr-randr scale). DISPLAY_ARGS="--image FILE" for a rebuilt desktop image.
+test-linux-display: $(B)/hengevm
+	uv run tools/linux/display-check.py $(DISPLAY_ARGS)
+.PHONY: test-linux-display
+
+# P6: the shared folder (~/Henge, davfs2) against --share. SHARE_ARGS="--image FILE" for an image that has davfs2.
+test-linux-share: $(B)/hengevm
+	uv run tools/linux/share-check.py $(SHARE_ARGS)
+.PHONY: test-linux-share
+
+# P7: the clipboard helper in the desktop image against the host's clipboard. CLIP_ARGS="--image FILE" for an image that has henge-guest 1.2.
+test-linux-clipboard: $(B)/hengevm
+	uv run tools/linux/clipboard-check.py $(CLIP_ARGS)
+.PHONY: test-linux-clipboard
+
 test-vm-lifecycle: $(B)/test_vm_lifecycle
 	$(B)/test_vm_lifecycle
 .PHONY: test-vm-lifecycle
@@ -317,6 +337,14 @@ $(B)/test_legacy_external_display: ios/Henge/LegacyExternalDisplay.swift ios/Hen
 $(B)/test_scene_manifest: tests/test_scene_manifest.swift | $(B)
 	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
 
+# Guest mode sizes and when to send them: pure policy, no UIKit.
+$(B)/test_display_mode_policy: ios/Henge/DisplayModePolicy.swift tests/test_display_mode_policy.swift | $(B)
+	xcrun --sdk macosx swiftc $^ -o $@
+
+test-display-mode-policy: $(B)/test_display_mode_policy
+	$(B)/test_display_mode_policy
+.PHONY: test-display-mode-policy
+
 test-display-routing: $(B)/test_display_targets $(B)/test_display_router $(B)/test_external_screen_plan $(B)/test_legacy_external_display $(B)/test_scene_manifest
 	$(B)/test_display_targets
 	$(B)/test_display_router
@@ -374,6 +402,25 @@ $(B)/test_machine_model: ios/Henge/MachineModel.swift tests/test_machine_model.s
 test-machine-model: $(B)/test_machine_model
 	$(B)/test_machine_model
 .PHONY: test-machine-model
+
+# I7: the Linux catalogue, hashes, space and build checks, and the download bookkeeping.
+$(B)/test_linux_catalogue: ios/Henge/LinuxCatalogue.swift ios/Henge/LinuxDownload.swift ios/Henge/RangedDownload.swift tests/test_linux_catalogue.swift | $(B)
+	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
+
+test-linux-catalogue: $(B)/test_linux_catalogue
+	$(B)/test_linux_catalogue
+.PHONY: test-linux-catalogue
+
+# I8: LZFSE decode, sparse unpack, the machine folder, disk growth and the unpack space check.
+$(B)/hvsparse_swift.o: host/hvsparse.c host/hvsparse.h | $(B)
+	$(CC) -std=c11 -O1 -c host/hvsparse.c -o $@
+
+$(B)/test_linux_unpack: ios/Henge/LinuxUnpack.swift ios/Henge/LinuxCatalogue.swift ios/Henge/LinuxDownload.swift ios/Henge/RangedDownload.swift ios/Henge/MachineModel.swift tests/test_linux_unpack.swift $(B)/hvsparse_swift.o | $(B)
+	xcrun --sdk macosx swiftc -parse-as-library -import-objc-header host/hvsparse.h $^ -o $@
+
+test-linux-unpack: $(B)/test_linux_unpack
+	$(B)/test_linux_unpack
+.PHONY: test-linux-unpack
 
 # E13/T4: the engine gate. The macOS guest boot has no machine on this Mac, so it stays an iPhone check.
 # Does not run ios/scripts/sim_build.sh (HengeSim): run it when ios/ changes.

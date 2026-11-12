@@ -3,7 +3,6 @@
 set -eu
 
 chmod 0440 /etc/sudoers.d/henge
-chmod 0755 /usr/local/lib/henge/henge-grow /usr/local/lib/henge/henge-firstboot
 
 # Small initramfs; MODULES=dep would look at the build host
 sed -i 's/^MODULES=.*/MODULES=list/; s/^COMPRESS=.*/COMPRESS=zstd/' /etc/initramfs-tools/initramfs.conf
@@ -13,8 +12,12 @@ printf '%s\n' virtio_pci virtio_blk virtio_net virtio_rng ext4 >> /etc/initramfs
 
 useradd --create-home --shell /bin/bash --groups sudo henge
 passwd -d henge
+install -d -o henge -g henge /home/henge/Henge
 
-systemctl enable henge-firstboot.service henge-grow.service systemd-networkd.service systemd-resolved.service systemd-timesyncd.service
+# henge-guest enables its own units; fail the build if it did not
+dpkg-query -W -f='${Status}' henge-guest | grep -q 'install ok installed'
+systemctl is-enabled henge-firstboot.service henge-grow.service home-henge-Henge.automount
+systemctl enable systemd-networkd.service systemd-resolved.service systemd-timesyncd.service
 ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 mkdir -p /etc/systemd/system/getty.target.wants
 ln -sf /usr/lib/systemd/system/serial-getty@.service /etc/systemd/system/getty.target.wants/serial-getty@ttyAMA0.service
