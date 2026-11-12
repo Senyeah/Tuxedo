@@ -7,7 +7,10 @@ struct MacSettingsView: View {
     @State private var mac: VirtualMac
     @State private var confirmDelete = false
     @State private var movingExport = false
-    @AppStorage("henge.cpus") private var cpus = 4
+    @AppStorage("henge.cpus") private var globalCpus = 4
+    @State private var growToGB = 0 // 0: no change picked
+    @State private var confirmGrow = false
+    @State private var growError: String?
 
     init(mac: VirtualMac) { _mac = State(initialValue: mac) }
 
@@ -33,7 +36,7 @@ struct MacSettingsView: View {
                     }
                     Stepper("Memory", value: Binding(get: { mac.ramMB / 1024 }, set: { mac.ramMB = $0 * 1024; save() }), in: Device.memoryChoices)
                         .font(.system(size: 16))
-                    if let note = Device.memoryNote(mac.ramMB / 1024) {
+                    if let note = Device.memoryNote(mac.ramMB / 1024, guest: mac.guest) {
                         Text(note).font(.system(size: 13)).foregroundStyle(Desk.dim)
                     }
                 }
@@ -41,11 +44,11 @@ struct MacSettingsView: View {
                 .deskCard()
 
                 DeskHeading("Processors")
-                Stepper(value: $cpus, in: 1...6) {
+                Stepper(value: Binding(get: { mac.cpuCount(fallback: globalCpus) }, set: { mac.cpus = $0; save() }), in: VirtualMac.cpuRange) {
                     HStack {
                         Text("CPUs").font(.system(size: 16))
                         Spacer()
-                        Text("\(cpus)").font(.system(size: 16, weight: .semibold))
+                        Text("\(mac.cpuCount(fallback: globalCpus))").font(.system(size: 16, weight: .semibold))
                     }
                 }
                 .padding(.horizontal, 17)
@@ -72,28 +75,36 @@ struct MacSettingsView: View {
                             save()
                         })) {
                             if Device.isPad {
-                                Text("Retina").tag("retina")
+                                if mac.guest == .mac { Text("Retina").tag("retina") }
                                 Text("Performance").tag("performance")
                             }
                             Text("Fit this \(Device.name)").tag("fit")
                             Text("16:9").tag("wide")
                         }
                         .pickerStyle(.segmented)
-                        Text("\(mac.screen.width) × \(mac.screen.height). \(Device.isPad ? "Performance renders about 30% fewer pixels. " : "")Changes apply the next time this Mac starts.")
+                        Text("\(mac.screen.width) × \(mac.screen.height). \(Device.isPad ? "Performance renders about 30% fewer pixels. " : "")Changes apply the next time this \(mac.noun) starts.")
                             .font(.system(size: 13)).foregroundStyle(Desk.dim)
                     }
                     .padding(17)
                     .deskCard()
+                } else if mac.guest == .linux { // nothing to pick on this shape, but the size is still worth showing
+                    DeskHeading("Screen")
+                    Text("\(mac.screen.width) × \(mac.screen.height)").font(.system(size: 16))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 17)
+                        .padding(.vertical, 14)
+                        .deskCard()
                 }
 
-                DeskHeading("Storage")
-                VStack(spacing: 11) {
+                DeskHeading(mac.guest == .linux ? "Disk size" : "Storage")
+                VStack(alignment: .leading, spacing: 11) {
                     HStack {
-                        Text("\(ByteText.string(UInt64(max(mac.bytesUsed, 0)))) used").font(.system(size: 16))
+                        Text("\(usedText) used").font(.system(size: 16))
                         Spacer()
-                        Text("of \(ByteText.string(UInt64(max(mac.diskBytes, 0))))").font(.system(size: 16)).foregroundStyle(Desk.dim)
+                        Text("of \(sizeText)").font(.system(size: 16)).foregroundStyle(Desk.dim)
                     }
-                    DeskBar(fraction: Double(mac.bytesUsed) / Double(max(mac.diskBytes, 1)))
+                    DeskBar(fraction: Double(mac.bytesUsed) / Double(max(diskBytes, 1)))
+                    if mac.guest == .linux { growControls }
                 }
                 .padding(17)
                 .deskCard()
@@ -125,6 +136,46 @@ struct MacSettingsView: View {
         }
     }
 
+    private var diskBytes: Int64 { mac.guest == .linux ? mac.logicalDiskBytes : mac.diskBytes }
+    private var diskGB: Int { Int((diskBytes + (1 << 30) - 1) >> 30) }
+    private var growTarget: Int { max(growToGB, diskGB) }
+    // Linux sizes are in GB of 2^30 bytes, like Memory and the grow stepper.
+    private var usedText: String { mac.guest == .linux ? String(format: "%.1f GB", Double(max(mac.bytesUsed, 0)) / Double(1 << 30)) : ByteText.string(UInt64(max(mac.bytesUsed, 0))) }
+    private var sizeText: String { mac.guest == .linux ? "\(diskGB) GB" : ByteText.string(UInt64(max(diskBytes, 0))) }
+
+    @ViewBuilder private var growControls: some View {
+        Stepper(value: Binding(get: { growTarget }, set: { growToGB = $0 }), in: diskGB...max(diskGB + 1, 512), step: 4) {
+            Text("Grow to \(growTarget) GB").font(.system(size: 16))
+        }
+        .confirmationDialog("Grow the disk to \(growTarget) GB?", isPresented: $confirmGrow, titleVisibility: .visible) {
+            Button("Grow Disk", action: grow)
+        } message: {
+            Text("A disk cannot shrink again. Linux uses the new space the next time it starts.")
+        }
+        if growTarget > diskGB {
+            Button("Grow Disk…") { confirmGrow = true }
+                .font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.accentLight)
+        }
+        if let growError { Text(growError).font(.system(size: 13)).foregroundStyle(Desk.bad) }
+        Text("A disk can only grow, and only while the machine is off.").font(.system(size: 13)).foregroundStyle(Desk.dim)
+    }
+
+    private func grow() {
+        growError = nil
+        guard growTarget > diskGB else { return }
+        let state = henge_vm_state()
+        guard state != 1 && state != 3 else { growError = "Turn this machine off first."; return }
+        do {
+            try DiskGrowth.grow(mac.disk, toBytes: Int64(growTarget) << 30)
+            mac.diskBytes = mac.logicalDiskBytes
+            growToGB = 0
+            save()
+            HengeLog.log("machines", "grew \(mac.name)'s disk to \(mac.diskBytes >> 30) GB")
+        } catch {
+            growError = error.localizedDescription
+        }
+    }
+
     private var manage: some View {
         VStack(spacing: 0) {
             if let name = machines.exporting {
@@ -148,7 +199,7 @@ struct MacSettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             divider
-            row("Delete this Mac", symbol: nil, tint: Desk.bad) { confirmDelete = true }
+            row("Delete this \(mac.noun)", symbol: nil, tint: Desk.bad) { confirmDelete = true }
         }
         .deskCard()
     }
@@ -169,7 +220,7 @@ struct MacSettingsView: View {
     }
 
     private func save() {
-        if mac.name.isEmpty { mac.name = "Mac" }
+        if mac.name.isEmpty { mac.name = mac.guest == .linux ? "Linux" : "Mac" }
         machines.update(mac)
     }
 }

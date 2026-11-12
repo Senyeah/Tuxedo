@@ -20,7 +20,8 @@ struct SessionView: View {
     @State private var log: [String] = []
     @State private var started = Date()
     @State private var thermalState = ProcessInfo.processInfo.thermalState
-    @AppStorage("henge.cpus") private var cpus = 4
+    @AppStorage("henge.cpus") private var globalCpus = 4
+    private var cpus: Int { mac.cpuCount(fallback: globalCpus) }
     @AppStorage("henge.matchScreenColors") private var matchScreenColors = true
     @AppStorage("henge.display.brightness") private var screenBrightness = 1.0
     @AppStorage("henge.cursor.scale") private var cursorScale = Device.isPad ? 1 : 3
@@ -146,7 +147,7 @@ struct SessionView: View {
                     }
                 }
                 if state == 2 {
-                    StoppedMacView(outcome: henge_vm_exit_outcome(), reason: String(cString: henge_vm_exit_reason()),
+                    StoppedMacView(kind: mac.guest, outcome: henge_vm_exit_outcome(), reason: String(cString: henge_vm_exit_reason()),
                                    start: { bootAttempt += 1 }, close: close)
                         .frame(width: min(layout.touch.width - 32, 360))
                         .position(x: layout.touch.midX, y: layout.fillsPhone ? layout.touch.midY : layout.pad.midY)
