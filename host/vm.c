@@ -575,11 +575,13 @@ void hv_vm_destroy(void) {
 
 #define GPU_DRAIN_MS 1500
 
+#ifdef HV_GFX
 static uint64_t mono_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
 }
+#endif
 
 /* Under pause_mu, after the CPUs stop: no guest work can start now. iOS kills an app that commits Metal work in the
    background, so the renderer finishes what it holds, then the presenter stops. Resume starts the presenter again. */
