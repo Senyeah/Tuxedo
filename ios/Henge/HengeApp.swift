@@ -51,7 +51,7 @@ struct RootView: View {
                 HomeView(running: $running, tab: $tab)
                     .tabItem { Label(MachineList.tabTitle(machines.all), systemImage: "macwindow") }
                     .tag(Tab.macs)
-                InstallView()
+                InstallView(start: { mac in tab = .macs; running = mac })
                     .tabItem { Label("Install", systemImage: "arrow.down.circle") }
                     .tag(Tab.install)
                 SettingsView()

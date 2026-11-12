@@ -16,6 +16,7 @@ struct SettingsView: View {
     @AppStorage(EngineTuning.superblocksKey) private var superblocks = false
     @AppStorage(JITBootstrap.codeCacheKey) private var codeCacheMB = JITBootstrap.defaultCodeCacheMB
     @AppStorage(DeskAppearance.key) private var appearance = DeskAppearance.system
+    @AppStorage(LinuxCatalogue.urlKey) private var linuxCatalogueURL = ""
 
     /// The second footer paragraph: how you click, given the selected input mode.
     private var inputDescription: String {
@@ -127,6 +128,15 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.segmented)
                     Text("System follows the \(Device.name)'s Light or Dark setting. Henge stays dark while a Mac is running.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                .listRowBackground(Desk.card)
+                Section("Linux images") {
+                    TextField("Catalogue URL", text: $linuxCatalogueURL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                    Text("Where Henge reads the list of Linux images it can download (linux-images.json). Leave it empty to install Linux from a folder brought in from a computer.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 .listRowBackground(Desk.card)
