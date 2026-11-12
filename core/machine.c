@@ -396,6 +396,7 @@ void hv_machine_halt(HvMachine *m, enum HvHaltReason reason) {
        interrupts translated code and cannot release that condition wait. */
     for (int i = 0; i < m->ncpus; i++)
         if (m->cpus[i]) hv_cpu_wake(m->cpus[i]);
+    if (__atomic_load_n(&m->paused, __ATOMIC_SEQ_CST)) hv_machine_resume(m); /* paused CPUs wait on stw_cv */
 }
 
 /* Device work is for CPU 0, which polls the devices. */

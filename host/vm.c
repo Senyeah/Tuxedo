@@ -62,6 +62,7 @@ static int secondary_started[HV_MAX_CPUS], kicker_started;
 static _Atomic int kicker_stopped;
 static pthread_t primary_thread;
 static int primary_started;
+static void sound_stopped(void);
 
 HvMachine *hv_vm_machine(void) { return &m; }
 HvVmapple *hv_vm_board(void) { return board_kind == HV_BOARD_VMAPPLE ? &board : NULL; }
@@ -508,6 +509,7 @@ int hv_vm_create(const HvVmConfig *c, char *err, size_t errlen) {
         else net_on = 1;
     }
     if (devs.snd && !c->no_sound) hv_audio_attach(devs.snd);
+    hv_audio_stopped = sound_stopped;
     console_attach();
     atomic_store(&input_stopping, 0);
     return 0;
@@ -560,13 +562,77 @@ void hv_vm_destroy(void) {
     machine_created = 0;
 }
 
+/* hv_vm_pause: one caller at a time; the kicker sleeps meanwhile. */
+static pthread_mutex_t pause_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t pause_cv = PTHREAD_COND_INITIALIZER;
+static _Atomic int vm_paused, in_background;
+
 static void *kicker_thread(void *unused) {
     (void)unused;
     while (!atomic_load(&kicker_stopped)) {
         usleep(1000);
+        if (atomic_load(&vm_paused)) {
+            pthread_mutex_lock(&pause_mu);
+            struct timespec ts = {0, 100 * 1000000}; /* sees a stop without a signal */
+            if (atomic_load(&vm_paused)) pthread_cond_timedwait_relative_np(&pause_cv, &pause_mu, &ts);
+            pthread_mutex_unlock(&pause_mu);
+            continue;
+        }
         hv_machine_kick_all(&m);
     }
     return NULL;
+}
+
+int hv_vm_pause(void) {
+    pthread_mutex_lock(&pause_mu);
+    int r = 0;
+    if (!atomic_load(&vm_paused)) {
+        r = !machine_created || !kicker_started || atomic_load(&kicker_stopped) ? -1 : hv_machine_pause(&m, 2000);
+        if (r == 0) {
+            hv_audio_hold(1);
+            atomic_store(&vm_paused, 1);
+        }
+    }
+    pthread_mutex_unlock(&pause_mu);
+    return r;
+}
+
+double hv_vm_resume(void) {
+    pthread_mutex_lock(&pause_mu);
+    uint64_t gap = 0;
+    if (atomic_load(&vm_paused)) {
+        hv_audio_hold(0);
+        gap = hv_machine_resume(&m); /* 0 if a stop released it already */
+        atomic_store(&vm_paused, 0);
+        pthread_cond_broadcast(&pause_cv);
+    }
+    pthread_mutex_unlock(&pause_mu);
+    return gap / 24e6;
+}
+
+int hv_vm_paused(void) { return atomic_load(&vm_paused); }
+
+static dispatch_queue_t background_queue(void) {
+    static dispatch_queue_t q;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ q = dispatch_queue_create("henge.background", DISPATCH_QUEUE_SERIAL); });
+    return q;
+}
+
+/* A CPU's thread: the pause waits for it, so it goes on the queue. */
+static void sound_stopped(void) {
+    if (!atomic_load(&in_background)) return;
+    dispatch_async(background_queue(), ^{
+        if (atomic_load(&in_background)) hv_vm_pause();
+    });
+}
+
+void hv_vm_set_background(int on) {
+    atomic_store(&in_background, on); /* before the check: a stream that stops meanwhile still pauses */
+    dispatch_sync(background_queue(), ^{
+        if (!on) hv_vm_resume();
+        else if (!hv_audio_playing()) hv_vm_pause();
+    });
 }
 
 /* A thread that runs guest code. While a block runs its SP register holds the
@@ -648,6 +714,9 @@ static void *cpu0_thread(void *unused) {
     if (kicker_started) pthread_join(kicker, NULL);
     kicker_started = 0;
     memset(secondary_started, 0, sizeof secondary_started);
+    pthread_mutex_lock(&pause_mu);
+    atomic_store(&vm_paused, 0); /* the halt ended the pause */
+    pthread_mutex_unlock(&pause_mu);
     /* A DMA worker can still be writing after the guest CPUs have exited. */
     hv_virtio_blk_stop(devs.blk[0]);
     hv_virtio_blk_stop(devs.blk[1]);
@@ -689,7 +758,7 @@ failed:
 }
 
 void hv_vm_stop(void) {
-    hv_machine_halt(&m, HV_HALT_HOST);
+    hv_machine_halt(&m, HV_HALT_HOST); /* ends a pause too */
 }
 
 /* macOS's virtio mouse driver drops BTN_RIGHT, so the right button is a Control-click, with the right

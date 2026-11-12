@@ -886,6 +886,64 @@ static void stop_the_world(HvCpu *cpu) {
     }
 }
 
+/* A pause is a stop-the-world that the host holds: CPUs wait for it as for a flush (stop_the_world, unpark). */
+int hv_machine_pause(HvMachine *m, unsigned timeout_ms) {
+    if (hv_self) return -1; /* it would wait for itself */
+    pthread_mutex_lock(&m->stw_mu);
+    if (m->paused) {
+        pthread_mutex_unlock(&m->stw_mu);
+        return 0;
+    }
+    while (m->stw_active) pthread_cond_wait(&m->stw_cv, &m->stw_mu); /* a flush under way */
+    __atomic_store_n(&m->stw_active, 1, __ATOMIC_SEQ_CST);
+    m->paused = 1;
+    pthread_mutex_unlock(&m->stw_mu);
+    hv_machine_kick_all(m);
+    uint64_t until = mach_absolute_time() + (uint64_t)timeout_ms * 24000;
+    for (;;) {
+        int busy = 0, halted = 0;
+        for (int i = 0; i < m->ncpus; i++)
+            if (m->cpus[i]) {
+                busy |= __atomic_load_n(&m->cpus[i]->pc_state->active, __ATOMIC_SEQ_CST);
+                halted |= m->cpus[i]->halted != HV_HALT_NONE; /* a halt that missed m->paused must not be held */
+            }
+        if (!busy && !halted) break;
+        if (halted || mach_absolute_time() >= until) {
+            pthread_mutex_lock(&m->stw_mu);
+            m->paused = 0;
+            __atomic_store_n(&m->stw_active, 0, __ATOMIC_SEQ_CST);
+            pthread_cond_broadcast(&m->stw_cv);
+            pthread_mutex_unlock(&m->stw_mu);
+            return -1;
+        }
+        hv_machine_kick_all(m); /* a CPU that was between blocks may have taken the first kick already */
+        usleep(50);
+    }
+    m->paused_at = hv_counter();
+    return 0;
+}
+
+uint64_t hv_machine_resume(HvMachine *m) {
+    pthread_mutex_lock(&m->stw_mu);
+    if (!m->paused) {
+        pthread_mutex_unlock(&m->stw_mu);
+        return 0;
+    }
+    uint64_t now = hv_counter(), gap = now - m->paused_at;
+    m->cntvoff = hv_resume_offset(m->cntvoff, m->paused_at, now); /* CPU_ON copies it */
+    for (int i = 0; i < m->ncpus; i++)
+        if (m->cpus[i]) {
+            m->cpus[i]->cntvoff = hv_resume_offset(m->cpus[i]->cntvoff, m->paused_at, now);
+            m->cpus[i]->timer_due = 0; /* in host time: the next tick works it out again */
+        }
+    m->paused = 0;
+    __atomic_store_n(&m->stw_active, 0, __ATOMIC_SEQ_CST);
+    pthread_cond_broadcast(&m->stw_cv);
+    pthread_mutex_unlock(&m->stw_mu);
+    hv_machine_kick_all(m); /* each CPU ticks first, so its timer line and deadline follow the new offset */
+    return gap;
+}
+
 int hv_run(HvCpu *cpu) {
     if (cpu->pc_state) cpu->pc_state->thread = mach_thread_self();
     hv_big_lock(cpu->m);

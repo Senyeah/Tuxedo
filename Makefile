@@ -31,7 +31,7 @@ VM = $(B)/vm.o $(B)/linux_boot.o
 METAL_LIBS = -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers $(GFX_LDLIBS)
 
 TESTS = $(B)/test_classify $(B)/test_jit_region $(B)/test_operands $(B)/test_jit $(B)/test_mem \
-        $(B)/test_mmu $(B)/test_exc $(B)/test_devices $(B)/test_shutdown $(B)/test_big_lock $(B)/test_machine_rebuild $(B)/test_fdt $(B)/test_console $(B)/test_virt \
+        $(B)/test_mmu $(B)/test_exc $(B)/test_devices $(B)/test_shutdown $(B)/test_pause $(B)/test_big_lock $(B)/test_machine_rebuild $(B)/test_fdt $(B)/test_console $(B)/test_virt \
         $(B)/test_vgpu_metal $(if $(GFX),$(B)/test_vgpu_virgl)
 
 all: $(TESTS) $(B)/hengevm $(B)/hengevm-ref $(B)/hvsparse
@@ -121,6 +121,9 @@ $(B)/test_mmu: tests/test_mmu.c $(ENGINE)
 	$(CC) $(CFLAGS) tests/test_mmu.c $(ENGINE) -o $@
 
 $(B)/test_shutdown: tests/test_shutdown.c $(ENGINE)
+	$(CC) $(CFLAGS) $^ -o $@
+
+$(B)/test_pause: tests/test_pause.c $(ENGINE)
 	$(CC) $(CFLAGS) $^ -o $@
 
 $(B)/test_big_lock: tests/test_big_lock.c $(ENGINE)
@@ -234,6 +237,11 @@ test-linux-balloon: $(B)/hengevm
 test-linux-sound: $(B)/hengevm
 	uv run tools/linux/sound-check.py $(SOUND_ARGS)
 .PHONY: test-linux-sound
+
+# E15: hv_vm_pause hides a frozen hengevm from the guest (30 s and 120 s at 4 CPUs): no RCU stall, no clock jump, near zero host CPU while paused.
+test-linux-suspend: $(B)/hengevm
+	uv run tools/linux/suspend-check.py $(SUSPEND_ARGS)
+.PHONY: test-linux-suspend
 
 test-vm-lifecycle: $(B)/test_vm_lifecycle
 	$(B)/test_vm_lifecycle

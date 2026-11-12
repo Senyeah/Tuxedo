@@ -246,11 +246,21 @@ struct SessionView: View {
         .onChange(of: scenePhase) { phase in
             guard phase != .active else {
                 display.refresh()
+                setBackground(false)
                 return
             }
             HardwareKeys.releaseAll()
             HardwareMouse.shared.releaseButtons()
             VolumeClicks.shared.releaseButtons()
+            // An external screen's scene may still be up; then the app is not in the background.
+            if phase == .background && UIApplication.shared.applicationState == .background { setBackground(true) }
+            else if phase == .inactive { setBackground(false) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+            setBackground(true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            setBackground(false)
         }
         .onChange(of: showDetails) { showing in
             if showing { HardwareKeys.releaseAll(); StickyKeys.shared.releaseAll() }
@@ -1028,6 +1038,16 @@ struct SessionView: View {
 
     private func stopTapped() {
         if state == 1 { confirmStop = true } else { close() }
+    }
+
+    /// Linux pauses while the app is away, so iOS freezing it does not jump the guest's clock (RCU stalls).
+    /// A Mac keeps running as before: the pause is not checked with macOS yet (T4).
+    private func setBackground(_ away: Bool) {
+        guard mac.guest == .linux else { return }
+        let was = henge_vm_paused() != 0
+        henge_vm_set_background(away ? 1 : 0) // with sound playing, it pauses when the sound stops
+        let now = henge_vm_paused() != 0
+        if now != was { HengeLog.log("session", now ? "paused in the background" : "resumed") }
     }
 
     private func finish() {

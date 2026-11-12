@@ -248,10 +248,20 @@ int main(void) {
                 size_t n;
                 if (cases[i].how == FW_SPIN) {
                     n = drain(text, sizeof text, cases[i].say, 0, 3000);
-                    henge_vm_stop();
+                    henge_vm_set_background(1);
+                    check("the background pauses a silent machine", henge_vm_paused());
+                    henge_vm_stop(); /* a stop must end the pause */
                     for (int w = 0; w < 3000 && henge_vm_state() != 2; w++) usleep(1000);
                     n += drain(text + n, sizeof text - n, NULL, 0, 1);
+                    check("a stopped machine is not paused", !henge_vm_paused());
+                    henge_vm_set_background(0);
                 } else if (cases[i].key) {
+                    henge_vm_set_background(1);
+                    check("background pauses", henge_vm_paused());
+                    henge_vm_set_background(1);
+                    usleep(20000);
+                    henge_vm_set_background(0);
+                    check("foreground resumes", !henge_vm_paused());
                     usleep(100000);
                     check("the key text is not out before the key", henge_vm_console_read((uint8_t *)text, sizeof text) == 0);
                     henge_vm_power_button();

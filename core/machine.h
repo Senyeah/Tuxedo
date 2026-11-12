@@ -287,6 +287,8 @@ typedef struct HvMachine {
     pthread_mutex_t stw_mu;
     pthread_cond_t stw_cv;
     int stw_active;
+    int paused;          /* hv_machine_pause holds stw_active: every CPU waits at the barrier */
+    uint64_t paused_at;  /* the host counter once the last CPU stopped */
     pthread_mutex_t big_mu;
     pthread_cond_t big_cv;
     uint64_t big_next, big_serving;
@@ -376,6 +378,17 @@ void hv_machine_kick_all(HvMachine *m);
 /* Publish a terminal reason, then wake all CPUs, including CPU_OFF waits.
    A later host stop must not overwrite the guest's shutdown/panic reason. */
 void hv_machine_halt(HvMachine *m, enum HvHaltReason reason);
+/* Not on a CPU's thread: stop every CPU where it parks (its next block, a WFI, CPU_OFF) and hold it there.
+   0 once all are stopped, or -1 (and nothing held) if one has not within timeout_ms, or on a CPU's thread. */
+int hv_machine_pause(HvMachine *m, unsigned timeout_ms);
+/* Let them go with every CNTVOFF raised by the time paused, so the guest's virtual counter and timers carry on
+   from where they stopped (a CPU that read the jumped counter would set Linux's clocksource far ahead).
+   Returns the host ticks hidden, 0 if not paused. The physical counter and timer keep the host's time. */
+uint64_t hv_machine_resume(HvMachine *m);
+/* The CNTVOFF that hides a pause from paused_at to now. */
+static inline uint64_t hv_resume_offset(uint64_t cntvoff, uint64_t paused_at, uint64_t now) {
+    return cntvoff + (now - paused_at);
+}
 /* Wake one CPU out of WFI (and make it leave its block). */
 void hv_cpu_wake(HvCpu *cpu);
 /* Make it leave its block at the next checked exit, without waking it from WFI. */
