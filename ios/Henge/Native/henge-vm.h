@@ -9,6 +9,18 @@
    (henge_ios_jit_prewarm), and starts it. 0, or -1 with a reason in err. */
 int henge_vm_boot(const char *rom, const char *disk, const char *aux, uint64_t ecid, uint64_t seed, uint64_t ram_mb,
                   int cpus, char *err, size_t errlen);
+/* Starts a Linux machine (the virt board): U-Boot's firmware file and a raw root disk, which may be NULL.
+   Same rules as henge_vm_boot: on the app's JIT region. 0, or -1 with a reason in err. */
+int henge_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb, int cpus, char *err, size_t errlen);
+/* The serial console. Read drains what the guest wrote since the last call (a 256 KB ring; when it is full the
+   oldest bytes go) and works after the machine stops. Write types bytes into it; ignored unless running. */
+size_t henge_vm_console_read(uint8_t *buf, size_t cap);
+void henge_vm_console_write(const uint8_t *buf, size_t n);
+/* Presses the guest's power key (GPIO pin 3) for 100 ms: Debian shuts down cleanly. */
+void henge_vm_power_button(void);
+/* The running machine's board (the engine's HV_BOARD_* values), or -1 when none runs. */
+enum HengeVmBoard { HENGE_VM_BOARD_MAC = 0, HENGE_VM_BOARD_LINUX = 1 };
+int henge_vm_board_kind(void);
 /* Installs macOS from an IPSW onto a new machine (blank disk and auxiliary
    storage): boots the ROM in DFU mode and runs the restore over its USB port,
    as Virtualization.framework's installer does. workdir is scratch space.

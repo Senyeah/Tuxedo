@@ -4,6 +4,7 @@
 #include "jit_region.h"
 #include "vm.h"
 
+#include <dispatch/dispatch.h>
 #include <fcntl.h>
 #include <mach/mach.h>
 #include <pthread.h>
@@ -58,6 +59,49 @@ static void write_file(const char *path, const void *data, size_t bytes) {
     if (fd < 0 || (data && write(fd, data, bytes) != (ssize_t)bytes) || ftruncate(fd, bytes)) exit(1);
     close(fd);
 }
+
+/* A tiny arm64 firmware for the virt board, from a few encodings. It runs at flash 0. */
+#define MOVZ(rd, imm, hw) (0xd2800000u | (unsigned)(hw) << 21 | (unsigned)(imm) << 5 | (rd))
+#define MOVW(rd, imm) (0x52800000u | (unsigned)(imm) << 5 | (rd))
+#define STRB(rt, rn) (0x39000000u | (rn) << 5 | (rt))
+enum { FW_OFF, FW_RESET, FW_SPIN, FW_FLOOD };
+typedef struct { uint32_t w[512]; int n; } Fw;
+static void emit(Fw *f, uint32_t insn) { f->w[f->n++] = insn; }
+static void fw_print(Fw *f, const char *text) {
+    emit(f, MOVZ(1, 0x900, 1)); /* x1 = the PL011 at 0x09000000 */
+    for (; *text; text++) emit(f, MOVW(2, (unsigned char)*text)), emit(f, STRB(2, 1));
+}
+static void fw_end(Fw *f, int how) {
+    if (how == FW_SPIN) { emit(f, 0x14000000); return; } /* b . */
+    emit(f, MOVZ(0, how == FW_RESET ? 9 : 8, 0)); /* PSCI SYSTEM_OFF 0x84000008, SYSTEM_RESET 0x84000009 */
+    emit(f, 0xf2b08000);
+    emit(f, 0xd4000002); /* hvc #0 */
+}
+/* Waits for the GPIO power key (pin 3, GPIODATA at 0x09030000 + 0x3fc), then prints. */
+static void fw_wait_key(Fw *f) {
+    emit(f, MOVZ(3, 0x903, 1));
+    emit(f, 0xb9400000u | 0xffu << 10 | 3 << 5 | 4);          /* ldr w4, [x3, #0x3fc] */
+    emit(f, 0x36000000u | 3u << 19 | (0x3fffu << 5) | 4);     /* tbz w4, #3, back to the ldr */
+}
+/* 5 * 65536 bytes (more than the ring holds), each the low byte of a countdown that ends at 1. */
+static void fw_flood(Fw *f) {
+    emit(f, MOVZ(1, 0x900, 1));
+    emit(f, MOVZ(5, 5, 1));
+    emit(f, STRB(5, 1));
+    emit(f, 0xf1000000u | 1 << 10 | 5 << 5 | 5);              /* subs x5, x5, #1 */
+    emit(f, 0x54000001u | ((uint32_t)(-2 & 0x7ffff) << 5));   /* b.ne to the strb */
+}
+/* Drains the console into out (cap bytes), waiting up to ms for the machine to stop or, with stop_on, for the text. */
+static size_t drain(char *out, size_t cap, const char *stop_on, int until_stopped, int ms) {
+    size_t n = 0;
+    for (int t = 0; t < ms; t++) {
+        n += henge_vm_console_read((uint8_t *)out + n, cap - n);
+        if (stop_on && memmem(out, n, stop_on, strlen(stop_on))) break;
+        if (until_stopped && henge_vm_state() == 2) { n += henge_vm_console_read((uint8_t *)out + n, cap - n); break; }
+        usleep(1000);
+    }
+    return n;
+}
 static void *read_ui(void *unused) {
     (void)unused;
     while (!atomic_load(&reader_done)) {
@@ -69,6 +113,8 @@ static void *read_ui(void *unused) {
         henge_vm_cpus_on();
         henge_vm_gpu_frames();
         henge_vm_balloon(-1);
+        henge_vm_board_kind();
+        henge_vm_console_write((const uint8_t *)"", 0);
         henge_vm_set_display_layer(NULL);
         if (!henge_vm_boot_display(&pixels, &width, &height, &stride)) henge_vm_free_display(pixels);
         usleep(500);
@@ -94,6 +140,7 @@ int main(void) {
     if (pthread_create(&reader, NULL, read_ui, NULL)) return 1;
     /* Warm the process-wide pointer queue before counting worker threads. */
     hv_vm_mouse_move(0, 0);
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{}); /* the power key's release timer runs there */
     usleep(100000);
     int initial_fds = fds();
     unsigned initial_threads = threads();
@@ -145,11 +192,97 @@ int main(void) {
         check("no CPU, disk or network worker leak", threads() == initial_threads);
         check("no leaked CPU thread ports", dead_ports() == initial_dead_ports);
     }
+    /* The virt board through the bridge: a tiny firmware prints to the PL011 and ends in PSCI or a host stop. */
+    {
+        static char text[1 << 19];
+        int base = 12, runs = 0;
+        struct { const char *name; int how, key, outcome; const char *say; } cases[] = {
+            {"off", FW_OFF, 0, HENGE_VM_OUTCOME_SHUTDOWN, "HENGE OFF\n"},
+            {"reset", FW_RESET, 0, HENGE_VM_OUTCOME_RESTART, "HENGE RESET\n"},
+            {"host stop", FW_SPIN, 0, HENGE_VM_OUTCOME_HOST_STOP, "HENGE SPIN\n"},
+            {"power key", FW_OFF, 1, HENGE_VM_OUTCOME_SHUTDOWN, "KEY\n"},
+        };
+        check("no board before a boot", henge_vm_board_kind() == -1);
+        check("missing firmware file fails", henge_vm_boot_linux("/nonexistent/u-boot.bin", disk, 64, 2, error, sizeof error) != 0 &&
+                                                henge_vm_state() == 0 && henge_vm_can_start() && fds() == initial_fds &&
+                                                threads() == initial_threads);
+        check("no firmware fails", henge_vm_boot_linux(NULL, disk, 64, 2, error, sizeof error) != 0 && henge_vm_state() == 0);
+        for (unsigned i = 0; i < sizeof cases / sizeof *cases; i++) {
+            for (int again = 0; again < 2; again++) {
+                Fw f = {0};
+                if (cases[i].key) fw_wait_key(&f);
+                fw_print(&f, cases[i].say);
+                fw_end(&f, cases[i].how);
+                write_file(rom, f.w, f.n * sizeof f.w[0]);
+                int rc = henge_vm_boot_linux(rom, disk, 64, 2, error, sizeof error);
+                if (rc) fprintf(stderr, "virt %s: %s\n", cases[i].name, error);
+                check("virt boots through the bridge", rc == 0);
+                if (rc) break;
+                runs++;
+                check("virt board kind", henge_vm_board_kind() == HENGE_VM_BOARD_LINUX);
+                check("a second start is refused while running", henge_vm_boot_linux(rom, disk, 64, 2, error, sizeof error) != 0 &&
+                                                                  henge_vm_state() == 1);
+                henge_vm_console_write((const uint8_t *)"x", 1); /* nobody reads it; it must not hurt */
+                size_t n;
+                if (cases[i].how == FW_SPIN) {
+                    n = drain(text, sizeof text, cases[i].say, 0, 3000);
+                    henge_vm_stop();
+                    for (int w = 0; w < 3000 && henge_vm_state() != 2; w++) usleep(1000);
+                    n += drain(text + n, sizeof text - n, NULL, 0, 1);
+                } else if (cases[i].key) {
+                    usleep(100000);
+                    check("the key text is not out before the key", henge_vm_console_read((uint8_t *)text, sizeof text) == 0);
+                    henge_vm_power_button();
+                    n = drain(text, sizeof text, NULL, 1, 3000);
+                } else {
+                    n = drain(text, sizeof text, NULL, 1, 3000);
+                }
+                text[n] = 0;
+                check("virt stopped", henge_vm_state() == 2);
+                if (henge_vm_state() != 2) exit(1);
+                check("console text arrives", strstr(text, cases[i].say) != NULL);
+                if (!strstr(text, cases[i].say)) fprintf(stderr, "virt %s: got \"%s\"\n", cases[i].name, text);
+                check("virt outcome", henge_vm_exit_outcome() == cases[i].outcome);
+                check("virt board kind after stop", henge_vm_board_kind() == -1);
+                check("virt released", hv_vm_virt() == NULL && henge_vm_can_start());
+                check("virt generation", henge_vm_generation() == (uint64_t)base + runs);
+                check("console empty after the drain", henge_vm_console_read((uint8_t *)text, sizeof text) == 0);
+                henge_vm_power_button(); /* no machine: nothing to press */
+                check("virt leaves no descriptors", fds() == initial_fds);
+                for (int w = 0; w < 1000 && threads() > initial_threads; w++) usleep(1000);
+                check("virt leaves no threads", threads() == initial_threads);
+                if (threads() != initial_threads) fprintf(stderr, "  %s #%d: %u threads, started with %u\n", cases[i].name, again, threads(), initial_threads);
+            }
+        }
+        /* More output than the ring holds: the oldest bytes go, the newest stay. */
+        Fw f = {0};
+        fw_flood(&f);
+        fw_end(&f, FW_OFF);
+        write_file(rom, f.w, f.n * sizeof f.w[0]);
+        check("virt flood boots", henge_vm_boot_linux(rom, disk, 64, 2, error, sizeof error) == 0);
+        for (int w = 0; w < 10000 && henge_vm_state() != 2; w++) usleep(1000);
+        size_t total = 0, got;
+        static uint8_t flood[(1 << 18) + 64];
+        while ((got = henge_vm_console_read(flood + total, 4096)) > 0) total += got;
+        check("ring keeps 256 KB", total == 1 << 18);
+        check("ring dropped the oldest bytes", total && flood[0] == (uint8_t)(1 << 18)); /* countdown 262144 */
+        check("ring kept the newest byte", total && flood[total - 1] == 1);
+        check("flood outcome", henge_vm_exit_outcome() == HENGE_VM_OUTCOME_SHUTDOWN);
+        runs++;
+        /* The virtual Mac still boots after Linux and writes nothing to the console. */
+        uint32_t off[] = {0xd2800100, 0xf2b08000, 0xd4000002};
+        write_file(rom, off, sizeof off);
+        check("macOS boots after Linux", henge_vm_boot(rom, disk, aux, 1, 0, 64, 1, error, sizeof error) == 0);
+        for (int w = 0; w < 3000 && henge_vm_state() != 2; w++) usleep(1000);
+        check("mac outcome after Linux", henge_vm_exit_outcome() == HENGE_VM_OUTCOME_SHUTDOWN);
+        check("mac generation after Linux", henge_vm_generation() == (uint64_t)base + runs + 1);
+        check("mac wrote nothing to the console", henge_vm_console_read(flood, sizeof flood) == 0);
+    }
     hv_vm_destroy();
     atomic_store(&reader_done, 1);
     pthread_join(reader, NULL);
     hv_jit_region_close(&jit);
     unlink(rom); unlink(disk); unlink(aux); rmdir(dir);
-    printf("VM lifecycle: 12 power cycles and 3 failed boots, %d failures\n", failures);
+    printf("VM lifecycle: 12 power cycles and 3 failed boots, then the virt board (4 endings twice, a flood), %d failures\n", failures);
     return failures != 0;
 }
