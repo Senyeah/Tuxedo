@@ -19,8 +19,8 @@ TESTS = $(B)/test_classify $(B)/test_jit_region $(B)/test_operands $(B)/test_jit
 all: $(TESTS) $(B)/hengevm $(B)/hengevm-ref $(B)/hvsparse
 
 # Mac-only test tool: the same machine with the CPU on Hypervisor.framework, for comparing runs.
-$(B)/hengevm-ref: host/hvf_ref.c host/hvf_ref.entitlements $(ENGINE) $(DEV)
-	$(CC) $(CFLAGS) host/hvf_ref.c $(ENGINE) $(DEV) -framework Hypervisor $(METAL_LIBS) -o $@
+$(B)/hengevm-ref: host/hvf_ref.c host/hvf_ref.entitlements $(ENGINE) $(DEV) $(B)/linux_boot.o
+	$(CC) $(CFLAGS) host/hvf_ref.c $(ENGINE) $(DEV) $(B)/linux_boot.o -framework Hypervisor $(METAL_LIBS) -o $@
 	codesign -s - -f --entitlements host/hvf_ref.entitlements $@
 
 # Mac-only graphics device (ParavirtualizedGraphics.framework, as QEMU uses it).
@@ -294,6 +294,25 @@ $(B)/test_machine_model: ios/Henge/MachineModel.swift tests/test_machine_model.s
 test-machine-model: $(B)/test_machine_model
 	$(B)/test_machine_model
 .PHONY: test-machine-model
+
+# E13/T4: the engine gate. The macOS guest boot has no machine on this Mac, so it stays an iPhone check.
+# Does not run ios/scripts/sim_build.sh (HengeSim): run it when ios/ changes.
+# Needs no Husk checkout: IOS_DEPS falls back to Homebrew's libslirp when the default sysroot is missing.
+GATE_IOS_DEPS ?= $(if $(wildcard $(IOS_DEPS)/include/slirp/libslirp.h),$(IOS_DEPS),/opt/homebrew)
+gate-engine:
+	@echo "gate-engine: iOS deps from $(GATE_IOS_DEPS)"
+	$(MAKE) test
+	$(MAKE) test-vm-lifecycle
+	$(MAKE) test-display-routing
+	ios/scripts/check_display.sh
+	$(MAKE) ios-lib IOS_DEPS=$(GATE_IOS_DEPS)
+	$(MAKE) ios-sim-lib IOS_DEPS=$(GATE_IOS_DEPS)
+	$(MAKE) test-linux-dtb
+	$(MAKE) test-linux-direct
+	$(MAKE) test-linux-smoke
+	$(MAKE) test-virgl-host
+	$(MAKE) test-machine-model
+.PHONY: gate-engine
 
 # What the JIT setup tells the user and when it retries by itself, for each kind of network path and helper error.
 $(B)/test_jit_advice: ios/Henge/JIT/JITNetworkAdvice.swift tests/test_jit_advice.swift | $(B)

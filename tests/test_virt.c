@@ -235,6 +235,74 @@ static int count(const char *text, const char *what) {
     return n;
 }
 
+/* The nodes Linux needs, each with the address, interrupt and compatible string the board really has. */
+static void check_nodes(const char *dts, int ncpus) {
+    char want[128];
+    check("root compatible", strstr(dts, "compatible = \"linux,dummy-virt\";") != NULL, 1);
+    check("interrupt parent is the GIC", strstr(dts, "interrupt-parent = <0x02>;") != NULL, 1);
+    check("psci: cpu_on", strstr(dts, "cpu_on = <0xc4000003>;") != NULL, 1);
+    check("psci: compatible", strstr(dts, "compatible = \"arm,psci-1.0\", \"arm,psci-0.2\", \"arm,psci\";") != NULL, 1);
+    check("memory node", strstr(dts, "memory@40000000 {") != NULL, 1);
+    check("memory device_type", strstr(dts, "device_type = \"memory\";") != NULL, 1);
+    check("cpu 0", strstr(dts, "cpu@0 {") != NULL, 1);
+    snprintf(want, sizeof want, "cpu@%x {", ncpus - 1);
+    check("last cpu", strstr(dts, want) != NULL, 1);
+    snprintf(want, sizeof want, "cpu@%x {", ncpus);
+    check("no cpu past the last", strstr(dts, want) == NULL, 1);
+    check("every cpu enabled by psci", count(dts, "enable-method = \"psci\";"), ncpus);
+    check("cpu compatible", count(dts, "compatible = \"arm,armv8\";"), ncpus);
+    for (int i = 0; i < ncpus; i++) {
+        snprintf(want, sizeof want, "cpu@%x {\n\t\t\treg = <0x%02x>;", i, i);
+        check("cpu reg is its MPIDR Aff0", strstr(dts, want) != NULL, 1);
+    }
+    check("cpus: 1 address cell", strstr(dts, "#address-cells = <0x01>;") != NULL, 1);
+    check("cpus: no size cells", strstr(dts, "#size-cells = <0x00>;") != NULL, 1);
+    check("GIC node", strstr(dts, "intc@8000000 {") != NULL, 1);
+    check("GIC v3", strstr(dts, "compatible = \"arm,gic-v3\";") != NULL, 1);
+    check("GIC distributor and redistributors", strstr(dts, "reg = <0x00 0x8000000 0x00 0x10000 0x00 0x80a0000") != NULL, 1);
+    check("GIC phandle", strstr(dts, "phandle = <0x02>;") != NULL, 1);
+    check("GIC has 3 interrupt cells", strstr(dts, "#interrupt-cells = <0x03>;") != NULL, 1);
+    check("GIC has no ITS", strstr(dts, "arm,gic-v3-its") == NULL, 1);
+    check("timer node", strstr(dts, "timer {") != NULL, 1);
+    check("timer compatible", strstr(dts, "compatible = \"arm,armv8-timer\", \"arm,armv7-timer\";") != NULL, 1);
+    check("timer: four PPIs", strstr(dts, "interrupts = <0x01 0x0d 0x04 0x01 0x0e 0x04 0x01 0x0b 0x04 0x01 0x0a 0x04>;") != NULL, 1);
+    check("timer is always on", strstr(dts, "always-on;") != NULL, 1);
+    check("UART node", strstr(dts, "pl011@9000000 {") != NULL, 1);
+    check("UART reg", strstr(dts, "reg = <0x00 0x9000000 0x00 0x1000>;") != NULL, 1);
+    check("UART interrupt is SPI 1", strstr(dts, "interrupts = <0x00 0x01 0x04>;") != NULL, 1);
+    check("UART compatible", strstr(dts, "compatible = \"arm,pl011\", \"arm,primecell\";") != NULL, 1);
+    check("UART clocks", strstr(dts, "clock-names = \"uartclk\", \"apb_pclk\";") != NULL, 1);
+    check("RTC node", strstr(dts, "pl031@9010000 {") != NULL, 1);
+    check("RTC interrupt is SPI 2", strstr(dts, "interrupts = <0x00 0x02 0x04>;") != NULL, 1);
+    check("RTC compatible", strstr(dts, "compatible = \"arm,pl031\", \"arm,primecell\";") != NULL, 1);
+    check("GPIO node", strstr(dts, "pl061@9030000 {") != NULL, 1);
+    check("GPIO interrupt is SPI 7", strstr(dts, "interrupts = <0x00 0x07 0x04>;") != NULL, 1);
+    check("GPIO phandle", strstr(dts, "phandle = <0x03>;") != NULL, 1);
+    check("GPIO has 2 cells", strstr(dts, "#gpio-cells = <0x02>;") != NULL, 1);
+    check("power key on GPIO pin 3", strstr(dts, "gpios = <0x03 0x03 0x00>;") != NULL, 1);
+    check("power key code", strstr(dts, "linux,code = <0x74>;") != NULL, 1);
+    check("clock node", strstr(dts, "apb-pclk {") != NULL, 1);
+    check("clock: 24 MHz", strstr(dts, "clock-frequency = <0x16e3600>;") != NULL, 1);
+    check("PCIe node", strstr(dts, "pcie@10000000 {") != NULL, 1);
+    check("PCIe compatible", strstr(dts, "compatible = \"pci-host-ecam-generic\";") != NULL, 1);
+    check("PCIe ECAM", strstr(dts, "reg = <0x00 0x3f000000 0x00 0x1000000>;") != NULL, 1);
+    check("PCIe bus range", strstr(dts, "bus-range = <0x00 0x0f>;") != NULL, 1);
+    check("PCIe I/O and memory ranges",
+          strstr(dts, "ranges = <0x1000000 0x00 0x00 0x00 0x3eff0000 0x00 0x10000 "
+                      "0x2000000 0x00 0x10000000 0x00 0x10000000 0x00 0x2eff0000>;") != NULL, 1);
+    check("PCIe interrupt-map-mask", strstr(dts, "interrupt-map-mask = <0x1800 0x00 0x00 0x07>;") != NULL, 1);
+    check("PCIe has 1 interrupt cell", strstr(dts, "#interrupt-cells = <0x01>;") != NULL, 1);
+    check("every pin of every slot reaches one of SPI 3 to 6",
+          count(dts, "0x00 0x00 0x00 0x03 0x04") + count(dts, "0x00 0x00 0x00 0x04 0x04") +
+              count(dts, "0x00 0x00 0x00 0x05 0x04") + count(dts, "0x00 0x00 0x00 0x06 0x04"), 16);
+    check("slot 3 pin A goes to SPI 6", strstr(dts, "0x1800 0x00 0x00 0x01 0x02 0x00 0x00 0x00 0x06 0x04") != NULL, 1);
+    check("slot 3 pin D goes to SPI 5", strstr(dts, "0x1800 0x00 0x00 0x04 0x02 0x00 0x00 0x00 0x05 0x04") != NULL, 1);
+    check("stdout is the UART", strstr(dts, "stdout-path = \"/pl011@9000000\";") != NULL, 1);
+    check("serial0 alias", strstr(dts, "serial0 = \"/pl011@9000000\";") != NULL, 1);
+    check("kaslr-seed", strstr(dts, "kaslr-seed = <") != NULL, 1);
+    check("rng-seed is 32 bytes", strstr(dts, "rng-seed = <") != NULL && count(strstr(dts, "rng-seed = <"), " ") >= 7, 1);
+}
+
 static void test_fdt(int ncpus, uint64_t ram_mb) {
     static HvMachine mm;
     static HvCpu cc[4];
@@ -271,9 +339,56 @@ static void test_fdt(int ncpus, uint64_t ram_mb) {
         check("interrupt-map: 16 entries of 10 cells", cells, 160);
         check("slot 1 pin A goes to SPI 4", strstr(dts, "0x800 0x00 0x00 0x01 0x02 0x00 0x00 0x00 0x04 0x04") != NULL, 1);
         check("no msi-map", strstr(dts, "msi-map") == NULL, 1);
+        check_nodes(dts, ncpus);
         if (failures) printf("%s\n", dts);
         free(dts);
     }
+    hv_virt_destroy(&vb);
+    hv_machine_free(&mm);
+}
+
+/* Trees without a command line or an initrd, and two trees of the same board. */
+static void test_fdt_variants(void) {
+    static HvMachine mm;
+    static HvCpu cc[1];
+    static HvVirt vb;
+    if (hv_machine_init(&mm, 1 << 20) != 0 || hv_virt_create(&vb, &mm, cc, 1, 256ull << 20, NULL, NULL) != 0) {
+        check("board for the variants", 1, 0);
+        return;
+    }
+    uint32_t size = 0, size2 = 0;
+    uint8_t *plain = hv_virt_build_fdt(&vb, NULL, 0, 0, &size);
+    uint8_t *again = hv_virt_build_fdt(&vb, NULL, 0, 0, &size2);
+    check("two trees", plain && again, 1);
+    check("the seeds differ between trees", plain && again && size == size2 && memcmp(plain, again, size) != 0, 1);
+    char *dts = plain ? decode(plain, size) : NULL;
+    if (dts) {
+        check("no bootargs without a command line", strstr(dts, "bootargs") == NULL, 1);
+        check("no initrd without one", strstr(dts, "linux,initrd") == NULL, 1);
+        check("still a chosen node", strstr(dts, "chosen {") != NULL, 1);
+        check("one cpu node", count(dts, "device_type = \"cpu\""), 1);
+        check("one redistributor", strstr(dts, "0x80a0000 0x00 0x20000>") != NULL, 1);
+        check("256 MB of memory", strstr(dts, "reg = <0x00 0x40000000 0x00 0x10000000>;") != NULL, 1);
+        free(dts);
+    }
+    free(again);
+    free(plain);
+    uint8_t *empty = hv_virt_build_fdt(&vb, "", 0x48000000, 0x48000000, &size);
+    dts = empty ? decode(empty, size) : NULL;
+    if (dts) {
+        check("an empty command line is kept, as one NUL", strstr(dts, "bootargs = [00];") != NULL, 1);
+        check("an initrd with end == start is dropped", strstr(dts, "linux,initrd") == NULL, 1);
+        free(dts);
+    }
+    free(empty);
+    uint8_t *quoted = hv_virt_build_fdt(&vb, "root=/dev/vda1 quiet \"a b\"", 0x48000000, 0x48000001, &size);
+    dts = quoted ? decode(quoted, size) : NULL;
+    if (dts) {
+        check("a one-byte initrd is kept", strstr(dts, "linux,initrd-end = <0x00 0x48000001>") != NULL, 1);
+        check("quotes in the command line survive", strstr(dts, "bootargs = \"root=/dev/vda1 quiet \\\"a b\\\"\";") != NULL, 1);
+        free(dts);
+    }
+    free(quoted);
     hv_virt_destroy(&vb);
     hv_machine_free(&mm);
 }
@@ -1090,6 +1205,513 @@ static void test_gpu_fuzz(HvVirtioGpu *g) {
            ok[6], ok[7]);
 }
 
+/* A virtio device driven through its PCI BAR, one request at a time on queues of 16. */
+typedef struct {
+    int slot;
+    uint64_t cfg, bar, ring[2];
+    uint16_t avail[2];
+    void (*settle)(void); /* for devices that finish on a worker thread */
+} Vdev;
+typedef struct {
+    uint64_t addr;
+    uint32_t len;
+    int write;
+} Seg;
+
+#define VD_RINGS (VIRT_MEM + 0x600000)
+#define VD_BUF (VIRT_MEM + 0x700000)
+
+static void vdev_init(Vdev *d, int slot, int nq, uint64_t bar) {
+    *d = (Vdev){.slot = slot, .cfg = VIRT_PCIE_ECAM + ((uint64_t)slot << 15), .bar = bar};
+    wr32(&m, d->cfg + 0x20, (uint32_t)bar);
+    wr32(&m, d->cfg + 0x24, (uint32_t)(bar >> 32));
+    wr16(d->cfg + 0x04, 0x6);
+    wr8(bar + 0x14, 0);
+    wr8(bar + 0x14, 1 | 2);
+    wr32(&m, bar + 0x08, 1);
+    wr32(&m, bar + 0x0c, 1);
+    wr8(bar + 0x14, 1 | 2 | 8);
+    for (int q = 0; q < nq && q < 2; q++) {
+        d->ring[q] = VD_RINGS + (uint64_t)(slot * 2 + q) * 0x4000;
+        memset(ram(d->ring[q]), 0, 0x4000);
+        wr16(bar + 0x16, (uint16_t)q);
+        wr16(bar + 0x18, 16);
+        gwr64(bar + 0x20, d->ring[q]);
+        gwr64(bar + 0x28, d->ring[q] + 0x1000);
+        gwr64(bar + 0x30, d->ring[q] + 0x2000);
+        wr16(bar + 0x1c, 1);
+    }
+    wr8(bar + 0x14, 1 | 2 | 8 | 4);
+}
+
+/* One chain of n pieces; returns the length the device reports, or -1 when it did not complete the request. */
+static int64_t vdev_send(Vdev *d, int q, const Seg *seg, int n) {
+    uint64_t ring = d->ring[q];
+    for (int i = 0; i < n; i++)
+        put_desc(ring, i, seg[i].addr, seg[i].len, (uint16_t)((seg[i].write ? 2 : 0) | (i + 1 < n ? 1 : 0)), (uint16_t)(i + 1));
+    uint16_t *avail = (uint16_t *)ram(ring + 0x1000), *used = (uint16_t *)ram(ring + 0x2000);
+    uint16_t before = used[1];
+    avail[2 + d->avail[q] % 16] = 0;
+    avail[1] = ++d->avail[q];
+    wr16(d->bar + 0x3000 + 4u * q, 0);
+    if (d->settle) d->settle();
+    if (used[1] != (uint16_t)(before + 1)) return -1;
+    uint32_t len;
+    memcpy(&len, ram(ring + 0x2000 + 8 + 8u * (before % 16)), 4);
+    return len;
+}
+
+#define RNG_SLOT 3
+#define RNG_LINE (32 + VIRT_IRQ_PCIE + RNG_SLOT % 4)
+
+static int all_zero(const uint8_t *p, uint32_t n) {
+    for (uint32_t i = 0; i < n; i++)
+        if (p[i]) return 0;
+    return 1;
+}
+
+/* The entropy device (E9): one queue, every writable byte filled, nothing written past the buffers. */
+static void test_rng(void) {
+    Vdev d;
+    uint64_t bar = VIRT_PCIE_MMIO + 0x1000000;
+    vdev_init(&d, RNG_SLOT, 1, bar);
+    check("rng: class", rd32(&m, d.cfg + 8) >> 8, 0x00ff00);
+    check("rng: subsystem id", rd32(&m, d.cfg + 0x2c), 0x00041af4);
+    check("rng: one queue", rd32(&m, bar + 0x12) & 0xffff, 1);
+    wr32(&m, bar + 0x00, 0);
+    check("rng: no feature bits below 32", rd32(&m, bar + 0x04), 0);
+    wr32(&m, bar + 0x00, 1);
+    check("rng: VERSION_1 only", rd32(&m, bar + 0x04), 1);
+    wr16(bar + 0x16, 1);
+    check("rng: no second queue", rd32(&m, bar + 0x18) & 0xffff, 0);
+    wr16(bar + 0x16, 0);
+
+    uint8_t *buf = ram(VD_BUF);
+    memset(buf, 0, 0x4000);
+    uint64_t bytes0 = b.rng->bytes;
+    Seg one[1] = {{VD_BUF, 100, 1}};
+    check("rng: 100 bytes", (uint64_t)vdev_send(&d, 0, one, 1), 100);
+    check("rng: INTx raised", b.gic->level[RNG_LINE], 1);
+    check("rng: ISR", rd8(bar + 0x1000), 1);
+    check("rng: ISR read drops INTx", b.gic->level[RNG_LINE], 0);
+    check("rng: bytes counted", b.rng->bytes, bytes0 + 100);
+    check("rng: buffer filled", !all_zero(buf, 100), 1);
+    check("rng: nothing past the buffer", all_zero(buf + 100, 0x3f00), 1);
+    uint8_t first[100];
+    memcpy(first, buf, 100);
+    check("rng: again", (uint64_t)vdev_send(&d, 0, one, 1), 100);
+    check("rng: other bytes the second time", memcmp(first, buf, 100) != 0, 1);
+
+    memset(buf, 0, 0x4000);
+    Seg two[2] = {{VD_BUF + 0x2000, 3000, 1}, {VD_BUF, 5000, 1}};
+    check("rng: two pieces", (uint64_t)vdev_send(&d, 0, two, 2), 8000);
+    check("rng: first piece filled", !all_zero(ram(VD_BUF + 0x2000), 3000), 1);
+    check("rng: second piece filled to its end", !all_zero(ram(VD_BUF + 4096), 904), 1);
+    check("rng: nothing past the first piece", all_zero(ram(VD_BUF + 0x2000 + 3000), 0x1000), 1);
+    check("rng: second piece is not the first's", memcmp(ram(VD_BUF + 0x2000), buf, 64) != 0, 1);
+
+    Seg rd[1] = {{VD_BUF, 64, 0}};
+    check("rng: a readable-only chain gets nothing", (uint64_t)vdev_send(&d, 0, rd, 1), 0);
+    Seg empty[1] = {{VD_BUF, 0, 1}};
+    check("rng: an empty buffer", (uint64_t)vdev_send(&d, 0, empty, 1), 0);
+    Seg wild[1] = {{0x30000000, 4096, 1}}; /* PCI window: no RAM */
+    check("rng: a buffer outside RAM gets nothing", (uint64_t)vdev_send(&d, 0, wild, 1), 0);
+    Seg edge[1] = {{VIRT_MEM + b.mem.size - 100, 4096, 1}};
+    uint8_t tail[100];
+    memcpy(tail, ram(VIRT_MEM + b.mem.size - 100), 100);
+    check("rng: a buffer over the end of RAM is not written", (uint64_t)vdev_send(&d, 0, edge, 1), 0);
+    check("rng: the last bytes of RAM stay as they were", memcmp(tail, ram(VIRT_MEM + b.mem.size - 100), 100), 0);
+    Seg big[1] = {{VD_BUF, 0x10000, 1}};
+    check("rng: 64 KB in one buffer", (uint64_t)vdev_send(&d, 0, big, 1), 0x10000);
+    check("rng: 64 KB filled at its end", !all_zero(ram(VD_BUF + 0xf000), 0x1000), 1);
+
+    /* Status 0 is a driver reset: the queue is gone until it is set up again. */
+    wr8(bar + 0x14, 0);
+    check("rng: reset clears the status", rd8(bar + 0x14), 0);
+    check("rng: reset drops the queue", rd32(&m, bar + 0x1c) & 0xffff, 0);
+    uint16_t *used = (uint16_t *)ram(d.ring[0] + 0x2000);
+    uint16_t seen = used[1];
+    wr16(bar + 0x3000, 0);
+    check("rng: no answer after a reset", used[1], seen);
+    vdev_init(&d, RNG_SLOT, 1, bar);
+    check("rng: works after a new setup", (uint64_t)vdev_send(&d, 0, one, 1), 100);
+    rd8(bar + 0x1000);
+    wr16(d.cfg + 0x04, 0);
+}
+
+static void blk_settle(void) { hv_virtio_blk_drain(b.blk); }
+
+#define BLK_SLOT 1
+#define BLK_LINE (32 + VIRT_IRQ_PCIE + BLK_SLOT % 4)
+
+/* One request: header, data pieces, a status byte. Returns the status, or -1 when the request did not complete. */
+static int blk_request(Vdev *d, uint32_t type, uint64_t sector, const Seg *data, int n, int *len_out) {
+    uint8_t *hdr = ram(VD_BUF + 0x8000), *status = ram(VD_BUF + 0x8100);
+    memset(hdr, 0, 16);
+    memcpy(hdr, &type, 4);
+    memcpy(hdr + 8, &sector, 8);
+    *status = 0xaa;
+    Seg s[4] = {{VD_BUF + 0x8000, 16, 0}};
+    for (int i = 0; i < n; i++) s[1 + i] = data[i];
+    s[1 + n] = (Seg){VD_BUF + 0x8100, 1, 1};
+    int64_t r = vdev_send(d, 0, s, n + 2);
+    if (len_out) *len_out = (int)r;
+    return r < 0 ? -1 : *status;
+}
+
+/* The root disk (E9): requests through the queue reach the file. */
+static void test_blk(const char *disk_path) {
+    Vdev d;
+    uint64_t bar = VIRT_PCIE_MMIO + 0x1100000;
+    vdev_init(&d, BLK_SLOT, 1, bar);
+    d.settle = blk_settle;
+    check("blk: class", rd32(&m, d.cfg + 8) >> 8, 0x010000);
+    check("blk: one queue", rd32(&m, bar + 0x12) & 0xffff, 1);
+    wr32(&m, bar + 0x00, 0);
+    uint32_t f = rd32(&m, bar + 0x04);
+    check("blk: flush offered", (f >> 9) & 1, 1);
+    check("blk: not read-only", (f >> 5) & 1, 0);
+    check("blk: capacity in sectors", rd32(&m, bar + 0x2000), 2048);
+    check("blk: capacity high word", rd32(&m, bar + 0x2004), 0);
+
+    uint8_t *w = ram(VD_BUF), *r = ram(VD_BUF + 0x2000);
+    for (int i = 0; i < 1024; i++) w[i] = (uint8_t)(i * 13 + 7);
+    memset(r, 0, 1024);
+    Seg out[1] = {{VD_BUF, 1024, 0}}, in[1] = {{VD_BUF + 0x2000, 1024, 1}};
+    int len;
+    check("blk: write sectors 3 and 4", blk_request(&d, 1, 3, out, 1, &len), 0);
+    check("blk: write reports only the status byte", len, 1);
+    check("blk: INTx raised", b.gic->level[BLK_LINE], 1);
+    check("blk: ISR", rd8(bar + 0x1000), 1);
+    check("blk: ISR read drops INTx", b.gic->level[BLK_LINE], 0);
+    check("blk: read sectors 3 and 4", blk_request(&d, 0, 3, in, 1, &len), 0);
+    check("blk: read reports data and status", len, 1025);
+    check("blk: data comes back", memcmp(w, r, 1024), 0);
+    uint8_t file[1024] = {0};
+    int fd = open(disk_path, O_RDONLY);
+    check("blk: bytes are in the file", fd >= 0 && pread(fd, file, 1024, 3 * 512) == 1024 && !memcmp(file, w, 1024), 1);
+    check("blk: the sectors before are untouched", fd >= 0 && pread(fd, file, 512, 2 * 512) == 512 && all_zero(file, 512), 1);
+    if (fd >= 0) close(fd);
+
+    memset(r, 0, 1024);
+    Seg split[2] = {{VD_BUF + 0x2000 + 0x300, 700, 1}, {VD_BUF + 0x2000, 324, 1}};
+    check("blk: read into two pieces", blk_request(&d, 0, 3, split, 2, NULL), 0);
+    check("blk: first piece", memcmp(r + 0x300, w, 700), 0);
+    check("blk: second piece", memcmp(r, w + 700, 324), 0);
+    Seg last[1] = {{VD_BUF + 0x2000, 512, 1}};
+    check("blk: last sector reads", blk_request(&d, 0, 2047, last, 1, NULL), 0);
+    uint64_t errors = b.blk->errors;
+    check("blk: a read past the end fails", blk_request(&d, 0, 2048, last, 1, NULL), 1);
+    check("blk: a read that starts inside and ends outside fails", blk_request(&d, 0, 2047, in, 1, NULL), 1);
+    Seg wild[1] = {{0x30000000, 512, 1}};
+    check("blk: a buffer outside RAM fails", blk_request(&d, 0, 0, wild, 1, NULL), 1);
+    check("blk: the failures are counted", b.blk->errors, errors + 3);
+    Seg past[1] = {{VD_BUF, 512, 0}};
+    check("blk: a write past the end fails", blk_request(&d, 1, 4096, past, 1, NULL), 1);
+    check("blk: flush", blk_request(&d, 4, 0, NULL, 0, NULL), 0);
+    check("blk: barrier", blk_request(&d, 0x10000, 0, NULL, 0, NULL), 0);
+    check("blk: unknown type", blk_request(&d, 0x77, 0, NULL, 0, NULL), 2);
+    memset(r, 0, 32);
+    Seg id[1] = {{VD_BUF + 0x2000, 20, 1}};
+    check("blk: get id", blk_request(&d, 8, 0, id, 1, &len), 0);
+    check("blk: id length", len, 21);
+    check("blk: id text", memcmp(r, "hengevm-disk", 12), 0);
+    Seg id4[1] = {{VD_BUF + 0x2000, 4, 1}};
+    check("blk: a short id buffer", blk_request(&d, 8, 0, id4, 1, &len), 0);
+    check("blk: short id length", len, 5);
+    rd8(bar + 0x1000);
+    wr16(d.cfg + 0x04, 0);
+}
+
+/* The PL011, PL031 and PL061 as a driver uses them, on the interrupt lines the tree names. */
+static int uart_got;
+static uint8_t uart_bytes[8];
+static void uart_capture(void *opaque, uint8_t c) {
+    (void)opaque;
+    if (uart_got < 8) uart_bytes[uart_got] = c;
+    uart_got++;
+}
+
+static void test_primecell(void) {
+    int uart_line = 32 + VIRT_IRQ_UART, rtc_line = 32 + VIRT_IRQ_RTC, gpio_line = 32 + VIRT_IRQ_GPIO;
+    static const uint8_t pcell[8] = {0, 0x10, 0x14, 0, 0x0d, 0xf0, 0x05, 0xb1}; /* PeriphID1-3, then the cell ID */
+    char what[48];
+    for (int i = 0; i < 3; i++) {
+        snprintf(what, sizeof what, "PL011 PeriphID%d", i + 1);
+        check(what, rd32(&m, VIRT_UART + 0xfe4 + 4 * i), pcell[1 + i]);
+        snprintf(what, sizeof what, "PL031 PeriphID%d", i + 1);
+        check(what, rd32(&m, VIRT_RTC + 0xfe4 + 4 * i), pcell[1 + i]);
+        snprintf(what, sizeof what, "PL061 PeriphID%d", i + 1);
+        check(what, rd32(&m, VIRT_GPIO + 0xfe4 + 4 * i), i == 0 ? 0x10 : i == 1 ? 0x04 : 0);
+    }
+    for (int i = 0; i < 4; i++) {
+        snprintf(what, sizeof what, "PrimeCell ID %d", i);
+        check(what, rd32(&m, VIRT_UART + 0xff0 + 4 * i), pcell[4 + i]);
+        check(what, rd32(&m, VIRT_RTC + 0xff0 + 4 * i), pcell[4 + i]);
+        check(what, rd32(&m, VIRT_GPIO + 0xff0 + 4 * i), pcell[4 + i]);
+    }
+
+    /* PL011 */
+    check("UART: control after reset", rd32(&m, VIRT_UART + 0x30), 0x300);
+    check("UART: FIFO level select after reset", rd32(&m, VIRT_UART + 0x34), 0x12);
+    check("UART: flags: TX empty, RX empty", rd32(&m, VIRT_UART + 0x18), 0x90);
+    wr32(&m, VIRT_UART + 0x24, 0x12345);
+    check("UART: IBRD is 16 bits", rd32(&m, VIRT_UART + 0x24), 0x2345);
+    wr32(&m, VIRT_UART + 0x28, 0xff);
+    check("UART: FBRD is 6 bits", rd32(&m, VIRT_UART + 0x28), 0x3f);
+    wr32(&m, VIRT_UART + 0x2c, 0x170);
+    check("UART: LCR is 8 bits", rd32(&m, VIRT_UART + 0x2c), 0x70);
+    wr32(&m, VIRT_UART + 0x38, 0xffff);
+    check("UART: IMSC is 11 bits", rd32(&m, VIRT_UART + 0x38), 0x7ff);
+    wr32(&m, VIRT_UART + 0x38, 0);
+    check("UART: no interrupt before data", b.gic->level[uart_line], 0);
+    void (*old)(void *, uint8_t) = b.uart->output;
+    b.uart->output = uart_capture;
+    for (uint32_t c = 'a'; c < 'a' + 3; c++) wr32(&m, VIRT_UART, c);
+    b.uart->output = old;
+    check("UART: three bytes out", uart_got, 3);
+    check("UART: in order", memcmp(uart_bytes, "abc", 3), 0);
+    check("UART: TX interrupt is raw", rd32(&m, VIRT_UART + 0x3c) & 0x20, 0x20);
+    check("UART: masked TX interrupt stays quiet", rd32(&m, VIRT_UART + 0x40), 0);
+    wr32(&m, VIRT_UART + 0x38, 0x10);
+    check("UART: RX mask alone does not raise it", b.gic->level[uart_line], 0);
+    check("UART: receive", hv_pl011_receive(b.uart, 'x'), 1);
+    check("UART: RX interrupt", b.gic->level[uart_line], 1);
+    check("UART: masked status", rd32(&m, VIRT_UART + 0x40), 0x10);
+    check("UART: flags: RX not empty", rd32(&m, VIRT_UART + 0x18) & 0x10, 0);
+    check("UART: read the byte", rd32(&m, VIRT_UART), 'x');
+    check("UART: reading the last byte drops the interrupt", b.gic->level[uart_line], 0);
+    check("UART: RX empty again", rd32(&m, VIRT_UART + 0x18) & 0x10, 0x10);
+    check("UART: an empty read gives 0", rd32(&m, VIRT_UART), 0);
+    for (int i = 0; i < 64; i++) hv_pl011_receive(b.uart, (uint8_t)i);
+    check("UART: FIFO full flag", rd32(&m, VIRT_UART + 0x18) & 0x40, 0x40);
+    check("UART: a 65th byte is refused", hv_pl011_receive(b.uart, 0xee), 0);
+    int order = 0;
+    for (int i = 0; i < 64; i++) order += rd32(&m, VIRT_UART) == (uint32_t)i;
+    check("UART: 64 bytes in order", order, 64);
+    check("UART: full flag clear", rd32(&m, VIRT_UART + 0x18) & 0x40, 0);
+    hv_pl011_receive(b.uart, 'y');
+    wr32(&m, VIRT_UART + 0x44, 0x50);
+    check("UART: ICR clears the raw bits", rd32(&m, VIRT_UART + 0x3c) & 0x50, 0);
+    check("UART: ICR drops the line", b.gic->level[uart_line], 0);
+    rd32(&m, VIRT_UART);
+    wr32(&m, VIRT_UART + 0x38, 0);
+    wr32(&m, VIRT_UART + 0x44, 0x7ff);
+
+    /* PL031: windows are wide so a stalled CI machine does not fail them */
+    uint32_t t = (uint32_t)time(NULL), dr = rd32(&m, VIRT_RTC);
+    check("RTC: starts at the host's time", dr >= t - 5 && dr <= t + 30, 1);
+    wr32(&m, VIRT_RTC, 5);
+    check("RTC: a write to DR changes nothing", rd32(&m, VIRT_RTC) >= t - 5, 1);
+    check("RTC: control reads enabled", rd32(&m, VIRT_RTC + 0x0c), 1);
+    wr32(&m, VIRT_RTC + 0x08, 1000000000);
+    dr = rd32(&m, VIRT_RTC);
+    check("RTC: load sets the time", dr >= 1000000000 && dr <= 1000000030, 1);
+    wr32(&m, VIRT_RTC + 0x10, 0xff);
+    check("RTC: IMSC is 1 bit", rd32(&m, VIRT_RTC + 0x10), 1);
+    wr32(&m, VIRT_RTC + 0x04, rd32(&m, VIRT_RTC) + 100);
+    check("RTC: a future match is quiet", rd32(&m, VIRT_RTC + 0x14), 0);
+    check("RTC: match register reads back", rd32(&m, VIRT_RTC + 0x04) >= 1000000100, 1);
+    check("RTC: no interrupt yet", b.gic->level[rtc_line], 0);
+    wr32(&m, VIRT_RTC + 0x04, rd32(&m, VIRT_RTC));
+    check("RTC: a match that has come is raw", rd32(&m, VIRT_RTC + 0x14), 1);
+    check("RTC: masked status", rd32(&m, VIRT_RTC + 0x18), 1);
+    check("RTC: interrupt", b.gic->level[rtc_line], 1);
+    wr32(&m, VIRT_RTC + 0x1c, 1);
+    check("RTC: ICR clears it", rd32(&m, VIRT_RTC + 0x14), 0);
+    check("RTC: ICR drops the line", b.gic->level[rtc_line], 0);
+    hv_pl031_tick(b.rtc);
+    check("RTC: the tick raises a match that is still due", rd32(&m, VIRT_RTC + 0x14), 1);
+    wr32(&m, VIRT_RTC + 0x10, 0);
+    check("RTC: masking drops the line", b.gic->level[rtc_line], 0);
+    wr32(&m, VIRT_RTC + 0x1c, 1);
+    wr32(&m, VIRT_RTC + 0x04, 0);
+    hv_pl031_tick(b.rtc);
+    check("RTC: match 0 means off", rd32(&m, VIRT_RTC + 0x14), 0);
+
+    /* PL061 on pins 5 and 6; pin 3 is the power key. */
+    uint32_t p5 = 1u << 5, p6 = 1u << 6;
+    check("GPIO: pins read low", rd32(&m, VIRT_GPIO + (0xff << 2)), 0);
+    wr32(&m, VIRT_GPIO + 0x400, p6);
+    check("GPIO: direction", rd32(&m, VIRT_GPIO + 0x400), p6);
+    wr32(&m, VIRT_GPIO + (p6 << 2), p6);
+    check("GPIO: an output pin takes a write", rd32(&m, VIRT_GPIO + (p6 << 2)), p6);
+    check("GPIO: reads see only the masked pins", rd32(&m, VIRT_GPIO + (p5 << 2)), 0);
+    check("GPIO: a wider mask sees both", rd32(&m, VIRT_GPIO + ((p5 | p6) << 2)), p6);
+    wr32(&m, VIRT_GPIO + ((p5 | p6) << 2), p5 | p6);
+    check("GPIO: an input pin ignores a write", rd32(&m, VIRT_GPIO + (p5 << 2)), 0);
+    wr32(&m, VIRT_GPIO + (p6 << 2), 0);
+    check("GPIO: output low again", rd32(&m, VIRT_GPIO + (p6 << 2)), 0);
+    wr32(&m, VIRT_GPIO + 0x40c, p5);
+    wr32(&m, VIRT_GPIO + 0x410, p5);
+    hv_pl061_set_input(b.gpio, 5, 1);
+    check("GPIO: the host drives an input", rd32(&m, VIRT_GPIO + (p5 << 2)), p5);
+    check("GPIO: rising edge is raw", rd32(&m, VIRT_GPIO + 0x414), p5);
+    check("GPIO: rising edge is masked in", rd32(&m, VIRT_GPIO + 0x418), p5);
+    check("GPIO: its line", b.gic->level[gpio_line], 1);
+    wr32(&m, VIRT_GPIO + 0x41c, p5);
+    check("GPIO: ICR clears it", rd32(&m, VIRT_GPIO + 0x414), 0);
+    check("GPIO: ICR drops the line", b.gic->level[gpio_line], 0);
+    hv_pl061_set_input(b.gpio, 5, 0);
+    check("GPIO: a falling edge is not wanted", rd32(&m, VIRT_GPIO + 0x414), 0);
+    wr32(&m, VIRT_GPIO + 0x40c, 0);
+    hv_pl061_set_input(b.gpio, 5, 1);
+    hv_pl061_set_input(b.gpio, 5, 0);
+    check("GPIO: IEV 0 takes the falling edge", rd32(&m, VIRT_GPIO + 0x414), p5);
+    wr32(&m, VIRT_GPIO + 0x41c, p5);
+    wr32(&m, VIRT_GPIO + 0x410, 0);
+    hv_pl061_set_input(b.gpio, 5, 1);
+    hv_pl061_set_input(b.gpio, 5, 0);
+    check("GPIO: a masked edge is raw", rd32(&m, VIRT_GPIO + 0x414), p5);
+    check("GPIO: but quiet", rd32(&m, VIRT_GPIO + 0x418), 0);
+    check("GPIO: the line stays low", b.gic->level[gpio_line], 0);
+    wr32(&m, VIRT_GPIO + 0x41c, p5);
+    wr32(&m, VIRT_GPIO + 0x410, p5);
+    wr32(&m, VIRT_GPIO + 0x408, p5);
+    hv_pl061_set_input(b.gpio, 5, 1);
+    wr32(&m, VIRT_GPIO + 0x41c, p5);
+    hv_pl061_set_input(b.gpio, 5, 0);
+    check("GPIO: both edges", rd32(&m, VIRT_GPIO + 0x414), p5);
+    wr32(&m, VIRT_GPIO + 0x41c, p5);
+    wr32(&m, VIRT_GPIO + 0x408, 0);
+    wr32(&m, VIRT_GPIO + 0x40c, p5);
+    wr32(&m, VIRT_GPIO + 0x404, p5);
+    check("GPIO: level interrupt waits for the level", rd32(&m, VIRT_GPIO + 0x414), 0);
+    hv_pl061_set_input(b.gpio, 5, 1);
+    check("GPIO: high level", rd32(&m, VIRT_GPIO + 0x414), p5);
+    wr32(&m, VIRT_GPIO + 0x41c, p5);
+    check("GPIO: ICR cannot clear a level that is still there", rd32(&m, VIRT_GPIO + 0x414), p5);
+    hv_pl061_set_input(b.gpio, 5, 0);
+    wr32(&m, VIRT_GPIO + 0x41c, p5);
+    check("GPIO: and can when it has gone", rd32(&m, VIRT_GPIO + 0x414), 0);
+    check("GPIO: the power pin was not touched", b.gpio->input & (1u << VIRT_GPIO_POWER), 0);
+    wr32(&m, VIRT_GPIO + 0x404, 0);
+    wr32(&m, VIRT_GPIO + 0x40c, 0);
+    wr32(&m, VIRT_GPIO + 0x410, 0);
+    wr32(&m, VIRT_GPIO + 0x400, 0);
+    wr32(&m, VIRT_GPIO + 0x41c, 0xff);
+}
+
+/* The config space as Linux's PCI core reads and writes it. */
+static void test_pci_config(void) {
+    HvPciDev *net = b.pcie->dev[2];
+    uint64_t cfg = VIRT_PCIE_ECAM + (2ull << 15);
+    check("net: 64-bit memory BAR 4", rd32(&m, cfg + 0x20) & 0xf, 4);
+    check("net: BAR 4 is 16 KB", net->bar_size[4], 0x4000);
+    check("net: the other BARs are absent", rd32(&m, cfg + 0x10) | rd32(&m, cfg + 0x14) | rd32(&m, cfg + 0x18) |
+                                                 rd32(&m, cfg + 0x1c) | rd32(&m, cfg + 0x28), 0);
+    wr32(&m, cfg + 0x20, 0xffffffff);
+    wr32(&m, cfg + 0x24, 0xffffffff);
+    check("net: BAR 4 sizing, low", rd32(&m, cfg + 0x20), 0xffffc004);
+    check("net: BAR 4 sizing, high", rd32(&m, cfg + 0x24), 0xffffffff);
+    wr32(&m, cfg + 0x20, 0x10004123);
+    check("net: low bits of the address stay clear", rd32(&m, cfg + 0x20), 0x10004004);
+    wr32(&m, cfg + 0x20, 0);
+    wr32(&m, cfg + 0x24, 0);
+    wr32(&m, cfg + 0x10, 0xffffffff);
+    check("net: an unused BAR 0 ignores writes", rd32(&m, cfg + 0x10), 0);
+
+    check("net: interrupt pin is INTA", rd8(cfg + 0x3d), 1);
+    wr8(cfg + 0x3c, 0x2a);
+    check("net: interrupt line is writable", rd8(cfg + 0x3c), 0x2a);
+    wr16(cfg + 0x04, 0xffff);
+    check("net: only I/O, memory, master and INTx disable stick", rd32(&m, cfg + 4) & 0xffff, 0x0407);
+    wr16(cfg + 0x04, 0);
+    wr16(cfg + 0x06, 0xffff);
+    check("net: status is read-only", rd32(&m, cfg + 4) >> 16, 0x0010);
+    wr32(&m, cfg, 0);
+    check("net: vendor and device are read-only", rd32(&m, cfg), 0x10411af4);
+    check("net: a byte read of the vendor id", rd8(cfg), 0xf4);
+    uint16_t dev16 = 0;
+    hv_phys_read(&m, cfg + 2, &dev16, 2);
+    check("net: a 16-bit read of the device id", dev16, 0x1041);
+    check("net: revision 1", rd8(cfg + 8), 1);
+    check("net: class: network, ethernet", rd32(&m, cfg + 8) >> 8, 0x020000);
+    check("net: past the header reads 0", rd32(&m, cfg + 0x100), 0);
+    wr32(&m, cfg + 0x100, 0xffffffff);
+    check("net: and ignores writes", rd32(&m, cfg + 0x100), 0);
+    check("function 1 is empty", rd32(&m, cfg + 0x1000), 0xffffffff);
+    check("function 7 is empty", rd32(&m, cfg + 0x7000), 0xffffffff);
+    wr32(&m, cfg + 0x1004, 0x7);
+    check("a write to an empty function is dropped", rd32(&m, cfg + 0x1004), 0xffffffff);
+    check("the bridge is a host bridge", rd32(&m, VIRT_PCIE_ECAM + 8) >> 8, 0x060000);
+    hv_phys_read(&m, VIRT_PCIE_ECAM + (20ull << 15), &dev16, 2);
+    check("an empty slot reads 16 bits of ones", dev16, 0xffff);
+
+    /* The capability list Linux's virtio-pci walks: common, notify, ISR and device config, all in BAR 4. */
+    uint8_t seen[5] = {0};
+    int hops = 0;
+    for (uint32_t at = rd8(cfg + 0x34); at && hops < 16; at = rd8(cfg + at + 1), hops++) {
+        uint32_t type = rd8(cfg + at + 3);
+        check("net: a vendor capability", rd8(cfg + at), 9);
+        check("net: in BAR 4", rd8(cfg + at + 4), 4);
+        if (type >= 1 && type <= 4) seen[type]++;
+        if (type == 2) {
+            check("net: notify capability is 20 bytes", rd8(cfg + at + 2), 20);
+            check("net: notify multiplier", rd32(&m, cfg + at + 16), 4);
+        }
+        if (type == 1) check("net: common config at 0", rd32(&m, cfg + at + 8), 0);
+    }
+    check("net: four capabilities", hops, 4);
+    check("net: one of each kind", seen[1] == 1 && seen[2] == 1 && seen[3] == 1 && seen[4] == 1, 1);
+
+    /* Memory space off hides the BAR; INTx disable masks the line but not the status bit. */
+    uint64_t bar = VIRT_PCIE_MMIO + 0x1200000;
+    wr32(&m, cfg + 0x20, (uint32_t)bar);
+    check("net: BAR window off before memory enable", rd32(&m, bar + 0x10), 0xffffffff);
+    wr16(cfg + 0x04, 2);
+    check("net: BAR window on", rd32(&m, bar + 0x12) & 0xffff, 2);
+    wr16(cfg + 0x04, 0);
+    wr16(bar + 0x16, 1);
+    wr16(cfg + 0x04, 2);
+    check("net: a write to the window while off is dropped", rd32(&m, bar + 0x16) & 0xffff, 0);
+    wr16(cfg + 0x04, 0);
+    wr32(&m, cfg + 0x20, 0);
+    HvPciDev *kbd = b.pcie->dev[5];
+    uint64_t kcfg = VIRT_PCIE_ECAM + (5ull << 15);
+    int line = 32 + VIRT_IRQ_PCIE + 1;
+    hv_pci_set_intx(kbd, 1);
+    check("kbd: INTx up", b.gic->level[line], 1);
+    check("kbd: status bit 3", rd32(&m, kcfg + 4) >> 16 & 8, 8);
+    wr16(kcfg + 4, 0x400);
+    check("kbd: INTx disable drops the line", b.gic->level[line], 0);
+    check("kbd: status bit 3 stays", rd32(&m, kcfg + 4) >> 16 & 8, 8);
+    hv_pci_set_intx(kbd, 0);
+    hv_pci_set_intx(kbd, 1);
+    check("kbd: raised while disabled: quiet", b.gic->level[line], 0);
+    wr16(kcfg + 4, 0);
+    check("kbd: enabling again raises it", b.gic->level[line], 1);
+    hv_pci_set_intx(kbd, 0);
+    check("kbd: and it drops", b.gic->level[line], 0);
+    check("kbd: status bit 3 clears", rd32(&m, kcfg + 4) >> 16 & 8, 0);
+}
+
+/* Bad arguments to the board's constructor and loaders. */
+static void test_create_limits(void) {
+    static HvMachine mm;
+    static HvCpu cc[HV_MAX_CPUS + 2];
+    static HvVirt vb;
+    check("create: machine", hv_machine_init(&mm, 1 << 20), 0);
+    check("create: 0 CPUs becomes 1", hv_virt_create(&vb, &mm, cc, 0, 64ull << 20, NULL, NULL), 0);
+    check("create: 1 CPU", vb.ncpus, 1);
+    check("create: no disk, no net", (uint64_t)(vb.blk != NULL) + (vb.net != NULL), 0);
+    check("create: the other devices are there", vb.rng && vb.usb && vb.keyboard && vb.mouse && vb.gpu, 1);
+    check("create: the rng takes the first slot", vb.rng->vio.pci.slot, 1);
+    check("create: xHCI follows", vb.usb->pci.slot, 2);
+    check("create: tree needs room", hv_virt_place_fdt(&vb, (const uint8_t *)"x", 100u << 20), -1);
+    check("create: no tree", hv_virt_place_fdt(&vb, NULL, 4), -1);
+    check("create: a missing firmware file", hv_virt_load_firmware(&vb, "/nonexistent/firmware") != 0, 1);
+    hv_virt_destroy(&vb);
+    hv_machine_free(&mm);
+
+    if (hv_machine_init(&mm, 1 << 20) == 0) {
+        check("create: too many CPUs are capped", hv_virt_create(&vb, &mm, cc, HV_MAX_CPUS + 2, 64ull << 20, NULL, NULL), 0);
+        check("create: at HV_MAX_CPUS", vb.ncpus, HV_MAX_CPUS);
+        hv_virt_destroy(&vb);
+        hv_machine_free(&mm);
+    }
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     alarm(120);
@@ -1114,11 +1736,18 @@ int main(void) {
     test_reset();
     test_gpu(b.gpu);
     test_gpu_fuzz(b.gpu);
+    test_pci_config();
+    test_primecell();
+    test_rng();
+    test_blk(disk_path);
     hv_virt_destroy(&b);
+    test_create_limits();
     test_linux_boot();
     hv_disk_close(&root);
     if (have_dtc()) {
         test_fdt(1, 1024);
+        test_fdt(2, 2048);
+        test_fdt_variants();
         test_fdt(4, 4096);
     } else {
         printf("dtc not installed: device tree cases skipped\n");

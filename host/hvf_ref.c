@@ -3,18 +3,25 @@
    instead of the JIT, so a JIT run can be compared against real hardware at
    a breakpoint. HengeVM itself never uses a hypervisor.
 
-   hengevm-ref --rom FILE --disk FILE --aux FILE --ecid N [--seed N] [--ram MB] [--break PC [--break-hits N]] [--log N] */
+   hengevm-ref --rom FILE --disk FILE --aux FILE --ecid N [--seed N] [--ram MB] [--break PC [--break-hits N]] [--log N]
+   hengevm-ref --board virt (--firmware FILE | --kernel FILE [--initrd FILE] [--append STR]) [--disk FILE] [--ram MB] [--break PC [--break-hits N]] [--log N]
+   The virt board runs one CPU, and the console is write-only. Linux stops at GICv3 init: HVF has no ICC_* registers without its own GIC. */
 #include <Hypervisor/Hypervisor.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "exception.h"
+#include "linux_boot.h"
+#include "virt.h"
 #include "vmapple.h"
+#include <unistd.h>
 
 static HvMachine m;
 static HvCpu cpu; /* only used as the device model's view of the CPU (timer, GIC, mpidr) */
 static HvVmapple board;
+static HvVirt vboard;
+static int is_virt;
 static hv_vcpu_t vcpu;
 static hv_vcpu_exit_t *vexit;
 
@@ -55,7 +62,8 @@ static void advance(void) {
 static void map_ram(void) {
     for (int i = 0; i < m.nram; i++) {
         HvRam *r = &m.ram[i];
-        CHECK(hv_vm_map(r->host, r->pa, r->size, HV_MEMORY_READ | HV_MEMORY_WRITE | HV_MEMORY_EXEC));
+        /* Flash is read-only: a write faults and reaches hv_phys_write, which drops it. */
+        CHECK(hv_vm_map(r->host, r->pa, r->size, HV_MEMORY_READ | HV_MEMORY_EXEC | (r->readonly ? 0 : HV_MEMORY_WRITE)));
     }
 }
 
@@ -121,17 +129,66 @@ static void sysreg_trap(uint64_t esr) {
 }
 
 static void usage(void) {
-    fprintf(stderr, "usage: hengevm-ref --rom FILE --disk FILE --aux FILE --ecid N [--seed N] [--ram MB] [--break PC [--break-hits N]] [--log N]\n");
+    fprintf(stderr, "usage: hengevm-ref --rom FILE --disk FILE --aux FILE --ecid N [--seed N] [--ram MB] [--break PC [--break-hits N]] [--log N]\n"
+                    "       hengevm-ref --board virt (--firmware FILE | --kernel FILE [--initrd FILE] [--append STR]) [--disk FILE] [--ram MB] [--break PC [--break-hits N]] [--log N]\n");
     exit(2);
+}
+
+static void console_out(void *opaque, uint8_t c) {
+    (void)opaque;
+    ssize_t r = write(1, &c, 1);
+    (void)r;
+}
+
+/* The virt board, set up as hengevm does for --firmware or --kernel. 0, or -1 after a message. */
+static int create_virt(const char *firmware, const char *kernel, const char *initrd, const char *append,
+                       HvDisk *disk, int have_disk, uint64_t ram_mb) {
+    static const uint8_t mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
+    if (hv_virt_create(&vboard, &m, &cpu, 1, ram_mb << 20, have_disk ? disk : NULL, mac) != 0) {
+        fprintf(stderr, "hengevm-ref: cannot build the virt board\n");
+        return -1;
+    }
+    if (firmware) {
+        uint32_t size = 0;
+        if (hv_virt_load_firmware(&vboard, firmware) != 0) {
+            fprintf(stderr, "hengevm-ref: cannot read the firmware (at most 64 MB)\n");
+            return -1;
+        }
+        uint8_t *fdt = hv_virt_build_fdt(&vboard, NULL, 0, 0, &size);
+        int placed = hv_virt_place_fdt(&vboard, fdt, size);
+        free(fdt);
+        if (placed != 0) {
+            fprintf(stderr, "hengevm-ref: cannot build the device tree\n");
+            return -1;
+        }
+    }
+    hv_virt_reset(&vboard);
+    char err[256];
+    if (kernel && hv_linux_boot(&vboard, kernel, initrd, append, NULL, err, sizeof err) != 0) {
+        fprintf(stderr, "hengevm-ref: %s\n", err);
+        return -1;
+    }
+    vboard.uart->output = console_out;
+    return 0;
 }
 
 int main(int argc, char **argv) {
     const char *rom = NULL, *disk_path = NULL, *aux_path = NULL;
+    const char *firmware = NULL, *kernel = NULL, *initrd = NULL, *append = NULL;
     uint64_t seed = 0, ecid = 0, ram_mb = 2048, brk = ~0ull, hits = 1;
     int log = 1;
     for (int i = 1; i < argc; i++) {
         if (i + 1 >= argc) usage();
-        if (!strcmp(argv[i], "--rom")) rom = argv[++i];
+        if (!strcmp(argv[i], "--board")) {
+            i++;
+            if (!strcmp(argv[i], "virt")) is_virt = 1;
+            else if (strcmp(argv[i], "vmapple")) usage();
+        }
+        else if (!strcmp(argv[i], "--firmware")) firmware = argv[++i];
+        else if (!strcmp(argv[i], "--kernel")) kernel = argv[++i];
+        else if (!strcmp(argv[i], "--initrd")) initrd = argv[++i];
+        else if (!strcmp(argv[i], "--append")) append = argv[++i];
+        else if (!strcmp(argv[i], "--rom")) rom = argv[++i];
         else if (!strcmp(argv[i], "--disk")) disk_path = argv[++i];
         else if (!strcmp(argv[i], "--aux")) aux_path = argv[++i];
         else if (!strcmp(argv[i], "--ecid")) ecid = strtoull(argv[++i], NULL, 0);
@@ -142,26 +199,38 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--log")) log = atoi(argv[++i]);
         else usage();
     }
-    if (!rom || !disk_path || !aux_path) usage();
+    if (is_virt) {
+        if (rom || aux_path || (!firmware == !kernel) || ((initrd || append) && !kernel)) usage();
+    } else {
+        if (!rom || !disk_path || !aux_path || firmware || kernel || initrd || append) usage();
+    }
     setvbuf(stderr, NULL, _IONBF, 0);
 
     static HvDisk disk, aux;
-    if (hv_disk_open(&disk, disk_path, 0, 0) != 0 || hv_disk_open(&aux, aux_path, 16384, 0) != 0) return 1;
     if (hv_machine_init(&m, 1 << 20) != 0) return 1;
     m.log = log;
-    HvCfgParams cfg = {.nr_cpus = 1, .ecid = ecid, .seed = seed, .mac_en0 = {0x02, 0x48, 0x56, 0x4d, 0x00, 0x01}};
-    static const uint8_t mac[6] = {0x02, 0x48, 0x56, 0x4d, 0x00, 0x01};
-    if (hv_vmapple_create(&board, &m, &cpu, ram_mb << 20, &disk, &aux, &cfg, mac) != 0 ||
-        hv_vmapple_load_rom(&board, rom) != 0)
-        return 1;
-    hv_vmapple_reset_cpu(&board);
+    if (is_virt) {
+        int have_disk = disk_path != NULL;
+        if (have_disk && hv_disk_open(&disk, disk_path, 0, 0) != 0) return 1;
+        if (create_virt(firmware, kernel, initrd, append, &disk, have_disk, ram_mb) != 0) return 1;
+    } else {
+        if (hv_disk_open(&disk, disk_path, 0, 0) != 0 || hv_disk_open(&aux, aux_path, 16384, 0) != 0) return 1;
+        HvCfgParams cfg = {.nr_cpus = 1, .ecid = ecid, .seed = seed, .mac_en0 = {0x02, 0x48, 0x56, 0x4d, 0x00, 0x01}};
+        static const uint8_t mac[6] = {0x02, 0x48, 0x56, 0x4d, 0x00, 0x01};
+        if (hv_vmapple_create(&board, &m, &cpu, ram_mb << 20, &disk, &aux, &cfg, mac) != 0 ||
+            hv_vmapple_load_rom(&board, rom) != 0)
+            return 1;
+        hv_vmapple_reset_cpu(&board);
+    }
 
     CHECK(hv_vm_create(NULL));
     map_ram();
     CHECK(hv_vcpu_create(&vcpu, &vexit, NULL));
     /* The virtual counter starts with the machine, as under the JIT: the timer model subtracts m.cntvoff. */
     CHECK(hv_vcpu_set_vtimer_offset(vcpu, m.cntvoff));
-    CHECK(hv_vcpu_set_reg(vcpu, HV_REG_PC, VMAPPLE_FIRMWARE));
+    CHECK(hv_vcpu_set_reg(vcpu, HV_REG_PC, is_virt ? cpu.pc : VMAPPLE_FIRMWARE));
+    if (is_virt) /* a direct kernel boot: the device tree address in x0 */
+        for (int i = 0; i < 4; i++) CHECK(hv_vcpu_set_reg(vcpu, HV_REG_X0 + i, cpu.x[i]));
     CHECK(hv_vcpu_set_reg(vcpu, HV_REG_CPSR, 0x3c5)); /* EL1h, DAIF masked */
     CHECK(hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_MPIDR_EL1, 0x80000000));
     if (brk != ~0ull) {
@@ -177,7 +246,7 @@ int main(int argc, char **argv) {
             if (vexit->reason == HV_EXIT_REASON_VTIMER_ACTIVATED) {
                 cpu.cntv_ctl = sysreg(HV_SYS_REG_CNTV_CTL_EL0);
                 cpu.cntv_cval = sysreg(HV_SYS_REG_CNTV_CVAL_EL0);
-                board.m->tick(board.m, &cpu);
+                m.tick(&m, &cpu);
                 CHECK(hv_vcpu_set_pending_interrupt(vcpu, HV_INTERRUPT_TYPE_IRQ, m.percpu[0].irq_line));
                 CHECK(hv_vcpu_set_vtimer_mask(vcpu, false));
                 continue;
@@ -220,7 +289,7 @@ int main(int argc, char **argv) {
             dump(why);
             break;
         }
-        if (board.panic_events & 1) {
+        if (!is_virt && (board.panic_events & 1)) {
             dump("guest reported a panic");
             break;
         }
