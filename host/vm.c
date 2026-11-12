@@ -117,10 +117,83 @@ const char *hv_vm_reason_name(int r) {
     }
 }
 
+/* Console input waits here until the UART's 64-byte FIFO has room. Lock order: device lock, then this. */
+static os_unfair_lock console_lock = OS_UNFAIR_LOCK_INIT;
+static uint8_t *console_queue;
+static size_t console_head, console_len, console_cap;
+static void (*console_out)(void *opaque, uint8_t c);
+static void *console_out_opaque;
+static void (*uart_own_out)(void *opaque, uint8_t c);
+static void *uart_own_opaque;
+
+/* Under the device lock. */
+static void console_apply_output(void) {
+    if (!devs.uart) return;
+    devs.uart->output = console_out ? console_out : uart_own_out;
+    devs.uart->output_opaque = console_out ? console_out_opaque : uart_own_opaque;
+}
+
+static void console_attach(void) {
+    if (!devs.uart) return;
+    uart_own_out = devs.uart->output, uart_own_opaque = devs.uart->output_opaque;
+    console_apply_output();
+}
+
+void hv_vm_console_set_output(void (*out)(void *opaque, uint8_t c), void *opaque) {
+    int live = machine_created && devs.uart;
+    if (live) hv_dev_lock(&m);
+    console_out = out, console_out_opaque = opaque;
+    if (live) console_apply_output();
+    if (live) hv_dev_unlock(&m);
+}
+
+void hv_vm_console_input(const uint8_t *bytes, size_t n) {
+    if (!n) return;
+    os_unfair_lock_lock(&console_lock);
+    if (console_head && console_len + n > console_cap) {
+        memmove(console_queue, console_queue + console_head, console_len - console_head);
+        console_len -= console_head, console_head = 0;
+    }
+    if (console_len + n > console_cap) {
+        size_t cap = console_cap ? console_cap : 4096;
+        while (cap < console_len + n) cap *= 2;
+        uint8_t *grown = realloc(console_queue, cap);
+        if (!grown) {
+            os_unfair_lock_unlock(&console_lock);
+            return;
+        }
+        console_queue = grown, console_cap = cap;
+    }
+    memcpy(console_queue + console_len, bytes, n);
+    console_len += n;
+    os_unfair_lock_unlock(&console_lock);
+    if (!atomic_load(&input_stopping)) hv_machine_wake(&m); /* a CPU in WFI ticks only when woken */
+}
+
+/* Under the device lock, from the board's tick. */
+static void console_pump(void) {
+    if (!devs.uart) return;
+    os_unfair_lock_lock(&console_lock);
+    while (console_head < console_len && hv_pl011_receive(devs.uart, console_queue[console_head])) console_head++;
+    if (console_head == console_len) console_head = console_len = 0;
+    os_unfair_lock_unlock(&console_lock);
+}
+
+static void console_reset(void) {
+    console_out = NULL, console_out_opaque = NULL;
+    uart_own_out = NULL, uart_own_opaque = NULL;
+    os_unfair_lock_lock(&console_lock);
+    free(console_queue);
+    console_queue = NULL;
+    console_head = console_len = console_cap = 0;
+    os_unfair_lock_unlock(&console_lock);
+}
+
 /* Host-side device work on CPU 0's thread each tick. */
 static void board_poll(void) {
     if (extra_poll) extra_poll();
     if (net_on) hv_net_poll();
+    console_pump();
 }
 
 static int fail(char *err, size_t n, const char *msg) {
@@ -303,6 +376,7 @@ int hv_vm_create(const HvVmConfig *c, char *err, size_t errlen) {
         else net_on = 1;
     }
     if (devs.snd && !c->no_sound) hv_audio_attach(devs.snd);
+    console_attach();
     atomic_store(&input_stopping, 0);
     return 0;
 }
@@ -322,6 +396,7 @@ void hv_vm_destroy(void) {
     hv_net_detach();
     net_on = 0;
     hv_audio_detach();
+    console_reset();
     memset(&devs, 0, sizeof devs);
     if (board_kind == HV_BOARD_VMAPPLE) hv_vmapple_destroy(&board);
     hv_disk_close(&disk);

@@ -106,4 +106,10 @@ int hv_vm_pointer(int *x, int *y);
 /* A small picture of the display, BGRA, width * height * 4 bytes. 0, or -1 before anything shows. */
 int hv_vm_snapshot(uint8_t *bgra, int width, int height);
 
+/* The serial console (the PL011). Set the output before hv_vm_start; hv_vm_destroy clears it.
+   NULL gives the UART's own output (stdout). */
+void hv_vm_console_set_output(void (*out)(void *opaque, uint8_t c), void *opaque);
+/* Any thread. Queued here; CPU 0's tick moves it into the UART as its FIFO has room. */
+void hv_vm_console_input(const uint8_t *bytes, size_t n);
+
 #endif
