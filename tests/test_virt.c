@@ -7,10 +7,11 @@
 #include <unistd.h>
 
 #include "fdt.h"
+#include "linux_boot.h"
 #include "virt.h"
 
-/* The virt board: its memory map, flash, PCI routing, device tree and CPU reset,
-   then the same board built through host/vm.c. */
+/* The virt board: its memory map, flash, PCI routing, device tree, CPU reset and
+   direct kernel boot, then the same board built through host/vm.c. */
 static int checks, failures;
 static void check(const char *what, uint64_t got, uint64_t want) {
     checks++;
@@ -166,6 +167,120 @@ static void test_fdt(int ncpus, uint64_t ram_mb) {
     hv_machine_free(&mm);
 }
 
+/* A 64 KB arm64 Image: "b ." and the header booting.rst describes. */
+static void write_image(const char *path, uint64_t text_offset, uint64_t image_size, uint32_t magic) {
+    static uint8_t image[64 << 10];
+    memset(image, 0, sizeof image);
+    uint32_t code0 = 0x14000000;
+    uint64_t flags = 2 << 1; /* 16 KB pages */
+    memcpy(image, &code0, 4);
+    memcpy(image + 8, &text_offset, 8);
+    memcpy(image + 16, &image_size, 8);
+    memcpy(image + 24, &flags, 8);
+    memcpy(image + 56, &magic, 4);
+    image[sizeof image - 1] = 0x5a;
+    write_file(path, image, sizeof image);
+}
+
+static int boot_fails_with(HvVirt *vb, const char *kernel, const char *initrd, const char *text) {
+    char error[256] = "";
+    int r = hv_linux_boot(vb, kernel, initrd, NULL, NULL, error, sizeof error);
+    if (r == 0 || !strstr(error, text)) printf("  error was: \"%s\"\n", error);
+    return r != 0 && strstr(error, text) != NULL;
+}
+
+static void test_linux_boot(void) {
+    static HvMachine mm;
+    static HvCpu cc[2];
+    static HvVirt vb;
+    if (hv_machine_init(&mm, 1 << 20) != 0 || hv_virt_create(&vb, &mm, cc, 2, 256ull << 20, NULL, NULL) != 0) {
+        check("board for the kernel", 1, 0);
+        return;
+    }
+    char kernel[256], initrd[256], error[256];
+    snprintf(kernel, sizeof kernel, "%s/Image", dir);
+    snprintf(initrd, sizeof initrd, "%s/initrd", dir);
+    static uint32_t ramdisk[25600];
+    for (unsigned i = 0; i < sizeof ramdisk / 4; i++) ramdisk[i] = 0xc0de0000u + i;
+    write_file(initrd, ramdisk, sizeof ramdisk);
+    write_image(kernel, 0, 64 << 10, 0x644d5241);
+
+    hv_virt_reset(&vb);
+    cc[0].x[1] = cc[0].x[2] = cc[0].x[3] = 0xbad;
+    HvLinuxBoot at;
+    int r = hv_linux_boot(&vb, kernel, initrd, "console=ttyAMA0 earlycon", &at, error, sizeof error);
+    if (r != 0) printf("  boot: %s\n", error);
+    check("direct boot", r, 0);
+    check("kernel at the start of RAM", at.kernel, VIRT_MEM);
+    check("kernel end from image_size", at.kernel_end, VIRT_MEM + (64 << 10));
+    check("kernel's first instruction", rd32(&mm, VIRT_MEM), 0x14000000);
+    check("kernel's magic", rd32(&mm, VIRT_MEM + 56), 0x644d5241);
+    check("kernel's last byte", rd32(&mm, VIRT_MEM + (64 << 10) - 4), 0x5a000000);
+    check("initrd 64 MB above the kernel", at.initrd, VIRT_MEM + (64 << 20));
+    check("initrd end", at.initrd_end, at.initrd + sizeof ramdisk);
+    check("initrd's first word", rd32(&mm, at.initrd), 0xc0de0000);
+    check("initrd's last word", rd32(&mm, at.initrd_end - 4), 0xc0de0000u + sizeof ramdisk / 4 - 1);
+    check("tree 2 MB below the top of RAM", at.fdt, VIRT_MEM + (254 << 20));
+    check("tree magic", rd32(&mm, at.fdt), 0xedfe0dd0);
+    check("start of RAM is not a tree", rd32(&mm, VIRT_MEM) != 0xedfe0dd0, 1);
+    check("x0 is the tree", cc[0].x[0], at.fdt);
+    check("x1 is 0", cc[0].x[1], 0);
+    check("x2 is 0", cc[0].x[2], 0);
+    check("x3 is 0", cc[0].x[3], 0);
+    check("pc is the kernel", cc[0].pc, VIRT_MEM);
+    check("cpu 0 at EL1", cc[0].el, 1);
+    check("cpu 0 MMU off", cc[0].sctlr_el1 & 1, 0);
+    check("cpu 1 still off", cc[1].off, 1);
+    check("cpu 1 untouched", cc[1].pc, 0);
+    if (have_dtc()) {
+        char *dts = decode(hv_phys_ptr(&mm, at.fdt, at.fdt_size), at.fdt_size);
+        check("tree decodes", dts != NULL, 1);
+        if (dts) {
+            check("tree: no dtc warnings", strstr(dts, "Warning") == NULL && strstr(dts, "ERROR") == NULL, 1);
+            check("tree: bootargs", strstr(dts, "bootargs = \"console=ttyAMA0 earlycon\"") != NULL, 1);
+            check("tree: initrd start", strstr(dts, "linux,initrd-start = <0x00 0x44000000>") != NULL, 1);
+            check("tree: initrd end", strstr(dts, "linux,initrd-end = <0x00 0x44019000>") != NULL, 1);
+            free(dts);
+        }
+    }
+
+    /* Before Linux 3.17: image_size 0, and text_offset is 0x80000 whatever the header says. */
+    write_image(kernel, 0x123, 0, 0x644d5241);
+    hv_virt_reset(&vb);
+    check("old image boots", hv_linux_boot(&vb, kernel, initrd, NULL, &at, error, sizeof error), 0);
+    check("old image at 0x80000", at.kernel, VIRT_MEM + 0x80000);
+    check("old image's size is the file's", at.kernel_end, VIRT_MEM + 0x80000 + (64 << 10));
+    check("old image's initrd", at.initrd, VIRT_MEM + 0x80000 + (64 << 20));
+    check("pc at 0x80000", cc[0].pc, VIRT_MEM + 0x80000);
+
+    /* A kernel bigger than 64 MB in memory: the initrd goes above image_size, 16 KB aligned. */
+    write_image(kernel, 0, (70 << 20) + 1, 0x644d5241);
+    hv_virt_reset(&vb);
+    check("big image boots", hv_linux_boot(&vb, kernel, NULL, NULL, &at, error, sizeof error), 0);
+    check("no initrd", at.initrd | at.initrd_end, 0);
+    check("big image with initrd", hv_linux_boot(&vb, kernel, initrd, NULL, &at, error, sizeof error), 0);
+    check("initrd above image_size", at.initrd, VIRT_MEM + (70 << 20) + 0x4000);
+
+    write_image(kernel, 0, 300 << 20, 0x644d5241);
+    check("image_size over RAM is refused", boot_fails_with(&vb, kernel, NULL, "does not fit"), 1);
+    write_image(kernel, 0, 64 << 10, 0x644d5241);
+    write_file(initrd, NULL, 200 << 20);
+    check("initrd over RAM is refused", boot_fails_with(&vb, kernel, initrd, "more RAM"), 1);
+    write_image(kernel, 0, 64 << 10, 0x12345678);
+    check("no magic names the formats", boot_fails_with(&vb, kernel, NULL, "gzip or EFI zboot"), 1);
+    static const uint8_t gz[64] = {0x1f, 0x8b, 0x08};
+    write_file(kernel, gz, sizeof gz);
+    check("gzip is named", boot_fails_with(&vb, kernel, NULL, "gzip-compressed"), 1);
+    static const uint8_t zboot[64] = {'M', 'Z', 0, 0, 'z', 'i', 'm', 'g'};
+    write_file(kernel, zboot, sizeof zboot);
+    check("EFI zboot is named", boot_fails_with(&vb, kernel, NULL, "EFI zboot image"), 1);
+    write_file(kernel, NULL, 16);
+    check("a short file is refused", boot_fails_with(&vb, kernel, NULL, "not an arm64 Image"), 1);
+    check("a missing kernel is refused", boot_fails_with(&vb, dir, NULL, "Cannot open the kernel"), 1);
+    hv_virt_destroy(&vb);
+    hv_machine_free(&mm);
+}
+
 static void test_reset(void) {
     hv_virt_reset(&b);
     for (int i = 0; i < 4; i++) {
@@ -215,6 +330,7 @@ static void test_vm(void) {
     check("second byte", rd32(vm, VIRT_UART), 'k');
     hv_vm_destroy();
     check("no virt board after destroy", hv_vm_virt() == NULL, 1);
+
     HvVmConfig bad = {.board = HV_BOARD_VIRT, .rom = disk, .ram_mb = 64, .ncpus = 1, .no_net = 1, .no_sound = 1, .jit_bytes = 8 << 20};
     write_file(disk, NULL, VIRT_FLASH_SIZE + 4);
     check("firmware over 64 MB fails create", hv_vm_create(&bad, error, sizeof error) != 0, 1);
@@ -243,6 +359,7 @@ int main(void) {
     test_pci_intx();
     test_reset();
     hv_virt_destroy(&b);
+    test_linux_boot();
     hv_disk_close(&root);
     if (have_dtc()) {
         test_fdt(1, 1024);
