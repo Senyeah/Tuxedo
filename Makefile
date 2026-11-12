@@ -245,6 +245,14 @@ $(B)/test_pvg_lifecycle: tests/test_pvg_lifecycle.m $(ENGINE) $(DEV)
 $(B)/test_vgpu_metal: tests/test_vgpu_metal.m $(ENGINE) $(DEV)
 	$(CC) $(CFLAGS) -fobjc-arc $^ $(METAL_LIBS) -o $@
 
+$(B)/bench_vgpu_2d: tests/bench_vgpu_2d.m $(ENGINE) $(DEV)
+	$(CC) $(CFLAGS) -fobjc-arc $^ $(METAL_LIBS) -o $@
+
+# R11: the 2D presenter's times at 1080p and 4K. Not part of make test.
+bench-vgpu-2d: $(B)/bench_vgpu_2d
+	$(B)/bench_vgpu_2d $(BENCH_FRAMES)
+.PHONY: bench-vgpu-2d
+
 $(B)/hvsparse: tools/hvsparse_main.c host/hvsparse.c host/hvsparse.h | $(B)
 	$(CC) $(CFLAGS) tools/hvsparse_main.c host/hvsparse.c -o $@
 

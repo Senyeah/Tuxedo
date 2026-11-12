@@ -5,7 +5,7 @@
 # ///
 """G6: desktop timings on hengevm --board virt (not part of make test).
 
-Each run boots a clone of debian-desktop.img (direct kernel boot, 1920x1080) and reads
+Each run boots a clone of debian-desktop.img (direct kernel boot, 1920x1080 unless --display) and reads
 /run/user/1000/henge-times: guest uptime at tty1 login, labwc up and the terminal's shell start.
 Then it runs `seq 1 20000` in a full-screen foot, --seqs times, timed in the guest's own clock.
 Pass --gpu-accel to add hengevm's --gpu-accel. The shared image never changes.
@@ -40,7 +40,9 @@ def one(args, d, n):
             raise Fail(f"cannot clone {image}: {r.stderr.strip()}")
         argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.hengevm, "--board", "virt", "--kernel", kernel,
                 "--initrd", initrd, "--append", append, "--disk", clone, "--ram", "2048",
-                "--cpus", str(args.cpus), "--display", "1920x1080"]
+                "--cpus", str(args.cpus), "--display", args.display]
+        if args.window:
+            argv.append("--window")
         if args.gpu_accel:
             argv.append("--gpu-accel")
         p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200))
@@ -68,9 +70,13 @@ def one(args, d, n):
                 out, _ = sh(p, "tail -n 1 /tmp/seq.times", 15)
                 s, e = out.split()
                 seqs.append(float(e) - float(s))
+            if args.churn:  # a full-screen terminal scrolling without pause: every frame is a big dirty rectangle
+                loop = "while :; do seq 1 5000; done"
+                sh(p, f"{WL} timeout {args.churn + 60} foot --fullscreen bash -c 'timeout {args.churn} sh -c \"{loop}\"'", args.churn + 90)
             p.sendline("sudo poweroff")
             p.expect(pexpect.EOF, timeout=90)
-            return dict(serial=serial, login=times["login"], labwc=times["labwc-up"] - times["login"],
+            stats = [l for l in open(err).read().split("\n") if "vgpu-stats" in l]
+            return dict(serial=serial, stats=stats[-1] if stats else "", login=times["login"], labwc=times["labwc-up"] - times["login"],
                         term=times["terminal"] - times["login"], renderer=renderer.strip(), seqs=seqs)
         except (pexpect.TIMEOUT, pexpect.EOF) as e:
             raise Fail(f"{type(e).__name__}; tail:\n" + (p.before or "")[-1500:] + "\n" + open(err).read()[-1500:])
@@ -88,6 +94,9 @@ def main():
     ap.add_argument("--seqs", type=int, default=3)
     ap.add_argument("--cpus", type=int, default=4)
     ap.add_argument("--gpu-accel", action="store_true")
+    ap.add_argument("--churn", type=int, default=0, metavar="SECONDS", help="then scroll a full-screen terminal for this long")
+    ap.add_argument("--display", default="1920x1080", help="WxH")
+    ap.add_argument("--window", action="store_true", help="show a window, so the presenter draws (HV_VGPU_STATS=1 prints its times)")
     args = ap.parse_args()
     d = args.linux_dir or smoke.linux_dir()
     res = []
@@ -97,6 +106,8 @@ def main():
         print(f"run {n + 1}: serial login {r['serial']:.1f} s, guest login at {r['login']:.1f} s, labwc up "
               f"+{r['labwc']:.2f} s, terminal +{r['term']:.2f} s ({r['renderer']}); seq " +
               " ".join(f"{s:.3f}" for s in r["seqs"]), flush=True)
+        if r["stats"]:
+            print("  " + r["stats"], flush=True)
     allseq = [s for r in res for s in r["seqs"]]
     terms = ", ".join("%.2f" % r["term"] for r in res)
     firsts = ", ".join("%.3f" % r["seqs"][0] for r in res)
