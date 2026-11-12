@@ -15,8 +15,9 @@ enum { HV_BOARD_VMAPPLE = 0, HV_BOARD_VIRT = 1 };
 
 typedef struct HvVmConfig {
     int board;                /* HV_BOARD_*; 0 is the virtual Mac */
-    const char *rom;          /* vmapple: AVPBooter.vmapple2.bin. virt: u-boot.bin, or NULL (no firmware, no tree) */
+    const char *rom;          /* vmapple: AVPBooter.vmapple2.bin. virt: u-boot.bin, or NULL (a kernel boot, or no firmware and no tree) */
     const char *disk, *aux;   /* the root disk and the auxiliary storage (vmapple only); virt: disk may be NULL */
+    const char *kernel, *initrd, *cmdline; /* virt direct boot (rom NULL): an arm64 Image; initrd and cmdline may be NULL */
     uint64_t aux_offset;      /* where the aux image's data starts (16 KB) */
     uint64_t ecid, seed;      /* the machine identity the disk was installed with */
     uint64_t ram_mb;

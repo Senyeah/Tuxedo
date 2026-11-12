@@ -1,4 +1,5 @@
 #include "vm.h"
+#include "linux_boot.h"
 #include "pvg_lite.h"
 #include "virt.h"
 
@@ -357,6 +358,7 @@ static int create_virt(const HvVmConfig *c, uint64_t ram_size, char *err, size_t
         if (placed != 0) return fail(err, errlen, "Cannot build the device tree.");
     }
     hv_virt_reset(&virt);
+    if (c->kernel && hv_linux_boot(&virt, c->kernel, c->initrd, c->cmdline, NULL, err, errlen) != 0) return -1;
     devs = (HvBoardDevs){.gic = virt.gic, .uart = virt.uart, .gpio = virt.gpio, .usb = virt.usb,
                          .keyboard = virt.keyboard, .mouse = virt.mouse, .net = virt.net, .snd = virt.snd,
                          .balloon = virt.balloon, .blk = {virt.blk, NULL},
@@ -374,6 +376,9 @@ int hv_vm_create(const HvVmConfig *c, char *err, size_t errlen) {
     if (c->board != HV_BOARD_VMAPPLE && c->board != HV_BOARD_VIRT) return fail(err, errlen, "Unknown board.");
     if (c->board == HV_BOARD_VMAPPLE && (!c->rom || !c->disk || !c->aux))
         return fail(err, errlen, "The ROM, disk and auxiliary storage are all needed.");
+    if (c->kernel && (c->board != HV_BOARD_VIRT || c->rom))
+        return fail(err, errlen, "A kernel boots directly on the virt board only, without firmware.");
+    if ((c->initrd || c->cmdline) && !c->kernel) return fail(err, errlen, "An initrd or a command line needs a kernel.");
     machine_created = 1;
     board_kind = c->board;
     struct sigaction ill = {.sa_flags = SA_SIGINFO | SA_ONSTACK};

@@ -331,6 +331,36 @@ static void test_vm(void) {
     hv_vm_destroy();
     check("no virt board after destroy", hv_vm_virt() == NULL, 1);
 
+    char kernel[256];
+    snprintf(kernel, sizeof kernel, "%s/Image", dir);
+    write_image(kernel, 0, 64 << 10, 0x644d5241);
+    HvVmConfig direct = {.board = HV_BOARD_VIRT, .kernel = kernel, .cmdline = "console=ttyAMA0", .ram_mb = 128,
+                         .ncpus = 2, .no_net = 1, .no_sound = 1, .jit_bytes = 8 << 20};
+    if (hv_vm_create(&direct, error, sizeof error) != 0) {
+        printf("  FAIL direct create: %s\n", error);
+        failures++;
+    } else {
+        vm = hv_vm_machine();
+        check("direct: kernel at the start of RAM", rd32(vm, VIRT_MEM), 0x14000000);
+        check("direct: pc is the kernel", hv_vm_cpu(0)->pc, VIRT_MEM);
+        check("direct: x0 is the tree", hv_vm_cpu(0)->x[0], VIRT_MEM + (126 << 20));
+        check("direct: tree there", rd32(vm, VIRT_MEM + (126 << 20)), 0xedfe0dd0);
+        check("direct: cpu 1 waits for CPU_ON", hv_vm_cpu(1)->off, 1);
+    }
+    hv_vm_destroy();
+    HvVmConfig both = direct;
+    both.rom = rom;
+    check("kernel and firmware together fail", hv_vm_create(&both, error, sizeof error) != 0, 1);
+    hv_vm_destroy();
+    HvVmConfig lone = {.board = HV_BOARD_VIRT, .initrd = kernel, .ram_mb = 64, .ncpus = 1, .no_net = 1, .no_sound = 1,
+                       .jit_bytes = 8 << 20};
+    check("initrd without a kernel fails", hv_vm_create(&lone, error, sizeof error) != 0, 1);
+    hv_vm_destroy();
+    HvVmConfig junk = direct;
+    junk.kernel = disk; /* zeros: no magic */
+    check("a bad kernel fails create", hv_vm_create(&junk, error, sizeof error) != 0, 1);
+    check("with the loader's reason", strstr(error, "arm64 Image") != NULL, 1);
+    hv_vm_destroy();
     HvVmConfig bad = {.board = HV_BOARD_VIRT, .rom = disk, .ram_mb = 64, .ncpus = 1, .no_net = 1, .no_sound = 1, .jit_bytes = 8 << 20};
     write_file(disk, NULL, VIRT_FLASH_SIZE + 4);
     check("firmware over 64 MB fails create", hv_vm_create(&bad, error, sizeof error) != 0, 1);
