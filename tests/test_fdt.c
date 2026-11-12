@@ -104,6 +104,18 @@ static void test_errors(void) {
 
     f = hv_fdt_new();
     hv_fdt_begin(f, "");
+    hv_fdt_begin(f, "a");
+    hv_fdt_end(f);
+    hv_fdt_prop_u32(f, "x", 1);
+    hv_fdt_end(f);
+    CHECK(bad(f));                      /* property after a child node */
+
+    hv_fdt_begin(NULL, "");             /* NULL (failed new) is tolerated */
+    hv_fdt_prop_u32(NULL, "x", 1);
+    CHECK(bad(NULL));
+
+    f = hv_fdt_new();
+    hv_fdt_begin(f, "");
     hv_fdt_end(f);
     hv_fdt_end(f);
     CHECK(bad(f));                      /* end without begin */
@@ -175,7 +187,9 @@ int main(void) {
     char *out = NULL;
     if (b && run("command -v dtc >/dev/null 2>&1", &out) == 0) {
         free(out);
-        char in[] = "/tmp/hv_fdt_XXXXXX";
+        const char *tmp = getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp";
+        char in[512], rt[512];
+        snprintf(in, sizeof in, "%s/hv_fdt_XXXXXX", tmp);
         int fd = mkstemp(in);
         CHECK(fd >= 0 && write(fd, b, size) == (ssize_t)size);
         close(fd);
@@ -195,7 +209,7 @@ int main(void) {
         CHECK(!strstr(out, "Warning") && !strstr(out, "ERROR"));
         char *dts1 = out;
         /* dtb to dtb must keep the tree */
-        char rt[] = "/tmp/hv_fdt_rt_XXXXXX";
+        snprintf(rt, sizeof rt, "%s/hv_fdt_rt_XXXXXX", tmp);
         close(mkstemp(rt));
         snprintf(cmd, sizeof cmd, "dtc -I dtb -O dtb -o %s %s 2>&1", rt, in);
         CHECK(run(cmd, &out) == 0);

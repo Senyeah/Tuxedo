@@ -7,6 +7,8 @@
    The first mistake is kept and later calls do nothing; hv_fdt_finish then fails. */
 typedef struct HvFdt HvFdt;
 
+/* NULL on out of memory; every other call accepts NULL and finish then fails.
+   Duplicate property names in one node are not checked. */
 HvFdt *hv_fdt_new(void);
 /* The root node is begun with the empty name "". */
 void hv_fdt_begin(HvFdt *f, const char *name);

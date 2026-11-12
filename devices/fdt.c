@@ -22,6 +22,7 @@ struct HvFdt {
     Buf st, strs;
     int depth;
     int root_done;
+    int after_child;             /* last token at this depth closed a child node */
     uint32_t next_phandle;
     const char *err;
 };
@@ -82,11 +83,12 @@ HvFdt *hv_fdt_new(void) {
 }
 
 void hv_fdt_begin(HvFdt *f, const char *name) {
-    if (f->err) return;
+    if (!f || f->err) return;
     if (!name) { fail(f, "node name is NULL"); return; }
     if (f->depth == 0 && f->root_done) { fail(f, "second root node"); return; }
     if (f->depth == 0 ? *name != 0 : *name == 0) { fail(f, "bad node name (root must be empty, others not)"); return; }
     size_t n = strlen(name) + 1;
+    f->after_child = 0;
     put_u32(f, FDT_BEGIN_NODE);
     uint8_t *p = buf_grow(f, &f->st, pad4(n));
     if (p) memcpy(p, name, n);
@@ -94,15 +96,17 @@ void hv_fdt_begin(HvFdt *f, const char *name) {
 }
 
 void hv_fdt_end(HvFdt *f) {
-    if (f->err) return;
+    if (!f || f->err) return;
     if (f->depth == 0) { fail(f, "end without begin"); return; }
     put_u32(f, FDT_END_NODE);
     if (--f->depth == 0) f->root_done = 1;
+    else f->after_child = 1;
 }
 
 void hv_fdt_prop(HvFdt *f, const char *name, const void *data, uint32_t len) {
-    if (f->err) return;
+    if (!f || f->err) return;
     if (f->depth == 0) { fail(f, "property outside a node"); return; }
+    if (f->after_child) { fail(f, "property after a child node"); return; }
     if (!name || !*name) { fail(f, "property name is empty"); return; }
     if (len && !data) { fail(f, "property data is NULL"); return; }
     int64_t off = str_off(f, name);
@@ -115,6 +119,7 @@ void hv_fdt_prop(HvFdt *f, const char *name, const void *data, uint32_t len) {
 }
 
 void hv_fdt_prop_str(HvFdt *f, const char *name, const char *s) {
+    if (!f) return;
     if (!s) { if (!f->err) fail(f, "property string is NULL"); return; }
     size_t n = strlen(s) + 1;
     if (n > FDT_MAX) { if (!f->err) fail(f, "device tree too large"); return; }
@@ -122,7 +127,7 @@ void hv_fdt_prop_str(HvFdt *f, const char *name, const char *s) {
 }
 
 void hv_fdt_prop_strs(HvFdt *f, const char *name, const char *const *list, int n) {
-    if (f->err) return;
+    if (!f || f->err) return;
     if (n < 0 || (n && !list)) { fail(f, "bad string list"); return; }
     size_t total = 0;
     for (int i = 0; i < n; i++) {
@@ -143,7 +148,7 @@ void hv_fdt_prop_strs(HvFdt *f, const char *name, const char *const *list, int n
 }
 
 void hv_fdt_prop_cells(HvFdt *f, const char *name, const uint32_t *cells, int n) {
-    if (f->err) return;
+    if (!f || f->err) return;
     if (n < 0 || (n && !cells) || (size_t)n > FDT_MAX / 4) { fail(f, "bad cell list"); return; }
     uint8_t *tmp = malloc((size_t)n * 4 + 1);
     if (!tmp) { fail(f, "out of memory"); return; }
@@ -166,18 +171,19 @@ void hv_fdt_prop_empty(HvFdt *f, const char *name) {
 }
 
 uint32_t hv_fdt_phandle(HvFdt *f) {
-    if (f->err) return 0;
+    if (!f || f->err) return 0;
     if (f->depth == 0) { fail(f, "phandle outside a node"); return 0; }
     uint32_t h = f->next_phandle++;
     hv_fdt_prop_u32(f, "phandle", h);
     return f->err ? 0 : h;
 }
 
-const char *hv_fdt_error(const HvFdt *f) { return f->err; }
+const char *hv_fdt_error(const HvFdt *f) { return f ? f->err : "out of memory"; }
 
 uint8_t *hv_fdt_finish(HvFdt *f, uint32_t *size) {
     uint8_t *out = NULL;
     if (size) *size = 0;
+    if (!f) { fprintf(stderr, "fdt: out of memory\n"); return NULL; }
     if (!f->err && f->depth != 0) fail(f, "begin without end");
     if (!f->err && !f->root_done) fail(f, "no root node");
     if (!f->err) put_u32(f, FDT_END);
