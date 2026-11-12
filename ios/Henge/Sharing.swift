@@ -1,8 +1,8 @@
 import SwiftUI
 import UIKit
 
-/// What a running Mac shares with this device: the Shared folder in Files, and the clipboard. The Mac mounts
-/// the folder and follows the clipboard through a small helper (host/share.c, tools/henge-agent.m).
+/// What a running guest shares with this device: the Shared folder in Files, and the clipboard. The clipboard
+/// follows through a small helper: tools/henge-agent.m in macOS, henge-clipboard in a Debian desktop (host/share.c).
 enum Sharing {
     static var folder: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Shared", isDirectory: true)
@@ -39,21 +39,32 @@ enum Sharing {
         }
     }
 
-    /// Text from this device, pasted at the Mac's cursor. Without the helper it is typed, as far as the keyboard can.
-    /// A Linux guest has no helper yet (P7): its text is typed as keys, or written to the console while that shows.
-    static func paste(_ text: String, guest: GuestKind = .mac, console: Bool = false) {
+    /// What a Linux guest pastes with: terminals want Shift as well.
+    enum PasteKeys: String {
+        case control, controlShift
+
+        static let storageKey = "henge.linux.pasteKeys"
+    }
+
+    /// Text from this device, pasted at the guest's cursor. Without the helper it is typed, as far as the keyboard can.
+    /// A Linux guest's helper (henge-clipboard) runs on the desktop only: on the console the text goes to the console.
+    static func paste(_ text: String, guest: GuestKind = .mac, console: Bool = false, keys: PasteKeys = .control) {
         Task { @MainActor in
-            if guest == .linux {
-                if console {
-                    let bytes = Array(text.utf8)
-                    bytes.withUnsafeBufferPointer { henge_vm_console_write($0.baseAddress, $0.count) }
-                } else {
-                    await Keys.typeSlowly(text)
-                }
+            if guest == .linux && console {
+                let bytes = Array(text.utf8)
+                bytes.withUnsafeBufferPointer { henge_vm_console_write($0.baseAddress, $0.count) }
             } else if helperRunning {
                 henge_share_set_clipboard(text)
-                try? await Task.sleep(nanoseconds: 800_000_000) // for the helper to put it on the Mac's clipboard
-                Keys.chord(Keys.command, "v")
+                try? await Task.sleep(nanoseconds: 800_000_000) // for the helper to put it on the guest's clipboard
+                if guest == .linux && keys == .controlShift {
+                    henge_vm_key(Keys.control, 1)
+                    henge_vm_key(Keys.shift, 1)
+                    Keys.type("v")
+                    henge_vm_key(Keys.shift, 0)
+                    henge_vm_key(Keys.control, 0)
+                } else {
+                    Keys.chord(guest == .linux ? Keys.control : Keys.command, "v")
+                }
             } else {
                 await Keys.typeSlowly(text)
             }
