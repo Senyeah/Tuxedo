@@ -1,6 +1,7 @@
 // The virtio GPU with the real virgl renderer (devices/vgpu_virgl.m): a driver written in C posts
 // control-queue requests, a recorded virgl clear runs on ANGLE (Metal), and TRANSFER_FROM_HOST_3D
 // brings the colour back into guest RAM. Needs the libraries from tools/gfx (make test-vgpu-virgl).
+#include <dirent.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -554,6 +555,9 @@ int main(void) {
     if (!mkdtemp(dir)) return 1;
     setenv("HV_RAM_NO_LEDGER", "1", 1);
     setenv("HV_NO_SOUND", "1", 1);
+    char cache[300];
+    snprintf(cache, sizeof cache, "%s/glcache", dir);
+    setenv("HV_GL_CACHE", cache, 1); // A10: the scanout blit program lands here
     char path[256];
     snprintf(path, sizeof path, "%s/root", dir);
     int fd = open(path, O_CREAT | O_TRUNC | O_RDWR, 0600);
@@ -591,6 +595,20 @@ int main(void) {
     test_reset();
     test_scanout();
 
+    hv_vgpu_virgl_stats(rend, &st);
+    check("ANGLE stored a program in the shader cache", st.cache_stores >= 1, 1);
+    int files = 0;
+    char sub[400];
+    DIR *base = opendir(cache);
+    for (struct dirent *e; base && (e = readdir(base));) {
+        if (strncmp(e->d_name, "angle-", 6)) continue;
+        snprintf(sub, sizeof sub, "%s/%s", cache, e->d_name);
+        DIR *d = opendir(sub);
+        for (struct dirent *f; d && (f = readdir(d));) files += f->d_name[0] != '.' && !strstr(f->d_name, ".tmp");
+        if (d) closedir(d);
+    }
+    if (base) closedir(base);
+    check("the shader cache holds a file for each program", files >= 1 && (uint64_t)files == st.cache_stores, 1);
     hv_vgpu_virgl_stats(rend, &st);
     printf("  renderer: %llu requests, %llu errors, %llu fences\n", (unsigned long long)st.requests, (unsigned long long)st.errors,
            (unsigned long long)st.fences);

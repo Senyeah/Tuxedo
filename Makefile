@@ -10,6 +10,7 @@ ifndef GFX_ROOT
 GFX_ROOT := $(or $(patsubst %/.git,%,$(shell git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)),$(CURDIR))/build/gfx
 endif
 GFX_DIR ?= $(GFX_ROOT)/macos
+ANGLE_COMMIT := $(shell sed -n 's/^ANGLE_COMMIT=//p' tools/gfx/versions.env)
 GFX_LIBS = $(addprefix $(GFX_DIR)/lib/,libvirglrenderer.a libepoxy.a libEGL.a libGLESv2.a)
 GFX_FRAMEWORKS = -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework CoreFoundation -framework IOKit -framework AppKit -lc++
 GFX_OBJ = $(if $(GFX),$(B)/vgpu_virgl.o)
@@ -51,7 +52,7 @@ $(B)/vgpu_metal.o: devices/vgpu_metal.m devices/*.h core/*.h host/*.h $(B)/.gfx-
 # The virgl renderer (GFX=1, or the test below).
 $(B)/vgpu_virgl.o: devices/vgpu_virgl.m devices/*.h core/*.h host/*.h $(B)/.gfx-stamp | $(B)
 	$(call GFX_CHECK,$(GFX_DIR))
-	$(CC) $(CFLAGS) -fobjc-arc -Wno-unused-parameter -I$(GFX_DIR)/include -c $< -o $@
+	$(CC) $(CFLAGS) -fobjc-arc -Wno-unused-parameter -I$(GFX_DIR)/include -DHV_ANGLE_COMMIT='"$(ANGLE_COMMIT)"' -c $< -o $@
 $(B)/virt_window.o: host/virt_window.m host/*.h $(B)/.gfx-stamp | $(B)
 	$(CC) -fobjc-arc -O2 -g -Wall -Wextra -Icore -Ihost -Idevices -c $< -o $@
 $(B)/pvg_mac.o: devices/pvg_mac.m devices/*.h core/*.h host/*.h | $(B)
@@ -194,6 +195,16 @@ test-linux-accel:
 	uv run tools/linux/accel-check.py --hengevm $(ACCEL_B)/hengevm $(ACCEL_ARGS)
 .PHONY: test-linux-accel
 
+# A10: the shader cache. Two hengevm processes share one cache directory: the first writes it, the second reads it and starts the terrain scene at least 2 times faster.
+# STALL_ARGS="--cache off --processes 1" measures without the cache (no check).
+test-linux-shader-cache:
+	@if [ ! -d "$(GFX_DIR)" ]; then echo "test-linux-shader-cache: skipped: no graphics libraries in $(GFX_DIR)"; exit 0; fi; \
+	mkdir -p $(ACCEL_B) && \
+	{ [ -f $(ACCEL_B)/mac-restore/libhengerestore.a ] || { $(MAKE) build/mac-restore/libhengerestore.a && cp -R build/mac-restore $(ACCEL_B)/ && touch $(ACCEL_B)/mac-restore/libhengerestore.a; }; } && \
+	$(MAKE) GFX=1 B=$(ACCEL_B) $(ACCEL_B)/hengevm && \
+	uv run tools/linux/shader-stall.py --hengevm $(ACCEL_B)/hengevm $(if $(STALL_ARGS),$(STALL_ARGS),--check)
+.PHONY: test-linux-shader-cache
+
 # R3: a mode line in HV_INPUT_FILE changes the guest's display mode (fbcon on the console image).
 test-linux-mode: $(B)/hengevm
 	uv run tools/linux/mode-check.py $(MODE_ARGS)
@@ -288,7 +299,7 @@ $(IB)/devices/vgpu_metal.o: devices/vgpu_metal.m devices/*.h core/*.h host/*.h $
 $(IB)/devices/vgpu_virgl.o: devices/vgpu_virgl.m devices/*.h core/*.h host/*.h $(IB)/.gfx-stamp
 	$(call GFX_CHECK,$(IOS_GFX_DIR))
 	@mkdir -p $(dir $@)
-	$(IOS_CC) $(IOS_CFLAGS) -fobjc-arc -Wno-unused-parameter -I$(IOS_GFX_DIR)/include -c $< -o $@
+	$(IOS_CC) $(IOS_CFLAGS) -fobjc-arc -Wno-unused-parameter -I$(IOS_GFX_DIR)/include -DHV_ANGLE_COMMIT='"$(ANGLE_COMMIT)"' -c $< -o $@
 $(IB)/host/enter.o: host/enter.S
 	@mkdir -p $(dir $@)
 	$(IOS_CC) -c $< -o $@
