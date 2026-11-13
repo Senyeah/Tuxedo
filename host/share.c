@@ -87,6 +87,22 @@ int hv_share_keyboard_wanted(unsigned long *seq) {
     return wanted;
 }
 
+/* How much of the guest's screen the device's keyboard covers, in thousandths, for KWin's panel. */
+static pthread_cond_t kbd_cond = PTHREAD_COND_INITIALIZER;
+static int kbd_height;
+static unsigned long kbd_height_seq;
+
+void hv_share_set_keyboard_height(double fraction) {
+    int h = fraction > 0 ? (int)((fraction < 1 ? fraction : 1) * 1000 + 0.5) : 0; /* a NaN is 0 */
+    pthread_mutex_lock(&clip_mu);
+    if (h != kbd_height) {
+        kbd_height = h;
+        kbd_height_seq++;
+        pthread_cond_broadcast(&kbd_cond);
+    }
+    pthread_mutex_unlock(&clip_mu);
+}
+
 /* ---- connections ---- */
 
 typedef struct Conn {
@@ -727,6 +743,31 @@ static int keyboard_put(Conn *c, Request *r) {
     return respond_empty(c, r, 204, "No Content");
 }
 
+/* GET is "height F": the device keyboard's height as a part of the guest's screen, 0 when it is down.
+   ?since=N waits up to 25 s for a change after N; with no since the answer comes at once. */
+static int keyboard_get(Conn *c, Request *r) {
+    if (body_discard(c, r) != 0) return -1;
+    const char *q = strstr(r->query, "since=");
+    struct timespec until;
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    until.tv_sec = now.tv_sec + 25;
+    until.tv_nsec = now.tv_usec * 1000;
+    pthread_mutex_lock(&clip_mu);
+    if (q) {
+        unsigned long since = strtoul(q + 6, NULL, 10);
+        /* A since that is not the count (a server that started again) gets its answer at once */
+        while (kbd_height_seq == since && pthread_cond_timedwait(&kbd_cond, &clip_mu, &until) != ETIMEDOUT) {}
+    }
+    int h = kbd_height;
+    unsigned long seq = kbd_height_seq;
+    pthread_mutex_unlock(&clip_mu);
+    char body[32], headers[96];
+    int n = snprintf(body, sizeof body, "height %d.%03d\n", h / 1000, h % 1000);
+    snprintf(headers, sizeof headers, "Content-Type: text/plain\r\nCache-Control: no-store\r\nX-Henge-Seq: %lu\r\n", seq);
+    return respond(c, r, 200, "OK", headers, body, (size_t)n);
+}
+
 static int clipboard_put(Conn *c, Request *r) {
     size_t len = 0;
     char *text = body_small(c, r, &len);
@@ -782,6 +823,7 @@ static int serve_henge(Conn *c, Request *r) {
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "GET")) return clipboard_get(c, r);
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "PUT")) return clipboard_put(c, r);
     if (!strcmp(what, "keyboard") && !strcmp(r->method, "PUT")) return keyboard_put(c, r);
+    if (!strcmp(what, "keyboard") && !strcmp(r->method, "GET")) return keyboard_get(c, r);
     if (body_discard(c, r) != 0) return -1;
     return respond_empty(c, r, 404, "Not Found");
 }
