@@ -6,6 +6,8 @@ rt=${XDG_RUNTIME_DIR:-/tmp}
 echo "login $(cut -d' ' -f1 /proc/uptime)" > "$rt/henge-times"
 if [ "$(head -n 1 /etc/henge/session 2>/dev/null)" = plasma ] && command -v startplasma-wayland >/dev/null; then
     echo "session=plasma" | tee "$rt/henge-session.log"
+    # KWin attaches a backlight to an internal output only (not Virtual-1): powerdevil keeps it if it cannot hand it over
+    export QT_WAYLAND_DISABLED_INTERFACES="${QT_WAYLAND_DISABLED_INTERFACES:+$QT_WAYLAND_DISABLED_INTERFACES,}kde_external_brightness_v1"
     startplasma-wayland
     exit
 fi
