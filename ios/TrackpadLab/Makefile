@@ -6,8 +6,8 @@ B := $(ROOT)/build/trackpad-lab-tests
 PAD := $(ROOT)/ios/Pad
 SWIFTC := xcrun --sdk macosx swiftc -O -parse-as-library
 
-test: test-pad-field test-pad-layout test-pointer-buttons
-.PHONY: test test-pad-field test-pad-layout test-pointer-buttons
+test: test-pad-field test-pad-layout test-pointer-buttons test-pad-motion
+.PHONY: test test-pad-field test-pad-layout test-pointer-buttons test-pad-motion
 
 $(B):
 	mkdir -p $@
@@ -20,6 +20,12 @@ $(B)/test_pad_layout: $(PAD)/PadTuning.swift $(PAD)/PadLayout.swift $(ROOT)/test
 
 $(B)/test_pointer_buttons: $(PAD)/PointerButtons.swift $(ROOT)/tests/test_pointer_buttons.swift | $(B)
 	$(SWIFTC) $^ -o $@
+
+$(B)/test_pad_motion: $(PAD)/PadTuning.swift $(PAD)/PadMotionFeel.swift $(ROOT)/tests/test_pad_motion.swift | $(B)
+	$(SWIFTC) $^ -o $@
+
+test-pad-motion: $(B)/test_pad_motion
+	$<
 
 test-pad-field: $(B)/test_pad_field
 	$<

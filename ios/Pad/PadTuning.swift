@@ -17,6 +17,7 @@ struct PadTuning: Codable, Equatable {
     var contrast = Contrast()
     var frame = Frame()
     var haptics = Haptics()
+    var motion = Motion()
 
     struct Grid: Codable, Equatable {
         var pitch = 5.0
@@ -84,11 +85,11 @@ struct PadTuning: Codable, Equatable {
     struct Colours: Codable, Equatable {
         var idle = "#FFFFFF"
         var core = "#F4F8FF"
-        /// A move's trail at energy 1, 0.5 and 0.05: white (the owner's decision 1).
-        var move1 = "#F4F8FF"
-        var move05 = "#EEF2F8"
-        var move005 = "#E6EAF0"
-        /// A drag's trail: the only blue.
+        /// A move's trail at energy 1, 0.5 and 0.05: blue, as a drag's. A drag differs by its tail and ring.
+        var move1 = "#C9DCFF"
+        var move05 = "#7FA8FF"
+        var move005 = "#3D6FE0"
+        /// A drag's trail.
         var drag1 = "#C9DCFF"
         var drag05 = "#7FA8FF"
         var drag005 = "#3D6FE0"
@@ -130,6 +131,8 @@ struct PadTuning: Codable, Equatable {
         var pressedShadow = 0.40
         var attack = 0.06
         var release = 0.18
+        /// s a tap-to-click lights its key, as a press of the key does. 0: no light.
+        var tapFlash = 0.12
         var symbolSize = 22.0
         var symbolAlpha = 0.60
         var leftSymbol = "cursorarrow.click"
@@ -174,13 +177,14 @@ struct PadTuning: Codable, Equatable {
         /// What a first finger gives: "soft", "light", "rigid" (a tick of that style), "none".
         var touchDown = "soft"
         var touchDownIntensity = 0.35
-        var tap = Event(style: "rigid", intensity: 0.75)
-        var rightTap = Event(style: "heavy", intensity: 0.85)
-        var leftKeyDown = Event(style: "rigid", intensity: 0.90)
+        /// The keys and tap-to-click are the strongest, and a tap feels as its key does.
+        var tap = Event(style: "rigid", intensity: 1.0)
+        var rightTap = Event(style: "heavy", intensity: 1.0)
+        var leftKeyDown = Event(style: "rigid", intensity: 1.0)
         var leftKeyUp = Event(style: "rigid", intensity: 0.45)
-        var rightKeyDown = Event(style: "heavy", intensity: 0.90)
+        var rightKeyDown = Event(style: "heavy", intensity: 1.0)
         var rightKeyUp = Event(style: "heavy", intensity: 0.40)
-        var holdStart = Event(style: "medium", intensity: 1.0)
+        var holdStart = Event(style: "medium", intensity: 0.8)
         var holdEnd = Event(style: "light", intensity: 0.5)
         var reveal = Event(style: "light", intensity: 0.6)
         var minGap = 0.05
@@ -189,6 +193,26 @@ struct PadTuning: Codable, Equatable {
             var style: String
             var intensity: Double
         }
+    }
+
+    /// A haptic for every finger move, as strong as the finger's acceleration (faster or slower).
+    struct Motion: Codable, Equatable {
+        /// "texture" (a continuous Core Haptics event), "ticks" (taps at a distance of travel), "none".
+        var style = "texture"
+        var velocitySmoothing = 0.02     // s
+        var accelSmoothing = 0.04        // s
+        /// pt/s². Below floor nothing plays; at full the haptic is at its gain.
+        var floor = 2000.0
+        var full = 30000.0
+        /// s with no sample: the finger is still, so its speed falls to zero.
+        var still = 0.03
+        var textureGain = 0.35
+        var textureSharpness = 0.25
+        var tickStyle = "light"
+        var tickGain = 0.5
+        var tickSpacing = 6.0            // pt
+        var tickGap = 0.03               // s; the Taptic Engine cannot play much faster
+        var tickMin = 0.06
     }
 }
 

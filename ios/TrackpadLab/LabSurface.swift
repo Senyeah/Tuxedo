@@ -95,9 +95,10 @@ final class LabSurface: UIView {
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { lift(touches) }
-    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { lift(touches) }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { lift(touches, cancelled: true) }
 
-    private func lift(_ touches: Set<UITouch>) {
+    /// A cancelled touch (a system gesture, a call) ends a hold, and is never a tap or a gesture.
+    private func lift(_ touches: Set<UITouch>, cancelled: Bool = false) {
         var lifted: [Int] = []
         fingers.removeAll { f in
             guard touches.contains(f.touch) else { return false }
@@ -119,7 +120,7 @@ final class LabSurface: UIView {
         if holding {
             holding = false
             if buttons.holdEnd() { feedback?.padHoldEnd() }
-        } else if quick && still {
+        } else if quick && still && !cancelled {
             if mostFingers == 1, tapsClick(), buttons.tap(0) {
                 feedback?.padClick(0, at: firstPoints[0])
             } else if mostFingers == 2, twoFingerTapClicks(), buttons.tap(1) {
@@ -127,7 +128,7 @@ final class LabSurface: UIView {
                 feedback?.padClick(1, at: CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2))
             }
         }
-        if mostFingers == 3, still, quick {
+        if mostFingers == 3, still, quick, !cancelled {
             if let last = lastThreeTap, Date().timeIntervalSince(last) < 0.5 {
                 lastThreeTap = nil
                 onTuning?()
@@ -135,7 +136,7 @@ final class LabSurface: UIView {
                 lastThreeTap = Date()
             }
         }
-        if mostFingers >= 4, travelled < Self.tapDistance * 3, Date().timeIntervalSince(started) < Self.tapTime * 2 {
+        if mostFingers >= 4, !cancelled, travelled < Self.tapDistance * 3, Date().timeIntervalSince(started) < Self.tapTime * 2 {
             feedback?.padReveal()
             onReveal?()
         }

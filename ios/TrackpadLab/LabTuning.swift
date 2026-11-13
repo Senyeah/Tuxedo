@@ -22,6 +22,11 @@ struct LabTuningView: View {
                         Text("Clicks only").tag(PadHaptics.Level.clicksOnly)
                         Text("Off").tag(PadHaptics.Level.off)
                     }
+                    Picker("Motion feel", selection: $model.tuning.motion.style) {
+                        Text("Texture").tag("texture")
+                        Text("Ticks").tag("ticks")
+                        Text("Off").tag("none")
+                    }
                     Picker("Input mode", selection: $model.inputMode) {
                         Text("Touchscreen").tag(PadInputMode.touchscreen)
                         Text("Volume buttons").tag(PadInputMode.volumeButtons)
