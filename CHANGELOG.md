@@ -25,6 +25,17 @@ Every change keeps its original author in the git history.
   it always runs a frame stream, which the capture interaction needs, so the camera stays on).
 - The session controls are now shown with a four-finger tap, leaving three fingers free for
   the Mac's own gestures.
+- With the guest on an external display, the phone is one dotted pad instead of the text
+  overlay: a finger lights the dots and leaves a short blue trail (a drag leaves a longer one
+  with a ring), two keys at the bottom click left and right, and the session's tools sit in a
+  quiet pill at the top. The keys go away while the on-screen keyboard is up, and the pad's
+  edge follows the keyboard. The upright trackpad panel under the picture is the same pad.
+  A two-finger tap is a right click in both input modes; with the keyboard up a tap is a left
+  click in both. A tap during a held key or volume button no longer drops the drag. Settings >
+  Trackpad has Haptics (All, Clicks only, Off) and Motion feel (Texture, Ticks, Off). The
+  surface is in `ios/Pad`, shared with Trackpad Lab (`ios/TrackpadLab`), where it was tuned;
+  the plan is `docs/external-trackpad-plan.md`. Not yet checked on the iPhone in Henge
+  (`docs/iphone-checklist.md`, part 8b).
 - `devices/xhci.c` generalises the xHCI host to two USB devices (the keyboard and the
   trackpad). The report format follows the Linux kernel's `hid-magicmouse` MT2 support and
   VoodooInput's Magic Trackpad II emulation.
