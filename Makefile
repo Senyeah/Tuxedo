@@ -408,6 +408,14 @@ test-display-mode-policy: $(B)/test_display_mode_policy
 	$(B)/test_display_mode_policy
 .PHONY: test-display-mode-policy
 
+# When the on-screen keyboard follows a Linux desktop (henge-keyboard): pure policy, no UIKit.
+$(B)/test_keyboard_follow: ios/Henge/KeyboardFollow.swift tests/test_keyboard_follow.swift | $(B)
+	xcrun --sdk macosx swiftc $^ -o $@
+
+test-keyboard-follow: $(B)/test_keyboard_follow
+	$(B)/test_keyboard_follow
+.PHONY: test-keyboard-follow
+
 test-display-routing: $(B)/test_display_targets $(B)/test_display_router $(B)/test_external_screen_plan $(B)/test_legacy_external_display $(B)/test_scene_manifest
 	$(B)/test_display_targets
 	$(B)/test_display_router

@@ -50,6 +50,8 @@ struct SessionView: View {
     @State private var zoomFollowing: Task<Void, Never>?
     @State private var helperRunning = false
     @AppStorage(Sharing.PasteKeys.storageKey) private var pasteKeys = Sharing.PasteKeys.control.rawValue
+    @AppStorage(KeyboardFollow.storageKey) private var keyboardFollows = true
+    @State private var keyboardFollow = KeyboardFollow()
     @State private var shown = CGSize(width: 0.5, height: 0.5) // how much of the Mac's screen the zoomed view shows
     // Phone Linux follows the screen (R8): windowMode is what this orientation wants, liveMode what the guest was sent.
     @State private var windowMode: GuestMode?
@@ -287,6 +289,8 @@ struct SessionView: View {
         .modifier(ExternalMacDisplayModifier(presentation: MacPresentation(display: display, aspect: layoutAspect, isLinux: mac.guest == .linux)))
         .task(id: bootAttempt) { await run() }
         .task { await Sharing.followMacClipboard() }
+        .task(id: bootAttempt) { await followGuestKeyboard() }
+        .onChange(of: typing) { if !$0 { keyboardFollow.closed() } }
     }
 
     /// When there is something of the app's to point at, iPadOS gets its own pointer back.
@@ -505,6 +509,21 @@ struct SessionView: View {
         revealHintsShown += 1
         showRevealHint = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { showRevealHint = false }
+    }
+
+    /// A Linux desktop says when the focused program wants text (henge-keyboard): the keyboard comes and goes with it.
+    private func followGuestKeyboard() async {
+        guard mac.guest == .linux else { return }
+        var seq: UInt = 0
+        _ = henge_share_keyboard_wanted(&seq)
+        keyboardFollow = KeyboardFollow(seq: seq)
+        while !Task.isCancelled {
+            let wanted = henge_share_keyboard_wanted(&seq) != 0
+            // The console has the keys while it shows. A hardware keyboard needs no keyboard on the screen.
+            let allowed = keyboardFollows && state == 1 && !consoleShown && GCKeyboard.coalesced == nil
+            if let show = keyboardFollow.poll(wanted: wanted, seq: seq, typing: typing, allowed: allowed) { typing = show }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
     }
 
     /// Linux: the screen and the serial console are both always there; this shows the other one.

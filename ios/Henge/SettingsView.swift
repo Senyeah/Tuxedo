@@ -17,6 +17,7 @@ struct SettingsView: View {
     @AppStorage(JITBootstrap.codeCacheKey) private var codeCacheMB = JITBootstrap.defaultCodeCacheMB
     @AppStorage(DeskAppearance.key) private var appearance = DeskAppearance.system
     @AppStorage(LinuxCatalogue.urlKey) private var linuxCatalogueURL = ""
+    @AppStorage(KeyboardFollow.storageKey) private var keyboardFollows = true
 
     /// The second footer paragraph: how you click, given the selected input mode.
     private var inputDescription: String {
@@ -128,6 +129,12 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.segmented)
                     Text("System follows the \(Device.name)'s Light or Dark setting. Henge stays dark while a machine is running.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                .listRowBackground(Desk.card)
+                Section("Linux keyboard") {
+                    Toggle("Show the keyboard when Linux wants text", isOn: $keyboardFollows)
+                    Text("The keyboard comes up when a text field or a terminal on the Linux desktop has the focus, and goes away after. Programs that run through XWayland do not ask for it: use the keyboard button for them.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 .listRowBackground(Desk.card)

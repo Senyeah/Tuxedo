@@ -366,6 +366,7 @@ void henge_vm_share(const char *folder, const char *socket_path, const char *age
 void henge_share_set_clipboard(const char *text) { hv_share_set_clipboard(text); }
 char *henge_share_take_clipboard(void) { return hv_share_take_clipboard(); }
 long henge_share_agent_seen(void) { return hv_share_agent_seen(); }
+int henge_share_keyboard_wanted(unsigned long *seq) { return hv_share_keyboard_wanted(seq); }
 
 /* vm.c keeps the mode and gives it to the board's display once one exists. */
 void henge_vm_set_display(uint32_t width, uint32_t height) { hv_vm_set_display_mode(width, height); }
