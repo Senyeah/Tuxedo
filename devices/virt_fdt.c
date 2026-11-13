@@ -5,7 +5,7 @@
 #include <stdlib.h>
 
 /* Fixed phandles: the root names the GIC before its node is written. */
-enum { PH_CLOCK = 1, PH_GIC = 2, PH_GPIO = 3 };
+enum { PH_CLOCK = 1, PH_GIC = 2, PH_GPIO = 3, PH_AC = 4 };
 
 /* GIC interrupt specifiers: <type number flags>. */
 #define SPI 0
@@ -90,6 +90,46 @@ uint8_t *hv_virt_build_fdt(const HvVirt *b, const char *bootargs, uint64_t initr
     hv_fdt_prop_cells(f, "gpios", key, 3);
     hv_fdt_prop_u32(f, "linux,code", 0x74); /* KEY_POWER */
     hv_fdt_prop_str(f, "label", "GPIO Key Poweroff");
+    hv_fdt_end(f);
+    hv_fdt_end(f);
+
+    /* Henge only: the device's battery, mains and screen backlight. */
+    hv_fdt_begin(f, "ac-power");
+    hv_fdt_prop_u32(f, "phandle", PH_AC);
+    uint32_t ac[3] = {PH_GPIO, VIRT_GPIO_AC, 0};
+    hv_fdt_prop_cells(f, "gpios", ac, 3);
+    hv_fdt_prop_str(f, "charger-type", "mains");
+    hv_fdt_prop_str(f, "compatible", "gpio-charger");
+    hv_fdt_end(f);
+
+    snprintf(node, sizeof node, "i2c@%llx", (unsigned long long)VIRT_I2C);
+    hv_fdt_begin(f, node);
+    hv_fdt_prop_u32(f, "#size-cells", 0);
+    hv_fdt_prop_u32(f, "#address-cells", 1);
+    hv_fdt_prop_u32(f, "reg-io-width", 1);
+    hv_fdt_prop_u32(f, "reg-shift", 2);
+    hv_fdt_prop_u32(f, "clock-frequency", 100000); /* the bus; the core runs from the clock */
+    hv_fdt_prop_u32(f, "clocks", PH_CLOCK);
+    spi(f, VIRT_IRQ_I2C);
+    reg(f, VIRT_I2C, 0x1000);
+    hv_fdt_prop_str(f, "compatible", "opencores,i2c-ocores");
+    snprintf(node, sizeof node, "battery@%x", VIRT_I2C_BATTERY);
+    hv_fdt_begin(f, node);
+    hv_fdt_prop_u32(f, "power-supplies", PH_AC);
+    uint32_t detect[3] = {PH_GPIO, VIRT_GPIO_BATTERY, 0};
+    hv_fdt_prop_cells(f, "sbs,battery-detect-gpios", detect, 3);
+    hv_fdt_prop_u32(f, "sbs,i2c-retry-count", 1);
+    hv_fdt_prop_u32(f, "reg", VIRT_I2C_BATTERY);
+    hv_fdt_prop_str(f, "compatible", "sbs,sbs-battery");
+    hv_fdt_end(f);
+    snprintf(node, sizeof node, "backlight@%x", VIRT_I2C_BACKLIGHT);
+    hv_fdt_begin(f, node);
+    uint8_t init = b->backlight.reg[0], ctrl = 0x01; /* lp855x reads both as one byte */
+    hv_fdt_prop(f, "init-brt", &init, 1);
+    hv_fdt_prop(f, "dev-ctrl", &ctrl, 1);
+    hv_fdt_prop_str(f, "bl-name", "henge-backlight");
+    hv_fdt_prop_u32(f, "reg", VIRT_I2C_BACKLIGHT);
+    hv_fdt_prop_str(f, "compatible", "ti,lp8556");
     hv_fdt_end(f);
     hv_fdt_end(f);
 

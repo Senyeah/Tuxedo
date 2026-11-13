@@ -55,6 +55,11 @@ int hv_virt_create(HvVirt *b, HvMachine *m, HvCpu *cpus, int ncpus, uint64_t ram
     b->uart = hv_pl011_create(m, b->gic, VIRT_UART, 32 + VIRT_IRQ_UART);
     b->rtc = hv_pl031_create(m, b->gic, VIRT_RTC, 32 + VIRT_IRQ_RTC);
     b->gpio = hv_pl061_create(m, b->gic, VIRT_GPIO, 32 + VIRT_IRQ_GPIO);
+    b->i2c = hv_ocores_i2c_create(m, b->gic, VIRT_I2C, 32 + VIRT_IRQ_I2C);
+    hv_sbs_battery_init(&b->battery, VIRT_I2C_BATTERY);
+    hv_lp8556_init(&b->backlight, VIRT_I2C_BACKLIGHT);
+    hv_ocores_i2c_attach(b->i2c, &b->battery.t);
+    hv_ocores_i2c_attach(b->i2c, &b->backlight.t);
     b->pcie = hv_pcie_create(m, b->gic, VIRT_PCIE_ECAM, VIRT_PCIE_ECAM_SIZE, VIRT_PCIE_MMIO, VIRT_PCIE_MMIO_SIZE,
                              32 + VIRT_IRQ_PCIE, 1);
     hv_machine_add_mmio(m, VIRT_PCIE_PIO, VIRT_PCIE_PIO_SIZE, b, pio_read, pio_write, "pcie-pio");
@@ -140,6 +145,19 @@ int hv_virt_place_fdt(HvVirt *b, const uint8_t *fdt, uint32_t size) {
     return 0;
 }
 
+void hv_virt_set_battery(HvVirt *b, int level, int state, int current_ma, int to_empty_min, int to_full_min) {
+    HvSbsBattery *s = &b->battery;
+    int was = s->state != HV_BATTERY_UNKNOWN && s->level >= 0, old_level = s->level, old_state = s->state;
+    hv_sbs_battery_set(s, level, state, current_ma, to_empty_min, to_full_min);
+    int there = s->state != HV_BATTERY_UNKNOWN && s->level >= 0;
+    hv_pl061_set_input(b->gpio, VIRT_GPIO_AC, there && s->state != HV_BATTERY_UNPLUGGED);
+    /* sbs-battery reads the battery again on an edge of its detect pin: a pulse says "changed" with no gap the guest can see. */
+    if (there && was && (s->level != old_level || s->state != old_state)) hv_pl061_set_input(b->gpio, VIRT_GPIO_BATTERY, 0);
+    hv_pl061_set_input(b->gpio, VIRT_GPIO_BATTERY, there);
+}
+
+void hv_virt_set_backlight(HvVirt *b, uint8_t level) { b->backlight.reg[0] = level; }
+
 void hv_virt_destroy(HvVirt *b) {
     /* Device workers can still touch RAM and the GIC. */
     hv_virtio_blk_destroy(b->blk);
@@ -156,6 +174,7 @@ void hv_virt_destroy(HvVirt *b) {
     free(b->uart);
     free(b->rtc);
     free(b->gpio);
+    free(b->i2c);
     if (b->flash0) munmap(b->flash0, VIRT_FLASH_SIZE);
     if (b->flash1) munmap(b->flash1, VIRT_FLASH_SIZE);
     hv_guest_ram_free(&b->mem);
