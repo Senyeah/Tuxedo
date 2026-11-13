@@ -14,6 +14,10 @@ case "$1" in
                 deb-systemd-helper update-state "$u" >/dev/null || true
             fi
         done
+        # The wallet starts with each user's session; enabled once, so an admin's disable stays
+        if [ "$1" = configure ] && { [ -z "$2" ] || dpkg --compare-versions "$2" lt 1.6.0; }; then
+            systemctl --global enable henge-secrets.service >/dev/null 2>&1 || true
+        fi
         if [ -d /run/systemd/system ]; then
             systemctl --system daemon-reload >/dev/null || true
         fi

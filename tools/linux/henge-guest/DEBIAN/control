@@ -1,14 +1,15 @@
 Package: henge-guest
-Version: 1.4.0
+Version: 1.6.0
 Architecture: all
 Maintainer: Henge <henge@localhost>
 Section: admin
 Priority: optional
-Depends: systemd, util-linux, cloud-guest-utils, gdisk, e2fsprogs, davfs2, python3, tzdata
-Recommends: wl-clipboard, xclip
+Depends: systemd, util-linux, cloud-guest-utils, gdisk, e2fsprogs, davfs2, python3, tzdata, python3-jeepney
+Recommends: wl-clipboard, xclip, python3-cryptography
 Description: Henge guest tools
  Grows the root partition and file system to the disk on every boot,
  does the one-time first-boot setup, mounts the shared folder at ~/Henge,
  shares the clipboard with the device on the desktop, follows the device's
- clock, time zone and screen brightness, and tells the device when the
- focused program wants text.
+ clock, time zone and screen brightness, tells the device when the
+ focused program wants text, and keeps the wallet (Secret Service and
+ KWallet) in the device's Keychain.

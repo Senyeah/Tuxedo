@@ -12,6 +12,12 @@ if [ "$1" = purge ]; then
         deb-systemd-helper unmask "$u" >/dev/null || true
     done
 fi
+if [ "$1" = remove ] || [ "$1" = abort-install ] || [ "$1" = abort-upgrade ]; then
+    for n in org.freedesktop.secrets org.kde.kwalletd6 org.kde.kwalletd5; do
+        dpkg-divert --package henge-guest --rename --divert "/usr/share/dbus-1/services/$n.service.henge" \
+            --remove "/usr/share/dbus-1/services/$n.service" >/dev/null || true
+    done
+fi
 if [ -d /run/systemd/system ]; then
     systemctl --system daemon-reload >/dev/null || true
 fi
