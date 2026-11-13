@@ -1,4 +1,5 @@
 #include "share.h"
+#include "secrets.h"
 #include "net_slirp.h"
 #include <time.h>
 /* hengevm: boots the virtual Mac on the macOS host.
@@ -720,6 +721,11 @@ static void *input_thread(void *unused) {
             fprintf(stderr, "hengevm: guest clipboard: %s (agent seen %ld s ago)\n", text ? text : "(nothing new)", hv_share_agent_seen());
             free(text);
         }
+        else if (!strncmp(line, "secrets", 7)) { /* "secrets lock|unlock": the app's Face ID check (testing) */
+            if (!strcmp(line + 7, " lock")) hv_secrets_set_locked(1);
+            else if (!strcmp(line + 7, " unlock")) hv_secrets_set_locked(0);
+            fprintf(stderr, "hengevm: secrets %s\n", hv_secrets_locked() ? "locked" : "unlocked");
+        }
         else if (!strncmp(line, "getkbd", 6)) { /* what henge-keyboard in a Linux desktop last asked for */
             unsigned long seq;
             int wanted = hv_share_keyboard_wanted(&seq);
@@ -1374,6 +1380,7 @@ int main(int argc, char **argv) {
     int board_kind = HV_BOARD_VMAPPLE;
     const char *install_ipsw = NULL;
     const char *share_folder = NULL;
+    const char *secrets_dir = NULL, *machine_id = "hengevm";
     int log = 1, trace = 0, use_pvg = 1, no_chain = 0, gpu_accel = 0;
     const char *screenshot = NULL;
     uint64_t watch = 0, watch_pa = 0;
@@ -1430,6 +1437,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--share")) { /* FOLDER: the guest reaches it at http://10.0.2.4/ */
             share_folder = argv[++i];
         }
+        else if (!strcmp(argv[i], "--secrets")) secrets_dir = argv[++i]; /* DIR: the wallet's items, with --share */
+        else if (!strcmp(argv[i], "--machine-id")) machine_id = argv[++i];
         else if (!strcmp(argv[i], "--display")) { /* WxH: virt, or vmapple in --phone mode */
             unsigned w = 0, h = 0;
             if (sscanf(argv[++i], "%ux%u", &w, &h) == 2 && w && h) hv_vm_set_display_mode(w, h), virt_w = w, virt_h = h;
@@ -1498,6 +1507,15 @@ int main(int argc, char **argv) {
         char sock[256];
         snprintf(sock, sizeof sock, "%s.sock", share_folder);
         if (hv_share_start(share_folder, sock, getenv("HV_AGENT")) == 0) hv_net_set_share_socket(sock);
+    }
+    if (secrets_dir) {
+        HvSecretStore store;
+        if (hv_secrets_file_store(secrets_dir, &store) != 0 || hv_secrets_set_scope(machine_id) != 0) {
+            fprintf(stderr, "hengevm: secrets: bad folder or machine id\n");
+            return 1;
+        }
+        hv_secrets_set_store(&store);
+        hv_secrets_set_locked(getenv("HV_SECRETS_LOCKED") != NULL); /* no Face ID here: unlocked unless asked */
     }
     if (hv_vm_create(&vc, err, sizeof err) != 0) {
         fprintf(stderr, "hengevm: %s\n", err);

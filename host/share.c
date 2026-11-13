@@ -11,6 +11,7 @@
 
    Locks are accepted but not enforced: macOS only writes to a server that offers them, and there is one client. */
 #include "share.h"
+#include "secrets.h"
 #include "status.h"
 #include "vm.h"
 
@@ -757,6 +758,27 @@ static int status_get(Conn *c, Request *r) {
     return respond(c, r, 200, "OK", headers, body, (size_t)n);
 }
 
+/* A Linux guest's wallet (secrets.c). */
+static int secrets_route(Conn *c, Request *r, const char *path) {
+    char *body = NULL;
+    size_t len = 0;
+    if (!strcmp(r->method, "PUT")) {
+        if (r->length > HV_SECRETS_BODY_MAX) {
+            if (body_discard(c, r) != 0) return -1;
+            return respond_empty(c, r, 413, hv_secrets_reason(413));
+        }
+        if (!(body = body_small(c, r, &len))) return -1;
+    } else if (body_discard(c, r) != 0) {
+        return -1;
+    }
+    HvSecretsReply out;
+    hv_secrets_handle(r->method, path, r->query, body, len, &out);
+    free(body);
+    int rc = respond(c, r, out.status, hv_secrets_reason(out.status), out.headers, out.body, out.len);
+    free(out.body);
+    return rc;
+}
+
 static int serve_henge(Conn *c, Request *r) {
     const char *what = r->path + strlen("/.henge/");
     if (!strcmp(what, "install") && !strcmp(r->method, "GET")) {
@@ -782,6 +804,7 @@ static int serve_henge(Conn *c, Request *r) {
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "GET")) return clipboard_get(c, r);
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "PUT")) return clipboard_put(c, r);
     if (!strcmp(what, "keyboard") && !strcmp(r->method, "PUT")) return keyboard_put(c, r);
+    if (!strncmp(what, "secrets", 7) && (!what[7] || what[7] == '/')) return secrets_route(c, r, what + 7);
     if (body_discard(c, r) != 0) return -1;
     return respond_empty(c, r, 404, "Not Found");
 }
