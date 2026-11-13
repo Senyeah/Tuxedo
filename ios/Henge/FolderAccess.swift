@@ -25,8 +25,11 @@ final class FolderSession: ObservableObject {
     private struct Open {
         var url: URL
         var bookmark: Data
-        var scoped: Bool
+        /// The URL whose security-scoped access is started: it is the one to stop.
+        var access: URL?
         var presenter: FolderPresenter?
+        /// The engine has the placeholder for it: the real folder must go in again when it is back.
+        var placeholder = false
     }
 
     private var open: [UUID: Open] = [:]
@@ -36,10 +39,12 @@ final class FolderSession: ObservableObject {
     private var touches: [UUID: Task<Void, Never>] = [:]
     private var downloads = 0
 
-    /// An empty folder for one that cannot be reached: the guest sees it as unavailable, not gone.
-    private static var placeholder: String {
-        let dir = (NSTemporaryDirectory() as NSString).appendingPathComponent("henge-unavailable")
+    /// An empty folder for one that cannot be reached: the guest sees it as unavailable, not gone. One for each
+    /// folder, and no one can write in it.
+    private static func placeholder(_ id: UUID) -> String {
+        let dir = (NSTemporaryDirectory() as NSString).appendingPathComponent("henge-unavailable/\(id.uuidString)")
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir)
         return dir
     }
 
@@ -133,7 +138,7 @@ final class FolderSession: ObservableObject {
         if folder.lost == true { save(folder.id) { $0.lost = nil } }
         let presenter = FolderPresenter(url: url, id: folder.id)
         NSFileCoordinator.addFilePresenter(presenter)
-        open[folder.id] = Open(url: url, bookmark: bookmark, scoped: scoped, presenter: presenter)
+        open[folder.id] = Open(url: url, bookmark: bookmark, access: scoped ? url : nil, presenter: presenter)
         if case .resolved = resolution, provider(url) {
             Task.detached { // an older File Provider lists a folder in full only after a coordinated read of it
                 var error: NSError?
@@ -145,7 +150,7 @@ final class FolderSession: ObservableObject {
     private func close(_ id: UUID) {
         guard let o = open.removeValue(forKey: id) else { return }
         if let p = o.presenter { NSFileCoordinator.removeFilePresenter(p) }
-        if o.scoped { o.url.stopAccessingSecurityScopedResource() }
+        o.access?.stopAccessingSecurityScopedResource()
     }
 
     private func provider(_ url: URL) -> Bool {
@@ -160,19 +165,25 @@ final class FolderSession: ObservableObject {
         if let o = open[folder.id] {
             let kind: Int32 = provider(o.url) ? 1 : 0
             if henge_vm_folder_set(Int32(slot), id, folder.name, o.url.path, mode, kind) == 0 {
-                let there = FileManager.default.fileExists(atPath: o.url.path)
+                let there = reachable(o.url)
                 henge_vm_folder_online(Int32(slot), there ? 1 : 0)
                 FolderHooks.shared.set(slot, url: o.url, presenter: o.presenter)
+                open[folder.id]?.placeholder = false
                 setState(folder, FolderPolicy.state(.resolved(path: o.url.path, stale: false), reachable: there))
                 return
             }
-            HengeLog.log("folders", "\(folder.name): the engine refused it: \(String(cString: strerror(errno)))")
+            if !o.placeholder { HengeLog.log("folders", "\(folder.name): the engine refused it: \(String(cString: strerror(errno)))") }
         }
-        if henge_vm_folder_set(Int32(slot), id, folder.name, Self.placeholder, mode, 0) == 0 {
+        if henge_vm_folder_set(Int32(slot), id, folder.name, Self.placeholder(folder.id), mode, 0) == 0 {
             henge_vm_folder_online(Int32(slot), 0)
         }
+        open[folder.id]?.placeholder = true
         FolderHooks.shared.set(slot, url: nil, presenter: nil)
         setState(folder, open[folder.id] == nil ? .pickAgain : .unavailable)
+    }
+
+    private func reachable(_ url: URL) -> Bool {
+        !FolderPolicy.isTrash(path: url.path) && FileManager.default.fileExists(atPath: url.path)
     }
 
     private func setState(_ folder: SharedFolder, _ state: FolderPolicy.State) {
@@ -191,8 +202,12 @@ final class FolderSession: ObservableObject {
     private func checkReachable() {
         for folder in folders {
             guard let o = open[folder.id], let slot = slots[folder.id], let state = states[folder.id], state != .pickAgain else { continue }
-            let there = FileManager.default.fileExists(atPath: o.url.path)
+            let there = reachable(o.url)
             guard there != (state == .ready) else { continue }
+            if o.placeholder {
+                put(folder, slot: slot) // the real folder in again, not the placeholder online
+                continue
+            }
             henge_vm_folder_online(Int32(slot), there ? 1 : 0)
             setState(folder, there ? .ready : .unavailable)
         }
@@ -200,15 +215,30 @@ final class FolderSession: ObservableObject {
 
     // MARK: The presenter's news
 
+    /// A move to Recently Deleted is a move too: reachable() then has it unavailable, and a restore brings it back.
     fileprivate func moved(_ id: UUID, to url: URL) {
         guard var o = open[id], let folder = folders.first(where: { $0.id == id }), let slot = slots[id] else { return }
         o.url = url
-        if let data = try? url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil) {
-            o.bookmark = data
-            save(id) { $0.bookmark = data }
+        // The access started on the old URL may not cover the new place; the bookmark resolves there with its own.
+        var stale = false
+        if let found = try? URL(resolvingBookmarkData: o.bookmark, options: [], relativeTo: nil, bookmarkDataIsStale: &stale) {
+            if found.startAccessingSecurityScopedResource() {
+                o.access?.stopAccessingSecurityScopedResource()
+                o.access = found
+            }
+            o.url = found
+        }
+        if !FolderPolicy.isTrash(path: o.url.path) {
+            do {
+                let data = try o.url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
+                o.bookmark = data
+                save(id) { $0.bookmark = data }
+            } catch {
+                HengeLog.log("folders", "\(folder.name): no new bookmark after the move: \(error.localizedDescription)")
+            }
         }
         open[id] = o
-        HengeLog.log("folders", "\(folder.name) moved in Files")
+        HengeLog.log("folders", "\(folder.name) moved in Files\(FolderPolicy.isTrash(path: o.url.path) ? " to Recently Deleted" : "")")
         put(folder, slot: slot) // the same folder: the guest's open files stay good
     }
 
@@ -292,12 +322,41 @@ final class FolderSession: ObservableObject {
             asks[id] = .failed("Linux gave an export folder outside Exports: \(text)")
             return
         }
-        // davfs2 uploads each file a second after it closes
-        for _ in 0..<60 where !FileManager.default.fileExists(atPath: url.path) {
-            try? await Task.sleep(nanoseconds: 500_000_000)
+        // The helper answers once its copies are in davfs2's cache; each reaches Files a second after it closes.
+        if let want = FolderPolicy.exportExpected(text) {
+            var last: Int64 = -1, still = 0
+            while true {
+                let found = Self.filesBelow(url)
+                if FolderPolicy.exportArrived(found, expected: want) { break }
+                let bytes = found.reduce(0) { $0 + $1.size }
+                still = bytes == last ? still + 1 : 0
+                last = bytes
+                if still >= 60 { // 30 s with nothing new
+                    HengeLog.log("folders", "export to \(url.lastPathComponent): \(found.count) of \(want.files) files, \(bytes) of \(want.bytes) bytes")
+                    asks[id] = .failed("Only part of the export reached Files, in Henge, Shared, Exports, \(url.lastPathComponent). Keep Henge open while it exports, then export again.")
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+        } else {
+            for _ in 0..<60 where !FileManager.default.fileExists(atPath: url.path) { // a helper before 1.8.0's counts
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
         }
         HengeLog.log("folders", "exported to \(url.lastPathComponent): \(summary)")
         asks[id] = .exported(url, summary)
+    }
+
+    /// (name, size) of each file below dir.
+    private static func filesBelow(_ dir: URL) -> [(name: String, size: Int64)] {
+        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey]
+        guard let walk = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: keys) else { return [] }
+        var out: [(name: String, size: Int64)] = []
+        for case let file as URL in walk {
+            guard let v = try? file.resourceValues(forKeys: Set(keys)), v.isRegularFile == true else { continue }
+            out.append((file.lastPathComponent, Int64(v.fileSize ?? 0)))
+        }
+        return out
     }
 
     func clearAsk(_ id: UUID) { if !asking(id) { asks[id] = nil } }

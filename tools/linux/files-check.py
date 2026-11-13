@@ -447,12 +447,24 @@ def check_app_asks(vm, dirs, share):
     exported, host_dest = text, os.path.join(share, text)
     if "1 files" not in rest.splitlines()[0]:
         raise Fail(f"export for the app: the counts: {rest!r}")
+    m = re.fullmatch(r"files=(\d+) bytes=(\d+)", (rest.splitlines() + ["", ""])[1])
+    if not m:
+        raise Fail(f"export for the app: no files and bytes for the app to wait for: {rest!r}")
+    want = (int(m.group(1)), int(m.group(2)))
+
+    def arrived():  # what the app counts (FolderPolicy.exportArrived)
+        got = [os.path.getsize(os.path.join(t, n)) for t, _, ns in os.walk(host_dest) for n in ns
+               if not n.startswith(".henge-put-")]
+        return len(got), sum(got)
+
     end = time.monotonic() + 60  # davfs2 uploads a second after close
     path = os.path.join(host_dest, "app-export.txt")
-    while time.monotonic() < end and not (os.path.exists(path) and open(path).read() == "exported\n"):
+    while time.monotonic() < end and not (os.path.exists(path) and open(path).read() == "exported\n" and arrived() == want):
         time.sleep(0.5)
     if not os.path.exists(path):
         raise Fail(f"export for the app: {path} is not on the Mac")
+    if arrived() != want:
+        raise Fail(f"export for the app: the Mac has {arrived()} (files, bytes), the answer said {want}")
     since = os.path.getsize(vm.err)
     vm.input_line("folder discard b")
     state, text, _ = answer_of(vm, "b", since)
@@ -469,7 +481,7 @@ def check_app_asks(vm, dirs, share):
         raise Fail("export of a Read-write folder: the host did not refuse it")
     shutil.rmtree(host_dest, ignore_errors=True)
     ok(f"the app's part: a touch showed a new file in b's original in {took} s; Export Changes put b's change in the "
-       f"share's {exported}; Discard Changes emptied the upper layer; the host refuses an export of Read-write c")
+       f"share's {exported}, {want[0]} files and {want[1]} bytes as the answer said; Discard Changes emptied the upper layer; the host refuses an export of Read-write c")
 
 
 def check_mode(vm, dirs):

@@ -407,12 +407,13 @@ def opaque(path):
 
 
 def cmd_export(arg, dest):
-    dest, files, deletions, links = export(arg, dest)
+    dest, files, deletions, links, _ = export(arg, dest)
     print(f"{files} files, {deletions} deletions, {links} links: {dest}")
 
 
 def export_for_app(name):
-    """An export to ~/Henge/Exports, where Files shows it: its path below ~/Henge, then what it has."""
+    """An export to ~/Henge/Exports, where Files shows it: its path below ~/Henge, what it has, and the files and
+    bytes the app waits for, as davfs2 uploads them after this answer."""
     share = os.path.join(pwd.getpwuid(GUEST_UID).pw_dir, "Henge")
     try:
         os.listdir(share)  # the automount
@@ -420,12 +421,12 @@ def export_for_app(name):
         pass
     if not os.path.ismount(share):
         sys.exit("henge-files: ~/Henge is not mounted, so Files would not show the export")
-    dest, files, deletions, links = export(name, None)
-    return f"{os.path.relpath(dest, share)}\n{files} files, {deletions} deletions, {links} links"
+    dest, files, deletions, links, (n, size) = export(name, None)
+    return f"{os.path.relpath(dest, share)}\n{files} files, {deletions} deletions, {links} links\nfiles={n} bytes={size}"
 
 
 def export(arg, dest):
-    """Copies a Copy-on-write folder's changes to dest; (dest, files, deletions, links)."""
+    """Copies a Copy-on-write folder's changes to dest; (dest, files, deletions, links, (files written, bytes))."""
     f, key, name = find(arg)
     if not key:
         sys.exit(f"henge-files: {name} is not a Copy-on-write folder" if f else f"henge-files: no folder {name}")
@@ -443,7 +444,7 @@ def export(arg, dest):
         missing.append(d)
         d = os.path.dirname(d)
     os.makedirs(dest, exist_ok=True)
-    made, deletions, links, files = {dest}, [], [], 0
+    made, deletions, links, files, written = {dest}, [], [], 0, [0, 0]
 
     def own(p):
         try:
@@ -478,6 +479,8 @@ def export(arg, dest):
                 os.chmod(out, stat.S_IMODE(st.st_mode))
                 own(out)
                 files += 1
+                written[0] += 1
+                written[1] += os.path.getsize(out)
             elif stat.S_ISLNK(st.st_mode):
                 parent(out)
                 target = os.readlink(src)
@@ -496,7 +499,9 @@ def export(arg, dest):
             with open(os.path.join(dest, what), "w") as fh:
                 fh.write("".join(line + "\n" for line in lines))
             own(os.path.join(dest, what))
-    return dest, files, len(deletions), len(links)
+            written[0] += 1
+            written[1] += os.path.getsize(os.path.join(dest, what))
+    return dest, files, len(deletions), len(links), tuple(written)
 
 
 def cmd_reset(arg):

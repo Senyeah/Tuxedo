@@ -100,7 +100,7 @@ struct FolderPolicyTests {
         check("a notice once for each folder", notices.first(id) && !notices.first(id) && notices.first(UUID()))
         notices.reset()
         check("and again in the next session", notices.first(id))
-        check("the unreachable notice", FolderPolicy.unreachableNotice("Projects") == "Henge cannot reach Projects. Pick it again in the machine's settings.")
+        check("the unreachable notice", FolderPolicy.unreachableNotice("Projects") == "Henge cannot reach Projects. Pick it again in Details, Folders.")
         check("the download notice", FolderPolicy.downloadingNotice("a.pdf") == "Downloading a.pdf…")
         check("add: at most 8", FolderPolicy.addNote(count: 8, running: false, device: false) != nil)
         check("add: no device means a restart", FolderPolicy.addNote(count: 0, running: true, device: false)?.contains("restarts") == true)
@@ -147,6 +147,22 @@ struct FolderPolicyTests {
               && FolderPolicy.exportLocation("Other/x\n", shared: shared) == nil
               && FolderPolicy.exportLocation("Exports/..\n", shared: shared) == nil
               && FolderPolicy.exportLocation("", shared: shared) == nil)
+        let answer = "Exports/Docs-1\n2 files, 1 deletions, 0 links\nfiles=3 bytes=120"
+        check("export: the summary, not the counts", FolderPolicy.exportLocation(answer, shared: shared)?.summary == "2 files, 1 deletions, 0 links")
+        let want = FolderPolicy.exportExpected(answer)
+        check("export: what to wait for", want?.files == 3 && want?.bytes == 120)
+        check("export: an older helper gives no counts", FolderPolicy.exportExpected("Exports/Docs-1\n2 files, 1 deletions, 0 links") == nil
+              && FolderPolicy.exportExpected("Exports/Docs-1\nx\nfiles=x bytes=1") == nil)
+        if let want {
+            let all: [(name: String, size: Int64)] = [("a.txt", 100), ("deletions.txt", 6), (".bashrc", 14)]
+            check("export: all there", FolderPolicy.exportArrived(all, expected: want))
+            check("export: a file still coming", !FolderPolicy.exportArrived(Array(all.prefix(2)), expected: want))
+            check("export: a file not all there", !FolderPolicy.exportArrived([("a.txt", 50), ("deletions.txt", 6), (".bashrc", 14)], expected: want))
+            check("export: an upload in its temporary file", !FolderPolicy.exportArrived([("a.txt", 100), ("deletions.txt", 6), (".henge-put-a1", 14)], expected: want))
+        }
+        check("trash: Recently Deleted", FolderPolicy.isTrash(path: "/private/var/mobile/Library/Mobile Documents/.Trash/Projects")
+              && FolderPolicy.isTrash(path: "/x/File Provider Storage/.Trash/Music"))
+        check("trash: not a folder with Trash in its name", !FolderPolicy.isTrash(path: "/x/My .Trash things/a") && !FolderPolicy.isTrash(path: "/x/Trash"))
         check("export: a space in the name", FolderPolicy.exportLocation("Exports/My Docs-1", shared: shared)?.url.lastPathComponent == "My Docs-1")
         let files = FolderPolicy.filesURL(URL(fileURLWithPath: "/var/mobile/Documents/Shared/Exports/My Docs-1"))
         check("Files: the shareddocuments scheme", files?.scheme == "shareddocuments")

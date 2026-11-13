@@ -87,6 +87,22 @@ struct FoldersSection: View {
     }
 }
 
+/// The folders on a page of their own: the running session's Details has them, as settings is behind the session.
+struct FoldersPage: View {
+    let machine: UUID
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 0) { FoldersSection(machine: machine) }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
+                .deskColumn()
+        }
+        .background(Desk.page)
+        .navigationTitle("Folders")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
 /// A folder from the picker, as a bookmark.
 enum FolderPick {
     static func bookmark(_ url: URL) -> Data? {
@@ -265,7 +281,7 @@ struct FolderDetailView: View {
             case .discarding?: ProgressView("Discarding…").font(.system(size: 13))
             case .exported(let url, let summary)?:
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Exported to Files, under Henge, Shared, Exports, \(url.lastPathComponent)\(summary.isEmpty ? "" : ": \(summary)").")
+                    Text("Exported to Files, under Henge, Shared, Exports, \(url.lastPathComponent)\(summary.isEmpty ? "" : ": \(summary)"). Files opens in front of Henge, and the machine can pause until you come back.")
                         .font(.system(size: 13)).foregroundStyle(Desk.dim)
                     Button("Show in Files") {
                         if let files = FolderPolicy.filesURL(url) { UIApplication.shared.open(files) }

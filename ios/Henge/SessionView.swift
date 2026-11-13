@@ -1011,6 +1011,17 @@ struct SessionView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                     }
                 }
+                if mac.guest == .linux {
+                    Section("Folders") {
+                        NavigationLink {
+                            FoldersPage(machine: mac.id)
+                        } label: {
+                            LabeledContent("Folders from Files", value: "\(current.folders?.count ?? 0)")
+                        }
+                        Text("Add, pick again, change the mode, or export and discard a Copy-on-write folder's changes. Changes apply at once.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
                 if mac.guest == .mac {
                 Section("Lighter macOS") {
                     Button("Type the Lighter macOS Command") {

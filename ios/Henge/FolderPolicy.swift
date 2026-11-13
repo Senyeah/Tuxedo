@@ -126,7 +126,7 @@ enum FolderPolicy {
     }
 
     static func unreachableNotice(_ name: String) -> String {
-        "Henge cannot reach \(name). Pick it again in the machine's settings."
+        "Henge cannot reach \(name). Pick it again in Details, Folders."
     }
 
     static func downloadingNotice(_ file: String) -> String { "Downloading \(file)…" }
@@ -189,12 +189,40 @@ enum FolderPolicy {
     /// The helper's answer to Export Changes: its folder below the Shared folder, then what it has. nil for a path
     /// that is not in Exports.
     static func exportLocation(_ answer: String, shared: URL) -> (url: URL, summary: String)? {
-        let lines = answer.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+        let lines = answer.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         guard let rel = lines.first else { return nil }
         let parts = rel.split(separator: "/").map(String.init)
         guard parts.count == 2, parts[0] == "Exports", !parts[1].hasPrefix("."), !parts.contains("..") else { return nil }
         let url = parts.reduce(shared) { $0.appendingPathComponent($1, isDirectory: true) }
         return (url, lines.count > 1 ? lines[1] : "")
+    }
+
+    /// The answer's third line, "files=N bytes=B": what the export has once davfs2 has uploaded it all. nil from a
+    /// helper before it.
+    static func exportExpected(_ answer: String) -> (files: Int, bytes: Int64)? {
+        let lines = answer.split(separator: "\n", omittingEmptySubsequences: false)
+        guard lines.count > 2 else { return nil }
+        var files: Int?, bytes: Int64?
+        for part in lines[2].split(separator: " ") {
+            let kv = part.split(separator: "=", maxSplits: 1).map(String.init)
+            guard kv.count == 2 else { continue }
+            if kv[0] == "files" { files = Int(kv[1]) }
+            if kv[0] == "bytes" { bytes = Int64(kv[1]) }
+        }
+        guard let files, let bytes, files >= 0, bytes >= 0 else { return nil }
+        return (files, bytes)
+    }
+
+    /// Whether an export folder has it all, from (name, size) of each file below it. The share server's temporary
+    /// file for an upload not yet done (host/share.c) does not count.
+    static func exportArrived(_ found: [(name: String, size: Int64)], expected: (files: Int, bytes: Int64)) -> Bool {
+        let done = found.filter { !$0.name.hasPrefix(".henge-put-") }
+        return done.count >= expected.files && done.reduce(0) { $0 + $1.size } >= expected.bytes
+    }
+
+    /// Files' Recently Deleted keeps a deleted folder in a .Trash folder: the folder is gone for Linux.
+    static func isTrash(path: String) -> Bool {
+        path.split(separator: "/").contains { $0 == ".Trash" || $0 == ".Trashes" }
     }
 
     /// A URL that opens Files at a folder in Henge's Documents.
