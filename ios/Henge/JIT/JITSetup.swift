@@ -386,7 +386,9 @@ final class JITCoordinator: ObservableObject {
             }
         }
 
-        RemotePairingPortDiscovery.resolve { port in
+        // No lookup first: it took 3 s to fail on an iPhone, and the helper finds the port itself when none is given.
+        do {
+            let port = RemotePairingPortDiscovery.known
             HengeBuiltInJIT.send(
                 .enable(targetPID: getpid(), pairingData: pairing, scriptBase64: script, rsdPort: port),
                 started: { [weak self] in
@@ -541,6 +543,13 @@ enum RemotePairingPortDiscovery {
 
     /// Calls back on the main thread. nil means the helper should use StikJIT's
     /// default.
+    /// The port found earlier in this run, if any.
+    static var known: UInt16? {
+        lock.lock()
+        defer { lock.unlock() }
+        return cachedPort
+    }
+
     static func resolve(timeout: TimeInterval = 3, completion: @escaping (UInt16?) -> Void) {
         lock.lock()
         if let cachedPort {

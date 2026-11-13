@@ -26,7 +26,10 @@ struct HomeView: View {
                     notices
                     if let mac {
                         MacHero(mac: mac, jitReady: jitReady, start: { running = mac }, turnOnJIT: { jit.enable() },
-                                jitNote: jitReady ? nil : (JITBootstrap.lastFailure ?? jit.automaticDescription))
+                                jitNote: jitReady ? nil
+                                    : jit.busy ? (jit.status ?? "Turning on JIT…")
+                                    : (JITBootstrap.lastFailure ?? jit.automaticDescription),
+                                jitBusy: jit.busy)
                         HStack(spacing: 10) {
                             FactTile(title: "Disk", value: ByteText.string(UInt64(max(mac.bytesUsed, 0))))
                             FactTile(title: "Last used", value: mac.lastUsedText)
@@ -160,6 +163,7 @@ private struct MacHero: View {
     let start: () -> Void
     let turnOnJIT: () -> Void
     let jitNote: String?
+    let jitBusy: Bool
     @AppStorage("henge.cpus") private var cpus = 4
 
     var body: some View {
@@ -202,9 +206,19 @@ private struct MacHero: View {
                         .padding(.horizontal, 5)
                         .padding(.top, 10)
                 }
-                Button("Turn On JIT", action: turnOnJIT)
-                    .buttonStyle(DeskButtonStyle())
-                    .padding(.top, 15)
+                Button(action: turnOnJIT) {
+                    if jitBusy {
+                        HStack(spacing: 8) {
+                            ProgressView().tint(.white)
+                            Text("Turning On JIT…")
+                        }
+                    } else {
+                        Text("Turn On JIT")
+                    }
+                }
+                .buttonStyle(DeskButtonStyle())
+                .disabled(jitBusy)
+                .padding(.top, 15)
             }
         }
         .padding(14)

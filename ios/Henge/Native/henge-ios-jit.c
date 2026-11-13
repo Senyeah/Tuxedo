@@ -531,6 +531,33 @@ static void henge_ios_jit_log_map(const char *tag)
     HENGE_LOG("map[%s]: highest mapped end %#llx", tag, (unsigned long long)prev_end);
 }
 
+/* The mapped ranges in [from, to), in address order. -1 when there are more than cap. */
+typedef struct { uintptr_t lo, hi; } HengeSpan;
+static int henge_ios_jit_spans(uintptr_t from, uintptr_t to, HengeSpan *out, int cap)
+{
+    int n = 0;
+    vm_address_t a = (vm_address_t)from;
+    while (a < to) {
+        vm_size_t size = 0;
+        natural_t depth = 0;
+        struct vm_region_submap_info_64 info;
+        mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
+        if (vm_region_recurse_64(mach_task_self(), &a, &size, &depth, (vm_region_recurse_info_t)&info, &count) != KERN_SUCCESS) break;
+        if (a >= to) break;
+        if (n == cap) return -1;
+        out[n++] = (HengeSpan){(uintptr_t)a, (uintptr_t)a + size};
+        a += size;
+    }
+    return n;
+}
+
+static bool henge_ios_jit_overlaps(const HengeSpan *spans, int n, uintptr_t lo, uintptr_t hi)
+{
+    for (int i = 0; i < n; i++)
+        if (spans[i].lo < hi && lo < spans[i].hi) return true;
+    return false;
+}
+
 static HengeDualMapping henge_ios_jit_allocate_real(size_t bytes);
 
 static HengeDualMapping henge_prewarmed;
@@ -721,10 +748,15 @@ static HengeDualMapping henge_ios_jit_allocate_real(size_t bytes)
     vm_prot_t cur_prot = VM_PROT_NONE, max_prot = VM_PROT_NONE;
     kern_return_t kr = KERN_NO_SPACE;
     const uintptr_t step = 16u << 20, reach = (uintptr_t)2 << 30;
+    /* Each failed 1.5 GiB vm_remap costs about 5 ms, and on an iPhone all 258 failed (1.5 s): ask only where a fit is possible. */
+    static HengeSpan spans[1024];
+    uintptr_t from = (uintptr_t)rx > bytes + reach ? (uintptr_t)rx - bytes - reach : 0;
+    int nspans = henge_ios_jit_spans(from, (uintptr_t)rx + 2 * bytes + reach, spans, 1024);
     for (uintptr_t off = 0; off <= reach && kr != KERN_SUCCESS; off += step) {
         for (int side = 0; side < 2 && kr != KERN_SUCCESS; side++) {
             uintptr_t want = side == 0 ? (uintptr_t)rx + bytes + off : (uintptr_t)rx - bytes - off;
             if (side == 1 && (uintptr_t)rx < bytes + off + step) continue;
+            if (nspans >= 0 && henge_ios_jit_overlaps(spans, nspans, want, want + bytes)) continue;
             rw = (vm_address_t)want;
             kr = vm_remap(mach_task_self(), &rw, (vm_size_t)bytes, /*mask=*/0, VM_FLAGS_FIXED,
                           mach_task_self(), (vm_address_t)rx, /*copy=*/FALSE, &cur_prot, &max_prot, VM_INHERIT_NONE);
