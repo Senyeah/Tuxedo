@@ -72,6 +72,12 @@ Why a patch and not a shim in Henge: a `dlopen` and `dlsym` of our own, as `test
 
 A libepoxy built before A5 must be rebuilt: `tools/gfx/build-deps.sh --only epoxy`.
 
+## virglrenderer and GL_TIMESTAMP
+
+ANGLE's Metal backend lists `GL_EXT_disjoint_timer_query`, but GL_TIMESTAMP has 0 counter bits and `QueryMtl::queryCounter` is a stub. virglrenderer turns timer queries on from that extension. The guest cannot be told otherwise: Mesa ignores the `timer_query` cap when `host_feature_check_version` is below 15, and UTM's fork sets it to 4 on ANGLE. So a guest timestamp query never gets an answer, and a guest that waits for one stops. KWin 6.3 waits for one every frame, in `GLRenderTimeQuery::query`.
+
+`virglrenderer-angle-timestamp.patch` makes virglrenderer ask for the counter bits on GLES. With 0 bits, a timestamp query is invalid, so it is done at once with the result 0, as on a host with no timer queries. GL_TIME_ELAPSED still works. `build-deps.sh` applies the patch in the same way as the libepoxy one. A virglrenderer built before it must be rebuilt: `tools/gfx/build-deps.sh --only virgl`.
+
 ## Using them (GFX=1)
 
 ```sh

@@ -293,6 +293,30 @@ static void test_clear(void) {
     clear_and_read("blue again, unfenced", 1, 1, BLUE, BACKING, 0);
 }
 
+/* A timestamp query, as KWin makes one each frame. ANGLE's Metal GL_TIMESTAMP never answers, so without the
+   virglrenderer patch the state stays unset and Mesa in the guest waits forever (tools/gfx/README.md). */
+enum { CCMD_END_QUERY = 20, CCMD_GET_QUERY_RESULT = 21, OBJECT_QUERY = 9, QUERY_TIMESTAMP = 2, QUERY_STATE_DONE = 1 };
+#define QBO (BACKING + 0x100000)
+static void test_timestamp(void) {
+    q_hdr(0x204, 0, 0); // a 16-byte buffer, VIRGL_BIND_CUSTOM, as Mesa makes for a query
+    q32(24, 50), q32(28, 0), q32(32, 64), q32(36, 1u << 17), q32(40, 16), q32(44, 1), q32(48, 1), q32(52, 1);
+    rq_len = 72;
+    check("query buffer create", cmd(), OK);
+    check("query buffer backing", c_attach(50, QBO, 16), OK);
+    check("query buffer in ctx 1", c_ctx_attach(0x202, 1, 50), OK);
+    memset(ram(QBO), 0x77, 16);
+    uint32_t dw[] = {
+        CMD0(CCMD_CREATE_OBJECT, OBJECT_QUERY, 4), 7, QUERY_TIMESTAMP, 0, 50,
+        CMD0(CCMD_END_QUERY, 0, 1), 7,
+        CMD0(CCMD_GET_QUERY_RESULT, 0, 2), 7, 1,
+    };
+    q_submit(1, dw, sizeof dw / 4, 300);
+    check("timestamp query submit", cmd_wait(NODATA, NULL), OK);
+    check("timestamp query is done", rd32(QBO), QUERY_STATE_DONE);
+    check("timestamp result is 8 bytes", rd32(QBO + 4), 8);
+    check("query buffer unref", c_res_unref(50), OK); // the reset test counts what is left
+}
+
 /* One context failing leaves the others alone, and the error is the request's alone. */
 static void test_isolation(void) {
     check("a second context", c_ctx_create(2, "bad"), OK);
@@ -667,6 +691,7 @@ int main(void) {
 
     test_caps();
     test_clear();
+    test_timestamp();
     test_isolation();
     test_flood();
     test_reset();
