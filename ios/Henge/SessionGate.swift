@@ -54,6 +54,12 @@ struct SessionGate: Equatable {
         return covered || inactive
     }
 
+    /// An external screen has no stopped card: it stays black whenever the session is not open, closed too.
+    func blanksExternal(inactive: Bool) -> Bool {
+        guard check == .faceID else { return false }
+        return covered || inactive
+    }
+
     /// At the start, back from the background, or again after a refusal.
     mutating func ask() -> Ask {
         switch phase {

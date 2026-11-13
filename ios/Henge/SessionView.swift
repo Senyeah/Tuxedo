@@ -279,7 +279,8 @@ struct SessionView: View {
         }
         .onChange(of: pointerNeeded) { PointerLock.set(!$0) }
         .onChange(of: touchActive) { touchModeChanged($0) }
-        .onChange(of: hidesGuest) { display.guestHidden = $0 }
+        .onChange(of: gate.blanksExternal(inactive: inactive)) { display.guestHidden = $0 }
+        .onAppear { display.guestHidden = gate.blanksExternal(inactive: inactive) }
         .onChange(of: scenePhase) { phase in
             inactive = phase != .active
             guard phase != .active else {

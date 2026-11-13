@@ -108,10 +108,22 @@ struct SessionGateTests {
         precondition(hide.hidesGuest(inactive: false)) // refused
         var macHide = SessionGate(check: .none)
         _ = macHide.ask()
-        precondition(!macHide.hidesGuest(inactive: true))
+        precondition(!macHide.hidesGuest(inactive: true) && !macHide.blanksExternal(inactive: true))
         var autoHide = SessionGate(check: .skippedForTest)
         _ = autoHide.ask()
-        precondition(!autoHide.hidesGuest(inactive: true))
+        precondition(!autoHide.hidesGuest(inactive: true) && !autoHide.blanksExternal(inactive: true))
+
+        // An external screen has no stopped card: it stays black whenever the session is not open, closed too
+        // (the machine stopped while away or refused would leave its last frame there).
+        var ext = SessionGate()
+        precondition(ext.blanksExternal(inactive: false)) // closed, before the first check
+        let e1 = ticket(ext.ask())
+        precondition(ext.blanksExternal(inactive: false))
+        ext.checked(e1, passed: true)
+        precondition(!ext.blanksExternal(inactive: false) && ext.blanksExternal(inactive: true))
+        ext.leave()
+        ext.end() // the machine stopped while away
+        precondition(ext.blanksExternal(inactive: false) && !ext.hidesGuest(inactive: false))
 
         // One Keychain service per machine, and back.
         let a = UUID(uuidString: "0D3A5F6E-1C2B-4E8F-9A7B-6C5D4E3F2A1B")!, b = UUID()
