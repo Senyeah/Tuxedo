@@ -12,6 +12,7 @@ struct PadTuning: Codable, Equatable {
     var ripple = Ripple()
     var ghost = Ghost()
     var keys = Keys()
+    var pill = Pill()
     var layout = Layout()
     var keyboard = Keyboard()
     var contrast = Contrast()
@@ -45,10 +46,6 @@ struct PadTuning: Codable, Equatable {
         var edgeTop = 0.16
         var edgeBottom = 0.06
         var edgeWidth = 0.5
-        var grooveDark = 0.60
-        var grooveDarkWidth = 1.0
-        var grooveLight = 0.06
-        var grooveLightWidth = 0.5
         var bloom = 0.22
     }
 
@@ -120,14 +117,27 @@ struct PadTuning: Codable, Equatable {
         var rowHeight = 64.0
         var rowHeightSide = 52.0
         var rowHeightLabels = 76.0
-        var inset = 0.0
+        /// From the pad's sides and bottom, as the gap: each key's outer corner is the pad's, inset.
+        var inset = 8.0
         var gap = 8.0
         var innerRadius = 14.0
         var fill = 0.05
+        /// The edge line, top to bottom, as the pad's own edge. The pill has the same edge.
         var topEdge = 0.12
-        var pressedFill = 0.14
+        var bottomEdge = 0.03
+        var edgeWidth = 0.5
+        /// A press is a soft light: a Gaussian bloom, at its peak this much more white fill and key tint.
+        var pressedFill = 0.10
         var pressedTint = 0.08
-        var pressedEnergy = 0.3
+        /// The dots' energy at the bloom's peak, under a move's core (0.8).
+        var pressedEnergy = 0.4
+        /// The bloom's σ as a share of the key's half-width and half-height.
+        var bloomWidth = 0.5
+        var bloomHeight = 0.6
+        /// pt: a wide key (on its side, the iPad) keeps a spot, not a band.
+        var bloomMaxWidth = 60.0
+        /// How far the bloom's centre moves from the key's centre toward the touch.
+        var bloomFollow = 0.4
         var pressedShadow = 0.40
         var attack = 0.06
         var release = 0.18
@@ -137,6 +147,21 @@ struct PadTuning: Codable, Equatable {
         var symbolAlpha = 0.60
         var leftSymbol = "cursorarrow.click"
         var rightSymbol = "cursorarrow.click.2"
+    }
+
+    /// The tool pill: dark under the pad's light, with the keys' edge and symbol alpha.
+    struct Pill: Codable, Equatable {
+        var height = 44.0
+        var target = 44.0
+        var spacing = 0.0
+        var sidePadding = 6.0
+        var fill = "#050608"
+        var fillAlpha = 0.85
+        var symbolSize = 17.0
+        /// Its opacity while a finger is on the pad, and the fades to it and back.
+        var touchDim = 0.35
+        var dimAttack = 0.15
+        var dimRelease = 0.45
     }
 
     struct Layout: Codable, Equatable {

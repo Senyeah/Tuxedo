@@ -34,6 +34,9 @@ final class PadHostView: UIView, PadSurfaceHost, PadFeedback {
     private(set) var layout = PadLayout()
     /// After each layout, for what sits on the pad (the pill).
     var onLayout: ((PadLayout) -> Void)?
+    /// The pill's opacity: the keyboard's rule, dimmed while a finger is on the pad.
+    var onPillOpacity: ((Double) -> Void)?
+    private(set) var pillOpacity = 1.0
     /// Before each frame, for a script that drives the pad. Return true to keep frames coming.
     var beforeStep: ((CFTimeInterval) -> Bool)?
     /// The haptics' clock, which a script replaces with its own.
@@ -55,6 +58,9 @@ final class PadHostView: UIView, PadSurfaceHost, PadFeedback {
     private var keyTarget = [false, false]
     private var keyLevel = [0.0, 0.0]
     private var flashUntil = [0.0, 0.0]
+    private var bloomAt: [SIMD2<Double>] = [.zero, .zero]
+    private var padFingers = Set<Int>()
+    private var pillDim = 0.0
     private var lastStep: CFTimeInterval = 0
 
     init(touchView: UIView, buttons: PointerButtons, tuning: PadTuning = PadTuning()) {
@@ -122,7 +128,7 @@ final class PadHostView: UIView, PadSurfaceHost, PadFeedback {
     }
 
     @objc private func sceneActive() { surface.setNeedsFrame() }
-    @objc private func sceneInactive() { surface.stop(); motion.cancel() }
+    @objc private func sceneInactive() { surface.stop(); motion.cancel(); padFingers.removeAll() }
 
     private func updateAccessibility() {
         touchView.isAccessibilityElement = true
@@ -170,6 +176,14 @@ final class PadHostView: UIView, PadSurfaceHost, PadFeedback {
         surface.geometry = l
         if wasUp != keyboardUp { updateAccessibility() }
         onLayout?(l)
+        updatePill()
+    }
+
+    private func updatePill() {
+        let o = layout.pillOpacity * (1 - (1 - tuning.pill.touchDim) * pillDim)
+        guard o != pillOpacity else { return }
+        pillOpacity = o
+        onPillOpacity?(o)
     }
 
     // MARK: Frames
@@ -183,19 +197,29 @@ final class PadHostView: UIView, PadSurfaceHost, PadFeedback {
         s.syncWithCoreAnimation = moving
         var animating = false
         let k = tuning.keys
-        motion.step(now: clock()) // the clock that the touches arrive by, not the frame's target time
+        let touchNow = clock() // the clock that the touches arrive by, not the frame's target time
+        motion.step(now: touchNow)
         for b in 0..<2 {
-            let target = keyTarget[b] || now < flashUntil[b] ? 1.0 : 0.0
+            let target = keyTarget[b] || touchNow < flashUntil[b] ? 1.0 : 0.0
             let time = target > 0 ? k.attack : k.release
             let step = dt / max(time, 1e-3)
             keyLevel[b] = keyLevel[b] < target ? min(target, keyLevel[b] + step) : max(target, keyLevel[b] - step)
             if keyLevel[b] != target { animating = true }
         }
+        let dimTarget = padFingers.isEmpty ? 0.0 : 1.0
+        if pillDim != dimTarget {
+            let p = tuning.pill
+            let step = dt / max(dimTarget > pillDim ? p.dimAttack : p.dimRelease, 1e-3)
+            pillDim = pillDim < dimTarget ? min(dimTarget, pillDim + step) : max(dimTarget, pillDim - step)
+            updatePill()
+            animating = true
+        }
         // Attack eases out; the release eases out too, so the key settles.
         func ease(_ x: Double, up: Bool) -> Double { up ? 1 - pow(1 - x, 2) : pow(x, 2) }
-        let rising = [keyTarget[0] || now < flashUntil[0], keyTarget[1] || now < flashUntil[1]]
+        let rising = [keyTarget[0] || touchNow < flashUntil[0], keyTarget[1] || touchNow < flashUntil[1]]
         let shown = (ease(keyLevel[0], up: rising[0]), ease(keyLevel[1], up: rising[1]))
         s.keyPress = shown
+        s.keyBloom = (bloomAt[0], bloomAt[1])
         keys.setPress(0, shown.0)
         keys.setPress(1, shown.1)
         s.field.dragging = buttons.isDown(0) && !buttons.holds(0, .tap)
@@ -207,6 +231,7 @@ final class PadHostView: UIView, PadSurfaceHost, PadFeedback {
     func pressKey(_ b: Int, _ down: Bool) {
         haptics.prepare()
         if down { buttons.keyDown(b) } else { buttons.keyUp(b) }
+        if down { bloomAt[b] = keys.touchPoint(b) * tuning.keys.bloomFollow }
         haptics.fire(b == 0 ? (down ? .leftKeyDown : .leftKeyUp) : (down ? .rightKeyDown : .rightKeyUp), now: clock())
         keyTarget[b] = down
         surface.setNeedsFrame()
@@ -236,6 +261,7 @@ final class PadHostView: UIView, PadSurfaceHost, PadFeedback {
 
     func padFingerDown(_ id: Int, at p: CGPoint, time: TimeInterval, first: Bool) {
         let (x, y) = host(p)
+        padFingers.insert(id)
         surface.add(.down(id: id, x: x, y: y, t: time))
         if first {
             haptics.prepare()
@@ -253,6 +279,7 @@ final class PadHostView: UIView, PadSurfaceHost, PadFeedback {
     }
 
     func padFingerUp(_ id: Int, time: TimeInterval) {
+        padFingers.remove(id)
         surface.add(.up(id: id, t: time))
         motion.up(id)
     }
@@ -261,7 +288,10 @@ final class PadHostView: UIView, PadSurfaceHost, PadFeedback {
         let (x, y) = host(p)
         surface.add(.click(x: x, y: y))
         haptics.fire(button == 0 ? .tap : .rightTap, now: clock())
-        if tuning.keys.tapFlash > 0, button < 2 { flashUntil[button] = clock() + tuning.keys.tapFlash } // looks as its key's press
+        if tuning.keys.tapFlash > 0, button < 2 { // looks as its key's press, from the centre
+            if !keyTarget[button] { bloomAt[button] = .zero }
+            flashUntil[button] = clock() + tuning.keys.tapFlash
+        }
         surface.setNeedsFrame()
     }
 

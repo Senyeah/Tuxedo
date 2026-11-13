@@ -40,6 +40,7 @@ struct PadLayout: Equatable {
     var pad = PadRect(x: 0, y: 0, w: 0, h: 0)
     var radius = 0.0
     var rowHeight = 0.0
+    /// The keys' top: the pad surface ends here.
     var grooveY = 0.0
     var left = PadRect(x: 0, y: 0, w: 0, h: 0)
     var right = PadRect(x: 0, y: 0, w: 0, h: 0)
@@ -71,12 +72,13 @@ struct PadLayout: Equatable {
         l.radius = max(t.layout.minPadRadius, i.deviceCorner - m)
         l.rowHeight = i.labels ? t.keys.rowHeightLabels : (l.side ? t.keys.rowHeightSide : t.keys.rowHeight)
 
+        // The row height is the key's; the inset is under it and at its sides.
         let inset = t.keys.inset, gap = t.keys.gap
-        let rowY = l.pad.maxY - l.rowHeight
+        let rowY = l.pad.maxY - inset - l.rowHeight
         let keyW = (l.pad.w - 2 * inset - gap) / 2
         l.grooveY = rowY
-        l.left = PadRect(x: l.pad.x + inset, y: rowY + inset, w: keyW, h: l.rowHeight - 2 * inset)
-        l.right = PadRect(x: l.pad.x + inset + keyW + gap, y: rowY + inset, w: keyW, h: l.rowHeight - 2 * inset)
+        l.left = PadRect(x: l.pad.x + inset, y: rowY, w: keyW, h: l.rowHeight)
+        l.right = PadRect(x: l.pad.x + inset + keyW + gap, y: rowY, w: keyW, h: l.rowHeight)
         l.keyInnerRadius = t.keys.innerRadius
         l.keyOuterRadius = max(l.radius - inset, t.keys.innerRadius)
         l.pillX = i.width / 2

@@ -56,6 +56,9 @@ final class PadButtons: UIView {
     /// The press level from 0 to 1, as the shader draws it.
     func setPress(_ b: Int, _ level: Double) { keys[b].level = level }
 
+    /// Where the last touch on a key went down, from its centre, as a share of its half-size. Zero with no touch.
+    func touchPoint(_ b: Int) -> SIMD2<Double> { keys[b].touchPoint }
+
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         keys.contains { $0.frame.contains(point) }
     }
@@ -76,6 +79,7 @@ final class PadButtons: UIView {
         private let stack = UIStackView()
         private var touch: UITouch?
         private var held = false
+        private(set) var touchPoint = SIMD2<Double>.zero
 
         init(button: Int) {
             self.button = button
@@ -125,6 +129,9 @@ final class PadButtons: UIView {
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
             guard touch == nil, let t = touches.first else { return }
             touch = t
+            let l = t.location(in: self)
+            let w = max(Double(bounds.width), 1), h = max(Double(bounds.height), 1)
+            touchPoint = SIMD2(min(max(Double(l.x) / w * 2 - 1, -1), 1), min(max(Double(l.y) / h * 2 - 1, -1), 1))
             onPress?(button, true)
         }
 
@@ -139,6 +146,7 @@ final class PadButtons: UIView {
 
         /// A VoiceOver double tap: down then up.
         override func accessibilityActivate() -> Bool {
+            touchPoint = .zero
             onPress?(button, true)
             onPress?(button, false)
             return true

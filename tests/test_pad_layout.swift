@@ -45,7 +45,11 @@ struct PadLayoutTests {
             check(!l.side, "upright is not on its side")
             check(l.pad == PadRect(x: 8, y: 70, w: 386, h: 874 - 34 - 4 - 70), "upright pad: \(l.pad)")
             check(l.radius == 54, "the outer corner is 62 − 8")
-            check(l.left.w == 189 && l.left.h == 64, "upright key is 189 × 64: \(l.left)")
+            check(l.left.w == 181 && l.left.h == 64, "upright key is 181 × 64: \(l.left)")
+            check(l.left.minX == l.pad.minX + 8 && l.left.maxY == l.pad.maxY - 8 && l.right.maxX == l.pad.maxX - 8,
+                  "the keys are 8 pt in from the pad's sides and bottom: \(l.left), \(l.right)")
+            check(l.right.minX - l.left.maxX == 8, "the gap between the keys is the inset")
+            check(l.keyOuterRadius == 46, "a key's outer corner is the pad's, less the inset")
             check(l.pad.maxY == 874 - 38, "the key row ends 38 pt from the glass")
             check(l.pillY == 62 + 33, "the pill's centre is at the safe top + 33")
         }

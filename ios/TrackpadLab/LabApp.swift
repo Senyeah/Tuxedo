@@ -71,8 +71,8 @@ final class LabModel: ObservableObject {
             guard let self else { return }
             let p = CGPoint(x: l.pillX, y: l.pillY)
             if p != self.pill { self.pill = p }
-            if l.pillOpacity != self.pillOpacity { self.pillOpacity = l.pillOpacity }
         }
+        host.onPillOpacity = { [weak self] o in self?.pillOpacity = o }
         host.haptics.onFire = { [weak self] e, style, intensity in
             self?.note("haptic \(e.rawValue) \(style) \(intensity)")
         }
@@ -189,20 +189,12 @@ struct LabRoot: View {
 
     /// A stand-in for Henge's tool pill: the keyboard, and the tuning sheet.
     private var pill: some View {
-        HStack(spacing: 2) {
-            Button(action: model.toggleKeyboard) {
-                Image(systemName: "keyboard").frame(width: 44, height: 36)
-            }
-            .accessibilityLabel("Keyboard")
-            Button { model.showTuning = true } label: {
-                Image(systemName: "slider.horizontal.3").frame(width: 44, height: 36)
-            }
-            .accessibilityLabel("Tuning")
+        PadPill(tuning: model.tuning, increaseContrast: model.forced.increaseContrast) {
+            Button(action: model.toggleKeyboard) { Image(systemName: "keyboard") }
+                .accessibilityLabel("Keyboard")
+            Button { model.showTuning = true } label: { Image(systemName: "slider.horizontal.3") }
+                .accessibilityLabel("Tuning")
         }
-        .font(.system(size: 15, weight: .medium))
-        .foregroundStyle(.white.opacity(0.9))
-        .padding(.horizontal, 6)
-        .modifier(Glass())
         .fixedSize()
         .position(x: model.pill.x, y: model.pill.y)
         .opacity(model.pillOpacity)
@@ -213,15 +205,5 @@ struct LabRoot: View {
               let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
         let mask: UIInterfaceOrientationMask = want == "landscape" ? .landscapeRight : .portrait
         scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { _ in }
-    }
-}
-
-private struct Glass: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content.glassEffect(.regular, in: Capsule())
-        } else {
-            content.background(.ultraThinMaterial, in: Capsule())
-        }
     }
 }

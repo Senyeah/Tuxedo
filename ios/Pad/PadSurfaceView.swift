@@ -39,6 +39,8 @@ final class PadSurfaceView: UIView {
     var tuning: PadTuning { didSet { field.tuning = tuning; setNeedsFrame() } }
     var geometry = PadLayout() { didSet { if geometry != oldValue { setNeedsFrame() } } }
     var keyPress: (Double, Double) = (0, 0)
+    /// Each key's bloom centre, from its centre, as a share of its half-size.
+    var keyBloom: (SIMD2<Double>, SIMD2<Double>) = (.zero, .zero)
     var increaseContrast = false { didSet { if increaseContrast != oldValue { setNeedsFrame() } } }
     /// Present inside Core Animation's transaction, so the pad's edge and the keyboard move in the same frame.
     var syncWithCoreAnimation = false
@@ -273,14 +275,14 @@ final class PadSurfaceView: UIView {
             r(g.pad),                                                                                               // 2
             v(g.padBottom, g.radius, g.lowerRadius, g.keysOpacity),                                                 // 3
             r(g.leftNow), r(g.rightNow),                                                                            // 4, 5
-            v(g.keyOuterRadius, g.keyInnerRadius, g.grooveNow, keyPress.0),                                         // 6
+            v(g.keyOuterRadius, g.keyInnerRadius, g.keysShift, keyPress.0),                                         // 6
             v(keyPress.1, t.keys.pressedEnergy, hc ? t.contrast.keyFill : t.keys.fill, t.keys.topEdge),             // 7
             v(t.keys.pressedFill, t.keys.pressedTint, t.keys.pressedShadow, hc ? 1 : 0),                            // 8
             v(t.grid.idleRadius, t.grid.radiusGain, t.grid.radiusExponent, hc ? t.contrast.idleAlpha : t.grid.idleAlpha), // 9
             v(t.grid.alphaExponent, t.grid.edgePixels, t.grain.radiusJitter, t.grain.alphaJitter),                  // 10
             v(t.grain.baseNoise, t.light.vignetteStart, t.light.sheenTop, t.light.sheenEnd),                        // 11
             v(t.light.edgeTop, t.light.edgeBottom, hc ? t.contrast.lineWidth : t.light.edgeWidth, t.light.bloom),   // 12
-            v(t.light.grooveDark, t.light.grooveDarkWidth, t.light.grooveLight, t.light.grooveLightWidth),          // 13
+            v(t.keys.bottomEdge, hc ? t.contrast.lineWidth : t.keys.edgeWidth, t.keys.inset, 0),                    // 13
             c(t.light.baseCentre, t.colour.dragIdleMix),                                                            // 14
             c(t.light.baseEdge, t.contrast.lineAlpha),                                                              // 15
             c(t.colour.idle, t.layout.cornerSmoothing),                                                             // 16
@@ -288,6 +290,8 @@ final class PadSurfaceView: UIView {
             c(t.colour.move1), c(t.colour.move05), c(t.colour.move005),                                             // 18-20
             c(t.colour.drag1), c(t.colour.drag05), c(t.colour.drag005),                                             // 21-23
             c(t.colour.keyTint), c(t.light.page),                                                                   // 24, 25
+            v(keyBloom.0.x, keyBloom.0.y, keyBloom.1.x, keyBloom.1.y),                                              // 26
+            v(t.keys.bloomWidth, t.keys.bloomHeight, t.keys.bloomMaxWidth, 0),                                      // 27
         ]
     }
 
@@ -361,6 +365,26 @@ final class PadSurfaceView: UIView {
         return float(h & 0xFFFFu) / 32767.5 - 1.0;
     }
 
+    // A key: its own box with the inner radius, cut by the pad's rest outline moved in by the inset,
+    // so the outer corner is concentric with the pad's.
+    static float keyShape(float2 p, float4 kr, constant float4 *u) {
+        float smooth_ = u[16].w, inner = u[6].y, inset = u[13].z;
+        float dk = roundBox(p - (kr.xy + 0.5 * kr.zw), 0.5 * kr.zw, float4(inner), smooth_);
+        float4 pad = u[2];
+        float2 c = pad.xy + 0.5 * pad.zw + float2(0.0, u[6].z);
+        float dp = roundBox(p - c, 0.5 * pad.zw, float4(u[3].y), smooth_) + inset;
+        return max(dk, dp);
+    }
+
+    // A press's light: a Gaussian from near the key's centre, toward the touch.
+    static float keyBloom(float2 p, float4 kr, float2 off, constant float4 *u) {
+        float2 h = 0.5 * kr.zw;
+        float2 s = h * u[27].xy;
+        s.x = min(s.x, u[27].z);
+        float2 q = (p - (kr.xy + h + off * h)) / max(s, float2(1.0));
+        return exp(-0.5 * dot(q, q));
+    }
+
     static float3 ramp(float e, float3 s1, float3 s05, float3 s005, float3 s0) {
         if (e >= 0.5) return mix(s05, s1, min((e - 0.5) / 0.5, 1.0));
         if (e >= 0.05) return mix(s005, s05, (e - 0.05) / 0.45);
@@ -400,43 +424,28 @@ final class PadSurfaceView: UIView {
         col += (n - 0.5) * 2.0 * u[11].x;
         col += u[11].z * (1.0 - clamp((p.y - top) / (u[11].w * pad.w), 0.0, 1.0));
 
-        // The keys: raised areas, pressed ones lit and pushed in.
+        // The keys: raised areas, each with its own edge; a pressed one lit from within and pushed in.
         float ko = u[3].w;
-        float outer = u[6].x, inner = u[6].y;
+        float inner = u[6].y;
         float press[2] = { u[6].w, u[7].x };
         float4 rects[2] = { u[4], u[5] };
-        float4 radii[2] = { float4(inner, inner, inner, outer), float4(inner, inner, outer, inner) };
+        float2 offs[2] = { u[26].xy, u[26].zw };
         for (int k = 0; k < 2; k++) {
             float4 kr = rects[k];
-            float dk = roundBox(p - (kr.xy + 0.5 * kr.zw), 0.5 * kr.zw, radii[k], smooth_);
+            float dk = keyShape(p, kr, u);
             float cov = clamp(0.5 - dk * scale, 0.0, 1.0) * ko;
             if (cov <= 0.0) continue;
             float pr = press[k];
-            float fill = mix(u[7].z, u[8].x, pr);
-            col = mix(col, float3(1.0), fill * cov);
-            col = mix(col, u[24].rgb, u[8].y * pr * cov);
+            float lit = pr * keyBloom(p, kr, offs[k], u);
+            col = mix(col, float3(1.0), (u[7].z + u[8].x * lit) * cov);
+            col = mix(col, u[24].rgb, u[8].y * lit * cov);
+            float down = clamp((p.y - kr.y) / max(kr.w, 1.0), 0.0, 1.0);
             float topness = 1.0 - clamp((p.y - kr.y) / max(inner, 1.0), 0.0, 1.0);
-            float band = span(dk, px, -0.5, 0.0);
-            col = mix(col, float3(1.0), u[7].w * (1.0 - pr) * band * topness * ko);
+            float band = span(dk, px, -u[13].y, 0.0);
+            float ea = hc ? u[15].w : mix(u[7].w * (1.0 - pr), u[13].x, down);
+            col = mix(col, float3(1.0), ea * band * ko);
             float shadow = clamp(1.0 + dk, 0.0, 1.0) * topness * pr;
             col = mix(col, float3(0.0), u[8].z * shadow * cov);
-        }
-
-        // The grooves: under the pad, and between the keys. Light from above lights the lower lip.
-        float gy = u[6].z;
-        float gx = 0.5 * (u[4].x + u[4].z + u[5].x);
-        if (hc) {
-            float w = u[17].w;
-            float line_ = max(span(p.y, px, gy - 0.5 * w, gy + 0.5 * w),
-                              span(p.x, px, gx - 0.5 * w, gx + 0.5 * w) * step(gy, p.y));
-            col = mix(col, float3(1.0), u[15].w * line_ * ko);
-        } else {
-            float dw = u[13].y, lw = u[13].w;
-            float dark = max(span(p.y, px, gy - 0.5 * dw, gy + 0.5 * dw),
-                             span(p.x, px, gx - 0.5 * dw, gx + 0.5 * dw) * step(gy, p.y));
-            col = mix(col, float3(0.0), u[13].x * dark * ko);
-            float light = span(p.y, px, gy + 0.5 * dw, gy + 0.5 * dw + lw);
-            col = mix(col, float3(1.0), u[13].z * light * ko);
         }
 
         // The dots.
@@ -450,8 +459,8 @@ final class PadSurfaceView: UIView {
         float eC = max(s.r * s.r, s.a * s.a), eT = s.g * s.g, grab = s.b;
         for (int k = 0; k < 2; k++) {
             float4 kr = rects[k];
-            if (press[k] > 0.0 && roundBox(dc - (kr.xy + 0.5 * kr.zw), 0.5 * kr.zw - 1.0, radii[k], smooth_) < 0.0)
-                eC = max(eC, u[7].y * press[k] * ko);
+            if (press[k] > 0.0 && keyShape(dc, kr, u) < -1.0)
+                eC = max(eC, u[7].y * press[k] * ko * keyBloom(dc, kr, offs[k], u));
         }
         float e = max(eC, eT);
         uint2 ci = uint2(int2(cell) + 4096);
