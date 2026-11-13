@@ -99,6 +99,8 @@ struct SettingsView: View {
                         }
                         Text("Henge is able to emulate a Magic Trackpad, allowing you to use native gestures, such as two-finger scrolling, on your device's touchscreen.\n\n\(inputDescription)")
                             .font(.footnote).foregroundStyle(.secondary)
+                        Text("On a Linux machine, the hand button in the session's controls (Use touch) makes the screen a touchscreen. Each machine keeps its own choice.")
+                            .font(.footnote).foregroundStyle(.secondary)
                     }
                     .listRowBackground(Desk.card)
                 }
