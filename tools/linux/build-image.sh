@@ -57,8 +57,17 @@ rm -f "$WORK"/henge-guest_*.deb
 sh /tools/build-guest-pkg.sh --inner "$WORK" >/dev/null
 GUEST_DEB=$(ls "$WORK"/henge-guest_*.deb)
 
-# The desktop files are copied after the packages, so they replace the packages' own defaults
+# From build-ffmpeg-pkg.sh, which refuses a build that is not from the current sources
+FFMPEG_DEB=/out/ffmpeg/henge-ffmpeg_${FFMPEG_VERSION}-henge${FFMPEG_HENGE_REV}_arm64.deb
+if [ ! -f "$FFMPEG_DEB" ]; then
+    echo "build-image.sh: no $FFMPEG_DEB; run make linux-ffmpeg linux-ffmpeg-pkg first" >&2
+    exit 1
+fi
+
+# The desktop files are copied after the packages, so they replace the packages' own defaults.
+# apt brings henge-ffmpeg's Debian libraries; man-db (its Recommends) lets man ffmpeg-henge open.
 set -- --customize-hook='cp "'"$GUEST_DEB"'" "$1/tmp/henge-guest.deb"; chroot "$1" dpkg -i /tmp/henge-guest.deb; rm -f "$1/tmp/henge-guest.deb"' \
+    --customize-hook='cp "'"$FFMPEG_DEB"'" "$1/tmp/henge-ffmpeg.deb"; chroot "$1" env DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends /tmp/henge-ffmpeg.deb man-db; rm -f "$1/tmp/henge-ffmpeg.deb"' \
     --customize-hook='cp /tools/customize.sh "$1/tmp/customize.sh"; chroot "$1" sh -e /tmp/customize.sh; rm -f "$1/tmp/customize.sh"'
 if [ "$DESKTOP" = 1 ]; then
     set -- "$@" \

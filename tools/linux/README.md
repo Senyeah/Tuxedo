@@ -11,7 +11,7 @@ Every script runs inside the builder container, so no cross compiler is needed.
 - `customize-desktop.sh`, `rootfs-desktop/`: extra files for the desktop image (`build-image.sh --desktop`).
 - `henge-guest/` (G9): the source of the `henge-guest` Debian package. It holds the grow and first-boot scripts (`/usr/lib/henge/`) and units (`/usr/lib/systemd/system/henge-*.service`, G8), and enables them in `postinst`. `build-guest-pkg.sh` builds the `.deb` on its own; `build-image.sh` builds it too and installs it in both images. P6 adds the shared-folder mount (`home-henge-Henge.mount` and `.automount`, `/etc/henge/davfs2.conf`); P7 adds the clipboard helper (`henge-clipboard` and a user unit). DS5 adds `henge-status` and its unit, and UPower's settings. 1.6.0 adds the wallet, `henge-secrets` (see Wallet); 1.6.1 puts the command on the PATH. 1.7.0 adds the folders from Files (`henge-files`, see Folders from Files); 1.8.0 takes the app's Export Changes and Discard Changes, and remounts a Copy-on-write folder when its original changes. 1.9.0 adds the Henge apt repository's key (`/usr/share/keyrings/henge-archive.gpg`) and its source (`/etc/apt/sources.list.d/henge.sources`), which is off (see ffmpeg with the device's codecs); 1.9.1 makes that source the admin's file, not a conffile; 1.10.0 joins 1.8.0 and 1.9.1. `grow-check.py` tests the grow units, `share-check.py` the shared folder and `clipboard-check.py` the clipboard.
 - `build-ffmpeg.sh` (VE2): the guest's `ffmpeg` with the Henge codecs. It applies `hvcodec/ffmpeg-henge.patch` to the FFmpeg release in `versions.env`, builds `libhvcodec` (`hvcodec/libhvcodec/`) and `henge-codec-info`, and writes `ffmpeg/bin/` and `ffmpeg/ffmpeg.manifest` in the artefact directory. It runs in an arm64 `debian:trixie` container with packages from the pinned snapshot (about 3 min). `make test-linux-ffmpeg` checks the result in a clone of the desktop image. See `docs/guest-video-encode-plan.md`.
-- `build-ffmpeg-pkg.sh` (VE3): the `henge-ffmpeg` package from that build, with `henge-ffmpeg/` (its `postinst`, `prerm` and `copyright`) and the man page `hvcodec/ffmpeg-henge.7.md`. Output: `ffmpeg/henge-ffmpeg_<release>-henge<N>_arm64.deb`. `make linux-ffmpeg-pkg`.
+- `build-ffmpeg-pkg.sh` (VE3): the `henge-ffmpeg` package from that build, with `henge-ffmpeg/` (its `postinst`, `prerm` and `copyright`) and the man page `hvcodec/ffmpeg-henge.7.md`. Output: `ffmpeg/henge-ffmpeg_<release>-henge<N>_arm64.deb`. `make linux-ffmpeg-pkg`. `build-image.sh` installs this package (the version in `versions.env`) and `man-db` in both images, so build it first.
 - `publish-apt.sh` (VE3): the signed apt repository in `build/linux/apt` and the source offer in `build/linux/source`. Nothing leaves the Mac unless you give it `--rsync`. `make linux-apt`. `henge-archive.asc` is the repository's public key.
 - `snapshot-apt.sh`: sourced by the container scripts above, so they install packages from the snapshot in `versions.env`.
 - `run.sh`: runs a command in the builder image. `build/linux/` is mounted at `/out`, the repo's `tools/linux/` at `/tools` (read only), and a named volume at `/work` for source trees.
@@ -30,7 +30,7 @@ Needs:
 
 - Xcode 27 or later, `uv`, and Homebrew's `pkgconf` and `libslirp` (`brew install pkgconf libslirp`). `make` also finds libplist, libimobiledevice, libusbmuxd, libimobiledevice-glue, libtatsu, libzip and curl through `pkg-config` for the Mac tool; `make` says which one is missing.
 - Docker with arm64 images (Docker Desktop or colima). Keep the artefact directory under your home folder: a path under `/private/tmp` made the scripts exit 0 and write nothing to the Mac.
-- Disk space: the console image takes about 0.45 GB and the desktop image about 0.77 GB on disk (each is a 3 GB sparse file), plus Docker's work volume. `tools/gfx` (optional) takes about 8.3 GB.
+- Disk space: the console image takes about 0.53 GB and the desktop image about 0.85 GB on disk (each is a 3 GB sparse file), plus Docker's work volume. `tools/gfx` (optional) takes about 8.3 GB.
 - QEMU (`brew install qemu`) only for the reference checks (`qemu-ref.sh`, `qemu-check.py`, `make test-linux-dtb`).
 
 Steps, from the root of a clean checkout:
@@ -41,6 +41,7 @@ export HENGE_LINUX_OUT=$PWD/build/linux       # set it in every shell that runs 
 tools/linux/run.sh uname -m                   # builds the builder image, prints aarch64
 tools/linux/build-uboot.sh                    # build/linux/u-boot.bin and .manifest
 tools/linux/build-uboot.sh --stock            # u-boot-stock.bin, with the 2 s countdown; the U-Boot prompt tests need it
+make linux-ffmpeg linux-ffmpeg-pkg           # about 4 min: henge-ffmpeg, which both images install
 tools/linux/build-image.sh                    # about 6 min (the first image): debian-console.img, Image, initrd.img, .partuuid, .manifest
 tools/linux/build-image.sh --desktop          # debian-desktop.img (labwc and foot)
 
@@ -81,7 +82,7 @@ If a step fails, run it again with the same `HENGE_LINUX_OUT`. `build-image.sh` 
 
 1. `run.sh uname -m` checks the container. It prints `aarch64`.
 2. `build-uboot.sh` (G2, P2) makes `u-boot.bin`, `u-boot.config` and `u-boot.manifest` (tag, commit, fragment, SHA-256). It builds `qemu_arm64_defconfig` plus the boot-speed fragment `u-boot-henge.config` (no autoboot countdown, no EFI boot manager) in `/work/u-boot`. `build-uboot.sh --stock` builds the unmodified defconfig as `u-boot-stock.bin`, which keeps the 2 s countdown; the checks that stop at the `=>` prompt (`smoke.py --uboot` second boot, `input-check.py`, `kernel-boot-time.py`, `qemu-ref.sh`) use it when it exists. Check it with `qemu-system-aarch64 -M virt -cpu cortex-a57 -nographic -bios build/linux/u-boot.bin`.
-3. `build-image.sh` (G3, K1, G4) makes `debian-console.img`, `Image`, `initrd.img`, `config-debian-16k`, `debian-console.partuuid` and `debian-console.manifest` (kernel format, extlinux.conf, kernel config lines, package list). It takes about 6 minutes. `customize.sh` runs inside the new root filesystem and `rootfs/` is copied into it first. Set `DEBIAN_MIRROR` to use another mirror, for example `http://deb.debian.org/debian/`.
+3. `build-image.sh` (G3, K1, G4) makes `debian-console.img`, `Image`, `initrd.img`, `config-debian-16k`, `debian-console.partuuid` and `debian-console.manifest` (kernel format, extlinux.conf, kernel config lines, package list). It takes about 6 minutes. It installs `henge-guest`, built from `henge-guest/`, and `henge-ffmpeg` from `ffmpeg/` with `man-db` (apt brings the Debian libraries); it stops if that package is missing. `henge-codec-dkms` is not in the images (decision 11). `customize.sh` runs inside the new root filesystem and `rootfs/` is copied into it first. Set `DEBIAN_MIRROR` to use another mirror, for example `http://deb.debian.org/debian/`.
 4. `build-image.sh --desktop` (G6) makes `debian-desktop.img`, `debian-desktop.partuuid` and `debian-desktop.manifest`. It adds labwc, foot, fonts-dejavu-core and the Mesa test tools to the console image's packages. It builds in `/work/G6` and does not touch the console image or `Image` and `initrd.img`. See Desktop below.
 5. `qemu-ref.sh` (G5) boots the result on QEMU's `virt` machine.
 
@@ -339,7 +340,7 @@ What the package does:
 - The binaries go in `/usr/lib/henge/ffmpeg/bin/`. `postinst` makes the links `/usr/local/bin/ffmpeg` and `/usr/local/bin/ffprobe`, so `ffmpeg` on the default `PATH` is the Henge build. It does not replace a file there that it did not make; it says so, and that command stays the admin's.
 - Debian's `ffmpeg` stays at `/usr/bin/ffmpeg`, and `man ffmpeg` stays Debian's page. The two packages do not depend on each other.
 - `apt remove henge-ffmpeg` runs `prerm`, which removes the links only if they still point into `/usr/lib/henge`. Then `ffmpeg` is Debian's again (run `hash -r` in a shell that used it). An upgrade keeps the links.
-- `henge-codec-info` is in `/usr/bin`. The man page is `ffmpeg-henge(7)`. The package recommends `man-db`, which the desktop image does not have.
+- `henge-codec-info` is in `/usr/bin`. The man page is `ffmpeg-henge(7)`. The package recommends `man-db`. Both images have the package and `man-db`, so on a new machine `ffmpeg` is the Henge build and `man ffmpeg-henge` opens.
 - `Depends` comes from `dpkg-shlibdeps`: `libx264`, `libx265`, `libdav1d`, `libopus`, `libmp3lame` and GnuTLS are Debian's shared libraries.
 
 Build it:
