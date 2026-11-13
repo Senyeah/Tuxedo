@@ -452,10 +452,10 @@ int henge_vm_forwards_set(const uint16_t *phone_ports, const uint16_t *guest_por
 
 void henge_vm_forwards_refresh(void) { hv_net_forward_refresh(); }
 
-int henge_vm_forward_state(int index, char *addrs, size_t cap, int *err) {
+int henge_vm_forward_state(uint16_t phone_port, char *addrs, size_t cap, int *err) {
     HvFwdAddr a[HV_FWD_MAX_ADDRS];
     int e = 0;
-    int n = hv_net_forward_state(index, a, HV_FWD_MAX_ADDRS, &e);
+    int n = hv_net_forward_state(phone_port, a, HV_FWD_MAX_ADDRS, &e);
     if (err) *err = e;
     if (addrs && cap) {
         size_t used = 0;

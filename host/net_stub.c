@@ -12,4 +12,4 @@ void hv_net_poll(void) {}
 int hv_net_forward_set(const HvFwdRule *rules, int n) { return hv_fwd_check(rules, n, 1) ? -1 : 0; }
 int hv_net_forward_listen(const char *addr) { (void)addr; return 0; }
 void hv_net_forward_refresh(void) {}
-int hv_net_forward_state(int index, HvFwdAddr *out, int max, int *err) { (void)index, (void)out, (void)max, (void)err; return -1; }
+int hv_net_forward_state(uint16_t host_port, HvFwdAddr *out, int max, int *err) { (void)host_port, (void)out, (void)max, (void)err; return -1; }

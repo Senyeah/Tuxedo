@@ -73,9 +73,9 @@ final class ForwardSession: ObservableObject {
         guard machine != nil else { return }
         var next: [UUID: ForwardPolicy.Shown] = [:]
         var buf = [CChar](repeating: 0, count: 1024)
-        for (i, f) in active.enumerated() {
+        for f in active {
             var err: Int32 = 0
-            let n = henge_vm_forward_state(Int32(i), &buf, buf.count, &err)
+            let n = henge_vm_forward_state(UInt16(f.phonePort), &buf, buf.count, &err)
             next[f.id] = ForwardPolicy.shown(count: n, err: err, text: String(cString: buf), phonePort: f.phonePort, device: Device.name)
         }
         if next != states { states = next }
@@ -193,6 +193,7 @@ struct ForwardDetailView: View {
     @State private var name = ""
     @State private var phone = ""
     @State private var guest = ""
+    @State private var pending: Task<Void, Never>?
 
     private var list: [PortForward] { machines.all.first { $0.id == machine }?.forwards ?? [] }
     private var index: Int? { list.firstIndex { $0.id == id } }
@@ -211,7 +212,9 @@ struct ForwardDetailView: View {
                         labelled("Guest port", field("22", text: $guest, numeric: true, card: false))
                     }
                     .deskCard()
-                    if let p = ForwardPolicy.problem(list, at: i) {
+                    if let blank = blankNote(f) {
+                        note(blank, color: Desk.bad)
+                    } else if let p = ForwardPolicy.problem(draft(list), at: i) {
                         note(ForwardPolicy.problemText(p), color: Desk.bad)
                     } else {
                         note("Other devices connect to this \(Device.name)'s port \(String(f.phonePort)); the guest gets it on port \(String(f.guestPort)).")
@@ -251,9 +254,54 @@ struct ForwardDetailView: View {
             phone = String(list[i].phonePort)
             guest = String(list[i].guestPort)
         }
-        .onChange(of: phone) { v in if let n = Int(v) { edit { $0.phonePort = n } } }
-        .onChange(of: guest) { v in if let n = Int(v) { edit { $0.guestPort = n } } }
-        .onDisappear { edit { $0.name = name.trimmingCharacters(in: .whitespaces).isEmpty ? nil : name } }
+        .onChange(of: phone) { _ in later() }
+        .onChange(of: guest) { _ in later() }
+        .onChange(of: name) { _ in later() }
+        .onDisappear {
+            pending?.cancel()
+            commit()
+        }
+    }
+
+    /// Typing 22222 passes through 2222: save only after a pause, so a half-typed port never binds.
+    private func later() {
+        pending?.cancel()
+        pending = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            if !Task.isCancelled { commit() }
+        }
+    }
+
+    /// The fields into the stored rule; a blank or non-numeric port keeps the stored one.
+    private func commit() {
+        guard let i = index else { return }
+        let f = list[i]
+        let p = ForwardPolicy.port(phone) ?? f.phonePort, g = ForwardPolicy.port(guest) ?? f.guestPort
+        let n = ForwardPolicy.cleanName(name)
+        if p != f.phonePort || g != f.guestPort || n != f.name {
+            edit {
+                $0.phonePort = p
+                $0.guestPort = g
+                $0.name = n
+            }
+        }
+    }
+
+    /// The list with this rule's typed ports, for the problem note before they are saved.
+    private func draft(_ list: [PortForward]) -> [PortForward] {
+        list.map { f in
+            guard f.id == id else { return f }
+            var d = f
+            d.phonePort = ForwardPolicy.port(phone) ?? f.phonePort
+            d.guestPort = ForwardPolicy.port(guest) ?? f.guestPort
+            return d
+        }
+    }
+
+    private func blankNote(_ f: PortForward) -> String? {
+        if ForwardPolicy.port(phone) == nil { return "Enter a phone port. Until then the forward keeps port \(String(f.phonePort))." }
+        if ForwardPolicy.port(guest) == nil { return "Enter a guest port. Until then the forward keeps port \(String(f.guestPort))." }
+        return nil
     }
 
     private func edit(_ change: (inout PortForward) -> Void) {

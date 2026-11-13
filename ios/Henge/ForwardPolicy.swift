@@ -14,8 +14,19 @@ enum ForwardPolicy {
     static func sshPreset() -> PortForward { PortForward(name: "SSH", phonePort: sshPhonePort, guestPort: 22) }
 
     static func canAddSSH(_ list: [PortForward]) -> Bool {
-        list.count < maxRules && !list.contains { $0.phonePort == sshPhonePort || ($0.guestPort == 22 && $0.name == "SSH") }
+        list.count < maxRules && !list.contains {
+            $0.phonePort == sshPhonePort || ($0.guestPort == 22 && cleanName($0.name ?? "")?.caseInsensitiveCompare("SSH") == .orderedSame)
+        }
     }
+
+    /// A typed name as stored: trimmed, nil when blank.
+    static func cleanName(_ text: String) -> String? {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? nil : t
+    }
+
+    /// A typed port, or nil for a blank or non-numeric field (the rule keeps its port).
+    static func port(_ text: String) -> Int? { Int(text.trimmingCharacters(in: .whitespaces)) }
 
     /// A new rule: the first free phone port from 8000, to the same port in the guest.
     static func newRule(_ list: [PortForward]) -> PortForward {
@@ -55,7 +66,7 @@ enum ForwardPolicy {
     }
 
     static func title(_ f: PortForward) -> String {
-        if let n = f.name?.trimmingCharacters(in: .whitespaces), !n.isEmpty { return n }
+        if let n = cleanName(f.name ?? "") { return n }
         return "Port \(f.guestPort)"
     }
 
@@ -74,7 +85,7 @@ enum ForwardPolicy {
         if interface == "en0" { return "Wi-Fi" }
         if interface.hasPrefix("en") { return "Ethernet" }
         if interface.hasPrefix("bridge") { return "Personal Hotspot" }
-        if interface.hasPrefix("utun") || interface.hasPrefix("ipsec") { return "VPN" }
+        if interface.hasPrefix("utun") { return "VPN" }
         if interface.hasPrefix("lo") { return "This device" }
         return interface
     }

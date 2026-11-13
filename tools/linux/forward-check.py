@@ -6,9 +6,9 @@
 """Port forwards into the guest (hengevm --forward, host/net_forward.c), on a clone of the console image.
 
 Boot 1 listens on 127.0.0.1 (hengevm's default) with three rules: SSH to the guest's port 22, HTTP to a
-python3 -m http.server on 8000, and a third whose port the Mac holds already. It installs openssh-server and a
+python3 -m http.server on 8000, and two whose ports the Mac holds already: one on 127.0.0.1, one on 0.0.0.0. It installs openssh-server and a
 throwaway key in the guest, then: ssh logs in through the forward and carries 16 MB both ways; curl gets the page;
-the held port is an error in hengevm's log, the machine runs anyway, and the forward comes up once the port is
+each held port is an error in hengevm's log, the machine runs anyway, and the forward comes up once the port is
 free; nothing listens on the Mac's other addresses. Boot 2 has --forward-addr local (the app's: every local network
 address and loopback) and HV_NET_FWD (the old variable, an alias of --forward): ssh on 127.0.0.1 and on the Mac's
 LAN address (only listed when the Mac's application firewall is on: it holds such connections to an unsigned
@@ -136,18 +136,23 @@ class Run:
 
 
 def check(args, run):
-    ssh_port, http_port, busy_port, alias_port = free_port(), free_port(), free_port(), free_port()
+    ssh_port, http_port, busy_port, wild_port, alias_port = free_port(), free_port(), free_port(), free_port(), free_port()
     lan = lan_address()
     held = socket.socket()
     held.bind(("127.0.0.1", busy_port))
     held.listen(1)
+    wild = socket.socket()  # BSD lets libslirp's SO_REUSEADDR bind of 127.0.0.1 sit beside this one
+    wild.bind(("0.0.0.0", wild_port))
+    wild.listen(1)
 
     # Boot 1: 127.0.0.1
-    run.boot("boot1", [f"{ssh_port}:22", f"{http_port}:8000", f"{busy_port}:9"])
+    run.boot("boot1", [f"{ssh_port}:22", f"{http_port}:8000", f"{busy_port}:9", f"{wild_port}:9"])
     run.wait_log(rf"net: forward 127\.0\.0\.1:{ssh_port} -> guest port 22\n", 10, "the SSH forward")
     run.wait_log(rf"net: forward 127\.0\.0\.1:{http_port} -> guest port 8000\n", 10, "the HTTP forward")
     run.wait_log(rf"net: no forward from 127\.0\.0\.1:{busy_port}: Address already in use", 10, "the held port")
-    print(f"ok: forwards on 127.0.0.1:{ssh_port} and :{http_port}; :{busy_port} is in use, an error, and the machine runs")
+    run.wait_log(rf"net: no forward from 127\.0\.0\.1:{wild_port}: Address already in use", 10, "the port held on 0.0.0.0")
+    print(f"ok: forwards on 127.0.0.1:{ssh_port} and :{http_port}; :{busy_port} (held on 127.0.0.1) and :{wild_port} "
+          "(held on 0.0.0.0) are in use, errors, and the machine runs")
 
     have, _ = sh(run.p, "command -v sshd /usr/sbin/sshd python3", 20)
     if "sshd" not in have or "python3" not in have:
@@ -189,8 +194,10 @@ def check(args, run):
         print("note: the Mac has no LAN address; the 127.0.0.1-only check is skipped")
 
     held.close()
+    wild.close()
     run.wait_log(rf"net: forward 127\.0\.0\.1:{busy_port} -> guest port 9\n", 15, "the held port, once free")
-    print(f"ok: :{busy_port} listens within a refresh of being freed")
+    run.wait_log(rf"net: forward 127\.0\.0\.1:{wild_port} -> guest port 9\n", 15, "the port held on 0.0.0.0, once free")
+    print(f"ok: :{busy_port} and :{wild_port} listen within a refresh of being freed")
     run.poweroff()
 
     # Boot 2: the app's local networks, and HV_NET_FWD

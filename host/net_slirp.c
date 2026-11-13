@@ -221,6 +221,8 @@ static int fwd_add(void *ctx, const HvFwdRule *r, uint32_t ip) {
     (void)ctx;
     struct sockaddr_in h = {.sin_len = sizeof h, .sin_family = AF_INET, .sin_port = htons(r->host_port), .sin_addr.s_addr = ip};
     struct sockaddr_in g = {.sin_len = sizeof g, .sin_family = AF_INET, .sin_port = htons(r->guest_port)}; /* 0: the DHCP address */
+    int busy = hv_fwd_wildcard_free(r->host_port);
+    if (busy) return busy;
     errno = 0;
     if (slirp_add_hostxfwd(slirp, (struct sockaddr *)&h, sizeof h, (struct sockaddr *)&g, sizeof g, 0) == 0) return 0;
     return errno ? errno : EIO;
@@ -305,9 +307,9 @@ void hv_net_forward_refresh(void) {
     pthread_mutex_unlock(&fwd_mu);
 }
 
-int hv_net_forward_state(int index, HvFwdAddr *out, int max, int *err) {
+int hv_net_forward_state(uint16_t host_port, HvFwdAddr *out, int max, int *err) {
     pthread_mutex_lock(&fwd_mu);
-    int n = fwd_live ? hv_fwd_rule_state(&fwd, index, out, max, err) : -1;
+    int n = fwd_live ? hv_fwd_rule_state(&fwd, host_port, out, max, err) : -1;
     pthread_mutex_unlock(&fwd_mu);
     return n;
 }

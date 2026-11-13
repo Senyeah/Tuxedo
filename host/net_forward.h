@@ -41,8 +41,8 @@ int hv_fwd_parse(const char *spec, HvFwdRule *rule);
 int hv_fwd_check(const HvFwdRule *rules, int n, int min_host);
 
 /* The local network addresses in a getifaddrs list: IPv4 on Wi-Fi and Ethernet (en*), the hotspot (bridge*) and VPNs
-   (utun*, ipsec*), in that order; never cellular (pdp_ip*) or anything else. loopback adds 127.0.0.1 last. No
-   duplicates; at most max. Returns the count. */
+   (utun*), in that order; never cellular (pdp_ip*), ipsec* (Wi-Fi Calling's carrier tunnel uses it), a 169.254
+   link-local address or anything else. loopback adds 127.0.0.1 last. No duplicates; at most max. Returns the count. */
 int hv_fwd_local_addrs(const struct ifaddrs *list, int loopback, HvFwdAddr *out, int max);
 
 /* add: 0, or an errno. Called only from hv_fwd_refresh and hv_fwd_clear. */
@@ -56,8 +56,13 @@ void hv_fwd_set_rules(HvFwdTable *t, const HvFwdRule *rules, int n);
 int hv_fwd_refresh(HvFwdTable *t, const HvFwdAddr *addrs, int naddrs, HvFwdAddFn add, HvFwdRemoveFn remove, void *ctx);
 /* Removes every binding; remove may be NULL when the sockets go some other way. */
 void hv_fwd_clear(HvFwdTable *t, HvFwdRemoveFn remove, void *ctx);
-/* Rule i: the addresses it listens on (at most max) and in *err the errno of one that failed, or 0. The count, or -1
-   when there is no rule i. */
-int hv_fwd_rule_state(const HvFwdTable *t, int i, HvFwdAddr *out, int max, int *err);
+/* The rule for host_port: the addresses it listens on (at most max) and in *err the errno of one that failed, or 0.
+   The count, or -1 when the table has no such rule (yet). By port, not index: the table takes a new list later. */
+int hv_fwd_rule_state(const HvFwdTable *t, uint16_t host_port, HvFwdAddr *out, int max, int *err);
+
+/* 0, or EADDRINUSE when a socket on 0.0.0.0 (or a dual-stack ::) holds port. libslirp binds one address with
+   SO_REUSEADDR, which BSD allows beside such a socket; the clients of that address would get the guest. The probe has
+   SO_REUSEADDR too, so our own listeners and TIME_WAIT connections on the port do not count. */
+int hv_fwd_wildcard_free(uint16_t port);
 
 #endif

@@ -17,8 +17,8 @@ int hv_net_forward_set(const HvFwdRule *rules, int n);
 int hv_net_forward_listen(const char *addr);
 /* The host's addresses may have changed: look now, not at the next poll. Any thread. */
 void hv_net_forward_refresh(void);
-/* Rule index of the running machine (hv_fwd_rule_state), or -1 when none runs or there is no such rule. */
-int hv_net_forward_state(int index, HvFwdAddr *out, int max, int *err);
+/* The running machine's rule for host_port (hv_fwd_rule_state), or -1 when none runs or it has no such rule yet. */
+int hv_net_forward_state(uint16_t host_port, HvFwdAddr *out, int max, int *err);
 /* User-mode NAT for the guest's virtio-net (see net_slirp.c). Returns 0 on success. */
 int hv_net_attach(HvMachine *m, HvVirtioNet *n);
 /* CPUs must be stopped. Joins the network worker before its machine is freed. */

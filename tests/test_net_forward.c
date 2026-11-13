@@ -9,6 +9,8 @@
 #include <net/if.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #c); return 1; } } while (0)
 
@@ -104,21 +106,26 @@ int main(void) {
     CHECK(hv_fwd_check(many, HV_FWD_MAX_RULES, 1024) == 0);
     CHECK(hv_fwd_check(many, HV_FWD_MAX_RULES + 1, 1024) == EINVAL);
 
-    /* Local networks: Wi-Fi, Ethernet, the hotspot and VPNs; not cellular, AWDL, IPv6 or a down interface */
+    /* Local networks: Wi-Fi, Ethernet, the hotspot and VPNs; not cellular, ipsec (Wi-Fi Calling), AWDL, link-local,
+       IPv6 or a down interface */
     HvFwdAddr a[HV_FWD_MAX_ADDRS];
     {
-        const char *names[] = {"lo0", "pdp_ip0", "utun3", "en0", "en0", "awdl0", "bridge100", "en5", "ipsec0", "utun4", "en2", "pdp_ip1", "en0"};
+        const char *names[] = {"lo0", "pdp_ip0", "utun3", "en0", "en0", "awdl0", "bridge100", "en5", "ipsec0", "utun4", "en2", "pdp_ip1", "en0", "en1"};
         const char *ips[] = {"127.0.0.1", "10.64.1.2", "100.101.102.103", "192.168.1.20", "fd00::1", "169.254.3.3",
-                             "172.20.10.1", "10.0.0.9", "10.8.0.2", "100.101.102.103", "192.168.9.9", "2001:db8::5", "0.0.0.0"};
-        const int up[] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1};
-        int n = hv_fwd_local_addrs(list(13, names, ips, up), 0, a, HV_FWD_MAX_ADDRS);
-        const char *want[] = {"192.168.1.20", "10.0.0.9", "172.20.10.1", "100.101.102.103", "10.8.0.2"};
-        const char *want_if[] = {"en0", "en5", "bridge100", "utun3", "ipsec0"};
-        CHECK(n == 5);
+                             "172.20.10.1", "10.0.0.9", "10.8.0.2", "100.101.102.103", "192.168.9.9", "2001:db8::5", "0.0.0.0", "169.254.7.1"};
+        const int up[] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1};
+        int n = hv_fwd_local_addrs(list(14, names, ips, up), 0, a, HV_FWD_MAX_ADDRS);
+        const char *want[] = {"192.168.1.20", "10.0.0.9", "172.20.10.1", "100.101.102.103"};
+        const char *want_if[] = {"en0", "en5", "bridge100", "utun3"};
+        CHECK(n == 4);
         for (int i = 0; i < n; i++) CHECK(a[i].ip == ip(want[i]) && !strcmp(a[i].ifname, want_if[i]));
-        n = hv_fwd_local_addrs(list(13, names, ips, up), 1, a, HV_FWD_MAX_ADDRS);
-        CHECK(n == 6 && a[5].ip == ip("127.0.0.1") && !strcmp(a[5].ifname, "lo0"));
-        CHECK(hv_fwd_local_addrs(list(13, names, ips, up), 1, a, 2) == 2 && a[1].ip == ip("10.0.0.9")); /* the cap */
+        n = hv_fwd_local_addrs(list(14, names, ips, up), 1, a, HV_FWD_MAX_ADDRS);
+        CHECK(n == 5 && a[4].ip == ip("127.0.0.1") && !strcmp(a[4].ifname, "lo0"));
+        CHECK(hv_fwd_local_addrs(list(14, names, ips, up), 1, a, 2) == 2 && a[1].ip == ip("10.0.0.9")); /* the cap */
+        /* Wi-Fi with no DHCP lease: only link-local, so no local network */
+        const char *noLease[] = {"en0", "pdp_ip0"};
+        const char *noLeaseIps[] = {"169.254.40.2", "10.64.1.2"};
+        CHECK(hv_fwd_local_addrs(list(2, noLease, noLeaseIps, up), 0, a, HV_FWD_MAX_ADDRS) == 0);
     }
     {
         /* Cellular only: nothing but loopback */
@@ -148,8 +155,8 @@ int main(void) {
     CHECK(hv_fwd_refresh(&t, now, 2, fake_add, fake_remove, &f) == 0 && f.adds == 4 && f.removes == 0);
     int err = -1;
     HvFwdAddr st[HV_FWD_MAX_ADDRS];
-    CHECK(hv_fwd_rule_state(&t, 0, st, HV_FWD_MAX_ADDRS, &err) == 2 && err == 0 && st[0].ip == wifi.ip && st[1].ip == lo.ip);
-    CHECK(hv_fwd_rule_state(&t, 2, st, HV_FWD_MAX_ADDRS, &err) == -1);
+    CHECK(hv_fwd_rule_state(&t, 2222, st, HV_FWD_MAX_ADDRS, &err) == 2 && err == 0 && st[0].ip == wifi.ip && st[1].ip == lo.ip);
+    CHECK(hv_fwd_rule_state(&t, 9999, st, HV_FWD_MAX_ADDRS, &err) == -1);
 
     /* A VPN comes up: only its forwards are added */
     HvFwdAddr with_vpn[] = {wifi, vpn, lo};
@@ -165,7 +172,7 @@ int main(void) {
     HvFwdAddr cell[] = {lo};
     hv_fwd_refresh(&t, cell, 1, fake_add, fake_remove, &f);
     CHECK(f.n == 2 && listening(&f, 2222, "127.0.0.1") && listening(&f, 8000, "127.0.0.1"));
-    CHECK(hv_fwd_rule_state(&t, 1, st, HV_FWD_MAX_ADDRS, &err) == 1 && st[0].ip == lo.ip && err == 0);
+    CHECK(hv_fwd_rule_state(&t, 8000, st, HV_FWD_MAX_ADDRS, &err) == 1 && st[0].ip == lo.ip && err == 0);
 
     /* A rule's guest port changes: removed, then added with the new one */
     HvFwdRule changed[] = {{2222, 2200}, {8000, 8000}};
@@ -178,6 +185,8 @@ int main(void) {
     hv_fwd_set_rules(&t, changed + 1, 1);
     hv_fwd_refresh(&t, cell, 1, fake_add, fake_remove, &f);
     CHECK(f.n == 1 && listening(&f, 8000, "127.0.0.1") && !listening(&f, 2222, "127.0.0.1"));
+    CHECK(hv_fwd_rule_state(&t, 2222, st, HV_FWD_MAX_ADDRS, &err) == -1);
+    CHECK(hv_fwd_rule_state(&t, 8000, st, HV_FWD_MAX_ADDRS, &err) == 1 && st[0].ip == lo.ip); /* was rule 1, now 0 */
 
     /* A port in use: an error on that rule only; retried at each refresh, and it listens once the port is free */
     HvFwdRule busy[] = {{8000, 8000}, {5900, 5900}};
@@ -185,16 +194,16 @@ int main(void) {
     hv_fwd_set_rules(&t, busy, 2);
     HvFwdAddr back[] = {wifi, lo};
     hv_fwd_refresh(&t, back, 2, fake_add, fake_remove, &f);
-    CHECK(hv_fwd_rule_state(&t, 1, st, HV_FWD_MAX_ADDRS, &err) == 0 && err == EADDRINUSE);
-    CHECK(hv_fwd_rule_state(&t, 0, st, HV_FWD_MAX_ADDRS, &err) == 2 && err == 0);
+    CHECK(hv_fwd_rule_state(&t, 5900, st, HV_FWD_MAX_ADDRS, &err) == 0 && err == EADDRINUSE);
+    CHECK(hv_fwd_rule_state(&t, 8000, st, HV_FWD_MAX_ADDRS, &err) == 2 && err == 0);
     int adds = f.adds;
     CHECK(hv_fwd_refresh(&t, back, 2, fake_add, fake_remove, &f) == 0 && f.adds == adds + 2); /* same error: no change */
     f.busy_ip = ip("127.0.0.1"); /* now only loopback is taken */
     CHECK(hv_fwd_refresh(&t, back, 2, fake_add, fake_remove, &f) == 1);
-    CHECK(hv_fwd_rule_state(&t, 1, st, HV_FWD_MAX_ADDRS, &err) == 1 && st[0].ip == wifi.ip && err == EADDRINUSE);
+    CHECK(hv_fwd_rule_state(&t, 5900, st, HV_FWD_MAX_ADDRS, &err) == 1 && st[0].ip == wifi.ip && err == EADDRINUSE);
     f.busy_port = 0;
     CHECK(hv_fwd_refresh(&t, back, 2, fake_add, fake_remove, &f) == 1);
-    CHECK(hv_fwd_rule_state(&t, 1, st, HV_FWD_MAX_ADDRS, &err) == 2 && err == 0 && listening(&f, 5900, "127.0.0.1"));
+    CHECK(hv_fwd_rule_state(&t, 5900, st, HV_FWD_MAX_ADDRS, &err) == 2 && err == 0 && listening(&f, 5900, "127.0.0.1"));
     /* A failed binding that is no longer wanted goes without a remove call */
     f.busy_port = 5900;
     f.busy_ip = 0;
@@ -225,6 +234,25 @@ int main(void) {
     CHECK(f.n == 0 && t.nbinds == 0);
     hv_fwd_clear(&big, NULL, NULL);
     CHECK(big.nbinds == 0);
+
+    /* The wildcard probe, on real sockets: a 0.0.0.0 listener holds the port; one on 127.0.0.1 (as ours) does not */
+    {
+        int w = socket(AF_INET, SOCK_STREAM, 0);
+        struct sockaddr_in sa = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_ANY)};
+        socklen_t len = sizeof sa;
+        CHECK(w >= 0 && bind(w, (struct sockaddr *)&sa, sizeof sa) == 0 && listen(w, 1) == 0);
+        CHECK(getsockname(w, (struct sockaddr *)&sa, &len) == 0);
+        uint16_t port = ntohs(sa.sin_port);
+        CHECK(hv_fwd_wildcard_free(port) == EADDRINUSE);
+        close(w);
+        CHECK(hv_fwd_wildcard_free(port) == 0);
+        int one = 1, l = socket(AF_INET, SOCK_STREAM, 0);
+        sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        setsockopt(l, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+        CHECK(bind(l, (struct sockaddr *)&sa, sizeof sa) == 0 && listen(l, 1) == 0);
+        CHECK(hv_fwd_wildcard_free(port) == 0);
+        close(l);
+    }
 
     printf("net forward: %d adds, %d removes\n", f.adds + bf.adds, f.removes);
     return 0;

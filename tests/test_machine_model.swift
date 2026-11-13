@@ -241,6 +241,14 @@ struct MachineModelTests {
         let sixteen = (0..<16).map { PortForward(phonePort: 3000 + $0, guestPort: 22) }
         precondition(ForwardPolicy.isValid(sixteen) && !ForwardPolicy.isValid(sixteen + [PortForward(phonePort: 4000, guestPort: 22)]))
         precondition(!ForwardPolicy.canAddSSH(sixteen) && ForwardPolicy.canAddSSH([web]) && !ForwardPolicy.canAddSSH([ssh]))
+        // A typed name is stored trimmed; the preset is not offered again for "SSH " or "ssh".
+        precondition(ForwardPolicy.cleanName("  SSH \n") == "SSH" && ForwardPolicy.cleanName("   ") == nil && ForwardPolicy.cleanName("") == nil)
+        precondition(!ForwardPolicy.canAddSSH([PortForward(name: "SSH ", phonePort: 2200, guestPort: 22)]))
+        precondition(!ForwardPolicy.canAddSSH([PortForward(name: "ssh", phonePort: 2200, guestPort: 22)]))
+        precondition(ForwardPolicy.canAddSSH([PortForward(name: "SSH", phonePort: 2200, guestPort: 8022)]))
+        // A blank or non-numeric port field keeps the stored port.
+        precondition(ForwardPolicy.port("2222") == 2222 && ForwardPolicy.port(" 22 ") == 22)
+        precondition(ForwardPolicy.port("") == nil && ForwardPolicy.port("22a") == nil)
 
         // The engine gets the enabled rules with no problem, at most 16.
         precondition(ForwardPolicy.active([ssh, web]) == [ssh])
@@ -255,7 +263,8 @@ struct MachineModelTests {
         let lines = "127.0.0.1 lo0\n100.101.102.103 utun3\n192.168.1.20 en0\n"
         precondition(ForwardPolicy.parseAddresses(lines).map(\.ip) == ["192.168.1.20", "100.101.102.103", "127.0.0.1"])
         precondition(ForwardPolicy.networkName("en0") == "Wi-Fi" && ForwardPolicy.networkName("utun3") == "VPN"
-                     && ForwardPolicy.networkName("en5") == "Ethernet" && ForwardPolicy.networkName("bridge100") == "Personal Hotspot")
+                     && ForwardPolicy.networkName("en5") == "Ethernet" && ForwardPolicy.networkName("bridge100") == "Personal Hotspot"
+                     && ForwardPolicy.networkName("ipsec0") == "ipsec0")
         let up = ForwardPolicy.shown(count: 3, err: 0, text: lines, phonePort: 2222, device: "iPhone")
         guard case .listening(let local, true) = up, local.map(\.ip) == ["192.168.1.20", "100.101.102.103"] else { preconditionFailure("\(up)") }
         precondition(ForwardPolicy.shown(count: 1, err: 0, text: "127.0.0.1 lo0\n", phonePort: 2222, device: "iPhone") == .noLocalNetwork(loopback: true))
