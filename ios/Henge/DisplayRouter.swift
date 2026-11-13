@@ -8,6 +8,8 @@ final class DisplayRouter: ObservableObject {
     @Published private(set) var isExternal = false
     /// The pixels of the external screen that shows the guest; nil on the phone or when the screen did not say.
     @Published private(set) var externalPixels: CGSize?
+    /// The session hides the guest (SessionGate.hidesGuest): every external screen shows black.
+    @Published var guestHidden = false
 
     private var targets = DisplayTargetSelection()
     private var layers: [UUID: CAMetalLayer] = [:]

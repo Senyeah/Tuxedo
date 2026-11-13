@@ -47,6 +47,13 @@ struct SessionGate: Equatable {
     /// The guest's screen is hidden and the machine does not run.
     var covered: Bool { phase != .open }
 
+    /// The guest is hidden on the phone and on every external screen. inactive: the scene is not active, as when
+    /// the app switcher takes its picture. A stopped machine (closed) shows its card instead.
+    func hidesGuest(inactive: Bool) -> Bool {
+        guard check == .faceID, phase != .closed else { return false }
+        return covered || inactive
+    }
+
     /// At the start, back from the background, or again after a refusal.
     mutating func ask() -> Ask {
         switch phase {

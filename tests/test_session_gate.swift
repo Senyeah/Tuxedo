@@ -93,6 +93,26 @@ struct SessionGateTests {
         precondition(!SessionGate.testUnlock(environment: ["HENGE_AUTOPILOT_WALLET": "1"]))
         precondition(!SessionGate.testUnlock(environment: [:]))
 
+        // What hides the guest, on the phone and on every external screen: anything but an open session, and an
+        // open one while the scene is inactive (the app switcher takes its picture then).
+        var hide = SessionGate()
+        precondition(!hide.hidesGuest(inactive: false) && !hide.hidesGuest(inactive: true)) // closed: the stopped card
+        let h1 = ticket(hide.ask())
+        precondition(hide.hidesGuest(inactive: false)) // checking
+        hide.checked(h1, passed: true)
+        precondition(!hide.hidesGuest(inactive: false) && hide.hidesGuest(inactive: true))
+        hide.leave()
+        precondition(hide.hidesGuest(inactive: false)) // away
+        let h2 = ticket(hide.ask())
+        hide.checked(h2, passed: false)
+        precondition(hide.hidesGuest(inactive: false)) // refused
+        var macHide = SessionGate(check: .none)
+        _ = macHide.ask()
+        precondition(!macHide.hidesGuest(inactive: true))
+        var autoHide = SessionGate(check: .skippedForTest)
+        _ = autoHide.ask()
+        precondition(!autoHide.hidesGuest(inactive: true))
+
         // One Keychain service per machine, and back.
         let a = UUID(uuidString: "0D3A5F6E-1C2B-4E8F-9A7B-6C5D4E3F2A1B")!, b = UUID()
         precondition(WalletScope.id(a) == "0d3a5f6e-1c2b-4e8f-9a7b-6c5d4e3f2a1b")

@@ -15,10 +15,20 @@ struct ExternalMacDisplay: View {
                 .frame(width: width, height: width / aspect)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .overlay { GuestHidden(display: presentation.display) }
         .background(.black)
         .ignoresSafeArea()
         .allowsHitTesting(false)
         .preferredColorScheme(.dark)
+    }
+}
+
+/// Black over the guest while the session hides it (Face ID): the external screen keeps the last frame otherwise.
+private struct GuestHidden: View {
+    @ObservedObject var display: DisplayRouter
+
+    var body: some View {
+        if display.guestHidden { Color.black.ignoresSafeArea() }
     }
 }
 

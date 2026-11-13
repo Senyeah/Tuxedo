@@ -24,6 +24,8 @@ struct SessionView: View {
     @State private var gate: SessionGate // Face ID before a Linux machine runs or comes back
     @State private var gateMessage: String?
     @State private var gateContext: LAContext?
+    @State private var inactive = false // the app switcher's picture is taken while inactive
+    private var hidesGuest: Bool { gate.hidesGuest(inactive: inactive) }
     @State private var state: Int32 = 0
     @State private var bootAttempt = 0
     @State private var cpusOn: Int32 = 0
@@ -229,7 +231,7 @@ struct SessionView: View {
                 }
                 if let error { errorCard(error, layout) }
                 if shutdownAsked != nil && state != 2 { shutdownCard(layout) }
-                if gate.covered && gate.phase != .closed { lockCover(layout, full) }
+                if hidesGuest { lockCover(layout, full) }
                 KeyboardCatcher(active: $typing, suspended: consoleShown, linux: mac.guest == .linux).frame(width: 0, height: 0)
             }
             .frame(width: full.width, height: full.height)
@@ -277,7 +279,9 @@ struct SessionView: View {
         }
         .onChange(of: pointerNeeded) { PointerLock.set(!$0) }
         .onChange(of: touchActive) { touchModeChanged($0) }
+        .onChange(of: hidesGuest) { display.guestHidden = $0 }
         .onChange(of: scenePhase) { phase in
+            inactive = phase != .active
             guard phase != .active else {
                 display.refresh()
                 setBackground(false)
