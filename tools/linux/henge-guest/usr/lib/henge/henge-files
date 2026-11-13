@@ -9,10 +9,11 @@ Copy-on-write folders itself, so a remount here cannot get past it.
 News (a folder added, removed, renamed, a new mode, offline or online) comes from a long GET of /.henge/folders
 on the share server; without the share the table is read every 2 s.
 
-  henge-files list               the folders, and Copy-on-write layers with no folder
+  henge-files list               the folders, and Copy-on-write layers with no folder (with their keys)
   henge-files export NAME [DEST] the changes of a Copy-on-write folder, to ~/Henge/Exports by default
   henge-files reset NAME         discards the changes of a Copy-on-write folder
   henge-files remount NAME       mounts a folder again
+  export and reset also take a key from list, for a layer with no folder
 """
 import fcntl
 import hashlib
@@ -282,21 +283,35 @@ def need_root():
         os.execvp("sudo", ["sudo", "-n", sys.executable, os.path.abspath(sys.argv[0]), *sys.argv[1:]])
 
 
-def find(name):
-    """The table's folder called name, or None; and the layer's key for a Copy-on-write one, or for a layer that
-    has no folder now (its info.json names it)."""
-    table = read_table() or {"folders": []}
-    for f in table["folders"]:
-        if f["name"] == name:
-            return f, key_of(f["id"]) if f["mode"] == "cow" else None
-    for key in os.listdir(LAYERS) if os.path.isdir(LAYERS) else []:
+def orphans(table):
+    """Key -> info.json of each layer that no Copy-on-write folder in the table uses."""
+    live = {key_of(f["id"]) for f in table["folders"] if f["mode"] == "cow"}
+    out = {}
+    for key in sorted(os.listdir(LAYERS)) if os.path.isdir(LAYERS) else []:
+        if key in live:
+            continue
         try:
             with open(os.path.join(layer(key), "info.json")) as fh:
-                if json.load(fh).get("name") == name:
-                    return None, key
+                out[key] = json.load(fh)
         except (OSError, ValueError):
-            pass
-    return None, None
+            out[key] = {}
+    return out
+
+
+def find(arg):
+    """(folder, layer key, name) for arg: the table's folder called arg, else a layer with no folder by its key, else
+    by the name in its info.json. Exits when two such layers have that name, since each needs its key."""
+    table = read_table() or {"folders": []}
+    for f in table["folders"]:
+        if f["name"] == arg:
+            return f, key_of(f["id"]) if f["mode"] == "cow" else None, arg
+    lost = orphans(table)
+    if arg in lost:
+        return None, arg, lost[arg].get("name") or arg
+    keys = [k for k, info in lost.items() if info.get("name") == arg]
+    if len(keys) > 1:
+        sys.exit(f"henge-files: {len(keys)} layers are called {arg}; name one by its key: {', '.join(keys)}")
+    return (None, keys[0], arg) if keys else (None, None, arg)
 
 
 def size(path):
@@ -322,25 +337,21 @@ def cmd_list():
     if table is None:
         print("No folders: this machine has none, or Henge is too old for them.")
         table = {"folders": []}
-    st, keys = load_state(), set()
+    st = load_state()
     for f in table["folders"]:
         where = os.path.join(MEDIA, f["name"]) if f["name"] in st else "not mounted"
         extra = ""
         if f["mode"] == "cow":
-            keys.add(key_of(f["id"]))
             extra = ", changes " + human(size(os.path.join(layer(key_of(f["id"])), "upper")))
         print(f"{f['name']}: {f['mode']}, {f['state']}, {where}{extra}")
-    for key in sorted(os.listdir(LAYERS)) if os.path.isdir(LAYERS) else []:
-        if key in keys:
-            continue
-        try:
-            with open(os.path.join(layer(key), "info.json")) as fh:
-                info = json.load(fh)
-        except (OSError, ValueError):
-            info = {}
+    lost = orphans(table)
+    names = [f["name"] for f in table["folders"]] + [info.get("name") for info in lost.values()]
+    for key, info in lost.items():
+        name = info.get("name") or key
         seen = time.strftime("%d/%m/%Y", time.localtime(info.get("seen", 0)))
-        print(f"{info.get('name', key)}: changes with no folder ({human(size(os.path.join(layer(key), 'upper')))}, "
-              f"last seen {seen}); export or reset it by that name")
+        by = "by that name" if names.count(name) == 1 else f"by its key {key}"  # find() takes a table folder first
+        print(f"{name}: changes with no folder ({human(size(os.path.join(layer(key), 'upper')))}, "
+              f"last seen {seen}, key {key}); export or reset it {by}")
 
 
 def whiteout(st):
@@ -354,8 +365,8 @@ def opaque(path):
         return False
 
 
-def cmd_export(name, dest):
-    f, key = find(name)
+def cmd_export(arg, dest):
+    f, key, name = find(arg)
     if not key:
         sys.exit(f"henge-files: {name} is not a Copy-on-write folder" if f else f"henge-files: no folder {name}")
     upper = os.path.join(layer(key), "upper")
@@ -425,19 +436,24 @@ def cmd_export(name, dest):
     print(f"{files} files, {len(deletions)} deletions, {len(links)} links: {dest}")
 
 
-def cmd_reset(name):
-    f, key = find(name)
+def cmd_reset(arg):
+    f, key, name = find(arg)
     if not key:
         sys.exit(f"henge-files: {name} is not a Copy-on-write folder" if f else f"henge-files: no folder {name}")
     with Locked():
         st = load_state()
-        if not unmount_one(name, lazy=False):
-            sys.exit(f"henge-files: {name} is in use; close what has it open, then try again")
-        st.pop(name, None)
+        # Only the overlays on this layer: a folder with no layer can have the same name
+        using = {n for n, s in st.items() if s.get("key") == key and s.get("mode") == "cow"} | ({name} if f else set())
+        for n in sorted(using):
+            if not unmount_one(n, lazy=False):
+                save_state(st)
+                sys.exit(f"henge-files: {n} is in use; close what has it open, then try again")
+            st.pop(n, None)
         shutil.rmtree(layer(key), ignore_errors=True)
         save_state(st)
-        if f:
-            reconcile(read_table() or {"folders": []})
+        table = read_table()
+        if table is not None:
+            reconcile(table)
     sh("fstrim", "/")  # the freed blocks go back to the device now, not at the weekly fstrim
     print(f"{name}: changes discarded")
 

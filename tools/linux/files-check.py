@@ -10,9 +10,10 @@ make; fsx from LTP; pjdfstest with --pjdfstest) in a clone of --image. Boot 1 ha
 c=DIR (Read-write, the default) and --share, and checks the mounts and owners, that a Read-only folder refuses
 every change (also after root remounts it rw), the same changes in Copy-on-write (the Mac's folder stays as it
 was; export and reset) and in Read-write (the Mac sees them), a new original under a Copy-on-write folder (the
-guest's changes stay on top), host changes within 2 s, a new mode, offline and online, a folder added and
-removed while running, a program built and run on the folder, a shared mmap, links from the Mac that point out
-of the folder, fsx, and times for tar, git, dd and rm on each folder, on ~/Henge (davfs2) and on the root disk.
+guest's changes stay on top), two layers with no folder and one name, host changes within 2 s, a new mode,
+offline and online, a folder added and removed while running, a program built and run on the folder, a shared
+mmap, links from the Mac that point out of the folder, fsx, and times for tar, git, dd and rm on each folder, on
+~/Henge (davfs2) and on the root disk.
 Boot 2 has no --folder: the system is running and /media/henge is empty.
 --pjdfstest runs FM7 instead: pjdfstest's groups on the Read-write folder, with the failures by cause.
 The shared image never changes: the guest writes to a clone. Exit 1 on a failed check.
@@ -347,6 +348,26 @@ def check_new_original(vm, dirs, tmp):
     ok(f"a new original for b: the overlay moved onto it in {took} s and kept the guest's file")
 
 
+def check_orphans(vm):
+    """Two layers with no folder and one name: list gives each key, the name is refused, the keys work."""
+    L = "/var/lib/henge/files"
+    for k in ("o1", "o2"):
+        vm.need(f"sudo mkdir -p {L}/{k}/upper && echo {k} | sudo tee {L}/{k}/upper/note.txt >/dev/null && "
+                f"echo '{{\"id\": \"{k}\", \"name\": \"Docs\", \"seen\": 0}}' | sudo tee {L}/{k}/info.json >/dev/null")
+    out = vm.need("henge-files list", what="list")
+    lines = [line for line in out.splitlines() if line.startswith("Docs: ")]
+    if len(lines) != 2 or not all(f"by its key {k}" in line for k, line in zip(("o1", "o2"), lines)):
+        raise Fail(f"list: two layers called Docs: {out!r}")
+    out, rc = vm.sh("henge-files reset Docs")
+    if rc == 0 or "o1, o2" not in out:
+        raise Fail(f"reset Docs with two such layers: status {rc}, {out!r}")
+    vm.need("henge-files export o1 /tmp/exp-o1 && cat /tmp/exp-o1/note.txt", lambda o: o.endswith("o1"), "export o1")
+    vm.need("henge-files reset o1 && henge-files reset Docs", what="reset o1, then Docs")
+    vm.need(f"sudo ls {L}", lambda o: not {"o1", "o2"} & set(o.split()), "reset: both layers are gone")
+    vm.need(f"mountpoint -q {MEDIA}/b", what="b is mounted after the resets")
+    ok("two layers with no folder called Docs: list gives each key, reset Docs refuses, export and reset by key work")
+
+
 def seen_after(vm, path, text, write):
     """Seconds from write() on the Mac until the guest reads text at path (the console's round trip is in it)."""
     vm.p.sendline(f"python3 /tmp/files-probe.py wait {path} '{text}' 10; echo {MARK}$?")
@@ -621,6 +642,7 @@ def main():
             check_ro(vm, dirs, before)
             check_changes(vm, dirs, before, share)
             check_new_original(vm, dirs, folders)
+            check_orphans(vm)
             check_host_change(vm, dirs, times)
             check_mode(vm, dirs)
             check_offline(vm, dirs, folders, times)
