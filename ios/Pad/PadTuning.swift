@@ -203,7 +203,7 @@ struct PadTuning: Codable, Equatable {
         var accelSmoothing = 0.04        // s
         /// pt/s². Below floor nothing plays; above it the haptic starts at its minimum, and at full it is at its gain.
         var floor = 1500.0
-        var full = 20000.0
+        var full = 50000.0
         /// s with no sample: the finger is still, so its speed falls to zero.
         var still = 0.03
         /// The weakest motion haptic, and the strongest. Set on the phone: half of the first, felt values.
