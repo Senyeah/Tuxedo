@@ -10,7 +10,8 @@
    devices/virtio_fs.c carries the messages.
 
    The guest sees one root that the server makes. It has one directory for each folder, by name, and a read-only
-   file .henge-folders with each folder's id, name, mode and state as JSON. The guest's helper mounts each folder at
+   file .henge-folders with each folder's id, name, mode, state and gen as JSON (gen changes when another folder
+   is picked for the index, so the guest remounts an overlay on it). The guest's helper mounts each folder at
    /media/henge/<name>. Every path below a folder opens below that folder's descriptor (safe_path.h), and the
    Read-only and Copy-on-write modes refuse every change here, not only in the guest. Everything has uid and gid
    1000 (the guest's user henge). */

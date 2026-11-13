@@ -1,0 +1,522 @@
+#!/usr/bin/python3
+"""The folders from the Files app at /media/henge/<name> (docs/files-mount-plan.md).
+
+The host serves them on one virtio-fs tag, henge-files, mounted at /run/henge/files by run-henge-files.mount.
+Its root has a directory for each folder and .henge-folders, the table as JSON. `henge-files run` (the service)
+mounts each folder by its mode: Read-write and Read-only as bind mounts, Copy-on-write as an overlay with the
+upper layer in /var/lib/henge/files/<id> on the root disk. The host refuses changes in Read-only and
+Copy-on-write folders itself, so a remount here cannot get past it.
+News (a folder added, removed, renamed, a new mode, offline or online) comes from a long GET of /.henge/folders
+on the share server; without the share the table is read every 2 s.
+
+  henge-files list               the folders, and Copy-on-write layers with no folder
+  henge-files export NAME [DEST] the changes of a Copy-on-write folder, to ~/Henge/Exports by default
+  henge-files reset NAME         discards the changes of a Copy-on-write folder
+  henge-files remount NAME       mounts a folder again
+"""
+import fcntl
+import hashlib
+import http.client
+import json
+import os
+import pwd
+import re
+import shutil
+import signal
+import socket
+import stat
+import subprocess
+import sys
+import time
+
+HOST = "10.0.2.4"
+ROOT = "/run/henge/files"
+LOWER = "/run/henge/lower"  # overlay options cannot carry every name, so lowerdir is a link here
+STATE = "/run/henge/files.json"
+LOCK = "/run/henge/files.lock"
+MEDIA = "/media/henge"
+LAYERS = "/var/lib/henge/files"
+TABLE = ROOT + "/.henge-folders"
+GUEST_UID = 1000
+OVERLAY = "redirect_dir=off,index=off,metacopy=off,xino=off"  # the kernel's defaults, and they allow changes to the original while unmounted
+PLACES_URL = "file://" + MEDIA
+
+
+def log(*a):
+    print(*a, file=sys.stderr, flush=True)
+
+
+def key_of(fid):
+    """A layer's directory name: the folder's id when it is safe in mount options, else a hash of it."""
+    if re.fullmatch(r"[A-Za-z0-9_@+-][A-Za-z0-9_.@+-]*", fid):
+        return fid
+    return "h-" + hashlib.sha256(fid.encode()).hexdigest()[:32]
+
+
+def unescape(s):
+    return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), s)
+
+
+def mounts():
+    """Mount point -> file system type, from mountinfo (the last mount on a point wins)."""
+    out = {}
+    with open("/proc/self/mountinfo") as f:
+        for line in f:
+            a = line.split()
+            sep = a.index("-")
+            out[unescape(a[4])] = a[sep + 1]
+    return out
+
+
+def sh(*cmd):
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    return r.returncode, (r.stderr or r.stdout).strip()
+
+
+def read_table():
+    try:
+        with open(TABLE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def load_state():
+    try:
+        with open(STATE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(st):
+    tmp = STATE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(st, f)
+    os.replace(tmp, STATE)
+
+
+class Locked:
+    def __enter__(self):
+        os.makedirs(os.path.dirname(LOCK), exist_ok=True)
+        self.f = open(LOCK, "w")
+        fcntl.flock(self.f, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *a):
+        self.f.close()
+
+
+def layer(key):
+    return os.path.join(LAYERS, key)
+
+
+def note_layer(key, folder):
+    try:
+        with open(os.path.join(layer(key), "info.json"), "w") as f:
+            json.dump({"id": folder["id"], "name": folder["name"], "seen": int(time.time())}, f)
+    except OSError:
+        pass
+
+
+def mount_one(f):
+    """Mounts folder f at /media/henge/<name>. Returns None, or why not."""
+    name, mode = f["name"], f["mode"]
+    src, dst = os.path.join(ROOT, name), os.path.join(MEDIA, name)
+    os.makedirs(dst, exist_ok=True)
+    if mode in ("rw", "ro"):
+        rc, err = sh("mount", "--bind", "-o", "nosuid,nodev", src, dst)
+        if rc == 0 and mode == "ro":
+            rc, err = sh("mount", "-o", "remount,bind,ro,nosuid,nodev", dst)
+            if rc != 0:
+                sh("umount", dst)
+        return None if rc == 0 else err
+    key = key_of(f["id"])
+    upper, work = os.path.join(layer(key), "upper"), os.path.join(layer(key), "work")
+    os.makedirs(work, mode=0o700, exist_ok=True)
+    if not os.path.isdir(upper):
+        try:
+            st = os.stat(src)
+            uid, gid, perm = st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode)
+        except OSError:
+            uid, gid, perm = GUEST_UID, GUEST_UID, 0o755
+        os.mkdir(upper)
+        os.chown(upper, uid, gid)
+        os.chmod(upper, perm)  # the overlay's root takes the upper layer's owner and mode
+    note_layer(key, f)
+    os.makedirs(LOWER, exist_ok=True)
+    link = os.path.join(LOWER, key)
+    if os.path.lexists(link):
+        os.remove(link)
+    os.symlink(src, link)
+    sh("modprobe", "-q", "overlay")
+    rc, err = sh("mount", "-t", "overlay", "henge-" + key, "-o",
+                 f"lowerdir={link},upperdir={upper},workdir={work},{OVERLAY},nosuid,nodev", dst)
+    return None if rc == 0 else err
+
+
+def unmount_one(name, lazy):
+    """True when /media/henge/<name> is no longer mounted."""
+    dst = os.path.join(MEDIA, name)
+    if dst in mounts():
+        rc, err = sh("umount", dst)
+        if rc != 0 and lazy:
+            rc, err = sh("umount", "-l", dst)  # programs that have it open keep their view
+        if rc != 0:
+            if name not in busy:
+                log(f"{name}: in use ({err}); it changes when nothing has it open")
+            busy.add(name)
+            return False
+    busy.discard(name)
+    try:
+        os.rmdir(dst)
+    except OSError:
+        pass
+    return True
+
+
+busy, away = set(), set()  # names already logged
+
+
+def notify(name):
+    """Tells each desktop session that the app cannot reach the folder."""
+    if not shutil.which("notify-send"):
+        return
+    for run in os.listdir("/run/user") if os.path.isdir("/run/user") else []:
+        bus = f"/run/user/{run}/bus"
+        if not run.isdigit() or not os.path.exists(bus):
+            continue
+        try:
+            user = pwd.getpwuid(int(run)).pw_name
+        except KeyError:
+            continue
+        subprocess.run(["runuser", "-u", user, "--", "env", f"DBUS_SESSION_BUS_ADDRESS=unix:path={bus}", "notify-send",
+                        "-a", "Henge", "Henge cannot reach " + name, "Pick it again in the machine's settings."],
+                       capture_output=True, timeout=10)
+
+
+def reconcile(table):
+    """Makes /media/henge match the table. Returns True when something is left to do (a busy folder, a failed
+    mount), so the caller comes back soon."""
+    st, now = load_state(), mounts()
+    want = {f["name"]: f for f in table.get("folders", [])
+            if f["name"] and "/" not in f["name"] and not f["name"].startswith(".")}  # the host checks this too
+    pending = False
+    for name in list(st):
+        f = want.get(name)
+        if f and f["id"] == st[name]["id"] and os.path.join(MEDIA, name) in now:
+            continue
+        if unmount_one(name, lazy=True):  # removed, renamed, or gone underneath
+            link = os.path.join(LOWER, st[name].get("key", ""))
+            if st[name].get("key") and os.path.islink(link):
+                os.remove(link)
+            del st[name]
+    for name, f in want.items():
+        old = st.get(name)
+        if f["state"] != "ready" and name not in away:
+            log(f"{name}: unavailable")
+            away.add(name)
+            notify(name)
+        elif f["state"] == "ready" and name in away:
+            log(f"{name}: available again")
+            away.discard(name)
+        if old and (old["mode"] != f["mode"] or (f["mode"] == "cow" and old.get("gen") != f.get("gen"))):
+            if not unmount_one(name, lazy=False):  # a new mode or another original applies when nothing is open
+                pending = True
+                continue
+            del st[name]
+            old = None
+        if old or f["state"] != "ready":
+            continue
+        why = mount_one(f)
+        if why:
+            log(f"{name}: not mounted: {why}")
+            pending = True
+            continue
+        st[name] = {"id": f["id"], "key": key_of(f["id"]), "mode": f["mode"], "gen": f.get("gen")}
+        log(f"{name}: mounted at {os.path.join(MEDIA, name)} ({f['mode']})")
+    save_state(st)
+    return pending
+
+
+def poll(seq, limit):
+    """Waits up to limit s for news after seq. Returns the seq to wait from next, or None when the share server
+    cannot be reached."""
+    c = http.client.HTTPConnection(HOST, 80, timeout=limit)
+    try:
+        c.request("GET", "/.henge/folders" + (f"?since={seq}" if seq is not None else ""))
+        r = c.getresponse()
+        r.read()
+        return int(r.getheader("X-Henge-Seq") or 0) if r.status == 200 else None
+    except socket.timeout:
+        return seq
+    except (OSError, http.client.HTTPException, ValueError):
+        return None
+    finally:
+        c.close()
+
+
+def run():
+    signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))  # the mounts stay: a restart takes them over
+    if ROOT not in mounts():
+        log(f"{ROOT} is not mounted: no folders")
+        return
+    os.makedirs(MEDIA, exist_ok=True)
+    seq, share_back, pending = None, 0, False
+    while True:
+        table = read_table()
+        if table is not None:
+            with Locked():  # each time, so a change made by a command (remount, reset) is taken up too
+                pending = reconcile(table)
+        if time.monotonic() >= share_back:
+            got = poll(seq, 10 if pending else 130)
+            if got is not None:
+                seq = got
+                continue
+            share_back = time.monotonic() + 60  # no share server: read the table every 2 s, and try again later
+        time.sleep(2)
+
+
+def need_root():
+    if os.geteuid() != 0:
+        os.execvp("sudo", ["sudo", "-n", sys.executable, os.path.abspath(sys.argv[0]), *sys.argv[1:]])
+
+
+def find(name):
+    """The table's folder called name, or None; and the layer's key for a Copy-on-write one, or for a layer that
+    has no folder now (its info.json names it)."""
+    table = read_table() or {"folders": []}
+    for f in table["folders"]:
+        if f["name"] == name:
+            return f, key_of(f["id"]) if f["mode"] == "cow" else None
+    for key in os.listdir(LAYERS) if os.path.isdir(LAYERS) else []:
+        try:
+            with open(os.path.join(layer(key), "info.json")) as fh:
+                if json.load(fh).get("name") == name:
+                    return None, key
+        except (OSError, ValueError):
+            pass
+    return None, None
+
+
+def size(path):
+    total = 0
+    for top, dirs, files in os.walk(path):
+        for n in files:
+            try:
+                total += os.lstat(os.path.join(top, n)).st_blocks * 512
+            except OSError:
+                pass
+    return total
+
+
+def human(n):
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+
+
+def cmd_list():
+    table = read_table()
+    if table is None:
+        print("No folders: this machine has none, or Henge is too old for them.")
+        table = {"folders": []}
+    st, keys = load_state(), set()
+    for f in table["folders"]:
+        where = os.path.join(MEDIA, f["name"]) if f["name"] in st else "not mounted"
+        extra = ""
+        if f["mode"] == "cow":
+            keys.add(key_of(f["id"]))
+            extra = ", changes " + human(size(os.path.join(layer(key_of(f["id"])), "upper")))
+        print(f"{f['name']}: {f['mode']}, {f['state']}, {where}{extra}")
+    for key in sorted(os.listdir(LAYERS)) if os.path.isdir(LAYERS) else []:
+        if key in keys:
+            continue
+        try:
+            with open(os.path.join(layer(key), "info.json")) as fh:
+                info = json.load(fh)
+        except (OSError, ValueError):
+            info = {}
+        seen = time.strftime("%d/%m/%Y", time.localtime(info.get("seen", 0)))
+        print(f"{info.get('name', key)}: changes with no folder ({human(size(os.path.join(layer(key), 'upper')))}, "
+              f"last seen {seen}); export or reset it by that name")
+
+
+def whiteout(st):
+    return stat.S_ISCHR(st.st_mode) and st.st_rdev == 0
+
+
+def opaque(path):
+    try:
+        return os.getxattr(path, "trusted.overlay.opaque", follow_symlinks=False) == b"y"
+    except OSError:
+        return False
+
+
+def cmd_export(name, dest):
+    f, key = find(name)
+    if not key:
+        sys.exit(f"henge-files: {name} is not a Copy-on-write folder" if f else f"henge-files: no folder {name}")
+    upper = os.path.join(layer(key), "upper")
+    lower = os.path.join(ROOT, name) if f else None
+    user = os.environ.get("SUDO_USER") or pwd.getpwuid(GUEST_UID).pw_name
+    pw = pwd.getpwnam(user)
+    if not dest:
+        dest = os.path.join(pw.pw_dir, "Henge", "Exports", f"{name}-{time.strftime('%d-%m-%Y-%H%M')}")
+    missing, d = [], dest
+    while not os.path.isdir(d):
+        missing.append(d)
+        d = os.path.dirname(d)
+    os.makedirs(dest, exist_ok=True)
+    made, deletions, links, files = {dest}, [], [], 0
+
+    def own(p):
+        try:
+            os.chown(p, pw.pw_uid, pw.pw_gid)
+        except OSError:
+            pass
+
+    def parent(p):
+        d = os.path.dirname(p)
+        if d not in made:
+            parent(d)
+            os.makedirs(d, exist_ok=True)
+            own(d)
+            made.add(d)
+
+    for d in missing:
+        own(d)
+    for top, dirs, names in os.walk(upper):
+        rel = os.path.relpath(top, upper)
+        rel = "" if rel == "." else rel
+        if rel and opaque(top):
+            deletions.append(rel + "/")  # everything the original had here is gone, but for what the export has
+        for n in sorted(dirs + names):
+            src, part = os.path.join(top, n), os.path.join(rel, n)
+            out = os.path.join(dest, part)
+            st = os.lstat(src)
+            if whiteout(st):
+                deletions.append(part)
+            elif stat.S_ISREG(st.st_mode):
+                parent(out)
+                shutil.copyfile(src, out)
+                os.chmod(out, stat.S_IMODE(st.st_mode))
+                own(out)
+                files += 1
+            elif stat.S_ISLNK(st.st_mode):
+                parent(out)
+                target = os.readlink(src)
+                try:
+                    os.symlink(target, out)
+                    os.lchown(out, pw.pw_uid, pw.pw_gid)
+                except OSError:
+                    links.append(f"{part} -> {target}")  # davfs2 has no links
+            elif stat.S_ISDIR(st.st_mode) and (lower is None or not os.path.lexists(os.path.join(lower, part)) or opaque(src)):
+                parent(out)
+                os.makedirs(out, exist_ok=True)  # a new directory, kept when it is empty
+                own(out)
+                made.add(out)
+    for what, lines in (("deletions.txt", deletions), ("links.txt", links)):
+        if lines:
+            with open(os.path.join(dest, what), "w") as fh:
+                fh.write("".join(line + "\n" for line in lines))
+            own(os.path.join(dest, what))
+    print(f"{files} files, {len(deletions)} deletions, {len(links)} links: {dest}")
+
+
+def cmd_reset(name):
+    f, key = find(name)
+    if not key:
+        sys.exit(f"henge-files: {name} is not a Copy-on-write folder" if f else f"henge-files: no folder {name}")
+    with Locked():
+        st = load_state()
+        if not unmount_one(name, lazy=False):
+            sys.exit(f"henge-files: {name} is in use; close what has it open, then try again")
+        st.pop(name, None)
+        shutil.rmtree(layer(key), ignore_errors=True)
+        save_state(st)
+        if f:
+            reconcile(read_table() or {"folders": []})
+    sh("fstrim", "/")  # the freed blocks go back to the device now, not at the weekly fstrim
+    print(f"{name}: changes discarded")
+
+
+def cmd_remount(name):
+    with Locked():
+        st = load_state()
+        unmount_one(name, lazy=True)
+        st.pop(name, None)
+        save_state(st)
+        reconcile(read_table() or {"folders": []})
+    print(f"{name}: {'mounted' if name in load_state() else 'not mounted'}")
+
+
+def cmd_unmount():
+    """Every folder, lazily, so programs that have one open keep it (the package's removal)."""
+    with Locked():
+        for name in load_state():
+            unmount_one(name, lazy=True)
+        shutil.rmtree(LOWER, ignore_errors=True)
+        if os.path.exists(STATE):
+            os.remove(STATE)
+
+
+def places():
+    """A Places entry for /media/henge: GTK's bookmarks, and Dolphin's when the file exists (KDE makes it)."""
+    home = os.path.expanduser("~")
+    gtk = os.path.join(home, ".config", "gtk-3.0", "bookmarks")
+    try:
+        with open(gtk) as f:
+            have = f.read()
+    except OSError:
+        have = ""
+    if not any(line.split(" ")[0] == PLACES_URL for line in have.splitlines()):
+        os.makedirs(os.path.dirname(gtk), exist_ok=True)
+        with open(gtk, "a") as f:
+            f.write(("" if not have or have.endswith("\n") else "\n") + PLACES_URL + " Folders\n")
+    kde = os.path.join(home, ".local", "share", "user-places.xbel")
+    try:
+        with open(kde) as f:
+            xbel = f.read()
+    except OSError:
+        return
+    if f'href="{PLACES_URL}"' in xbel or "</xbel>" not in xbel:
+        return
+    icon = ('    <metadata owner="http://freedesktop.org">\n     <bookmark:icon name="folder-remote"/>\n    </metadata>\n'
+            if "xmlns:bookmark" in xbel else "")
+    entry = (f' <bookmark href="{PLACES_URL}">\n  <title>Folders</title>\n  <info>\n{icon}'
+             '    <metadata owner="http://www.kde.org">\n     <ID>henge-folders</ID>\n    </metadata>\n  </info>\n </bookmark>\n')
+    at = xbel.rindex("</xbel>")
+    with open(kde + ".tmp", "w") as f:
+        f.write(xbel[:at] + entry + xbel[at:])
+    os.replace(kde + ".tmp", kde)
+
+
+def main():
+    a = sys.argv[1:]
+    cmd = a[0] if a else ""
+    if cmd == "places" and len(a) == 1:
+        return places()
+    if cmd == "run" and len(a) == 1:
+        return run()
+    if cmd == "list" and len(a) == 1:
+        need_root()
+        return cmd_list()
+    if cmd == "export" and len(a) in (2, 3):
+        need_root()
+        return cmd_export(a[1], os.path.abspath(a[2]) if len(a) == 3 else None)
+    if cmd == "reset" and len(a) == 2:
+        need_root()
+        return cmd_reset(a[1])
+    if cmd == "unmount" and len(a) == 1:
+        need_root()
+        return cmd_unmount()
+    if cmd == "remount" and len(a) == 2:
+        need_root()
+        return cmd_remount(a[1])
+    sys.exit(__doc__.split("\n\n", 2)[-1].rstrip() if cmd in ("", "-h", "--help") else f"henge-files: {' '.join(a)}: see henge-files --help")
+
+
+if __name__ == "__main__":
+    main()

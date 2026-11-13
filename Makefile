@@ -263,6 +263,17 @@ test-linux-share: $(B)/hengevm
 	uv run tools/linux/share-check.py $(SHARE_ARGS)
 .PHONY: test-linux-share
 
+# FM6: the folders from the Files app (virtio-fs, henge-files) at /media/henge against --folder. Installs henge-guest from
+# tools/linux/henge-guest in the clone (needs Docker); FILES_ARGS="--image FILE --no-install" for a disk saved with --save-image.
+test-linux-files: $(B)/hengevm
+	uv run tools/linux/files-check.py $(FILES_ARGS)
+.PHONY: test-linux-files
+
+# FM7: pjdfstest's rename, unlink, link, symlink, chmod, open and mkdir groups on the Read-write folder, failures by cause.
+test-linux-files-posix: $(B)/hengevm
+	uv run tools/linux/files-check.py --pjdfstest $(FILES_ARGS)
+.PHONY: test-linux-files-posix
+
 # P7: the clipboard helper in the desktop image against the host's clipboard. CLIP_ARGS="--image FILE" for an image that has henge-guest 1.2.
 test-linux-clipboard: $(B)/hengevm
 	uv run tools/linux/clipboard-check.py $(CLIP_ARGS)

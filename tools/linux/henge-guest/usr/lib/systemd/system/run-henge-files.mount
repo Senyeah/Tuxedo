@@ -1,0 +1,11 @@
+[Unit]
+Description=Henge folders from the Files app (virtio-fs)
+# Not empty only when the machine has the virtio-fs device: a machine with no folders skips this, not fails
+ConditionDirectoryNotEmpty=/sys/fs/virtiofs
+
+[Mount]
+What=henge-files
+Where=/run/henge/files
+Type=virtiofs
+Options=nosuid,nodev
+TimeoutSec=10

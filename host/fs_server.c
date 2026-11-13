@@ -220,8 +220,9 @@ char *hv_fs_folders_json(unsigned long *seq) {
         if (n < CAP) n += (size_t)snprintf(out + n, CAP - n, ",\"name\":");
         json_str(out, CAP, &n, f->name);
         if (n < CAP)
-            n += (size_t)snprintf(out + n, CAP - n, ",\"mode\":\"%s\",\"state\":\"%s\",\"case\":\"%s\"}", hv_fs_mode_name(f->mode),
-                                  f->online ? "ready" : "unavailable", f->case_sensitive ? "sensitive" : "insensitive");
+            n += (size_t)snprintf(out + n, CAP - n, ",\"mode\":\"%s\",\"state\":\"%s\",\"case\":\"%s\",\"gen\":%u}",
+                                  hv_fs_mode_name(f->mode), f->online ? "ready" : "unavailable",
+                                  f->case_sensitive ? "sensitive" : "insensitive", f->gen);
         first = 0;
     }
     if (seq) *seq = news;
@@ -538,6 +539,19 @@ static Handle *node_handle(HvFs *fs, uint64_t fh, int folder, uint32_t fgen, dev
         handle_put(fs, h);
         h = NULL;
     }
+    return h;
+}
+
+/* Any open file of the node: an fstat of a file the guest unlinked comes with no fh, and its path is gone. */
+static Handle *any_node_handle(HvFs *fs, int folder, uint32_t fgen, dev_t dev, ino_t ino) {
+    Handle *h = NULL;
+    pthread_mutex_lock(&fs->mu);
+    for (uint32_t i = 0; i < fs->hcap && !h; i++) {
+        Handle *x = fs->handles[i];
+        if (x && !x->dir && !x->closing && x->folder == folder && x->fgen == fgen && x->dev == dev && x->ino == ino)
+            h = x, h->refs++;
+    }
+    pthread_mutex_unlock(&fs->mu);
     return h;
 }
 
@@ -991,6 +1005,13 @@ static size_t op_getattr(Req *r, Ctx *c) {
         }
     }
     int err = ctx_stat(c, &st);
+    if (err == LX_ESTALE) {
+        Handle *h = any_node_handle(r->fs, c->folder, c->fgen, c->dev, c->ino);
+        if (h) {
+            err = fstat(h->fd, &st) == 0 ? 0 : lx(errno);
+            handle_put(r->fs, h);
+        }
+    }
     return err ? reply_err(r->o, err) : attr_reply(r, &st);
 }
 
@@ -1075,13 +1096,26 @@ static size_t made_reply(Req *r, Ctx *c, int dfd, const char *name) {
     return entry_reply(r, c, name, &st, NULL, 0);
 }
 
+/* A new object gets the guest's mode: the guest's kernel applied the guest's umask, and the host's must not apply
+   again (the app's 022 made 0777 0755). fd, or else name below dfd, without following a link. */
+static void exact_mode(int fd, int dfd, const char *name, mode_t perm) {
+    struct stat st;
+    if (fd >= 0 ? fstat(fd, &st) != 0 : fstatat(dfd, name, &st, AT_SYMLINK_NOFOLLOW) != 0) return;
+    if ((st.st_mode & 07777) == perm || S_ISLNK(st.st_mode)) return;
+    if (fd >= 0) fchmod(fd, perm);
+    else fchmodat(dfd, name, perm, AT_SYMLINK_NOFOLLOW);
+}
+
 static size_t op_mkdir(Req *r, Ctx *c) {
     FuseMkdirIn m;
     int err = arg_get(r, &m, sizeof m), dfd;
     const char *name = err ? NULL : arg_name(r, sizeof m, &err);
     if (!name) return reply_err(r->o, err);
     if ((err = change_in(c, &dfd))) return reply_err(r->o, err);
-    size_t n = mkdirat(dfd, name, (mode_t)(m.mode & 07777)) == 0 ? made_reply(r, c, dfd, name) : reply_err(r->o, lx(errno));
+    mode_t perm = (mode_t)(m.mode & 07777);
+    int rc = mkdirat(dfd, name, perm);
+    if (rc == 0) exact_mode(-1, dfd, name, perm);
+    size_t n = rc == 0 ? made_reply(r, c, dfd, name) : reply_err(r->o, lx(errno));
     close(dfd);
     return n;
 }
@@ -1094,10 +1128,11 @@ static size_t op_mknod(Req *r, Ctx *c) {
     if ((err = change_in(c, &dfd))) return reply_err(r->o, err);
     int rc = -1;
     mode_t perm = (mode_t)(m.mode & 07777);
-    if (S_ISFIFO(m.mode)) rc = mkfifoat(dfd, name, perm);
-    else if (S_ISREG(m.mode)) {
+    if (S_ISFIFO(m.mode)) {
+        if ((rc = mkfifoat(dfd, name, perm)) == 0) exact_mode(-1, dfd, name, perm);
+    } else if (S_ISREG(m.mode)) {
         int fd = openat(dfd, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, perm);
-        if (fd >= 0) close(fd), rc = 0;
+        if (fd >= 0) exact_mode(fd, -1, NULL, perm), close(fd), rc = 0;
     } else errno = EPERM; /* no devices or sockets on the host */
     size_t n = rc == 0 ? made_reply(r, c, dfd, name) : reply_err(r->o, lx(errno));
     close(dfd);
@@ -1254,7 +1289,12 @@ static size_t op_create(Req *r, Ctx *c) {
     const char *name = err ? NULL : arg_name(r, sizeof a, &err);
     if (!name) return reply_err(r->o, err);
     if ((err = change_in(c, &dfd))) return reply_err(r->o, err);
-    int fd = openat(dfd, name, host_flags(a.flags) | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, (mode_t)(a.mode & 07777));
+    /* O_EXCL first, so only a file made here gets the guest's mode; one that was there opens as it is */
+    mode_t perm = (mode_t)(a.mode & 07777);
+    int flags = host_flags(a.flags) | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC;
+    int fd = openat(dfd, name, flags | O_EXCL, perm);
+    if (fd >= 0) exact_mode(fd, -1, NULL, perm);
+    else if (errno == EEXIST && !(flags & O_EXCL)) fd = openat(dfd, name, flags & ~O_CREAT, perm);
     struct stat st;
     if (fd < 0 || fstat(fd, &st) != 0 || (err = plain_file(fd, &st, 0))) {
         if (!err) err = lx(errno);

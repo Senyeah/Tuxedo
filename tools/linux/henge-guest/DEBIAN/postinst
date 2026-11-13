@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-UNITS="henge-firstboot.service henge-grow.service home-henge-Henge.automount henge-status.service henge-secrets-firewall.service"
+UNITS="henge-firstboot.service henge-grow.service home-henge-Henge.automount henge-status.service henge-secrets-firewall.service henge-files.service"
 
 case "$1" in
     configure|abort-upgrade|abort-deconfigure|abort-remove)
@@ -20,10 +20,17 @@ case "$1" in
             systemctl --global enable henge-secrets.service >/dev/null 2>&1 || true
         fi
         rm -f /var/lib/henge/secrets-removed
+        # The Places entry for /media/henge, on a first install or an upgrade from before the folders
+        if [ "$1" = configure ] && { [ -z "$2" ] || dpkg --compare-versions "$2" lt 1.7.0; }; then
+            systemctl --global enable henge-files-places.service >/dev/null 2>&1 || true
+        fi
+        systemd-tmpfiles --create /usr/lib/tmpfiles.d/henge-files.conf >/dev/null 2>&1 || true
         if [ -d /run/systemd/system ]; then
             systemctl --system daemon-reload >/dev/null || true
             # No gap: a stop keeps the rule, and the start replaces it in one transaction
             deb-systemd-invoke restart henge-secrets-firewall.service >/dev/null || true
+            # The mounts stay over a restart: the new helper takes them over
+            deb-systemd-invoke restart henge-files.service >/dev/null || true
         fi
         ;;
 esac

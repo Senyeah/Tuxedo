@@ -257,6 +257,15 @@ static void test_init(void) {
     call(FUSE_INIT, 0, &in, sizeof in, NULL, 0);
 }
 
+/* The gen of a folder in .henge-folders, as text. */
+static void folder_gen(char *out, const char *name) {
+    char want[96];
+    snprintf(want, sizeof want, "\"name\":\"%s\",", name);
+    const char *j = read_text(FUSE_ROOT_ID, ".henge-folders"), *at = strstr(j, want), *g = at ? strstr(at, "\"gen\":") : NULL;
+    out[0] = 0;
+    if (g) sscanf(g + 6, "%63[0-9]", out);
+}
+
 static void test_root(void) {
     const char *l = listing(FUSE_ROOT_ID);
     check("root: lists a", strstr(l, "|a|") != NULL, 1);
@@ -379,6 +388,60 @@ static void test_rw(void) {
     release(n, (uint64_t)fh, 0);
     check("on the host", !strcmp(host_read("a/new"), "hello"), 1);
     check("create again with O_EXCL", create_in(a, "new", LX_O_RDWR | LX_O_EXCL, NULL), -LX_EEXIST);
+
+    /* The guest's mode, not the host's umask: the guest's kernel has applied the guest's. */
+    mode_t old_mask = umask(022);
+    FuseCreateIn ci = {LX_O_RDWR | LX_O_CREAT, 0777, 0, 0};
+    check("create 0777 under the host's umask 022", name_call(FUSE_CREATE, a, &ci, sizeof ci, "m777"), 0);
+    FuseEntryOut eo;
+    FuseOpenOut oo;
+    memcpy(&eo, reply_buf, sizeof eo);
+    memcpy(&oo, reply_buf + sizeof eo, sizeof oo);
+    check("create 0777: the reply's mode", (int)(eo.attr.mode & 07777), 0777);
+    release(eo.nodeid, oo.fh, 0);
+    FuseMkdirIn mi = {0777, 0};
+    check("mkdir 0777", name_call(FUSE_MKDIR, a, &mi, sizeof mi, "d777"), 0);
+    FuseMknodIn ni = {S_IFIFO | 0666, 0, 0, 0};
+    check("mkfifo 0666", name_call(FUSE_MKNOD, a, &ni, sizeof ni, "p666"), 0);
+    struct stat hs;
+    char hp[PATH_MAX];
+    host_path(hp, "a/m777");
+    check("create 0777: on the host", stat(hp, &hs) == 0 ? (int)(hs.st_mode & 07777) : -1, 0777);
+    host_path(hp, "a/d777");
+    check("mkdir 0777: on the host", stat(hp, &hs) == 0 ? (int)(hs.st_mode & 07777) : -1, 0777);
+    host_path(hp, "a/p666");
+    check("mkfifo 0666: on the host", lstat(hp, &hs) == 0 ? (int)(hs.st_mode & 07777) : -1, 0666);
+    host_write("a/there", "there\n");
+    host_path(hp, "a/there");
+    chmod(hp, 0600);
+    ci.mode = 0777;
+    check("create of a file that is there", name_call(FUSE_CREATE, a, &ci, sizeof ci, "there"), 0);
+    memcpy(&eo, reply_buf, sizeof eo);
+    memcpy(&oo, reply_buf + sizeof eo, sizeof oo);
+    release(eo.nodeid, oo.fh, 0);
+    check("create of a file that is there: its mode stays", stat(hp, &hs) == 0 ? (int)(hs.st_mode & 07777) : -1, 0600);
+    umask(old_mask);
+
+    /* fstat of an open file after its unlink: the kernel sends no fh, and the path is gone */
+    uint64_t un = 0;
+    long long ufh = create_in(a, "unlinked", LX_O_RDWR, &un);
+    check("unlinked: create", ufh > 0, 1);
+    check("unlinked: unlink while open", name_call(FUSE_UNLINK, a, NULL, 0, "unlinked"), 0);
+    check("unlinked: getattr with no fh", getattr(un), 0);
+    FuseAttrOut uo;
+    memcpy(&uo, reply_buf, sizeof uo);
+    check("unlinked: nlink 0", (int)uo.attr.nlink, 0);
+    release(un, (uint64_t)ufh, 0);
+    check("unlinked: getattr after release", getattr(un), -LX_ESTALE);
+    forget(un, 1);
+    static const char *const made[] = {"m777", "d777", "p666", "there"};
+    for (size_t i = 0; i < sizeof made / sizeof *made; i++) {
+        long long id = lookup(a, made[i]);
+        if (id > 0) forget((uint64_t)id, 2);
+        snprintf(hp, sizeof hp, "%s/a/%s", base, made[i]);
+        if (i == 1) rmdir(hp);
+        else unlink(hp);
+    }
 
     FuseSetattrIn s = {.valid = FATTR_SIZE, .size = 2};
     check("truncate", call(FUSE_SETATTR, n, &s, sizeof s, NULL, 0), 0);
@@ -691,8 +754,15 @@ static void test_folder_changes(void) {
     char p[PATH_MAX];
     host_path(p, "b");
     long long bn = lookup(folder_node("b"), "keepb");
+    char gen0[64], gen1[64], gen2[64];
+    folder_gen(gen0, "b");
     hv_fs_folder_set(1, NULL, "b", to, HV_FS_RW);
     check("picked again: old nodes stale", getattr((uint64_t)bn), -LX_ESTALE);
+    folder_gen(gen1, "b");
+    check("picked again: .henge-folders has a new gen", strcmp(gen0, gen1) != 0 && gen1[0], 1);
+    hv_fs_folder_set(1, NULL, "b", to, HV_FS_RO);
+    folder_gen(gen2, "b");
+    check("a new mode: the gen stays", strcmp(gen1, gen2), 0);
     check("picked again: the new folder's files", lookup(folder_node("b"), "f") > 0, 1);
     hv_fs_folder_set(1, NULL, "b", p, HV_FS_RW);
     hv_fs_folder_clear(hv_fs_folder_find("mv"));
