@@ -1463,6 +1463,139 @@ static void test_devstatus(void) {
     wr32(&m, VIRT_GPIO + 0x41c, 0xff);
 }
 
+/* virtio-snd's control elements on the virt board, as sound/virtio/virtio_kctl.c uses them. */
+#define SND_SLOT 8
+#define SND_REQ (VD_BUF + 0x4000)
+#define SND_RESP (VD_BUF + 0x5000)
+static int snd_calls, snd_percent, snd_muted;
+static void on_snd(void *opaque, int percent, int muted) {
+    (void)opaque;
+    snd_calls++, snd_percent = percent, snd_muted = muted;
+}
+
+/* A control request: header and value out, then the status (and value) back. */
+static uint32_t snd_ctl_req(Vdev *d, uint32_t code, uint32_t a, uint32_t b2, uint32_t c, const int32_t *value, uint32_t extra) {
+    uint8_t *req = ram(SND_REQ), *resp = ram(SND_RESP);
+    memset(req, 0, 8 + 512);
+    memset(resp, 0xee, 4 + 512);
+    memcpy(req, &code, 4);
+    memcpy(req + 4, &a, 4);
+    memcpy(req + 8, &b2, 4);
+    memcpy(req + 12, &c, 4);
+    uint32_t req_len = code == 0x0300 ? 16 : 8;
+    if (value) memcpy(req + 8, value, 8), req_len = 8 + 512;
+    Seg seg[3] = {{SND_REQ, req_len, 0}, {SND_RESP, 4, 1}, {SND_RESP + 4, extra, 1}};
+    vdev_send(d, 0, seg, extra ? 3 : 2);
+    uint32_t st;
+    memcpy(&st, resp, 4);
+    return st;
+}
+
+static int32_t snd_read(Vdev *d, uint32_t cid, int ch) {
+    snd_ctl_req(d, 0x0302, cid, 0, 0, NULL, 512);
+    int32_t v;
+    memcpy(&v, ram(SND_RESP + 4 + 4 * (uint32_t)ch), 4);
+    return v;
+}
+
+static void test_snd_controls(void) {
+    HvVirtioSnd *s = b.snd;
+    Vdev d;
+    uint64_t bar = VIRT_PCIE_MMIO + 0x1300000;
+    vdev_init(&d, SND_SLOT, 2, bar);
+    s->on_control = on_snd;
+    wr32(&m, bar + 0x00, 0);
+    check("snd: offers the control elements", rd32(&m, bar + 0x04), 1);
+    check("snd: two controls in config space", rd32(&m, bar + 0x2000 + 12), 2);
+
+    check("snd: CTL_INFO", snd_ctl_req(&d, 0x0300, 0, 2, 96, NULL, 192), 0x8000);
+    const uint8_t *info = ram(SND_RESP + 4);
+    uint32_t w[6];
+    memcpy(w, info, sizeof w);
+    check("snd: volume role", w[1], 1);
+    check("snd: volume is an integer", w[2], 1);
+    check("snd: read and write, no dB scale", w[3], 3);
+    check("snd: two channels", w[4], 2);
+    check("snd: volume name", !strcmp((const char *)info + 24, "Master Playback Volume"), 1);
+    memcpy(w, info + 72, 12);
+    check("snd: 0 to 100 in steps of 1", w[0] == 0 && w[1] == 100 && w[2] == 1, 1);
+    memcpy(w, info + 96, sizeof w);
+    check("snd: switch role", w[1], 2);
+    check("snd: switch is a boolean", w[2], 0);
+    check("snd: switch name", !strcmp((const char *)info + 96 + 24, "Master Playback Switch"), 1);
+    check("snd: CTL_INFO past the last control", snd_ctl_req(&d, 0x0300, 1, 2, 96, NULL, 192), 0x8001);
+    check("snd: CTL_INFO with a short size", snd_ctl_req(&d, 0x0300, 0, 1, 64, NULL, 64), 0x8001);
+    check("snd: enum items not supported", snd_ctl_req(&d, 0x0301, 0, 0, 0, NULL, 0), 0x8002);
+    check("snd: TLV not supported", snd_ctl_req(&d, 0x0304, 0, 0, 0, NULL, 64), 0x8002);
+    check("snd: full volume at first", snd_read(&d, 0, 0), 100);
+    check("snd: unmuted at first", snd_read(&d, 1, 1), 1);
+
+    /* Events: the driver's buffers wait in the ring until a change needs one. */
+    uint16_t *used = (uint16_t *)ram(d.ring[1] + 0x2000);
+    hv_virtio_snd_set_volume(s, 30);
+    check("snd: a host change without a buffer waits", s->notify_pending[0], 1);
+    check("snd: the guest reads the new volume", snd_read(&d, 0, 1), 30);
+    memset(ram(VD_BUF + 0x6000), 0, 16);
+    Seg ev = {VD_BUF + 0x6000, 8, 1};
+    check("snd: the first buffer takes the waiting event", (uint64_t)vdev_send(&d, 1, &ev, 1), 8);
+    uint32_t code;
+    uint16_t cid, mask;
+    memcpy(&code, ram(VD_BUF + 0x6000), 4);
+    memcpy(&cid, ram(VD_BUF + 0x6004), 2);
+    memcpy(&mask, ram(VD_BUF + 0x6006), 2);
+    check("snd: CTL_NOTIFY", code, 0x1200);
+    check("snd: for the volume", cid, 0);
+    check("snd: its value changed", mask, 1);
+    Seg ev2 = {VD_BUF + 0x6010, 8, 1};
+    check("snd: a buffer with no news is kept", (uint64_t)vdev_send(&d, 1, &ev2, 1), (uint64_t)-1);
+    uint16_t before = used[1];
+    hv_virtio_snd_set_volume(s, 30);
+    check("snd: the same volume sends nothing", used[1], before);
+    hv_virtio_snd_set_volume(s, 45);
+    check("snd: a host change uses the kept buffer", used[1], (uint16_t)(before + 1));
+    memcpy(&code, ram(VD_BUF + 0x6010), 4);
+    check("snd: CTL_NOTIFY in it", code, 0x1200);
+    check("snd: the host's volume is no guest request", snd_calls, 0);
+
+    int32_t v70[2] = {70, 70}, same[2] = {70, 70}, off[2] = {0, 0}, on[2] = {1, 1}, wide[2] = {150, -3};
+    check("snd: a guest write", snd_ctl_req(&d, 0x0303, 0, 0, 0, v70, 0), 0x8000);
+    check("snd: reads back", snd_read(&d, 0, 0), 70);
+    check("snd: reaches the host", snd_calls == 1 && snd_percent == 70 && !snd_muted, 1);
+    check("snd: and tells the guest's other clients", s->notify_pending[0], 1);
+    snd_ctl_req(&d, 0x0303, 0, 0, 0, same, 0);
+    check("snd: an unchanged write is not passed on", snd_calls, 1);
+    snd_ctl_req(&d, 0x0303, 0, 0, 0, wide, 0);
+    check("snd: values are clamped", snd_read(&d, 0, 0) == 100 && snd_read(&d, 0, 1) == 0, 1);
+    snd_ctl_req(&d, 0x0303, 0, 0, 0, v70, 0);
+    check("snd: CTL_WRITE past the last control", snd_ctl_req(&d, 0x0303, 2, 0, 0, v70, 0), 0x8001);
+
+    /* Mute: the ring drains as before, with silence. */
+    snd_calls = 0;
+    snd_ctl_req(&d, 0x0303, 1, 0, 0, off, 0);
+    check("snd: mute reaches the host", snd_calls == 1 && snd_muted == 1 && snd_percent == 70, 1);
+    uint8_t out[64];
+    memset(s->ring, 0x55, 64);
+    uint64_t c0 = atomic_load(&s->consumed);
+    atomic_store(&s->written, c0 + 64);
+    check("snd: a muted pull takes the bytes", hv_virtio_snd_pull(s, out, 64), 64);
+    check("snd: and plays silence", all_zero(out, 64), 1);
+    snd_ctl_req(&d, 0x0303, 1, 0, 0, on, 0);
+    memset(s->ring + 64, 0x55, 64);
+    atomic_store(&s->written, c0 + 128);
+    hv_virtio_snd_pull(s, out, 64);
+    check("snd: unmuted plays the sound", out[0] == 0x55 && out[63] == 0x55, 1);
+
+    /* A reset: no event waits, and a new driver starts unmuted. */
+    snd_ctl_req(&d, 0x0303, 1, 0, 0, off, 0);
+    snd_calls = 0;
+    wr8(bar + 0x14, 0);
+    check("snd: reset drops a waiting event", s->notify_pending[0] + s->notify_pending[1], 0);
+    check("snd: reset unmutes", atomic_load(&s->muted), 0);
+    check("snd: and says so", snd_calls == 1 && snd_muted == 0, 1);
+    check("snd: reset keeps the volume", s->volume[0], 70);
+    s->on_control = NULL;
+}
+
 static void test_rng(void) {
     Vdev d;
     uint64_t bar = VIRT_PCIE_MMIO + 0x1000000;
@@ -3442,6 +3575,7 @@ int main(void) {
     test_primecell();
     test_rng();
     test_devstatus();
+    test_snd_controls();
     test_blk(disk_path);
     test_gpu3d(b.gpu);
     hv_virt_destroy(&b);

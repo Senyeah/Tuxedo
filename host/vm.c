@@ -257,11 +257,17 @@ static void status_apply(void) {
     HvStatusView v;
     hv_status_get(&v);
     hv_virt_set_battery(&virt, v.battery_level, v.battery_state, v.current_ma, v.to_empty_min, v.to_full_min);
+    if (v.volume >= 0) hv_virtio_snd_set_volume(virt.snd, (int)lround(v.volume * 100));
 }
 
 static void guest_backlight(void *opaque, uint8_t value) {
     (void)opaque;
     hv_status_guest_brightness(value);
+}
+
+static void guest_volume(void *opaque, int percent, int muted) {
+    (void)opaque;
+    hv_status_guest_volume(percent, muted);
 }
 
 static void board_poll(void) {
@@ -462,6 +468,7 @@ static int create_virt(const HvVmConfig *c, uint64_t ram_size, char *err, size_t
     status_apply();
     hv_virt_set_backlight(&virt, st.brightness >= 0 ? (uint8_t)lround(st.brightness * 255) : 255);
     virt.backlight.on_brightness = guest_backlight;
+    if (virt.snd) virt.snd->on_control = guest_volume;
     if (c->rom) {
         if (hv_virt_load_firmware(&virt, c->rom) != 0) return fail(err, errlen, "Cannot read the firmware (at most 64 MB).");
         uint32_t size = 0;

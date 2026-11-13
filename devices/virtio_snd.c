@@ -55,11 +55,95 @@ static void put32(uint8_t *p, uint32_t v) {
     memcpy(p, &v, 4);
 }
 
+/* ---- control elements (VIRTIO_SND_F_CTLS) ---- */
+
+#define R_CTL_INFO 0x0300
+#define R_CTL_READ 0x0302
+#define R_CTL_WRITE 0x0303
+#define EVT_CTL_NOTIFY 0x1200
+#define CTL_VOLUME 0 /* control ids */
+#define CTL_SWITCH 1
+#define CTL_VALUE_BYTES 512 /* struct virtio_snd_ctl_value */
+
+/* struct virtio_snd_ctl_info; the union is 8-byte aligned, as in Linux's header */
+typedef struct {
+    uint32_t hda_fn_nid, role, type, access, count, index;
+    char name[44];
+    union {
+        struct { uint32_t min, max, step; } integer;
+        struct { uint64_t min, max, step; } integer64;
+    } value;
+} CtlInfo;
+_Static_assert(sizeof(CtlInfo) == 96, "virtio_snd_ctl_info is 96 bytes");
+
+static void ctl_info(int cid, CtlInfo *c) {
+    memset(c, 0, sizeof *c);
+    c->access = 1 << 0 | 1 << 1; /* read, write; no dB scale, so the guest's percent is the device's */
+    c->count = 2;
+    if (cid == CTL_VOLUME) {
+        c->role = 1, c->type = 1; /* volume, integer */
+        snprintf(c->name, sizeof c->name, "Master Playback Volume");
+        c->value.integer.max = 100, c->value.integer.step = 1;
+    } else {
+        c->role = 2, c->type = 0; /* mute, boolean */
+        snprintf(c->name, sizeof c->name, "Master Playback Switch");
+    }
+}
+
+/* CTL_NOTIFY for one control, or later when the guest has given no event buffer yet. */
+static void send_notify(HvVirtioSnd *d, int cid) {
+    HvVirtio *v = &d->vio;
+    static HvVirtqElem ev;
+    if (!(v->status & 4) || !v->q[EVENTQ].enabled || hv_virtq_pop(v, EVENTQ, &ev) <= 0) {
+        d->notify_pending[cid] = 1;
+        return;
+    }
+    uint8_t buf[8] = {0};
+    put32(buf, EVT_CTL_NOTIFY);
+    buf[4] = (uint8_t)cid; /* le16 control_id, then le16 mask: the value changed */
+    buf[6] = 1;
+    hv_virtq_write(v, &ev, 0, buf, sizeof buf);
+    hv_virtq_push(v, EVENTQ, &ev, sizeof buf);
+    hv_virtio_interrupt(v);
+    d->notify_pending[cid] = 0;
+}
+
+static void flush_notify(HvVirtioSnd *d) {
+    for (int cid = 0; cid < 2; cid++)
+        if (d->notify_pending[cid]) send_notify(d, cid);
+}
+
+static int ctl_percent(const HvVirtioSnd *d) { return (d->volume[0] + d->volume[1] + 1) / 2; }
+
+void hv_virtio_snd_set_volume(HvVirtioSnd *d, int percent) {
+    if (!d || !d->controls) return;
+    percent = percent < 0 ? 0 : percent > 100 ? 100 : percent;
+    if (d->volume[0] == percent && d->volume[1] == percent) return;
+    d->volume[0] = d->volume[1] = percent;
+    send_notify(d, CTL_VOLUME);
+}
+
+static uint32_t ctl_write(HvVirtioSnd *d, uint32_t cid, const uint8_t *value) {
+    int32_t in[2];
+    memcpy(in, value, sizeof in);
+    int *to = cid == CTL_VOLUME ? d->volume : d->on, max = cid == CTL_VOLUME ? 100 : 1, changed = 0;
+    for (int i = 0; i < 2; i++) {
+        int x = in[i] < 0 ? 0 : in[i] > max ? max : in[i];
+        changed |= to[i] != x;
+        to[i] = x;
+    }
+    if (!changed) return S_OK;
+    atomic_store(&d->muted, !d->on[0] && !d->on[1]);
+    send_notify(d, (int)cid); /* the guest's other mixer clients */
+    if (d->on_control) d->on_control(d->cb_opaque, ctl_percent(d), atomic_load(&d->muted));
+    return S_OK;
+}
+
 /* ---- control queue ---- */
 
 static uint32_t control(HvVirtioSnd *d, const HvVirtqElem *e) {
     HvVirtio *v = &d->vio;
-    uint8_t req[32] = {0}, resp[4 + 32];
+    uint8_t req[8 + CTL_VALUE_BYTES] = {0}, resp[4 + CTL_VALUE_BYTES];
     uint32_t got = hv_virtq_read(v, e, 0, req, sizeof req);
     uint32_t code, status = S_OK, rlen = 4;
     memcpy(&code, req, 4);
@@ -104,6 +188,32 @@ static uint32_t control(HvVirtioSnd *d, const HvVirtqElem *e) {
         rlen = 4 + size;
         break;
     case R_JACK_REMAP:
+        break;
+    case R_CTL_INFO:
+        if (!d->controls || start + count > 2 || count == 0 || size < sizeof(CtlInfo) || count * size > CTL_VALUE_BYTES) {
+            status = S_BAD_MSG;
+            break;
+        }
+        for (uint32_t i = 0; i < count; i++) {
+            CtlInfo c;
+            ctl_info((int)(start + i), &c);
+            memcpy(resp + 4 + i * size, &c, sizeof c);
+        }
+        rlen = 4 + count * size;
+        break;
+    case R_CTL_READ:
+    case R_CTL_WRITE: /* virtio_snd_ctl_hdr: control_id where start_id is */
+        if (!d->controls || start > 1 || (code == R_CTL_WRITE && got < 8 + 8)) {
+            status = S_BAD_MSG;
+            break;
+        }
+        if (code == R_CTL_WRITE) {
+            status = ctl_write(d, start, req + 8);
+            break;
+        }
+        put32(resp + 4, (uint32_t)(start == CTL_VOLUME ? d->volume[0] : d->on[0]));
+        put32(resp + 8, (uint32_t)(start == CTL_VOLUME ? d->volume[1] : d->on[1]));
+        rlen = 4 + CTL_VALUE_BYTES;
         break;
     case R_PCM_SET_PARAMS: {
         uint32_t buffer_bytes, period_bytes;
@@ -257,6 +367,7 @@ uint32_t hv_virtio_snd_pull(HvVirtioSnd *d, void *buf, uint32_t len) {
         memcpy((uint8_t *)buf + off, d->ring + at, k);
         off += k;
     }
+    if (n && atomic_load_explicit(&d->muted, memory_order_relaxed)) memset(buf, 0, n); /* the same pace, no sound */
     if (n < len) {
         memset((uint8_t *)buf + n, 0, len - n);
         if (d->running) d->underruns++;
@@ -290,7 +401,9 @@ static void notify(HvVirtio *v, int q) {
             any = 1;
         }
         if (any) hv_virtio_interrupt(v);
-    } /* event queue: kept for events we never send */
+    } else if (q == EVENTQ) { /* buffers stay in the ring until an event needs one */
+        flush_notify(d);
+    }
 }
 
 /* The driver reset the device: the stream goes back to unconfigured and held buffers are dropped. */
@@ -303,12 +416,19 @@ static void device_reset(HvVirtio *v) {
     d->buffer_bytes = d->period_bytes = 0;
     d->phead = d->pcopy = d->ptail = 0; /* their elements belong to queues that are gone */
     atomic_store(&d->consumed, atomic_load(&d->written));
+    d->notify_pending[0] = d->notify_pending[1] = 0;
+    if (atomic_load(&d->muted)) { /* a new driver starts unmuted */
+        d->on[0] = d->on[1] = 1;
+        atomic_store(&d->muted, 0);
+        if (d->on_control) d->on_control(d->cb_opaque, ctl_percent(d), 0);
+    }
 }
 
-HvVirtioSnd *hv_virtio_snd_create(HvMachine *m, HvPcie *bus) {
+HvVirtioSnd *hv_virtio_snd_create(HvMachine *m, HvPcie *bus, int flags) {
     HvVirtioSnd *d = calloc(1, sizeof *d);
     HvVirtio *v = &d->vio;
-    hv_virtio_init(v, m, 25, 0x040100, 4, 0); /* sound device, multimedia audio */
+    d->controls = (flags & HV_VSND_CONTROLS) != 0;
+    hv_virtio_init(v, m, 25, 0x040100, 4, d->controls ? 1 : 0); /* sound device, multimedia audio; feature 0: controls */
     v->dev = d;
     v->notify = notify;
     v->reset = device_reset;
@@ -317,6 +437,13 @@ HvVirtioSnd *hv_virtio_snd_create(HvMachine *m, HvPcie *bus) {
     memcpy(v->config + 4, &streams, 4);
     memcpy(v->config + 8, &chmaps, 4);
     v->config_len = 12;
+    if (d->controls) {
+        uint32_t controls = 2;
+        memcpy(v->config + 12, &controls, 4);
+        v->config_len = 16;
+        d->volume[0] = d->volume[1] = 100;
+        d->on[0] = d->on[1] = 1;
+    }
     d->ring = calloc(1, HV_VSND_RING);
     hv_pcie_attach(bus, &v->pci);
     return d;

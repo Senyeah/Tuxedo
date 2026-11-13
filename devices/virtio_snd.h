@@ -48,12 +48,23 @@ typedef struct HvVirtioSnd {
     uint64_t pending_end[HV_VSND_PENDING]; /* `written` after this buffer's data */
     uint32_t phead, pcopy, ptail; /* pcopy: next one whose audio is not yet in the ring */
     uint64_t underruns, xfers;
+    /* HV_VSND_CONTROLS: "Master Playback Volume" (0-100, both channels) and "Master Playback Switch" */
+    int controls;
+    int volume[2], on[2];
+    _Atomic int muted;                     /* both switches off: the backend plays silence */
+    int notify_pending[2];                 /* a CTL_NOTIFY waits for an event buffer */
+    void (*on_control)(void *opaque, int percent, int muted); /* a guest write that changed a control */
+    void *cb_opaque;
 } HvVirtioSnd;
 
-HvVirtioSnd *hv_virtio_snd_create(HvMachine *m, HvPcie *bus);
+#define HV_VSND_CONTROLS 1 /* the control elements (VIRTIO_SND_F_CTLS); Linux only: the Mac's device stays as it was */
+
+HvVirtioSnd *hv_virtio_snd_create(HvMachine *m, HvPcie *bus, int flags);
+/* Under the device lock: the host's volume, 0-100. The guest is told with a CTL_NOTIFY event. */
+void hv_virtio_snd_set_volume(HvVirtioSnd *d, int percent);
 /* CPU thread, each tick: return played buffers to the guest. */
 void hv_virtio_snd_poll(HvVirtioSnd *d);
-/* Backend thread: take up to `len` bytes of PCM; the rest of `buf` is silence. Returns bytes taken. */
+/* Backend thread: take up to `len` bytes of PCM; the rest of `buf` is silence, and all of it while muted. Returns bytes taken. */
 uint32_t hv_virtio_snd_pull(HvVirtioSnd *d, void *buf, uint32_t len);
 
 #endif

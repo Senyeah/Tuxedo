@@ -605,7 +605,10 @@ static void test_reset_snd(void) {
     if (!d || slot < 0 || slot >= 32) return;
     uint64_t bar = VMAPPLE_PCIE_MMIO + 0x600000, ring = VMAPPLE_MEM + 0x2400000;
     d->backend.start = NULL;
+    check("snd: the Mac's device offers no control elements", d->vio.features, HV_VIRTIO_F_VERSION_1);
+    check("snd: and keeps its 12 config bytes", d->vio.config_len, 12);
     reprobe(slot, bar, ring);
+    check("snd: control requests are refused", snd_ctl(ring, 0, 0x0302, 0, 0, 0, 0, 0), 0x8001);
     check("snd: set params", snd_ctl(ring, 0, 0x0101, 16384, 4096, 2, HV_VSND_FMT_S16, HV_VSND_RATE_48000), 0x8000);
     check("snd: prepare", snd_ctl(ring, 1, 0x0102, 0, 0, 0, 0, 0), 0x8000);
     check("snd: start", snd_ctl(ring, 2, 0x0104, 0, 0, 0, 0, 0), 0x8000);

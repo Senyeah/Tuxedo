@@ -72,7 +72,7 @@ int hv_virt_create(HvVirt *b, HvMachine *m, HvCpu *cpus, int ncpus, uint64_t ram
     b->keyboard = hv_virtio_input_create(m, b->pcie, HV_VINPUT_KEYBOARD);
     b->mouse = hv_virtio_input_create(m, b->pcie, HV_VINPUT_MOUSE);
     b->gpu = hv_virtio_gpu_create(m, b->pcie, 1920, 1080);
-    if (!getenv("HV_NO_SOUND")) b->snd = hv_virtio_snd_create(m, b->pcie);
+    if (!getenv("HV_NO_SOUND")) b->snd = hv_virtio_snd_create(m, b->pcie, HV_VSND_CONTROLS);
     if (root && !b->blk) return -1;
     if (getenv("HV_BALLOON")) {
         b->balloon = hv_virtio_balloon_create(m, b->pcie, b->mem.host, VIRT_MEM, ram_size, b->mem.fd);
