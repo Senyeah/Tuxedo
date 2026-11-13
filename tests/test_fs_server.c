@@ -518,6 +518,13 @@ static void test_readonly(const char *name) {
     long long fh = open_node((uint64_t)k, 0, 0);
     check("ro: open for reading", fh > 0 ? 1 : fh, 1);
     check("ro: write on a read handle", write_fh((uint64_t)k, (uint64_t)fh, 0, "x", 1) < 0, 1);
+    long long other = lookup(folder_node("a"), "f");
+    s = (FuseSetattrIn){.valid = FATTR_FH | FATTR_MODE, .fh = (uint64_t)fh, .mode = 0777};
+    call(FUSE_SETATTR, (uint64_t)other, &s, sizeof s, NULL, 0); /* a Read-write node with this folder's handle */
+    if (other > 0) forget((uint64_t)other, 1);
+    char af[PATH_MAX];
+    host_path(af, "a/f");
+    chmod(af, 0644);
     FuseFallocateIn fa = {(uint64_t)fh, 0, 100, 0, 0};
     check("ro: fallocate", call(FUSE_FALLOCATE, (uint64_t)k, &fa, sizeof fa, NULL, 0), -LX_EROFS);
     release((uint64_t)k, (uint64_t)fh, 0);
@@ -525,7 +532,8 @@ static void test_readonly(const char *name) {
     char p[PATH_MAX];
     host_path(p, rel);
     stat(p, &st);
-    check("ro: the host file is unchanged", !strcmp(host_read(rel), "keep\n") && (st.st_mode & 0777) == 0644 && st.st_mtime != 5, 1);
+    check("ro: the host file is unchanged (another node's SETATTR with its handle too)",
+          !strcmp(host_read(rel), "keep\n") && (st.st_mode & 0777) == 0644 && st.st_mtime != 5, 1);
     snprintf(rel, sizeof rel, "%s/x", name);
     check("ro: nothing new on the host", host_exists(rel), 0);
     if (kd > 0) forget((uint64_t)kd, 1);

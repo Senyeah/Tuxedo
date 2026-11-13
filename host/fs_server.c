@@ -479,6 +479,20 @@ static uint64_t handle_new(HvFs *fs, int fd, int folder, uint32_t fgen, const st
     return fh;
 }
 
+static Handle *handle_get(HvFs *fs, uint64_t fh);
+static void handle_put(HvFs *fs, Handle *h);
+
+/* The handle only when it is the node's own open file: another node's would let a change reach a file in a
+   folder whose mode refuses it. */
+static Handle *node_handle(HvFs *fs, uint64_t fh, int folder, uint32_t fgen, dev_t dev, ino_t ino) {
+    Handle *h = handle_get(fs, fh);
+    if (h && (h->dir || h->folder != folder || h->fgen != fgen || h->dev != dev || h->ino != ino)) {
+        handle_put(fs, h);
+        h = NULL;
+    }
+    return h;
+}
+
 static Handle *handle_get(HvFs *fs, uint64_t fh) {
     uint32_t slot = (uint32_t)fh - 1;
     Handle *h = NULL;
@@ -905,7 +919,7 @@ static size_t op_getattr(Req *r, Ctx *c) {
     }
     if (!c->online) return reply_err(r->o, LX_EIO);
     if (g.getattr_flags & FUSE_GETATTR_FH) { /* an open file the guest may have unlinked */
-        Handle *h = handle_get(r->fs, g.fh);
+        Handle *h = node_handle(r->fs, g.fh, c->folder, c->fgen, c->dev, c->ino);
         if (h) {
             int rc = fstat(h->fd, &st);
             handle_put(r->fs, h);
@@ -938,7 +952,7 @@ static size_t op_setattr(Req *r, Ctx *c) {
         err = ctx_stat(c, &st); /* atime only: nothing changes on the host */
         return err ? reply_err(r->o, err) : attr_reply(r, &st);
     }
-    Handle *h = s.valid & FATTR_FH ? handle_get(r->fs, s.fh) : NULL;
+    Handle *h = s.valid & FATTR_FH && c->kind == K_NODE ? node_handle(r->fs, s.fh, c->folder, c->fgen, c->dev, c->ino) : NULL;
     int fd = h ? h->fd : -1, dfd = -1, own = -1;
     char leaf[NAME_MAX + 1] = "";
     if (!h && c->kind == K_FOLDER) fd = c->rootfd;
@@ -1564,6 +1578,8 @@ size_t hv_fs_handle(HvFs *fs, const struct iovec *in, int nin, const struct iove
     if (total < sizeof r.h) return 0;
     iov_copy_in(in, nin, 0, &r.h, sizeof r.h);
     o.unique = r.h.unique;
+    if (r.h.opcode >= FUSE_SETXATTR && r.h.opcode <= FUSE_REMOVEXATTR)
+        return reply_err(&o, LX_ENOSYS); /* v1 has no xattrs; the kernel stops asking */
     /* A write's data stays in the guest's pages; anything else is small. */
     size_t take = r.h.opcode == FUSE_WRITE ? sizeof r.h + sizeof(FuseWriteIn) : total;
     if (take > total) take = total;
