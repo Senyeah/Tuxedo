@@ -243,12 +243,16 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
         cursor_x = d->cursor.x, cursor_y = d->cursor.y;
         memset(cursor_px, 0, sizeof cursor_px);
         if (cursor_shown) {
+            uint8_t any_alpha = 0;
             for (uint32_t y = 0; y < d->cursor.height; y++) {
                 uint8_t *to = (uint8_t *)(cursor_px + y * CURSOR);
                 to_bgra(to, (const uint8_t *)(d->cursor.pixels + y * CURSOR), d->cursor.width, d->cursor.format);
-                if (!has_alpha(d->cursor.format))
-                    for (uint32_t x = 0; x < d->cursor.width; x++) to[x * 4 + 3] = 255;
+                for (uint32_t x = 0; x < d->cursor.width; x++) any_alpha |= to[x * 4 + 3];
             }
+            /* Linux makes every dumb buffer XRGB, so an X cursor's alpha is real (QEMU uses it too). All zero: opaque. */
+            if (!any_alpha && !has_alpha(d->cursor.format))
+                for (uint32_t y = 0; y < d->cursor.height; y++)
+                    for (uint32_t x = 0; x < d->cursor.width; x++) ((uint8_t *)(cursor_px + y * CURSOR))[x * 4 + 3] = 255;
         }
         cursor_stale = YES;
     }

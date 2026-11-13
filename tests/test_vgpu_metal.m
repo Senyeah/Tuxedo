@@ -329,6 +329,33 @@ static void test_pixels(void) {
     }
     check("cursor moved", ok, 1);
 
+    /* An XRGB cursor, as a Linux dumb buffer always is: its alpha still counts. */
+    create(40, HV_VGPU_B8G8R8X8, 64, 64);
+    attach(40, FBC, 64 * 64 * 4);
+    transfer(40, 0, 0, 64, 64, 64 * 4);
+    cursor(0x300, 30, 4, 40, 0, 0);
+    ok = 0;
+    for (double end = now() + 2; now() < end && !ok; usleep(2000)) {
+        hv_vgpu_metal_drawn(p, drawn, W1, H1);
+        ok = drawn[(4 * W1 + 30) * 4] == 0xff && is1(drawn + (20 * W1 + 40) * 4, 40, 20, 1);
+    }
+    check("XRGB cursor drawn", ok, 1);
+    check("XRGB cursor: transparent beside the image", is1(drawn + (4 * W1 + 40) * 4, 40, 4, 1), 1);
+    check("XRGB cursor: transparent below the image", is1(drawn + (14 * W1 + 30) * 4, 30, 14, 1), 1);
+    for (int i = 0; i < 64 * 64; i++) c[i * 4] = c[i * 4 + 1] = c[i * 4 + 2] = 0x40, c[i * 4 + 3] = 0;
+    create(41, HV_VGPU_B8G8R8X8, 64, 64);
+    attach(41, FBC, 64 * 64 * 4);
+    transfer(41, 0, 0, 64, 64, 64 * 4);
+    cursor(0x300, 30, 4, 41, 0, 0);
+    ok = 0;
+    for (double end = now() + 2; now() < end && !ok; usleep(2000)) {
+        hv_vgpu_metal_drawn(p, drawn, W1, H1);
+        ok = drawn[(14 * W1 + 40) * 4] == 0x40 && drawn[(14 * W1 + 40) * 4 + 2] == 0x40;
+    }
+    check("XRGB cursor with no alpha at all: opaque", ok, 1);
+    cursor(0x300, 40, 20, 4, 0, 0); /* the earlier cursor again, as the checks below expect */
+    usleep(50000);
+
     /* At most 60 frames a second, however fast the guest flushes. */
     double t0 = now();
     uint64_t f1 = hv_vgpu_metal_frames(p);
