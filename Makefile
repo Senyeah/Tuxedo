@@ -276,6 +276,16 @@ test-linux-ffmpeg: $(B)/hengevm
 	uv run tools/linux/vcodec-check.py --hengevm $(B)/hengevm --ffmpeg $(LINUX_OUT)/ffmpeg/bin --no-software $(VCODEC_ARGS)
 .PHONY: linux-ffmpeg test-linux-ffmpeg
 
+# VE3: the henge-ffmpeg package, then the signed apt repository and the source offer in $(LINUX_OUT)/apt and /source
+# (publish-apt.sh; nothing leaves the Mac without its --rsync), then both packages from it in a clone of the desktop image.
+linux-ffmpeg-pkg:
+	HENGE_LINUX_OUT=$(LINUX_OUT) tools/linux/build-ffmpeg-pkg.sh
+linux-apt:
+	HENGE_LINUX_OUT=$(LINUX_OUT) tools/linux/publish-apt.sh
+test-linux-ffmpeg-pkg: $(B)/hengevm
+	uv run tools/linux/vcodec-check.py --hengevm $(B)/hengevm --apt $(LINUX_OUT)/apt --sizes 4k,1080p --codecs hevc8,h264 --no-software $(VCODEC_ARGS)
+.PHONY: linux-ffmpeg-pkg linux-apt test-linux-ffmpeg-pkg
+
 # P6: the shared folder (~/Henge, davfs2) against --share. SHARE_ARGS="--image FILE" for an image that has davfs2.
 test-linux-share: $(B)/hengevm
 	uv run tools/linux/share-check.py $(SHARE_ARGS)

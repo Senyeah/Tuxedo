@@ -22,6 +22,12 @@ The output must have the clip's frames, decode with no error, reach MIN_PSNR, an
 video times as the clip, and the same audio start, duration and packet count. Its fps is set against henge-xcode's
 on the same clip in the same run. Then a scale_henge, a software filter chain and an h264_henge output. Before the clips,
 each input format goes to h264_henge and hevc_henge, and the profile must follow the rule in PROFILE_RULE.
+With --apt TREE (VE3, the repository of publish-apt.sh, build/linux/apt), it serves TREE through --share and checks the
+packages instead: henge-guest from TREE (its key and its apt source, Enabled: no, with which apt update gives no error),
+then henge-ffmpeg. `ffmpeg` must be the Henge build through /usr/local/bin and /usr/bin/ffmpeg Debian's, unchanged;
+`man ffmpeg-henge` must open and list each encoder and option (hvcodec/manpage-check.py); henge-codec-info --json; the
+main command with `ffmpeg` on each clip; a reinstall keeps the links; apt remove gives Debian's ffmpeg back; and an
+admin's own file in /usr/local/bin stays through an install and a remove.
 The shared image never changes: the guest runs on an APFS clone, deleted at the end. Exit 1 on a failed check.
 """
 import argparse
@@ -197,16 +203,16 @@ def in_sync(out, src):
                 f"{au['packets']} of {sa['packets']} audio packets, video start {v['start']:.3f} s against audio {au['start']:.3f} s")
 
 
-def ffmpeg_case(p, share, tag, src, want, args, cmd_out="/tmp/ff-out.mp4", check_sync=True, min_psnr=None, startup=False):
+def ffmpeg_case(p, share, tag, src, want, args, cmd_out="/tmp/ff-out.mp4", check_sync=True, min_psnr=None, startup=False, exe="./ffmpeg"):
     """One patched-ffmpeg command in the guest, its output checked on the Mac. With startup, a 1-frame run first gives the
     fixed cost (connect, QUERY, sessions, the global header's blank frame), and steady is the rate without it."""
     rt1 = None
     if startup:
-        one = need(p, f"./ffmpeg -hide_banner -nostats -benchmark -y {args.replace(' -c:v ', ' -frames:v 1 -c:v ', 1)} {cmd_out} 2>&1 | grep bench:",
+        one = need(p, f"{exe} -hide_banner -nostats -benchmark -y {args.replace(' -c:v ', ' -frames:v 1 -c:v ', 1)} {cmd_out} 2>&1 | grep bench:",
                    f"ffmpeg {tag} one frame", 300)
         m1 = re.search(r"rtime=([\d.]+)s", one)
         rt1 = float(m1.group(1)) if m1 else None
-    text = need(p, f"TIMEFORMAT='GUEST_TIME %R %U %S'; time ./ffmpeg -hide_banner -nostats -benchmark -y {args} {cmd_out} 2>&1 "
+    text = need(p, f"TIMEFORMAT='GUEST_TIME %R %U %S'; time {exe} -hide_banner -nostats -benchmark -y {args} {cmd_out} 2>&1 "
                    "| grep -E 'bench:|rror|refused|frame=' | tail -4", f"ffmpeg {tag}", 900)
     gt = re.search(r"GUEST_TIME ([\d.]+) ([\d.]+) ([\d.]+)", text)
     rt = re.search(r"rtime=([\d.]+)s", text)
@@ -255,8 +261,8 @@ def boot(args, disk, share, err_log):
     return p
 
 
-def install(p, extra=()):
-    want = PACKAGES + [x for x in extra if x not in PACKAGES]
+def install(p, extra=(), base=PACKAGES, show=("ffmpeg", "libavformat-dev", "gcc")):
+    want = list(base) + [x for x in extra if x not in base]
     out, _ = sh(p, "dpkg-query -W -f '${Package} ${Status}\\n' " + " ".join(want) + " 2>/dev/null")
     have = {l.split()[0] for l in out.splitlines() if l.strip().endswith("install ok installed")}
     missing = [x for x in want if x not in have]
@@ -265,7 +271,7 @@ def install(p, extra=()):
         need(p, "sudo apt-get update -q >/dev/null", "apt-get update", 600)
         need(p, "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends "
              + " ".join(missing) + " >/tmp/apt.log 2>&1 || { tail -20 /tmp/apt.log; false; }", "apt-get install", 1800)
-    out = need(p, "dpkg-query -W -f '${Package} ${Version}\\n' ffmpeg libavformat-dev gcc", "package versions")
+    out = need(p, "dpkg-query -W -f '${Package} ${Version}\\n' " + " ".join(show), "package versions")
     print("ok   packages: " + ", ".join(l.strip() for l in out.splitlines() if l.strip()))
 
 
@@ -317,6 +323,152 @@ def soft_decode(p, clip):
     return dict(frames=n, secs=real, fps=n / real, cpu=float(gt.group(2)) + float(gt.group(3)))
 
 
+def apt_update(p):
+    """sudo apt-get update: its status, its W:, E: and Err: lines, and the whole log."""
+    out = need(p, "sudo apt-get update >/tmp/aptu.log 2>&1; echo APT_RC=$?; cat /tmp/aptu.log", "apt-get update", 600)
+    m = re.search(r"APT_RC=(\d+)", out)
+    return (int(m.group(1)) if m else -1), [l.strip() for l in out.splitlines() if re.match(r"\s*(W|E|Err):", l)], out
+
+
+def apt_install(p, what, args=""):
+    return need(p, f"sudo DEBIAN_FRONTEND=noninteractive apt-get {args or 'install -y -q'} {what} >/tmp/apt.log 2>&1; rc=$?; "
+                   "grep -E 'henge-ffmpeg:|^(W|E):' /tmp/apt.log; test $rc -eq 0 || { tail -20 /tmp/apt.log; false; }",
+                f"apt-get {args or 'install'} {what}", 1800)
+
+
+def nonblank(text):
+    return [l.strip() for l in text.splitlines() if l.strip()]
+
+
+def apt_checks(p, share, tree, clips):
+    """VE3: henge-guest and henge-ffmpeg from the repository that publish-apt.sh built, served at http://10.0.2.4/apt."""
+    ok = True
+    LOCAL = "/etc/apt/sources.list.d/henge-local.sources"
+
+    def check(good, text):
+        nonlocal ok
+        ok &= bool(good)
+        print(f"{'ok  ' if good else 'FAIL'} {text}")
+
+    def local_source(keyring):
+        need(p, f"printf 'Types: deb\\nURIs: http://10.0.2.4/apt\\nSuites: trixie\\nComponents: main\\nSigned-By: {keyring}\\n' "
+                f"| sudo tee {LOCAL} >/dev/null", "local apt source")
+
+    pool = {}
+    for block in open(os.path.join(tree, "dists", "trixie", "main", "binary-arm64", "Packages")).read().split("\n\n"):
+        f = dict(l.split(": ", 1) for l in block.splitlines() if ": " in l and not l.startswith(" "))
+        if f:
+            pool[f["Package"]] = f["Version"]
+    print(f"     repository {tree}: " + ", ".join(f"{k} {v}" for k, v in sorted(pool.items())))
+    keyring_sha = subprocess.run(["shasum", "-a", "256", os.path.join(ROOT, "tools/linux/henge-guest/usr/share/keyrings/henge-archive.gpg")],
+                                 capture_output=True, text=True, check=True).stdout.split()[0]
+    need(p, "mkdir -p ~/hv && cd ~/hv", "work folder")
+    fetch(p, "manpage-check.py", "manpage-check.py")
+    fetch(p, "apt/henge-archive.asc", "/tmp/henge-test.asc")
+    old = need(p, "dpkg-query -W -f '${Version}' henge-guest", "henge-guest version").strip()
+    deb_sums = need(p, "sha256sum /usr/bin/ffmpeg /usr/bin/ffprobe", "Debian's ffmpeg")
+    rc, base, _ = apt_update(p)
+    print(f"     before: henge-guest {old}; apt update with Debian's sources only: status {rc}, {len(base)} W/E lines")
+
+    local_source("/tmp/henge-test.asc")
+    rc, lines, log = apt_update(p)
+    check(rc == 0 and not set(lines) - set(base) and "10.0.2.4" in log,
+          f"apt update with the local repository, InRelease signed by the new key: status {rc}, new W/E lines {sorted(set(lines) - set(base))}")
+    pol = need(p, "apt-cache policy henge-guest henge-ffmpeg | grep -E '^[a-z]|Candidate'", "apt-cache policy")
+    print("     " + "\n     ".join(nonblank(pol)))
+    apt_install(p, "henge-guest")
+    got = need(p, "dpkg-query -W -f '${Version}' henge-guest", "henge-guest version").strip()
+    src = need(p, "cat /etc/apt/sources.list.d/henge.sources; sha256sum /usr/share/keyrings/henge-archive.gpg", "henge.sources")
+    check(got == pool.get("henge-guest"), f"henge-guest {old} to {got} from the repository")
+    check(re.search(r"^Enabled: no$", src, re.M) and "URIs: https://walkies.site/henge-linux-catalogue/apt" in src and keyring_sha in src,
+          "henge-guest ships henge.sources (walkies.site, Enabled: no) and the repository's key")
+
+    need(p, f"sudo rm -f {LOCAL}", "remove the local source")
+    rc, lines, log = apt_update(p)
+    check(rc == 0 and not set(lines) - set(base) and "walkies" not in log,
+          f"apt update with henge-guest {got} and its source off: status {rc}, new W/E lines {sorted(set(lines) - set(base))}, "
+          f"walkies.site {'named' if 'walkies' in log else 'not contacted'}")
+    # The README's way to turn it on, with the URI pointed at the local copy: the shipped key and fields must work.
+    need(p, "sed -e 's#^URIs: .*#URIs: http://10.0.2.4/apt#' -e 's/^Enabled: no/Enabled: yes/' /etc/apt/sources.list.d/henge.sources "
+            f"| sudo tee {LOCAL} >/dev/null", "enabled copy of henge.sources")
+    rc, lines, log = apt_update(p)
+    check(rc == 0 and not set(lines) - set(base) and "10.0.2.4" in log,
+          f"henge.sources with Enabled: yes (URIs set to the local copy) and the shipped key: status {rc}, "
+          f"new W/E lines {sorted(set(lines) - set(base))}")
+
+    def resolve():
+        out = need(p, "hash -r; for c in ffmpeg ffprobe; do echo \"$c $(command -v $c) $(readlink /usr/local/bin/$c)\"; done", "which ffmpeg")
+        return {l.split()[0]: l.split()[1:] for l in out.splitlines() if l.strip()}
+
+    log = apt_install(p, "henge-ffmpeg")
+    if log.strip():
+        print("     " + "\n     ".join(nonblank(log)))
+    r = resolve()
+    henge_bin = "/usr/lib/henge/ffmpeg/bin"
+    check(all(r.get(c) == [f"/usr/local/bin/{c}", f"{henge_bin}/{c}"] for c in ("ffmpeg", "ffprobe")),
+          f"henge-ffmpeg {pool.get('henge-ffmpeg')}: ffmpeg and ffprobe are links into {henge_bin}: {r}")
+    ver = nonblank(need(p, "ffmpeg -hide_banner -version | head -1; ffmpeg -hide_banner -hwaccels | tail -n +2 | tr '\\n' ' '; echo; "
+                  "/usr/bin/ffmpeg -hide_banner -version | head -1; dpkg -S /usr/bin/ffmpeg /usr/bin/ffprobe; "
+                  "sha256sum /usr/bin/ffmpeg /usr/bin/ffprobe; command -v henge-codec-info", "versions"))
+    print("     " + "\n     ".join(ver))
+    check("henge" in ver[0] and "henge" in ver[1].split(), f"`ffmpeg` is the Henge build: {ver[0]}")
+    check(ver[2].startswith("ffmpeg version ") and "henge" not in ver[2] and "ffmpeg: /usr/bin/ffmpeg" in ver and "ffmpeg: /usr/bin/ffprobe" in ver
+          and all(l in ver for l in nonblank(deb_sums)),
+          f"/usr/bin/ffmpeg is Debian's and unchanged: {ver[2]}")
+    js = need(p, "henge-codec-info --json", "henge-codec-info --json")
+    try:
+        table = json.loads(js[js.index("{"):js.rindex("}") + 1])
+        encs = {e["codec"]: e for e in table["encoders"]}
+    except ValueError:
+        encs = {}
+    listed = ", ".join(f"{k} ({e.get('ffmpeg')})" for k, e in encs.items())
+    check(ver[-1] == "/usr/bin/henge-codec-info" and encs.get("hvc1", {}).get("hardware") and encs.get("avc1", {}).get("hardware"),
+          f"henge-codec-info on the PATH: encoders {listed}")
+    man = need(p, "man -w ffmpeg-henge; man -w ffmpeg; dpkg -S $(man -w ffmpeg); MANWIDTH=100 man -P cat ffmpeg-henge | head -4",
+               "man ffmpeg-henge")
+    print("     " + "\n     ".join(nonblank(man)))
+    check("/usr/share/man/man7/ffmpeg-henge.7.gz" in man and "ffmpeg-henge - " in man and re.search(r"^ffmpeg[^:]*: /usr/share/man/man1/ffmpeg\.1", man, re.M),
+          "man ffmpeg-henge opens; man ffmpeg is still Debian's page")
+    out, rc = sh(p, "python3 manpage-check.py ffmpeg-henge", 120)
+    print("     " + "\n     ".join(nonblank(out)))
+    check(rc == 0, "the installed man page lists each encoder, option and value of the installed ffmpeg")
+
+    for name, info in clips:
+        fetch(p, name, f"/tmp/{name}")
+        want = int(info.split(",")[-1]) if info.split(",")[-1].isdigit() else -1
+        good, _ = ffmpeg_case(p, share, f"pkg-{name[:-4]}", name, want,
+                              f"-hwaccel henge -hwaccel_output_format henge -i /tmp/{name} -c:v hevc_henge -b:v 20M -c:a copy", exe="ffmpeg")
+        ok &= good
+        sh(p, f"rm -f /tmp/{name}")
+
+    apt_install(p, "henge-ffmpeg", "install -y -q --reinstall")
+    r = resolve()
+    check(all(r.get(c) == [f"/usr/local/bin/{c}", f"{henge_bin}/{c}"] for c in ("ffmpeg", "ffprobe")), f"a reinstall keeps the links: {r}")
+
+    apt_install(p, "henge-ffmpeg", "remove -y -q")
+    r = resolve()
+    ver = nonblank(need(p, "ffmpeg -hide_banner -version | head -1; ls /usr/local/bin", "after remove"))
+    check(all(r.get(c) == [f"/usr/bin/{c}"] for c in ("ffmpeg", "ffprobe")) and ver[0].startswith("ffmpeg version ") and "henge" not in ver[0],
+          f"apt remove henge-ffmpeg gives Debian's ffmpeg back: {r}, {ver[0]}")
+
+    # An admin's own /usr/local/bin/ffprobe: not replaced by the install, not removed by the remove.
+    need(p, "printf '#!/bin/sh\\necho admin-ffprobe\\n' | sudo tee /usr/local/bin/ffprobe >/dev/null && sudo chmod 755 /usr/local/bin/ffprobe",
+         "admin ffprobe")
+    log = apt_install(p, "henge-ffmpeg")
+    r = resolve()
+    mine = need(p, "/usr/local/bin/ffprobe", "admin ffprobe").strip()
+    check(r.get("ffmpeg") == ["/usr/local/bin/ffmpeg", f"{henge_bin}/ffmpeg"] and mine == "admin-ffprobe" and "is not ours" in log,
+          f"an admin's /usr/local/bin/ffprobe stays at install, with a notice: {' '.join(nonblank(log))}")
+    apt_install(p, "henge-ffmpeg", "purge -y -q")
+    mine = need(p, "/usr/local/bin/ffprobe; test ! -e /usr/local/bin/ffmpeg && echo no-link", "admin ffprobe").strip()
+    check(mine.split() == ["admin-ffprobe", "no-link"], "and stays at remove, while the ffmpeg link goes")
+    need(p, f"sudo rm -f /usr/local/bin/ffprobe {LOCAL}", "clean up")
+    rc, lines, log = apt_update(p)
+    check(rc == 0 and not set(lines) - set(base) and "walkies" not in log,
+          f"at the end, apt update with henge.sources off: status {rc}, new W/E lines {sorted(set(lines) - set(base))}")
+    return ok
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--hengevm", default=os.path.join(ROOT, "build", "hengevm"))
@@ -335,6 +487,7 @@ def main():
     ap.add_argument("--ffmpeg", help="VE2: a folder with the patched ffmpeg, ffprobe and henge-codec-info (build/linux/ffmpeg/bin)")
     ap.add_argument("--keep-disk", help="keep the guest's disk (with the packages installed) at this path, for --image next time")
     ap.add_argument("--no-xcode", action="store_true", help="with --ffmpeg: skip henge-xcode's transcodes")
+    ap.add_argument("--apt", help="VE3: the repository from publish-apt.sh (build/linux/apt): check the packages instead")
     args = ap.parse_args()
     args.linux_dir = args.linux_dir or linux_dir()
     image = args.image or os.path.join(args.linux_dir, "debian-desktop.img")
@@ -348,8 +501,13 @@ def main():
     with tempfile.TemporaryDirectory(prefix="vcodec-", dir=args.work_dir) as tmp:
         share = os.path.join(tmp, "share")
         os.mkdir(share)
-        for f in ("tools/linux/hvcodec/henge-xcode.c", "tools/linux/hvcodec/hvbench.c", "host/vcodec_proto.h"):
+        for f in ("tools/linux/hvcodec/henge-xcode.c", "tools/linux/hvcodec/hvbench.c", "host/vcodec_proto.h",
+                  "tools/linux/hvcodec/manpage-check.py"):
             shutil.copy(os.path.join(ROOT, f), share)
+        if args.apt:
+            r = subprocess.run(["/bin/cp", "-cR", os.path.abspath(args.apt), os.path.join(share, "apt")], capture_output=True, text=True)
+            if r.returncode:
+                raise Fail(f"cannot copy {args.apt}: {r.stderr.strip()}")
         runtime = []
         if args.ffmpeg:
             for f in ("ffmpeg", "ffprobe", "henge-codec-info"):
@@ -375,92 +533,96 @@ def main():
             raise Fail(f"cannot clone {image}: {r.stderr.strip()}")
         p = boot(args, disk, share, err_log)
         try:
-            install(p, runtime)
-            need(p, "mkdir -p ~/hv && cd ~/hv", "work folder")
-            for f in ("henge-xcode.c", "hvbench.c", "vcodec_proto.h"):
-                fetch(p, f, f)
-            need(p, "gcc -O2 -Wall -Wextra -I. henge-xcode.c $(pkg-config --cflags --libs libavformat libavcodec libavutil) -o henge-xcode 2>&1",
-                 "build henge-xcode", 300)
-            need(p, "gcc -O2 hvbench.c -o hvbench", "build hvbench", 120)
-            print("ok   henge-xcode and hvbench built in the guest against Debian's libavformat")
-            q = need(p, "./henge-xcode --query 2>&1 | grep -E '^(encoder|decoder)'", "henge-xcode --query")
-            print("     " + q.strip().replace("\n", "\n     "))
-            if "encoder hvc1" not in q or "encoder avc1" not in q:
-                raise Fail("QUERY lists no HEVC or no H.264 encoder")
-            print("ok   QUERY from the guest lists the H.264 and HEVC encoders")
-            if args.ffmpeg:
-                for f in ("ffmpeg", "ffprobe", "henge-codec-info"):
+            if args.apt:
+                install(p, base=["ffmpeg"], show=("ffmpeg", "henge-guest"))  # man-db comes as henge-ffmpeg's Recommends
+                ok &= apt_checks(p, share, args.apt, clips)
+            else:
+                install(p, runtime)
+                need(p, "mkdir -p ~/hv && cd ~/hv", "work folder")
+                for f in ("henge-xcode.c", "hvbench.c", "vcodec_proto.h"):
                     fetch(p, f, f)
-                need(p, "chmod +x ffmpeg ffprobe henge-codec-info", "chmod")
-                ver = need(p, "./ffmpeg -hide_banner -version | head -1; ./ffmpeg -hide_banner -hwaccels | tail -n +2; "
-                              "./ffmpeg -hide_banner -encoders | grep _henge", "patched ffmpeg")
-                print("     " + ver.strip().replace("\n", "\n     "))
-                if "hevc_henge" not in ver or not re.search(r"^henge$", ver, re.M):
-                    raise Fail("the patched ffmpeg has no henge hwaccel or no hevc_henge")
-                js = need(p, "./henge-codec-info --json", "henge-codec-info --json")
-                try:
-                    table = json.loads(js[js.index("{"):js.rindex("}") + 1])
-                except ValueError:
-                    raise Fail(f"henge-codec-info --json is not JSON:\n{js[-800:]}")
-                encs = {e["codec"]: e for e in table["encoders"]}
-                if not (encs.get("hvc1", {}).get("hardware") and encs.get("avc1", {}).get("hardware")):
-                    raise Fail("henge-codec-info lists no H.264 or no HEVC hardware encoder")
-                listed = ", ".join(f"{k} ({e['ffmpeg']})" for k, e in encs.items())
-                print(f"ok   henge-codec-info --json: encoders {listed}; decoders {', '.join(d['codec'] for d in table['decoders'])}")
-                ok &= check_profiles(p, encs)
-            mem = need(p, "./hvbench", "hvbench")
-            for line in re.findall(r"hvbench: [^\n]+", mem):
-                print(f"     {line}")
-            for name, info in clips:
-                fetch(p, name, f"/tmp/{name}")
-                want = int(info.split(",")[-1]) if info.split(",")[-1].isdigit() else -1
+                need(p, "gcc -O2 -Wall -Wextra -I. henge-xcode.c $(pkg-config --cflags --libs libavformat libavcodec libavutil) -o henge-xcode 2>&1",
+                     "build henge-xcode", 300)
+                need(p, "gcc -O2 hvbench.c -o hvbench", "build hvbench", 120)
+                print("ok   henge-xcode and hvbench built in the guest against Debian's libavformat")
+                q = need(p, "./henge-xcode --query 2>&1 | grep -E '^(encoder|decoder)'", "henge-xcode --query")
+                print("     " + q.strip().replace("\n", "\n     "))
+                if "encoder hvc1" not in q or "encoder avc1" not in q:
+                    raise Fail("QUERY lists no HEVC or no H.264 encoder")
+                print("ok   QUERY from the guest lists the H.264 and HEVC encoders")
                 if args.ffmpeg:
-                    good, r = ffmpeg_case(p, share, name[:-4], name, want,
-                                          f"-hwaccel henge -hwaccel_output_format henge -i /tmp/{name} -c:v hevc_henge -b:v 20M -c:a copy",
-                                          startup=True)
-                    ok &= good
-                    rows.append((f"{name} ffmpeg main", r))
-                    if name == "hevc8_4k.mp4":
-                        good, r = ffmpeg_case(p, share, "scale", name, want, f"-hwaccel henge -hwaccel_output_format henge -i /tmp/{name} "
-                                              "-vf scale_henge=1920:1080 -c:v hevc_henge -b:v 10M -c:a copy", min_psnr=30.0)
+                    for f in ("ffmpeg", "ffprobe", "henge-codec-info"):
+                        fetch(p, f, f)
+                    need(p, "chmod +x ffmpeg ffprobe henge-codec-info", "chmod")
+                    ver = need(p, "./ffmpeg -hide_banner -version | head -1; ./ffmpeg -hide_banner -hwaccels | tail -n +2; "
+                                  "./ffmpeg -hide_banner -encoders | grep _henge", "patched ffmpeg")
+                    print("     " + ver.strip().replace("\n", "\n     "))
+                    if "hevc_henge" not in ver or not re.search(r"^henge$", ver, re.M):
+                        raise Fail("the patched ffmpeg has no henge hwaccel or no hevc_henge")
+                    js = need(p, "./henge-codec-info --json", "henge-codec-info --json")
+                    try:
+                        table = json.loads(js[js.index("{"):js.rindex("}") + 1])
+                    except ValueError:
+                        raise Fail(f"henge-codec-info --json is not JSON:\n{js[-800:]}")
+                    encs = {e["codec"]: e for e in table["encoders"]}
+                    if not (encs.get("hvc1", {}).get("hardware") and encs.get("avc1", {}).get("hardware")):
+                        raise Fail("henge-codec-info lists no H.264 or no HEVC hardware encoder")
+                    listed = ", ".join(f"{k} ({e['ffmpeg']})" for k, e in encs.items())
+                    print(f"ok   henge-codec-info --json: encoders {listed}; decoders {', '.join(d['codec'] for d in table['decoders'])}")
+                    ok &= check_profiles(p, encs)
+                mem = need(p, "./hvbench", "hvbench")
+                for line in re.findall(r"hvbench: [^\n]+", mem):
+                    print(f"     {line}")
+                for name, info in clips:
+                    fetch(p, name, f"/tmp/{name}")
+                    want = int(info.split(",")[-1]) if info.split(",")[-1].isdigit() else -1
+                    if args.ffmpeg:
+                        good, r = ffmpeg_case(p, share, name[:-4], name, want,
+                                              f"-hwaccel henge -hwaccel_output_format henge -i /tmp/{name} -c:v hevc_henge -b:v 20M -c:a copy",
+                                              startup=True)
                         ok &= good
-                        rows.append((f"{name} ffmpeg scale_henge", r))
-                    if name == "hevc8_1080p.mp4":
-                        for tag, a in [("swfilter", f"-init_hw_device henge -hwaccel henge -hwaccel_output_format henge -i /tmp/{name} "
-                                                    "-vf hwdownload,format=nv12,hflip,hflip,hwupload -c:v hevc_henge -b:v 20M -c:a copy"),
-                                       ("h264", f"-hwaccel henge -hwaccel_output_format henge -i /tmp/{name} -c:v h264_henge -b:v 20M -c:a copy"),
-                                       ("swdec", f"-i /tmp/{name} -c:v hevc_henge -b:v 20M -c:a copy")]:
-                            good, r = ffmpeg_case(p, share, tag, name, want, a)
+                        rows.append((f"{name} ffmpeg main", r))
+                        if name == "hevc8_4k.mp4":
+                            good, r = ffmpeg_case(p, share, "scale", name, want, f"-hwaccel henge -hwaccel_output_format henge -i /tmp/{name} "
+                                                  "-vf scale_henge=1920:1080 -c:v hevc_henge -b:v 10M -c:a copy", min_psnr=30.0)
                             ok &= good
-                            rows.append((f"{name} ffmpeg {tag}", r))
-                for out_codec, speed in ([] if args.no_xcode else [("hevc", False)]) + ([("hevc", True)] if args.speed else []):
-                    out, r = transcode(p, p.pid, name, out_codec, speed)
-                    tag = f"{name} to {out_codec}{' speed' if speed else ''}"
-                    oname = f"out-{name[:-4]}-{out_codec}{'-speed' if speed else ''}.mp4"
-                    put(p, out, oname)
-                    got = probe(os.path.join(share, oname))
-                    dec = subprocess.run(["ffmpeg", "-v", "error", "-i", os.path.join(share, oname), "-f", "null", "-"], capture_output=True, text=True)
-                    frames = int(got.split(",")[-1]) if got and got.split(",")[-1].isdigit() else -1
-                    q = psnr(os.path.join(share, oname), os.path.join(share, name))
-                    sharp = q is not None and min(q["y"], q["u"], q["v"]) >= MIN_PSNR and q["min"] >= MIN_FRAME_PSNR
-                    good = frames == want and not dec.stderr.strip() and dec.returncode == 0 and r["packets"] == want and sharp
-                    ok &= good
-                    pq = f"PSNR y {q['y']:.1f} u {q['u']:.1f} v {q['v']:.1f} dB, worst frame {q['min']:.1f} dB" if q else "no PSNR"
-                    print(f"{'ok  ' if good else 'FAIL'} {tag}: {r['fps']:.1f} fps, {r['packets']} packets, output {got} "
-                          f"({frames} of {want} frames, {len(dec.stderr.strip().splitlines())} decode errors), {pq}")
-                    if q:
-                        r.update(psnr_y=q["y"], psnr_u=q["u"], psnr_v=q["v"], psnr_min=q["min"])
-                    print(f"     socket {r['sent']:.1f} MB up, {r['recv']:.1f} MB down, {r['mbs']:.1f} MB/s, {r['calls']} calls; "
-                          f"henge-xcode CPU {r['cpu']:.2f} s ({r['cpu'] / r['secs'] * 100:.0f}% of one core), guest busy {r['guest_busy']:.0f}% "
-                          f"of {args.cpus} CPUs, hengevm {r['host_cpu']:.0f}% of one host core")
-                    rows.append((tag, r))
-                    os.remove(os.path.join(share, oname))
-                if not args.no_software:
-                    s = soft_decode(p, name)
-                    print(f"     Debian software decode {name} -f null: {s['fps']:.1f} fps ({s['frames']} frames in {s['secs']:.2f} s, "
-                          f"guest CPU {s['cpu']:.2f} s)")
-                    rows.append((f"{name} software decode", s))
-                sh(p, f"rm -f /tmp/{name} /tmp/out-*.mp4")
+                            rows.append((f"{name} ffmpeg scale_henge", r))
+                        if name == "hevc8_1080p.mp4":
+                            for tag, a in [("swfilter", f"-init_hw_device henge -hwaccel henge -hwaccel_output_format henge -i /tmp/{name} "
+                                                        "-vf hwdownload,format=nv12,hflip,hflip,hwupload -c:v hevc_henge -b:v 20M -c:a copy"),
+                                           ("h264", f"-hwaccel henge -hwaccel_output_format henge -i /tmp/{name} -c:v h264_henge -b:v 20M -c:a copy"),
+                                           ("swdec", f"-i /tmp/{name} -c:v hevc_henge -b:v 20M -c:a copy")]:
+                                good, r = ffmpeg_case(p, share, tag, name, want, a)
+                                ok &= good
+                                rows.append((f"{name} ffmpeg {tag}", r))
+                    for out_codec, speed in ([] if args.no_xcode else [("hevc", False)]) + ([("hevc", True)] if args.speed else []):
+                        out, r = transcode(p, p.pid, name, out_codec, speed)
+                        tag = f"{name} to {out_codec}{' speed' if speed else ''}"
+                        oname = f"out-{name[:-4]}-{out_codec}{'-speed' if speed else ''}.mp4"
+                        put(p, out, oname)
+                        got = probe(os.path.join(share, oname))
+                        dec = subprocess.run(["ffmpeg", "-v", "error", "-i", os.path.join(share, oname), "-f", "null", "-"], capture_output=True, text=True)
+                        frames = int(got.split(",")[-1]) if got and got.split(",")[-1].isdigit() else -1
+                        q = psnr(os.path.join(share, oname), os.path.join(share, name))
+                        sharp = q is not None and min(q["y"], q["u"], q["v"]) >= MIN_PSNR and q["min"] >= MIN_FRAME_PSNR
+                        good = frames == want and not dec.stderr.strip() and dec.returncode == 0 and r["packets"] == want and sharp
+                        ok &= good
+                        pq = f"PSNR y {q['y']:.1f} u {q['u']:.1f} v {q['v']:.1f} dB, worst frame {q['min']:.1f} dB" if q else "no PSNR"
+                        print(f"{'ok  ' if good else 'FAIL'} {tag}: {r['fps']:.1f} fps, {r['packets']} packets, output {got} "
+                              f"({frames} of {want} frames, {len(dec.stderr.strip().splitlines())} decode errors), {pq}")
+                        if q:
+                            r.update(psnr_y=q["y"], psnr_u=q["u"], psnr_v=q["v"], psnr_min=q["min"])
+                        print(f"     socket {r['sent']:.1f} MB up, {r['recv']:.1f} MB down, {r['mbs']:.1f} MB/s, {r['calls']} calls; "
+                              f"henge-xcode CPU {r['cpu']:.2f} s ({r['cpu'] / r['secs'] * 100:.0f}% of one core), guest busy {r['guest_busy']:.0f}% "
+                              f"of {args.cpus} CPUs, hengevm {r['host_cpu']:.0f}% of one host core")
+                        rows.append((tag, r))
+                        os.remove(os.path.join(share, oname))
+                    if not args.no_software:
+                        s = soft_decode(p, name)
+                        print(f"     Debian software decode {name} -f null: {s['fps']:.1f} fps ({s['frames']} frames in {s['secs']:.2f} s, "
+                              f"guest CPU {s['cpu']:.2f} s)")
+                        rows.append((f"{name} software decode", s))
+                    sh(p, f"rm -f /tmp/{name} /tmp/out-*.mp4")
         except pexpect.TIMEOUT:
             raise Fail("timeout waiting for the guest; tail:\n" + (p.before or "")[-1500:])
         except pexpect.EOF:

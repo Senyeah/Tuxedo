@@ -1,3 +1,4 @@
 /etc/henge/davfs2.conf
 /etc/henge/UPower.conf
 /etc/xdg/plasma-workspace/env/henge-keyboard.sh
+/etc/apt/sources.list.d/henge.sources

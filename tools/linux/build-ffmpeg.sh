@@ -32,29 +32,9 @@ if [ "${1:-}" != "--inner" ]; then
 fi
 
 . /src/tools/linux/versions.env
-SNAP=http://snapshot.debian.org/archive/debian/$DEBIAN_SNAPSHOT/
-SNAP_SEC=http://snapshot.debian.org/archive/debian-security/$DEBIAN_SNAPSHOT/
 # The -dev packages are the runtime libraries' versions, so the binary matches what the guest installs
-DEPS="build-essential pkgconf libx264-dev libx265-dev libdav1d-dev libopus-dev libmp3lame-dev libgnutls28-dev zlib1g-dev xz-utils patch"
-
-rm -f /etc/apt/sources.list.d/*
-cat > /etc/apt/sources.list.d/snapshot.sources <<EOF
-Types: deb
-URIs: $SNAP
-Suites: $DEBIAN_SUITE $DEBIAN_SUITE-updates
-Components: main
-Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
-Check-Valid-Until: no
-
-Types: deb
-URIs: $SNAP_SEC
-Suites: $DEBIAN_SUITE-security
-Components: main
-Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
-Check-Valid-Until: no
-EOF
-apt-get -q -o Acquire::Retries=5 update >/dev/null
-DEBIAN_FRONTEND=noninteractive apt-get -q -o Acquire::Retries=5 install -y --no-install-recommends $DEPS >/dev/null
+APT_PKGS="build-essential pkgconf libx264-dev libx265-dev libdav1d-dev libopus-dev libmp3lame-dev libgnutls28-dev zlib1g-dev xz-utils patch"
+. /src/tools/linux/snapshot-apt.sh
 
 NAME=ffmpeg-$FFMPEG_VERSION
 SRC=/work/$NAME-henge

@@ -9,8 +9,11 @@ Every script runs inside the builder container, so no cross compiler is needed.
 - `Dockerfile`: the builder image (`debian:trixie` with the build tools).
 - `build-uboot.sh`, `build-image.sh`, `customize.sh`, `rootfs/`: see Order.
 - `customize-desktop.sh`, `rootfs-desktop/`: extra files for the desktop image (`build-image.sh --desktop`).
-- `henge-guest/` (G9): the source of the `henge-guest` Debian package. It holds the grow and first-boot scripts (`/usr/lib/henge/`) and units (`/usr/lib/systemd/system/henge-*.service`, G8), and enables them in `postinst`. `build-guest-pkg.sh` builds the `.deb` on its own; `build-image.sh` builds it too and installs it in both images. P6 adds the shared-folder mount (`home-henge-Henge.mount` and `.automount`, `/etc/henge/davfs2.conf`); P7 adds the clipboard helper (`henge-clipboard` and a user unit). DS5 adds `henge-status` and its unit, and UPower's settings. 1.6.0 adds the wallet, `henge-secrets` (see Wallet); 1.6.1 puts the command on the PATH. `grow-check.py` tests the grow units, `share-check.py` the shared folder and `clipboard-check.py` the clipboard.
+- `henge-guest/` (G9): the source of the `henge-guest` Debian package. It holds the grow and first-boot scripts (`/usr/lib/henge/`) and units (`/usr/lib/systemd/system/henge-*.service`, G8), and enables them in `postinst`. `build-guest-pkg.sh` builds the `.deb` on its own; `build-image.sh` builds it too and installs it in both images. P6 adds the shared-folder mount (`home-henge-Henge.mount` and `.automount`, `/etc/henge/davfs2.conf`); P7 adds the clipboard helper (`henge-clipboard` and a user unit). DS5 adds `henge-status` and its unit, and UPower's settings. 1.6.0 adds the wallet, `henge-secrets` (see Wallet); 1.6.1 puts the command on the PATH. 1.9.0 adds the Henge apt repository's key (`/usr/share/keyrings/henge-archive.gpg`) and its source (`/etc/apt/sources.list.d/henge.sources`), which is off (see ffmpeg with the device's codecs). `grow-check.py` tests the grow units, `share-check.py` the shared folder and `clipboard-check.py` the clipboard.
 - `build-ffmpeg.sh` (VE2): the guest's `ffmpeg` with the Henge codecs. It applies `hvcodec/ffmpeg-henge.patch` to the FFmpeg release in `versions.env`, builds `libhvcodec` (`hvcodec/libhvcodec/`) and `henge-codec-info`, and writes `ffmpeg/bin/` and `ffmpeg/ffmpeg.manifest` in the artefact directory. It runs in an arm64 `debian:trixie` container with packages from the pinned snapshot (about 3 min). `make test-linux-ffmpeg` checks the result in a clone of the desktop image. See `docs/guest-video-encode-plan.md`.
+- `build-ffmpeg-pkg.sh` (VE3): the `henge-ffmpeg` package from that build, with `henge-ffmpeg/` (its `postinst`, `prerm` and `copyright`) and the man page `hvcodec/ffmpeg-henge.7.md`. Output: `ffmpeg/henge-ffmpeg_<release>-henge<N>_arm64.deb`. `make linux-ffmpeg-pkg`.
+- `publish-apt.sh` (VE3): the signed apt repository in `build/linux/apt` and the source offer in `build/linux/source`. Nothing leaves the Mac unless you give it `--rsync`. `make linux-apt`. `henge-archive.asc` is the repository's public key.
+- `snapshot-apt.sh`: sourced by the container scripts above, so they install packages from the snapshot in `versions.env`.
 - `run.sh`: runs a command in the builder image. `build/linux/` is mounted at `/out`, the repo's `tools/linux/` at `/tools` (read only), and a named volume at `/work` for source trees.
 
 `run.sh` builds the image on first use. `HENGE_LINUX_OUT` is the artefact directory. `run.sh`, `package-image.sh`, `serve.sh`, `qemu-ref.sh`, `qemu-check.py`, `balloon-check.py` and `sound-check.py` default to the author's `$HOME/Repos/Henge/build/linux`, so on any other Mac set it first (see From nothing). `smoke.py` and the Makefile targets default to `build/linux` of the main checkout, where all worktrees share the files.
@@ -277,6 +280,61 @@ vainfo --display drm --device /dev/dri/renderD128
 - Not in hardware: HEVC (VA-API does not carry the reference picture sets that VideoToolbox needs), MPEG-2, VC-1, JPEG, VP9 profiles 1 and 3, AV1 profiles 1 and 2, and AV1 with film grain. Players fall back to software decode for those, except AV1 with film grain: its frames fail, so turn hardware decode off in the player (`--hwdec=no`).
 - A stream that fails on the host gives no error in the guest: the frame keeps its old pixels until the next key frame. `hengevm`'s log (`HV_VIRGL_VERBOSE=1`) has a line for each failure and, when the player closes, a total for each codec.
 - The phone pauses an accelerated machine in the background, and the decoder with it.
+
+## ffmpeg with the device's codecs (henge-ffmpeg)
+
+`henge-ffmpeg` gives the guest an `ffmpeg` that decodes and encodes on the device's hardware, with the frames on the device (`docs/guest-video-encode-plan.md`). The host must offer the codec service (`hengevm --vcodec` on the Mac). `man ffmpeg-henge` gives the commands, the encoders and their options, and the limits.
+
+What the package does:
+
+- The binaries go in `/usr/lib/henge/ffmpeg/bin/`. `postinst` makes the links `/usr/local/bin/ffmpeg` and `/usr/local/bin/ffprobe`, so `ffmpeg` on the default `PATH` is the Henge build. It does not replace a file there that it did not make; it says so, and that command stays the admin's.
+- Debian's `ffmpeg` stays at `/usr/bin/ffmpeg`, and `man ffmpeg` stays Debian's page. The two packages do not depend on each other.
+- `apt remove henge-ffmpeg` runs `prerm`, which removes the links only if they still point into `/usr/lib/henge`. Then `ffmpeg` is Debian's again (run `hash -r` in a shell that used it). An upgrade keeps the links.
+- `henge-codec-info` is in `/usr/bin`. The man page is `ffmpeg-henge(7)`. The package recommends `man-db`, which the desktop image does not have.
+- `Depends` comes from `dpkg-shlibdeps`: `libx264`, `libx265`, `libdav1d`, `libopus`, `libmp3lame` and GnuTLS are Debian's shared libraries.
+
+Build it:
+
+```sh
+make linux-ffmpeg          # build-ffmpeg.sh, about 2 to 3 min
+make linux-ffmpeg-pkg      # build-ffmpeg-pkg.sh, about 1 min
+make linux-apt             # publish-apt.sh: build/linux/apt and build/linux/source, signed, local only
+make test-linux-ffmpeg-pkg # both packages from build/linux/apt in a clone of the desktop image
+```
+
+`build-ffmpeg-pkg.sh` refuses a build that is not from the current patch, `libhvcodec` and `versions.env`. It renders the man page with `pandoc`, and `hvcodec/manpage-check.py` must find each `*_henge` encoder, each of its options and named values, and each `scale_henge` option in it. Add an option to the patch, and the package does not build until the page has it. Two builds from the same inputs give the same `.deb`, byte for byte.
+
+### The repository
+
+`publish-apt.sh` adds the current `henge-ffmpeg` and a fresh `henge-guest` to `build/linux/apt/pool`, writes `Packages` for `arm64` and `all` with `apt-ftparchive` in a container, and signs `Release` on the Mac (`InRelease` and `Release.gpg`). It also writes `build/linux/source/ffmpeg-<release>-henge<N>/`: the FFmpeg tarball, the patch, `build-ffmpeg.sh`, `ffmpeg.manifest`, `henge-ffmpeg-src.tar.xz` (the Henge files of the build at their places in this repository), `README.txt` and `SHA256SUMS`. The package's `copyright` file gives that directory's URL. This is the source offer that the GPL needs (see `docs/licensing.md`).
+
+Published files never change. The script stops if a package in the pool has the same name and other content, or if the source directory of the current version would change: raise `Version` in `henge-guest/DEBIAN/control`, or `FFMPEG_HENGE_REV` in `versions.env`. It also stops if a `henge-ffmpeg` in the pool has no source directory with its own manifest. Old versions stay in the pool, and their source directories stay with them.
+
+The key: an ed25519 key with no passphrase and no expiry, `Henge apt repository <henge@localhost>`, fingerprint `3C6090534ECD46192BB2DD961BBB87C25399869D`. The private part is only in `~/.henge-apt-key` on the Mac (`HENGE_APT_GNUPGHOME` changes the place). Keep a copy of that directory somewhere safe: without it, no new version can be signed, and each guest needs a new `henge-guest` with a new key. Its revocation certificate is in `openpgp-revocs.d/` there. `gpg --homedir ~/.henge-apt-key --passwd` adds a passphrase; then the script asks for it. `publish-apt.sh --new-key` makes a key only when there is none, and writes the public part to `tools/linux/henge-archive.asc` and `henge-guest/usr/share/keyrings/henge-archive.gpg`. The script stops if those two are not the key in the keyring.
+
+Publication is a separate step, and only the owner runs it:
+
+```sh
+tools/linux/publish-apt.sh --rsync
+```
+
+It copies `apt/` and `source/` to `root@walkies.site:/home/USER/henge-linux-catalogue/files` with `rsync` over `ssh` (`HENGE_APT_REMOTE`): the pool and the source first, the `dists/` index last, so `InRelease` never names a file that is not there yet. It deletes nothing on the server. Then it downloads `InRelease` from `https://walkies.site/henge-linux-catalogue` (`HENGE_APT_URL`), checks the signature with the guest's key, and compares `Packages`, the SHA-256 of each `.deb` and each `SHA256SUMS` with the local files. `--check-remote` does only that check.
+
+### Turning the repository on in a guest
+
+`henge-guest` 1.9.0 ships `/etc/apt/sources.list.d/henge.sources` with `Enabled: no`, so `apt update` does not try the server before the repository is there. After the publication, in each guest:
+
+```sh
+sudo sed -i 's/^Enabled: no/Enabled: yes/' /etc/apt/sources.list.d/henge.sources
+sudo apt update
+sudo apt install henge-ffmpeg
+```
+
+The file is a conffile. A later `henge-guest` keeps your change, and if that version changes the file too, `dpkg` asks which one to keep. A guest with an older `henge-guest` has no key and no source yet. A new machine from an image with `henge-guest` 1.9.0 or later has them. On an existing machine, put `build/linux/apt/pool/main/h/henge-guest/henge-guest_1.9.0_all.deb` in the shared folder and run `sudo apt install ~/Henge/henge-guest_1.9.0_all.deb`.
+
+### The package check
+
+`vcodec-check.py --apt build/linux/apt` (`make test-linux-ffmpeg-pkg`) boots a clone of the desktop image with `hengevm --vcodec` and serves the repository through `--share` at `http://10.0.2.4/apt`. It checks, in order: `apt update` with the local repository and its signature; `henge-guest` from it, with its key and `henge.sources` (`Enabled: no`); `apt update` with that file gives no new warning or error and does not contact walkies.site; the same file with `Enabled: yes` and the local URI works with the shipped key; then `henge-ffmpeg`: `ffmpeg` and `ffprobe` resolve to the links, `ffmpeg -version` is the Henge build, `/usr/bin/ffmpeg` is Debian's and unchanged, `henge-codec-info --json`, `man ffmpeg-henge` opens and `manpage-check.py` passes on the installed page, `man ffmpeg` is still Debian's page, the main command with `ffmpeg` on each clip (frames, PSNR and audio sync, as with `--ffmpeg`), a reinstall keeps the links, `apt remove` gives Debian's `ffmpeg` back, and an admin's own `/usr/local/bin/ffprobe` stays through an install and a remove. Give `--linux-dir` and `--image` for an image that is not in `build/linux`, in `VCODEC_ARGS`.
 
 ## Checks on the Mac
 
