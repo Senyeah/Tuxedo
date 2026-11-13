@@ -186,6 +186,12 @@ test-linux-input: $(B)/hengevm
 	uv run tools/linux/input-check.py $(INPUT_ARGS)
 .PHONY: test-linux-input
 
+# TS3: the virtio touchscreen reaches labwc: udev, libinput, evtest order, and wl_touch positions before and after a mode change.
+# TOUCH_ARGS="--image FILE" skips the apt install; "--no-qemu" skips the comparison with QEMU's virtio-multitouch-pci.
+test-linux-touch: $(B)/hengevm
+	uv run tools/linux/touch-check.py $(TOUCH_ARGS)
+.PHONY: test-linux-touch
+
 # A8: the desktop image booted twice, with and without --gpu-accel: renderer string, virgl frame time (median <= 4 ms, p99 <= 16.7 ms), glmark2 against the same run software score, no virtio_gpu error.
 # Builds hengevm with GFX=1 in its own directory so the objects of a plain build are not mixed in. Skipped when GFX_DIR is missing.
 # ACCEL_ARGS="--full" runs the whole default glmark2 benchmark instead of the short scene set.
