@@ -207,26 +207,41 @@ def input_method_runs():
         return False
 
 
+def wait_for_no_input_method():
+    """Blocks while a henge-keyboard that is KWin's input method holds the lock."""
+    try:
+        with open(lock_path(), "a") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+    except OSError:
+        pass
+
+
 def follow_kwin(sender):
-    if input_method_runs():
-        log("henge-keyboard is KWin's input method; nothing to do")
-        return 0
     match = f"type='signal',path='{KWIN[1]}',interface='{KWIN[2]}',member='activeChanged'"
-    p = subprocess.Popen(["busctl", "--user", "--json=short", "monitor", "--match=" + match],
-                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    sender.set(bool(kwin_property("active")))
     while True:
-        wait = sender.step()
-        if not select.select([p.stdout], [], [], wait)[0]:
-            continue
-        if not os.read(p.stdout.fileno(), 65536):
-            raise ConnectionError("busctl monitor stopped")
-        if input_method_runs():  # the input method started later: it sends the requests now
-            p.terminate()
-            return 0
-        active = kwin_property("active")
-        if active is not None:
-            sender.set(active)
+        # The input method sends the requests while it runs. This waits, and takes over when it stops
+        # (the person chose Maliit or Fcitx): an exit would leave no helper, as systemd restarts failures only.
+        if input_method_runs():
+            log("henge-keyboard is KWin's input method; this one waits")
+            wait_for_no_input_method()
+            log("the input method stopped; this one follows KWin on the bus")
+        p = subprocess.Popen(["busctl", "--user", "--json=short", "monitor", "--match=" + match],
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        sender.sent = None  # the host has the input method's last word: say the state again
+        sender.set(bool(kwin_property("active")))
+        while True:
+            wait = sender.step()
+            if not select.select([p.stdout], [], [], wait)[0]:
+                continue
+            if not os.read(p.stdout.fileno(), 65536):
+                raise ConnectionError("busctl monitor stopped")
+            if input_method_runs():  # the input method started later
+                p.terminate()
+                p.wait()
+                break
+            active = kwin_property("active")
+            if active is not None:
+                sender.set(active)
 
 
 # ---- KWin's input method, with the panel ----

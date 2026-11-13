@@ -5,7 +5,7 @@ Installs the package's files and the image's kwinrc as the image has them, start
 (1280x800) and a stand-in for the host, and checks with a maximized test window:
 with a text field: "show" reaches the host; a keyboard height makes KWin give the window a smaller height, a new
 height changes it, and 0 gives the full height back; with no text field (the keyboard opened by hand) the
-same, and no "show"; a text field after that is news; a second helper on the bus stops.
+same, and no "show"; a text field after that is news; a second helper on the bus waits, and sends when the input method stops.
 Then KWin without KWIN_IM_SHOW_ALWAYS: the window keeps its size (why the package sets it).
 """
 import os
@@ -157,12 +157,35 @@ def main():
             raise Fail(f"the text field still has the focus, but the host got {lines(HOSTLOG)[-1:]}")
         print("ok: the text field keeps its show when the keyboard goes down", flush=True)
 
-        # The helper that the desktop's autostart runs stops: there must be one sender only
-        r = subprocess.run(["/usr/lib/henge/henge-keyboard"], env=dict(env, WAYLAND_DISPLAY="wayland-0"),
-                           capture_output=True, text=True, timeout=20)
-        if r.returncode != 0 or "input method" not in r.stderr:
-            raise Fail(f"a second helper gave status {r.returncode} and {r.stderr.strip()!r}")
-        print("ok: a second helper stops", flush=True)
+        # The helper that the desktop's autostart runs waits: there must be one sender only
+        before = lines(HOSTLOG)
+        second = subprocess.Popen(["/usr/lib/henge/henge-keyboard"], env=dict(env, WAYLAND_DISPLAY="wayland-0"),
+                                  stderr=open("/tmp/second.log", "w"))
+        time.sleep(3)
+        if second.poll() is not None or lines(HOSTLOG) != before or "waits" not in open("/tmp/second.log").read():
+            raise Fail(f"a second helper: status {second.poll()}, log {open('/tmp/second.log').read()!r}, "
+                       f"requests {lines(HOSTLOG)[len(before):]}")
+        print("ok: a second helper waits and sends nothing", flush=True)
+
+        # The input method stops (the person chose another one): the second helper takes over on the bus
+        pids = subprocess.run(["pgrep", "-f", "/usr/lib/henge/henge-keyboard"], capture_output=True, text=True).stdout.split()
+        for pid in pids:
+            if int(pid) != second.pid:
+                os.kill(int(pid), 15)
+        wait("the second helper did not take over", lambda: "follows KWin on the bus" in open("/tmp/second.log").read())
+        stop(win)
+        wait("after the input method stopped: no hide from the second helper", lambda: lines(HOSTLOG)[-1:] == ["hide"])
+        time.sleep(1)
+        count = len(lines(HOSTLOG))
+        win = start_window(env, "--text")
+        wait("after the input method stopped: no show from the second helper",
+             lambda: lines(HOSTLOG)[count:] == ["show"])
+        stop(win)
+        wait("after the input method stopped: no hide from the second helper",
+             lambda: lines(HOSTLOG)[count:] == ["show", "hide"])
+        print("ok: the input method stops: the second helper sends show and hide", flush=True)
+        stop(second)
+        win = start_window(env)
         stop(win)
         stop(kwin)
 
