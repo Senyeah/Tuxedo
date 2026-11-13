@@ -96,7 +96,7 @@ struct PadMotionTests {
         let flick = run(hz: 240, seconds: 0.3) { t in 30000 * min(t, 0.1) }
         check(!flick.ticks.isEmpty, "a flick gives ticks")
         check(zip(flick.ticks, flick.ticks.dropFirst()).allSatisfy { $1.t - $0.t >= m.tickGap - 1e-9 }, "ticks keep their gap")
-        check(flick.ticks.allSatisfy { $0.i <= m.tickGain + 1e-9 && $0.i >= m.tickMin }, "ticks stay within the minimum and the gain")
+        check(flick.ticks.allSatisfy { $0.i <= m.tickGain + 1e-9 && $0.i >= m.tickMin - 1e-9 }, "ticks stay within the minimum and the gain")
 
         // An older sample is skipped, and its travel comes in the next one.
         var g = PadMotionFeel()
@@ -107,6 +107,39 @@ struct PadMotionTests {
         check(g.level.isFinite && g.accel.isFinite, "an older sample does no harm")
         g.end()
         check(!g.active && g.level == 0, "the end stops the feel")
+
+        // As on the phone: touches sampled at 240 Hz arrive 25 ms late, in a batch each 120 Hz frame,
+        // and each frame steps on the arrival clock. The move must be felt as without the latency.
+        func delayed(_ latency: Double, frameHz: Double, speed: (Double) -> Double, seconds: Double, after: Double)
+            -> (peak: Double, last: Double, stopTicks: Int) {
+            var f = PadMotionFeel()
+            var queue: [(x: Double, t: Double)] = []
+            var x = 0.0, t = 0.0, frame = 0.0, peak = 0.0, stopTicks = 0
+            f.begin(x: 0, y: 0, t: 0, arrival: latency)
+            while frame < seconds + after {
+                frame += 1 / frameHz
+                while t + 1.0 / 240 <= min(frame - latency, seconds) {
+                    t += 1.0 / 240
+                    x += speed(t) / 240
+                    queue.append((x, t))
+                }
+                for s in queue { _ = f.sample(x: s.x, y: 0, t: s.t, arrival: frame) }
+                queue.removeAll()
+                if f.step(now: frame) != nil { stopTicks += 1 }
+                if frame < seconds + latency { peak = max(peak, f.level) }
+            }
+            return (peak, f.level, stopTicks)
+        }
+        let direct = run(hz: 240, seconds: 0.3) { t in 16000 * min(t, 0.15) }.peak
+        for hz in [60.0, 120] {
+            let r = delayed(0.025, frameHz: hz, speed: { t in 16000 * min(t, 0.15) }, seconds: 0.3, after: 0)
+            check(abs(r.peak - direct) < 0.1, "with 25 ms touch latency at \(hz) Hz the level is \(r.peak), \(direct) without")
+        }
+        let steadyLate = delayed(0.025, frameHz: 60, speed: { _ in 600 }, seconds: 1, after: 0)
+        check(steadyLate.last == 0, "a steady move with touch latency is silent at its end, got \(steadyLate.last)")
+        let stopLate = delayed(0.025, frameHz: 120, speed: { _ in 1500 }, seconds: 0.4, after: 0.6)
+        check(stopLate.last == 0, "a stop with touch latency goes silent")
+        check(stopLate.stopTicks == 1, "a sudden stop gives one tick, got \(stopLate.stopTicks)")
 
         if failures > 0 { print("test_pad_motion: \(failures) failed"); exit(1) }
         print("test_pad_motion: all passed")

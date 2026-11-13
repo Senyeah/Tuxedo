@@ -177,11 +177,11 @@ struct PadTuning: Codable, Equatable {
         /// What a first finger gives: "soft", "light", "rigid" (a tick of that style), "none".
         var touchDown = "soft"
         var touchDownIntensity = 0.35
-        /// The keys and tap-to-click are the strongest, and a tap feels as its key does.
-        var tap = Event(style: "rigid", intensity: 1.0)
+        /// The keys and tap-to-click are the strongest, and a tap feels as its key does. Left feels as right.
+        var tap = Event(style: "heavy", intensity: 1.0)
         var rightTap = Event(style: "heavy", intensity: 1.0)
-        var leftKeyDown = Event(style: "rigid", intensity: 1.0)
-        var leftKeyUp = Event(style: "rigid", intensity: 0.45)
+        var leftKeyDown = Event(style: "heavy", intensity: 1.0)
+        var leftKeyUp = Event(style: "heavy", intensity: 0.40)
         var rightKeyDown = Event(style: "heavy", intensity: 1.0)
         var rightKeyUp = Event(style: "heavy", intensity: 0.40)
         var holdStart = Event(style: "medium", intensity: 0.8)
@@ -201,18 +201,20 @@ struct PadTuning: Codable, Equatable {
         var style = "texture"
         var velocitySmoothing = 0.02     // s
         var accelSmoothing = 0.04        // s
-        /// pt/s². Below floor nothing plays; at full the haptic is at its gain.
-        var floor = 2000.0
-        var full = 30000.0
+        /// pt/s². Below floor nothing plays; above it the haptic starts at its minimum, and at full it is at its gain.
+        var floor = 1500.0
+        var full = 20000.0
         /// s with no sample: the finger is still, so its speed falls to zero.
         var still = 0.03
-        var textureGain = 0.35
-        var textureSharpness = 0.25
-        var tickStyle = "light"
-        var tickGain = 0.5
+        /// The Taptic Engine plays almost nothing under about 0.2, so the weakest felt haptic is the minimum.
+        var textureMin = 0.30
+        var textureGain = 0.90
+        var textureSharpness = 0.5
+        var tickStyle = "rigid"
+        var tickGain = 1.0
         var tickSpacing = 6.0            // pt
         var tickGap = 0.03               // s; the Taptic Engine cannot play much faster
-        var tickMin = 0.06
+        var tickMin = 0.35
     }
 }
 

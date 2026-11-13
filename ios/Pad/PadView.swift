@@ -183,7 +183,7 @@ final class PadHostView: UIView, PadSurfaceHost, PadFeedback {
         s.syncWithCoreAnimation = moving
         var animating = false
         let k = tuning.keys
-        motion.step(now: now)
+        motion.step(now: clock()) // the clock that the touches arrive by, not the frame's target time
         for b in 0..<2 {
             let target = keyTarget[b] || now < flashUntil[b] ? 1.0 : 0.0
             let time = target > 0 ? k.attack : k.release
@@ -241,14 +241,14 @@ final class PadHostView: UIView, PadSurfaceHost, PadFeedback {
             haptics.prepare()
             haptics.fire(.touchDown, now: clock())
         }
-        if haptics.level == .all { motion.down(id, x: x, y: y, t: time) }
+        if haptics.level == .all { motion.down(id, x: x, y: y, t: time, now: clock()) }
     }
 
     func padFingerMoved(_ id: Int, samples: [(CGPoint, TimeInterval)]) {
         for (p, t) in samples {
             let (x, y) = host(p)
             surface.add(.move(id: id, x: x, y: y, t: t))
-            motion.moved(id, x: x, y: y, t: t)
+            motion.moved(id, x: x, y: y, t: t, now: clock())
         }
     }
 

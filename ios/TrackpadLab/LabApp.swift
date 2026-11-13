@@ -76,6 +76,7 @@ final class LabModel: ObservableObject {
         host.haptics.onFire = { [weak self] e, style, intensity in
             self?.note("haptic \(e.rawValue) \(style) \(intensity)")
         }
+        host.motion.onLog = { [weak self] line in self?.note(line) }
         host.haptics.prepare()
         let d = UserDefaults.standard
         if d.object(forKey: "padDemo") != nil || d.object(forKey: "padDemoAt") != nil || d.object(forKey: "padHapticCount") != nil {
