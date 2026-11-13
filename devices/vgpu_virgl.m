@@ -20,6 +20,7 @@
 #include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
+#define VIRGL_RENDERER_UNSTABLE_APIS 1 /* VIRGL_RENDERER_USE_VIDEO */
 #include <virgl/virglrenderer.h>
 
 #include "virtio_gpu.h"
@@ -722,10 +723,14 @@ static void caps_fill(HvVgpuVirgl *r) {
 static struct virgl_renderer_callbacks cbs = {.version = 4, .write_fence = on_fence, .create_gl_context = cb_create,
                                               .destroy_gl_context = cb_destroy, .make_current = cb_current};
 
+static atomic_int video_on;
+void hv_vgpu_virgl_set_video(int on) { atomic_store(&video_on, on); }
+
 static int renderer_start(HvVgpuVirgl *r) {
     if (egl_start(r)) return -1;
     virgl_set_log_callback(on_log, r, NULL);
-    int rc = virgl_renderer_init(r, VIRGL_RENDERER_USE_GLES, &cbs);
+    // Video (opt-in): the guest's VA-API decodes on VideoToolbox (H.264), with the bitstream the guest gives.
+    int rc = virgl_renderer_init(r, VIRGL_RENDERER_USE_GLES | (atomic_load(&video_on) ? VIRGL_RENDERER_USE_VIDEO : 0), &cbs);
     if (rc) {
         fprintf(stderr, "virgl: virgl_renderer_init returned %d\n", rc);
         eglTerminate(r->dpy);

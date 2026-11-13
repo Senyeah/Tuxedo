@@ -12,7 +12,8 @@ endif
 GFX_DIR ?= $(GFX_ROOT)/macos
 ANGLE_COMMIT := $(shell sed -n 's/^ANGLE_COMMIT=//p' tools/gfx/versions.env)
 GFX_LIBS = $(addprefix $(GFX_DIR)/lib/,libvirglrenderer.a libepoxy.a libEGL.a libGLESv2.a)
-GFX_FRAMEWORKS = -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework CoreFoundation -framework IOKit -framework AppKit -lc++
+# VideoToolbox, CoreMedia and CoreVideo: guest video decode in virglrenderer (tools/gfx/virglrenderer-videotoolbox.patch).
+GFX_FRAMEWORKS = -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework CoreFoundation -framework IOKit -framework AppKit -framework VideoToolbox -framework CoreMedia -framework CoreVideo -lc++
 GFX_OBJ = $(if $(GFX),$(B)/vgpu_virgl.o)
 GFX_LDLIBS = $(if $(GFX),$(GFX_LIBS) $(GFX_FRAMEWORKS))
 # $(call GFX_CHECK,dir): stop with a plain message when the libraries are missing or libepoxy lacks the static-GL patch.
@@ -89,7 +90,7 @@ $(B)/henge-agent.gz: $(B)/henge-agent
 $(B)/share.o: host/share.c host/*.h devices/*.h core/*.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(B)/hengevm: host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(B)/mac-restore/libhengerestore.a
+$(B)/hengevm: host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(B)/mac-restore/libhengerestore.a $(if $(GFX),$(wildcard $(GFX_LIBS)))
 	$(CC) $(CFLAGS) host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(B)/mac-restore/libhengerestore.a -lz -framework Foundation -framework CFNetwork -framework Security -framework SystemConfiguration -framework IOKit $(SLIRP_LIBS) -framework AudioToolbox -framework ParavirtualizedGraphics -framework Metal -framework IOSurface \
 	    -framework Foundation -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers -framework CoreFoundation \
 	    -framework AppKit -framework QuartzCore $(GFX_LDLIBS) -o $@
@@ -213,6 +214,17 @@ test-linux-accel:
 	$(MAKE) GFX=1 B=$(ACCEL_B) $(ACCEL_B)/hengevm && \
 	uv run tools/linux/accel-check.py --hengevm $(ACCEL_B)/hengevm $(ACCEL_ARGS)
 .PHONY: test-linux-accel
+
+# Guest video decode (docs/guest-video-decode-research.md, first spike): vainfo lists H.264, ffmpeg -hwaccel vaapi gives the same
+# framemd5 as software decode for 1080p High clips with B-frames, and decodes faster than real time. Builds hengevm as test-linux-accel
+# does; the libraries need tools/gfx/virglrenderer-videotoolbox.patch. VIDEO_ARGS="--image FILE" names a desktop image with the packages.
+test-linux-video:
+	@if [ ! -d "$(GFX_DIR)" ]; then echo "test-linux-video: skipped: no graphics libraries in $(GFX_DIR)"; exit 0; fi; \
+	mkdir -p $(ACCEL_B) && \
+	{ [ -f $(ACCEL_B)/mac-restore/libhengerestore.a ] || { $(MAKE) build/mac-restore/libhengerestore.a && cp -R build/mac-restore $(ACCEL_B)/ && touch $(ACCEL_B)/mac-restore/libhengerestore.a; }; } && \
+	$(MAKE) GFX=1 B=$(ACCEL_B) $(ACCEL_B)/hengevm && \
+	uv run tools/linux/video-decode-check.py --hengevm $(ACCEL_B)/hengevm $(VIDEO_ARGS)
+.PHONY: test-linux-video
 
 # A9c: a paused accelerated machine sends no work to the renderer: the desktop runs glmark2 on virgl and hengevm pauses (Ctrl-A s,
 # SIGTSTP, Ctrl-A b with guest sound), restarts, and powers off while paused. Builds hengevm with GFX=1 as test-linux-accel does.
@@ -514,13 +526,15 @@ $(B)/test_vgpu_virgl: tests/test_vgpu_virgl.c $(ENGINE) $(filter-out $(B)/vgpu_v
 	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) $(GFX_FRAMEWORKS) -framework AudioToolbox -o $@
 
 test-vgpu-virgl:
-	@if [ -d "$(GFX_DIR)" ]; then $(MAKE) --no-print-directory $(B)/test_vgpu_virgl GFX_DIR="$(GFX_DIR)" && ulimit -s 65520 && $(B)/test_vgpu_virgl; \
+	@if [ -d "$(GFX_DIR)" ]; then $(MAKE) --no-print-directory $(B)/test_vgpu_virgl GFX_DIR="$(GFX_DIR)" && ulimit -s 65520 && $(B)/test_vgpu_virgl && \
+	  if grep -q virglrenderer-video-patch "$(GFX_DIR)/MANIFEST.txt"; then echo "test-vgpu-virgl: again with guest video on, under libgmalloc" && \
+	  VGPU_VIRGL_VIDEO=1 DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib $(B)/test_vgpu_virgl; fi; \
 	else echo "test-vgpu-virgl: skipped: no graphics libraries in $(GFX_DIR)"; fi
 .PHONY: test-vgpu-virgl
 
 # A5: both iOS libraries with the renderer, linked with the static graphics libraries. The device binary is only linked.
 # The simulator binary runs when a simulator is booted (xcrun simctl spawn).
-IOS_GFX_FW = -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework CoreFoundation -framework UIKit -lc++
+IOS_GFX_FW = -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework CoreFoundation -framework UIKit -framework VideoToolbox -framework CoreMedia -framework CoreVideo -lc++
 IOS_GFX_LIBS = $(addprefix $(GFX_ROOT)/$(1)/lib/,libvirglrenderer.a libepoxy.a libEGL.a libGLESv2.a)
 ios-gfx-probe:
 	$(MAKE) ios-lib GFX=1

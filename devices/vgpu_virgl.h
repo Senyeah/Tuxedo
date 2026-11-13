@@ -15,6 +15,8 @@ typedef struct HvVgpuVirgl HvVgpuVirgl;
 /* Starts the thread: EGL on Metal, virglrenderer, the capset cache. NULL when ANGLE or virglrenderer refuse,
    or when another renderer lives: virglrenderer keeps global state, one per process. */
 HvVgpuVirgl *hv_vgpu_virgl_create(void);
+/* Before create: 1 turns on guest video decode on VideoToolbox (H.264, a spike). Default 0: the guest's video commands fail. */
+void hv_vgpu_virgl_set_video(int on);
 /* The ops for hv_virtio_gpu_set_3d(gpu, hv_vgpu_virgl_ops(), r). */
 const HvGpu3dOps *hv_vgpu_virgl_ops(void);
 /* The scanout hook for hv_vgpu_metal_set_3d(presenter, hv_vgpu_virgl_scanout_ops(), r) (A6). */

@@ -46,7 +46,7 @@ How UTM builds them (`scripts/build_dependencies.sh`):
 Differences here, on purpose:
 
 - ANGLE comes from Chromium's repository at the same upstream commit, built with `gn`. The WebKit copy is that commit plus WebKit and UTM patches (for example, "Metal: Prevent EGLImage-backed textures from being reallocated", 24/02/2026). Those patches are not applied. A3 and A5 must check whether any of them matters.
-- Venus, neptune and the render server are off. Platform is EGL only. No GBM, no DRM, no minigbm, no video, no vtest.
+- Venus, neptune and the render server are off. Platform is EGL only. No GBM, no DRM, no minigbm, no vtest. Video is on, with a VideoToolbox back end (below).
 - All libraries are static.
 
 ### Does UTM's ANGLE give ES 3.0
@@ -78,6 +78,20 @@ ANGLE's Metal backend lists `GL_EXT_disjoint_timer_query`, but GL_TIMESTAMP has 
 
 `virglrenderer-angle-timestamp.patch` makes virglrenderer ask for the counter bits on GLES. With 0 bits, a timestamp query is invalid, so it is done at once with the result 0, as on a host with no timer queries. GL_TIME_ELAPSED still works. `build-deps.sh` applies the patch in the same way as the libepoxy one. A virglrenderer built before it must be rebuilt: `tools/gfx/build-deps.sh --only virgl`.
 
+## virglrenderer and guest video decode
+
+`virglrenderer-videotoolbox.patch` (on top of the timestamp patch) builds `-Dvideo=true` with a VideoToolbox back end, `src/vrend/virgl_video_vt.m`, in place of the VA-API one. It needs no libva and no libdrm, and the video back end starts without a DRM descriptor. The guest's Mesa VA-API driver (`virtio_gpu_drv_video.so`) then lists H.264 decode. The back end writes an SPS and a PPS from the parsed fields, reads the PPS id from each slice header, collects the slices of a picture between `BEGIN_FRAME` and `END_FRAME`, and decodes one `CMSampleBuffer` synchronously at `END_FRAME`. The output is copied into the plane resources' textures on the CPU (`glTexSubImage2D`). NV12, I420 and YV12 targets work. See `docs/guest-video-decode-research.md`.
+
+Guest video is off unless the embedder asks for it. Henge passes `VIRGL_RENDERER_USE_VIDEO` (`devices/vgpu_virgl.m`) only with `hengevm --gpu-accel --gpu-video`; the iOS app never passes it. Without the flag the back end does not start, the capset lists no video, and every video command fails as in a library built without video. Everything that links the library needs `-framework VideoToolbox -framework CoreMedia -framework CoreVideo`. `tools/linux/video-decode-check.py` (`make test-linux-video`) checks it in the guest.
+
+The guest controls every video command, so the patch also bounds what upstream's `vrend_video.c` trusts:
+
+- `DECODE_BITSTREAM` copies at most the bitstream resource's size (`width0`), and only from a `VIRGL_BIND_CUSTOM` buffer. Upstream copies the guest's size into a `width0` heap block.
+- The CPU plane copy takes only a 2D `R8` (luma, I420 chroma) or `R8G8` (NV12 chroma) texture, and reads only inside the VideoToolbox plane.
+- At most 16 codecs in a context, and at most 16 MiB of slices in a picture.
+
+`make test-vgpu-virgl` sends the video commands with video off (they must fail) and, with a patched library, an oversized `DECODE_BITSTREAM` with video on under `libgmalloc`. Without the size bound that run crashes.
+
 ## Using them (GFX=1)
 
 ```sh
@@ -92,7 +106,7 @@ make -s ios-gfx-ldflags       # link flags for an app that uses libhengevm.a bui
 
 `GFX_ROOT` (default: `build/gfx` of the main checkout, also from a worktree) and `GFX_DIR` (default: `$GFX_ROOT/macos`) say where the libraries are. The iOS libraries use `$GFX_ROOT/ios` and `$GFX_ROOT/sim`. Without `GFX=1` nothing needs the libraries.
 
-Link line for an app: the four libraries, `-framework Metal -framework QuartzCore -framework IOSurface -framework CoreGraphics -framework CoreFoundation -framework Foundation`, `-framework UIKit` (iOS) or `-framework AppKit` and `-framework IOKit` (macOS), and `-lc++`. The app project needs no `-ObjC` or `-force_load`: nothing refers to the renderer by name until the board creates it, and the linker takes `vgpu_virgl.o` from `libhengevm.a` only then.
+Link line for an app: the four libraries, `-framework Metal -framework QuartzCore -framework IOSurface -framework CoreGraphics -framework CoreFoundation -framework Foundation -framework VideoToolbox -framework CoreMedia -framework CoreVideo`, `-framework UIKit` (iOS) or `-framework AppKit` and `-framework IOKit` (macOS), and `-lc++`. The app project needs no `-ObjC` or `-force_load`: nothing refers to the renderer by name until the board creates it, and the linker takes `vgpu_virgl.o` from `libhengevm.a` only then.
 
 virglrenderer keeps global state, so one renderer can live in a process at a time. `hv_vgpu_virgl_create` returns NULL for a second one.
 

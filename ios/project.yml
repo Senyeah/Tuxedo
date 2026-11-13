@@ -24,7 +24,7 @@ settings:
     HENGE_GFX: ""
     HENGE_GFX_DIR: $(SRCROOT)/../build/gfx
     HENGE_GFX_LIBS_: ""
-    HENGE_GFX_LIBS_1: "$(HENGE_GFX_DIR)/$(HENGE_GFX_PLATFORM)/lib/libvirglrenderer.a $(HENGE_GFX_DIR)/$(HENGE_GFX_PLATFORM)/lib/libepoxy.a $(HENGE_GFX_DIR)/$(HENGE_GFX_PLATFORM)/lib/libEGL.a $(HENGE_GFX_DIR)/$(HENGE_GFX_PLATFORM)/lib/libGLESv2.a"
+    HENGE_GFX_LIBS_1: "$(HENGE_GFX_DIR)/$(HENGE_GFX_PLATFORM)/lib/libvirglrenderer.a $(HENGE_GFX_DIR)/$(HENGE_GFX_PLATFORM)/lib/libepoxy.a $(HENGE_GFX_DIR)/$(HENGE_GFX_PLATFORM)/lib/libEGL.a $(HENGE_GFX_DIR)/$(HENGE_GFX_PLATFORM)/lib/libGLESv2.a -framework VideoToolbox -framework CoreMedia -framework CoreVideo"
     # The simulator's guest network: HENGE_SIM_NET=1 links the simulator builds of libslirp and glib in
     # HENGE_SIM_NET_ROOT (tools/build_sim_net.sh). sim_build.sh sets both when they exist; else net_stub.c.
     HENGE_SIM_NET: ""

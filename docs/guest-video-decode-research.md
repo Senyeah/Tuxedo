@@ -246,10 +246,10 @@ Code that both can share, written one time:
 
 ## Not verified
 
-- That Mesa's virgl VA driver and `vaExportSurfaceHandle` work end to end on Henge's virtio-gpu without blob resources. Public reports of guest VA-API on virgl with Linux hosts often show no profiles. No report shows a working setup.
+- That Mesa's virgl VA driver and `vaExportSurfaceHandle` work end to end on Henge's virtio-gpu without blob resources. Public reports of guest VA-API on virgl with Linux hosts often show no profiles. No report shows a working setup. The spike verified it for H.264 on the Mac ([Spike results](#spike-results)).
 - That FFmpeg's VA-API VP9 path sends the whole frame and the AV1 path sends only tile data. This is from memory of FFmpeg's `vaapi_vp9.c` and `vaapi_av1.c`.
 - That common HEVC encoders refer to SPS reference picture sets by index. This is expected; it makes path 1 fail for HEVC.
-- That VideoToolbox gives one output frame for each synchronous decode call, in decode order, for H.264 with B-frames.
+- That VideoToolbox gives one output frame for each synchronous decode call, in decode order, for H.264 with B-frames. The spike verified it on the Mac.
 - That Firefox and Chromium on Debian use VA-API on virgl, and with which flags.
 - Hardware VP9 and AV1 on the iPhone 18 Pro.
 - All effort numbers.
@@ -272,3 +272,60 @@ Code that both can share, written one time:
 - Virgl video encode work (Phoronix): https://www.phoronix.com/news/Virgl-Encode-H264-H265
 - Guest VA-API on virgl reports: https://forum.proxmox.com/threads/virgl-hardware-accelerated-h264-h265.137023/
 - iPhoneOS 27.1 SDK headers: `VideoToolbox.framework/Headers/VTUtilities.h:61`, `VTDecompressionSession.h:331`
+
+## Spike results
+
+Run on 13/11/2026 on the Mac (Apple M4 Pro, 14 cores), branch `spike/video-decode`. This is the [First spike](#first-spike): H.264 only, with a CPU copy of the planes. The numbers are from run 8, after the review fixes below. The host load average was about 7.
+
+What was built:
+
+- `tools/gfx/virglrenderer-videotoolbox.patch`, applied by `build-deps.sh` after the timestamp patch. It adds `src/vrend/virgl_video_vt.m` and builds `-Dvideo=true` with no `libva` and no `libdrm`. The back end writes the SPS and PPS from the parsed fields, reads the PPS id from each slice header, collects the slices between `BEGIN_FRAME` and `END_FRAME`, and decodes one `CMSampleBuffer` synchronously. `vrend_video.c` copies the output planes into the plane textures with `glTexSubImage2D`. The IOSurface pbuffer import (item 3 of [What changes](#what-changes)) is not in the spike.
+- Henge: guest video is off by default. `hengevm --gpu-accel --gpu-video` passes `VIRGL_RENDERER_USE_VIDEO` (`devices/vgpu_virgl.m`). The iOS app has no setting for it, so it never turns video on. VideoToolbox, CoreMedia and CoreVideo are on the `hengevm` and iOS link lines. The iOS app was not built.
+- `tools/linux/video-decode-check.py` (`make test-linux-video`) runs steps 3 to 5 on a clone of the desktop image.
+- `make test-vgpu-virgl` sends video commands with video off, and an oversized `DECODE_BITSTREAM` with video on under `libgmalloc`.
+
+Guest: Debian desktop image with `mesa-va-drivers` 25.0.7-2+deb13u1, `vainfo` 2.22.0, `ffmpeg` 7.1.5 and `mpv` 0.40.0; 4 CPUs, 3 GB. Clips: made on the Mac with libx264, 1920x1080, 30 fps, High profile, 15 s (450 frames), 3 B-frames with B-pyramid, 4 reference frames. One clip has 1 slice per picture and one has 4.
+
+| Check | Result |
+|---|---|
+| `vainfo`, `VAEntrypointVLD` | `VAProfileH264Main`, `VAProfileH264High` |
+| framemd5, `-hwaccel vaapi` against `-hwaccel none` | 450 of 450 frames match, both clips |
+| `-hwaccel vaapi -hwaccel_output_format vaapi -f null -` | 374.4 fps, guest CPU 0.54 s, `hengevm` CPU 0.88 s (70% of one core) |
+| `-hwaccel none -f null -` | 160.7 fps, guest CPU 5.56 s, `hengevm` CPU 5.63 s (197% of one core) |
+| `mpv --hwdec=vaapi --vo=gpu`, full screen on the desktop | `hwdec-current=vaapi`, 0 frames dropped by the VO and 0 by the decoder. `mpv`'s last sampled frame number was 447 (the sampler runs every 0.25 s); the host log shows that `mpv`'s codec decoded all 450 frames |
+| `hengevm`'s log | 4 VA-API runs (2 framemd5, the benchmark, `mpv`): 4 codecs, each 450 frames on the hardware decoder, 0 failed, 0 skipped, 1 session each |
+| `hengevm` without `--gpu-video` | `vainfo` lists no decode profile, and the VideoToolbox back end does not start |
+| `make test-vgpu-virgl` | passes with video off (197 checks) and with video on under `libgmalloc` (217 checks) |
+| `make test-linux-accel` with the patched libraries (video off, the default) | passes: glmark2 1072 against 306 for llvmpipe (need 3x), median frame time 0.71 ms, p99 2.59 ms, no virtio_gpu errors |
+
+The spike passes: the checksums match and the hardware path decodes 1080p30 at about 12 times real time. Runs 5 and 6, before the review fixes, gave the same result (384.0 and 388.6 fps). An independent re-run of run 6 gave 368.2 fps.
+
+What the spike showed:
+
+- Mesa's virgl VA driver works on Henge's virtio-gpu without blob resources and without context-init, for decode and for `mpv`'s `vaExportSurfaceHandle` path. The first item in [Not verified](#not-verified) is now true for H.264.
+- A synchronous `VTDecompressionSessionDecodeFrame` gives one output frame for each call, in decode order, with B-frames. The checksums prove it.
+- Mesa 25.0 sends all the slices of a picture in one `DECODE_BITSTREAM` (4 slices in one call for the 4-slice clip). So the picture descriptor's active reference counts are the last slice's. The back end learns the PPS default counts only from the last slice of a call, and only when that slice does not override them.
+- The learnt default counts change the PPS once, at the first P picture. VideoToolbox accepted the new format description on the same session (1 parameter set update, 1 session per codec).
+- On the Mac the gain is CPU time, not frame rate: software decode is also faster than real time at 1080p (161 fps on 4 guest CPUs). Guest CPU time falls by a factor of 10. `hengevm`'s CPU time falls by a factor of 6.4 (0.88 s against 5.63 s). Its CPU rate falls by a factor of 2.8 (70% against 197% of one core), because the hardware run is shorter.
+- Mesa creates video buffers in many formats when it probes, not only the decode target. The back end must accept all of them and refuse a format only at `BEGIN_FRAME`. An earlier version refused them at creation and logged errors.
+- When the back end fails to create a buffer, `ffmpeg` still ends with status 0 and writes frames. Only the framemd5 comparison finds it (one run had 450 of 450 frames wrong). The check script therefore uses the checksums and `hengevm`'s log, not the exit status.
+- VideoToolbox sessions are 1920x1088 (the coded size). Each guest process makes its own session.
+- The desktop image has no `curl`. The script copies the clips from the `--share` folder with Python.
+
+### Review fixes
+
+An independent review of runs 1 to 6 found these defects. The patch and Henge now handle them:
+
+- Heap overflow (blocker). Upstream's `vrend_video_decode_bitstream` copied the guest's size into the bitstream resource's `width0` heap block. `-Dvideo=true` made this code reachable. The copy is now at most `width0` bytes, and only from a `VIRGL_BIND_CUSTOM` buffer. `test_vgpu_virgl` sends a 64 KiB size for a 16-byte buffer under `libgmalloc`: without the bound it crashes (status 139), with it it passes.
+- The off switch did not close the hole. The video commands ran even without `VIRGL_RENDERER_USE_VIDEO`. Now no context gets a video context unless `vrend_video_init` worked. Every video command then fails with `EINVAL`, as in a library built without video. `test_vgpu_virgl` checks this.
+- Video was on by default for every embedder. Now it is off, and only `hengevm --gpu-video` turns it on. The phone stays off until the phone checks are done.
+- The CPU plane copy trusted the guest's plane format. It now takes only a 2D `R8` or `R8G8` texture whose pixel size matches the plane, and it reads only inside the VideoToolbox plane.
+- The PPS default reference counts came from the descriptor for every slice. See above: now only from the last slice of each call.
+- No cap on memory. Now at most 16 codecs in a context and 16 MiB of slices in a picture; a larger buffer is freed after its frame.
+- A failed picture left VideoToolbox's references wrong until the next IDR. Now the back end skips pictures after a failure until an IDR or an all-intra picture. It also drops the session on `kVTVideoDecoderMalfunctionErr`, as on `kVTInvalidSessionErr`. The guest still sees no error: the protocol has no way to report one, so the target keeps its old pixels.
+- A picture whose slices name more than one PPS is refused with a warning. Field pictures (PAFF) are refused, and `pic_order_cnt_type` 1 gets a warning: VA-API does not carry its offsets.
+- The test gate counted only sessions. The back end now logs its totals when the guest destroys a codec, and the script requires one codec with all 450 frames for each VA-API run.
+
+Not shown by the spike: 4K, HEVC, VP9 and AV1, interlaced content, the IOSurface zero-copy path, browsers, a crafted guest beyond the oversized bitstream, and anything on the phone ([What needs the phone](#what-needs-the-phone)). `mpv` did not report a mistimed-frame count.
+
+Re-run: `make GFX_ROOT=<tree with the patched macOS libraries> test-linux-video`. The libraries come from `GFX_ROOT=<tree> tools/gfx/build-deps.sh --target macos --only virgl`. `VIDEO_ARGS="--image FILE"` names a desktop image that has the packages already; without it, the script runs `apt install` in the clone. `uv run tools/linux/video-decode-check.py --no-video` checks the default (video off).

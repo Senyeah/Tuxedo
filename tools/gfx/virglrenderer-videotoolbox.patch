@@ -1,0 +1,1445 @@
+diff --git a/config.h.meson b/config.h.meson
+index 99ead1a..6d7d9b8 100644
+--- a/config.h.meson
++++ b/config.h.meson
+@@ -59,6 +59,7 @@
+ #mesondefine HAVE_LINUX_UDMABUF_H
+ #mesondefine HAVE_DLFCN_H
+ #mesondefine ENABLE_VIDEO
++#mesondefine ENABLE_VIDEO_VT
+ #mesondefine ENABLE_TRACING
+ #mesondefine ENABLE_TESTS
+ #mesondefine UTIL_ARCH_LITTLE_ENDIAN
+diff --git a/meson.build b/meson.build
+index b863ecc..56f9760 100644
+--- a/meson.build
++++ b/meson.build
+@@ -135,7 +135,7 @@ if with_drm_renderers
+   conf_data.set('ENABLE_DRM', 1)
+ endif
+ 
+-libdrm_dep = dependency('libdrm', version : '>=2.4.50', required: with_drm_renderers or get_option('video'))
++libdrm_dep = dependency('libdrm', version : '>=2.4.50', required: with_drm_renderers or (get_option('video') and not with_host_darwin))
+ libdrm_amdgpu_dep = dependency('libdrm_amdgpu', version : '>=2.4.121', required: with_drm_amdgpu)
+ conf_data.set('ENABLE_LIBDRM', libdrm_dep.found())
+ drm_uapi_dep = declare_dependency(
+@@ -453,8 +453,14 @@ if with_video
+      error('video require EGL, but it is not available')
+   endif
+   conf_data.set('ENABLE_VIDEO', 1)
+-  libva_dep = dependency('libva')
+-  libvadrm_dep = dependency('libva-drm')
++  if with_host_darwin
++    # VideoToolbox back end (virgl_video_vt.m): no libva, no DRM
++    add_languages('objc', required: true)
++    conf_data.set('ENABLE_VIDEO_VT', 1)
++    video_deps = [dependency('appleframeworks', modules : ['VideoToolbox', 'CoreMedia', 'CoreVideo', 'CoreFoundation'])]
++  else
++    video_deps = [dependency('libva'), dependency('libva-drm')]
++  endif
+ endif
+ 
+ with_tests = get_option('tests')
+diff --git a/src/meson.build b/src/meson.build
+index 26c7f58..a056590 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -194,7 +194,7 @@ if with_render_server == 'thread'
+ endif
+ 
+ video_sources = [
+-   'vrend/virgl_video.c',
++   with_host_darwin ? 'vrend/virgl_video_vt.m' : 'vrend/virgl_video.c',
+    'vrend/vrend_video.c',
+ ]
+ 
+@@ -293,7 +293,7 @@ endif
+ 
+ if with_video
+   virgl_sources += video_sources
+-  virgl_depends += [libva_dep, libvadrm_dep]
++  virgl_depends += video_deps
+ endif
+ 
+ if with_host_windows
+diff --git a/src/vrend/virgl_video.h b/src/vrend/virgl_video.h
+index e954559..6a5e05f 100644
+--- a/src/vrend/virgl_video.h
++++ b/src/vrend/virgl_video.h
+@@ -96,6 +96,11 @@ struct virgl_video_dma_buf {
+         int modifier;
+         uint32_t offset;
+         uint32_t pitch;
++        /* CPU copy (VideoToolbox): fd is -1, data points at height rows of pitch bytes, cpp bytes per pixel */
++        const void *data;
++        uint32_t width;
++        uint32_t height;
++        uint32_t cpp;
+     } planes[4];
+ };
+ 
+diff --git a/src/vrend/virgl_video_vt.m b/src/vrend/virgl_video_vt.m
+new file mode 100644
+index 0000000..7a3797c
+--- /dev/null
++++ b/src/vrend/virgl_video_vt.m
+@@ -0,0 +1,957 @@
++/**************************************************************************
++ *
++ * Copyright (C) 2026 Henge contributors
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included
++ * in all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
++ * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
++ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
++ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
++ * OTHER DEALINGS IN THE SOFTWARE.
++ *
++ **************************************************************************/
++
++/*
++ * The virgl_video.h back end on VideoToolbox. H.264 decode only.
++ *
++ * The guest's VA-API driver is stateless: it sends slices and parsed fields.
++ * VideoToolbox is stateful: it wants the stream with its parameter sets. So
++ * this file writes an SPS and a PPS from the fields, collects the slices of
++ * one picture between begin_frame and end_frame, and decodes them as one
++ * sample at end_frame. VideoToolbox keeps its own reference frames, so the
++ * guest's reference surfaces are not used. The output goes to the target's
++ * plane textures through decode_completed, as CPU pointers (plane.data).
++ */
++
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include <CoreFoundation/CoreFoundation.h>
++#include <CoreMedia/CoreMedia.h>
++#include <CoreVideo/CoreVideo.h>
++#include <TargetConditionals.h>
++#include <VideoToolbox/VideoToolbox.h>
++
++#include "util/u_formats.h"
++#include "virgl_hw.h"
++#include "virgl_video_hw.h"
++#include "virgl_util.h"
++#include "virgl_video.h"
++
++#define VT_VIRGL_FORMAT_NV12 166 /* VIRGL_FORMAT_NV12 in Mesa's virgl_hw.h */
++#define VT_MAX_PPS 256
++#define VT_PS_MAX 2048 /* 8 scaling lists of 64 values fit with room */
++#define VT_AU_MAX (16u << 20) /* the slices of one picture */
++#define VT_AU_KEEP (4u << 20) /* a larger access unit buffer is freed after its frame */
++
++struct virgl_video_buffer {
++    enum pipe_format format;
++    uint32_t width;
++    uint32_t height;
++    uint32_t id;
++    void *opaque;
++};
++
++struct vt_pps {
++    uint8_t *nal;
++    size_t len;
++    /* VA-API has no PPS default ref counts: learn them from slices that do not override them */
++    uint8_t l0, l1;
++};
++
++/* The last slice that one decode_bitstream call gave: the descriptor's active ref counts are its own */
++struct vt_slice {
++    bool valid, override;
++    unsigned pps_id, type;
++};
++
++struct virgl_video_codec {
++    enum pipe_video_profile profile;
++    enum pipe_video_entrypoint entrypoint;
++    uint32_t level;
++    uint32_t width;
++    uint32_t height;
++    void *opaque;
++
++    struct virgl_video_buffer *target;
++    uint8_t *au; /* AVCC: 4-byte big-endian lengths */
++    size_t au_len, au_cap;
++    bool have_desc;
++    struct virgl_h264_picture_desc desc;
++    int pps_id;
++    bool pps_mixed;   /* the picture's slices name more than one PPS */
++    bool pic_idr;     /* an IDR slice in the picture */
++    bool pic_intra;   /* every slice of the picture is I or SI */
++    unsigned pic_slices;
++    struct vt_slice last;
++
++    uint8_t sps[VT_PS_MAX];
++    size_t sps_len;
++    struct vt_pps pps[VT_MAX_PPS];
++
++    CMVideoFormatDescriptionRef fmt;
++    VTDecompressionSessionRef vt;
++    CVPixelBufferRef out;
++    OSStatus out_status;
++    OSType pixfmt; /* the session's output: NV12, or planar for IYUV and YV12 targets */
++    /* after a failed picture VideoToolbox's references are wrong: skip to the next IDR or intra picture */
++    bool need_intra;
++    unsigned frames, failed, skipped, sessions, ps_updates, max_slices_per_call;
++    bool warned_field, warned_poc1, warned_pps;
++};
++
++static struct virgl_video_callbacks *callbacks;
++static uint32_t next_buffer_id = 1;
++
++static bool is_h264(enum pipe_video_profile p)
++{
++    switch (p) {
++    case PIPE_VIDEO_PROFILE_MPEG4_AVC_BASELINE:
++    case PIPE_VIDEO_PROFILE_MPEG4_AVC_CONSTRAINED_BASELINE:
++    case PIPE_VIDEO_PROFILE_MPEG4_AVC_MAIN:
++    case PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH:
++        return true;
++    default:
++        return false;
++    }
++}
++
++static unsigned h264_profile_idc(enum pipe_video_profile p)
++{
++    switch (p) {
++    case PIPE_VIDEO_PROFILE_MPEG4_AVC_BASELINE:
++    case PIPE_VIDEO_PROFILE_MPEG4_AVC_CONSTRAINED_BASELINE:
++        return 66;
++    case PIPE_VIDEO_PROFILE_MPEG4_AVC_MAIN:
++        return 77;
++    default:
++        return 100;
++    }
++}
++
++/* ---- bit reader over a NAL's RBSP (skips emulation prevention bytes) ---- */
++
++struct br {
++    const uint8_t *p;
++    size_t len, pos;
++    unsigned cur, left, zeros;
++    bool err;
++};
++
++static unsigned br_bit(struct br *b)
++{
++    if (!b->left) {
++        if (b->pos < b->len && b->zeros >= 2 && b->p[b->pos] == 3) {
++            b->pos++;
++            b->zeros = 0;
++        }
++        if (b->pos >= b->len) {
++            b->err = true;
++            return 0;
++        }
++        b->cur = b->p[b->pos++];
++        b->zeros = b->cur ? 0 : b->zeros + 1;
++        b->left = 8;
++    }
++    b->left--;
++    return (b->cur >> b->left) & 1;
++}
++
++static unsigned br_u(struct br *b, unsigned n)
++{
++    unsigned v = 0;
++    while (n--)
++        v = v << 1 | br_bit(b);
++    return v;
++}
++
++static unsigned br_ue(struct br *b)
++{
++    unsigned lz = 0;
++    while (!br_bit(b) && !b->err)
++        if (++lz > 31) {
++            b->err = true;
++            return 0;
++        }
++    return ((1u << lz) - 1) + br_u(b, lz);
++}
++
++static void br_se(struct br *b)
++{
++    br_ue(b);
++}
++
++/* ---- bit writer, then NAL escaping ---- */
++
++struct bw {
++    uint8_t rbsp[VT_PS_MAX];
++    size_t n;
++    unsigned acc, nb;
++    bool err;
++};
++
++static void bw_u(struct bw *b, uint32_t v, unsigned n)
++{
++    while (n--) {
++        b->acc = b->acc << 1 | ((v >> n) & 1);
++        if (++b->nb == 8) {
++            if (b->n < sizeof(b->rbsp))
++                b->rbsp[b->n++] = (uint8_t)b->acc;
++            else
++                b->err = true;
++            b->acc = b->nb = 0;
++        }
++    }
++}
++
++static void bw_ue(struct bw *b, uint32_t v)
++{
++    uint64_t x = (uint64_t)v + 1;
++    unsigned m = 0;
++    while ((x >> m) > 1)
++        m++;
++    bw_u(b, 0, m);
++    bw_u(b, (uint32_t)x, m + 1);
++}
++
++static void bw_se(struct bw *b, int32_t v)
++{
++    bw_ue(b, v > 0 ? 2u * (uint32_t)v - 1 : 2u * (uint32_t)-v);
++}
++
++/* rbsp_trailing_bits, then the NAL header and emulation prevention. Returns the NAL's length. */
++static size_t bw_nal(struct bw *b, uint8_t header, uint8_t *out, size_t cap)
++{
++    size_t o = 0;
++    unsigned zeros = 0;
++    bw_u(b, 1, 1);
++    while (b->nb)
++        bw_u(b, 0, 1);
++    if (b->err || cap < 1)
++        return 0;
++    out[o++] = header;
++    for (size_t i = 0; i < b->n; i++) {
++        if (zeros >= 2 && b->rbsp[i] <= 3) {
++            if (o >= cap)
++                return 0;
++            out[o++] = 3;
++            zeros = 0;
++        }
++        if (o >= cap)
++            return 0;
++        out[o++] = b->rbsp[i];
++        zeros = b->rbsp[i] ? 0 : zeros + 1;
++    }
++    return o;
++}
++
++/* ---- H.264 parameter sets from the parsed fields ---- */
++
++static size_t h264_write_sps(const struct virgl_video_codec *c, const struct virgl_h264_picture_desc *d, uint8_t *out)
++{
++    const struct virgl_h264_sps *s = &d->pps.sps;
++    struct bw b = {0};
++    unsigned profile = h264_profile_idc(c->profile);
++    unsigned w_mbs = (c->width + 15) / 16;
++    unsigned map_unit = s->frame_mbs_only_flag ? 16 : 32;
++    unsigned h_units = (c->height + map_unit - 1) / map_unit;
++    unsigned crop_r = (w_mbs * 16 - c->width) / 2;
++    unsigned crop_b = (h_units * map_unit - c->height) / (s->frame_mbs_only_flag ? 2 : 4);
++    /* Mesa sends no level_idc; 5.1 lets the DPB hold max_num_ref_frames at any size we accept */
++    unsigned level = s->level_idc > 51 ? s->level_idc : 51;
++
++    bw_u(&b, profile, 8);
++    bw_u(&b, profile == 66 ? 0x40 : 0, 8); /* constraint_set1 for constrained baseline */
++    bw_u(&b, level, 8);
++    bw_ue(&b, 0); /* seq_parameter_set_id */
++    if (profile >= 100) {
++        bw_ue(&b, s->chroma_format_idc);
++        if (s->chroma_format_idc == 3)
++            bw_u(&b, s->separate_colour_plane_flag, 1);
++        bw_ue(&b, s->bit_depth_luma_minus8);
++        bw_ue(&b, s->bit_depth_chroma_minus8);
++        bw_u(&b, 0, 1); /* qpprime_y_zero_transform_bypass_flag */
++        bw_u(&b, 0, 1); /* seq_scaling_matrix_present_flag: the PPS carries the effective lists */
++    }
++    bw_ue(&b, s->log2_max_frame_num_minus4);
++    bw_ue(&b, s->pic_order_cnt_type);
++    if (s->pic_order_cnt_type == 0) {
++        bw_ue(&b, s->log2_max_pic_order_cnt_lsb_minus4);
++    } else if (s->pic_order_cnt_type == 1) {
++        /* VA-API does not carry these offsets: Mesa sends zeros */
++        bw_u(&b, s->delta_pic_order_always_zero_flag, 1);
++        bw_se(&b, s->offset_for_non_ref_pic);
++        bw_se(&b, s->offset_for_top_to_bottom_field);
++        bw_ue(&b, s->num_ref_frames_in_pic_order_cnt_cycle);
++        for (unsigned i = 0; i < s->num_ref_frames_in_pic_order_cnt_cycle; i++)
++            bw_se(&b, s->offset_for_ref_frame[i]);
++    }
++    bw_ue(&b, d->num_ref_frames); /* max_num_ref_frames: VA-API's num_ref_frames */
++    bw_u(&b, 0, 1);               /* gaps_in_frame_num_value_allowed_flag: not carried */
++    bw_ue(&b, w_mbs - 1);
++    bw_ue(&b, h_units - 1);
++    bw_u(&b, s->frame_mbs_only_flag, 1);
++    if (!s->frame_mbs_only_flag)
++        bw_u(&b, s->mb_adaptive_frame_field_flag, 1);
++    bw_u(&b, s->direct_8x8_inference_flag, 1);
++    bw_u(&b, crop_r || crop_b, 1);
++    if (crop_r || crop_b) {
++        bw_ue(&b, 0);
++        bw_ue(&b, crop_r);
++        bw_ue(&b, 0);
++        bw_ue(&b, crop_b);
++    }
++    bw_u(&b, 0, 1); /* vui_parameters_present_flag */
++    return bw_nal(&b, 0x67, out, VT_PS_MAX);
++}
++
++static bool list_flat(const uint8_t *l, unsigned n)
++{
++    for (unsigned i = 0; i < n; i++)
++        if (l[i] != 16)
++            return false;
++    return true;
++}
++
++/* VA-API's lists are in zigzag order, as the bitstream codes them */
++static void bw_scaling_list(struct bw *b, const uint8_t *l, unsigned n)
++{
++    int last = 8;
++    for (unsigned j = 0; j < n; j++) {
++        int d = l[j] - last;
++        if (d > 127)
++            d -= 256;
++        if (d < -128)
++            d += 256;
++        bw_se(b, d);
++        last = l[j];
++    }
++}
++
++static size_t h264_write_pps(const struct virgl_video_codec *c, const struct virgl_h264_picture_desc *d,
++                             unsigned pps_id, uint8_t *out)
++{
++    const struct virgl_h264_pps *p = &d->pps;
++    const struct vt_pps *st = &c->pps[pps_id];
++    struct bw b = {0};
++    bool t8 = p->transform_8x8_mode_flag;
++    bool flat = list_flat(&p->ScalingList4x4[0][0], 6 * 16) && (!t8 || list_flat(&p->ScalingList8x8[0][0], 2 * 64));
++
++    bw_ue(&b, pps_id);
++    bw_ue(&b, 0);
++    bw_u(&b, p->entropy_coding_mode_flag, 1);
++    bw_u(&b, p->bottom_field_pic_order_in_frame_present_flag, 1);
++    bw_ue(&b, 0); /* num_slice_groups_minus1 */
++    bw_ue(&b, st->l0);
++    bw_ue(&b, st->l1);
++    bw_u(&b, p->weighted_pred_flag, 1);
++    bw_u(&b, p->weighted_bipred_idc, 2);
++    bw_se(&b, p->pic_init_qp_minus26);
++    bw_se(&b, p->pic_init_qs_minus26);
++    bw_se(&b, p->chroma_qp_index_offset);
++    bw_u(&b, p->deblocking_filter_control_present_flag, 1);
++    bw_u(&b, p->constrained_intra_pred_flag, 1);
++    bw_u(&b, p->redundant_pic_cnt_present_flag, 1);
++    if (h264_profile_idc(c->profile) >= 100 &&
++        (t8 || !flat || p->second_chroma_qp_index_offset != p->chroma_qp_index_offset)) {
++        bw_u(&b, t8, 1);
++        bw_u(&b, !flat, 1);
++        if (!flat) {
++            for (unsigned i = 0; i < 6; i++) {
++                bw_u(&b, 1, 1);
++                bw_scaling_list(&b, p->ScalingList4x4[i], 16);
++            }
++            for (unsigned i = 0; t8 && i < 2; i++) {
++                bw_u(&b, 1, 1);
++                bw_scaling_list(&b, p->ScalingList8x8[i], 64);
++            }
++        }
++        bw_se(&b, p->second_chroma_qp_index_offset);
++    }
++    return bw_nal(&b, 0x68, out, VT_PS_MAX);
++}
++
++/* The slice header up to num_ref_idx_active_override_flag. False if it does not parse. */
++static bool h264_parse_slice(const struct virgl_h264_picture_desc *d, const uint8_t *nal, size_t len,
++                             unsigned *pps_id, unsigned *slice_type, bool *override)
++{
++    const struct virgl_h264_sps *s = &d->pps.sps;
++    struct br b = {.p = nal + 1, .len = len - 1};
++    bool field = false;
++
++    br_ue(&b); /* first_mb_in_slice */
++    *slice_type = br_ue(&b) % 5;
++    *pps_id = br_ue(&b);
++    if (s->separate_colour_plane_flag)
++        br_u(&b, 2);
++    br_u(&b, s->log2_max_frame_num_minus4 + 4);
++    if (!s->frame_mbs_only_flag) {
++        field = br_bit(&b);
++        if (field)
++            br_bit(&b);
++    }
++    if ((nal[0] & 0x1f) == 5)
++        br_ue(&b);
++    if (s->pic_order_cnt_type == 0) {
++        br_u(&b, s->log2_max_pic_order_cnt_lsb_minus4 + 4);
++        if (d->pps.bottom_field_pic_order_in_frame_present_flag && !field)
++            br_se(&b);
++    }
++    if (s->pic_order_cnt_type == 1 && !s->delta_pic_order_always_zero_flag) {
++        br_se(&b);
++        if (d->pps.bottom_field_pic_order_in_frame_present_flag && !field)
++            br_se(&b);
++    }
++    if (d->pps.redundant_pic_cnt_present_flag)
++        br_ue(&b);
++    if (*slice_type == 1)
++        br_bit(&b); /* direct_spatial_mv_pred_flag */
++    *override = false;
++    if (*slice_type == 0 || *slice_type == 1 || *slice_type == 3)
++        *override = br_bit(&b);
++    return !b.err && *pps_id < VT_MAX_PPS;
++}
++
++static bool au_append(struct virgl_video_codec *c, const uint8_t *nal, size_t len)
++{
++    if (len > VT_AU_MAX || c->au_len + 4 + len > VT_AU_MAX) {
++        virgl_error("vt: a picture has more than %u bytes of slices\n", VT_AU_MAX);
++        return false;
++    }
++    if (c->au_len + 4 + len > c->au_cap) {
++        size_t cap = c->au_cap ? c->au_cap : 1 << 16;
++        while (cap < c->au_len + 4 + len)
++            cap *= 2;
++        uint8_t *n = realloc(c->au, cap);
++        if (!n)
++            return false;
++        c->au = n, c->au_cap = cap;
++    }
++    uint8_t *p = c->au + c->au_len;
++    p[0] = (uint8_t)(len >> 24), p[1] = (uint8_t)(len >> 16), p[2] = (uint8_t)(len >> 8), p[3] = (uint8_t)len;
++    memcpy(p + 4, nal, len);
++    c->au_len += 4 + len;
++    return true;
++}
++
++/* One NAL unit from the Annex B data: slices go into the access unit, the rest is dropped. */
++static int h264_take_nal(struct virgl_video_codec *c, const struct virgl_h264_picture_desc *d,
++                         const uint8_t *nal, size_t len)
++{
++    unsigned type, pps_id, st;
++    bool override;
++
++    while (len && !nal[len - 1])
++        len--; /* trailing_zero_8bits */
++    if (!len)
++        return 0;
++    type = nal[0] & 0x1f;
++    if (type != 1 && type != 5)
++        return 0;
++    if (!h264_parse_slice(d, nal, len, &pps_id, &st, &override)) {
++        virgl_warn("vt: a slice header does not parse\n");
++        return -1;
++    }
++    if (c->pps_id < 0)
++        c->pps_id = (int)pps_id;
++    else if ((unsigned)c->pps_id != pps_id)
++        c->pps_mixed = true;
++    if (type == 5)
++        c->pic_idr = true;
++    if (st != 2 && st != 4)
++        c->pic_intra = false;
++    c->pic_slices++;
++    c->last = (struct vt_slice){.valid = true, .override = override, .pps_id = pps_id, .type = st};
++    return au_append(c, nal, len) ? 0 : -1;
++}
++
++static int h264_take_annexb(struct virgl_video_codec *c, const struct virgl_h264_picture_desc *d,
++                            const uint8_t *p, size_t n)
++{
++    size_t i = 0, start = SIZE_MAX;
++    while (i + 3 <= n) {
++        if (p[i] == 0 && p[i + 1] == 0 && p[i + 2] == 1) {
++            if (start != SIZE_MAX && h264_take_nal(c, d, p + start, i - start))
++                return -1;
++            i += 3;
++            start = i;
++        } else {
++            i++;
++        }
++    }
++    if (start != SIZE_MAX && start < n)
++        return h264_take_nal(c, d, p + start, n - start);
++    return 0;
++}
++
++/* ---- VideoToolbox ---- */
++
++static void vt_output(void *ref, void *src, OSStatus status, VTDecodeInfoFlags flags, CVImageBufferRef img,
++                      CMTime pts, CMTime dur)
++{
++    struct virgl_video_codec *c = ref;
++    (void)src, (void)flags, (void)pts, (void)dur;
++    c->out_status = status;
++    if (status == noErr && img) {
++        if (c->out)
++            CVPixelBufferRelease(c->out);
++        c->out = CVPixelBufferRetain(img);
++    }
++}
++
++static void vt_release_session(struct virgl_video_codec *c)
++{
++    if (c->vt) {
++        VTDecompressionSessionWaitForAsynchronousFrames(c->vt);
++        VTDecompressionSessionInvalidate(c->vt);
++        CFRelease(c->vt);
++        c->vt = NULL;
++    }
++}
++
++static void dict_set_i32(CFMutableDictionaryRef d, CFStringRef k, int32_t v)
++{
++    CFNumberRef n = CFNumberCreate(NULL, kCFNumberSInt32Type, &v);
++    CFDictionarySetValue(d, k, n);
++    CFRelease(n);
++}
++
++static OSType vt_pixfmt(enum pipe_format f)
++{
++    return f == PIPE_FORMAT_NV12 ? kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange : kCVPixelFormatType_420YpCbCr8Planar;
++}
++
++static int vt_create_session(struct virgl_video_codec *c)
++{
++    CFMutableDictionaryRef spec, attrs, ios;
++    VTDecompressionOutputCallbackRecord cb = {vt_output, c};
++    OSStatus st;
++
++    spec = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
++#if TARGET_OS_OSX
++    CFDictionarySetValue(spec, kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder, kCFBooleanTrue);
++#endif
++    attrs = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
++    ios = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
++    dict_set_i32(attrs, kCVPixelBufferPixelFormatTypeKey, (int32_t)c->pixfmt);
++    CFDictionarySetValue(attrs, kCVPixelBufferIOSurfacePropertiesKey, ios);
++    st = VTDecompressionSessionCreate(NULL, c->fmt, spec, attrs, &cb, &c->vt);
++    CFRelease(ios);
++    CFRelease(attrs);
++    CFRelease(spec);
++    if (st != noErr) {
++        virgl_error("vt: VTDecompressionSessionCreate failed (%d)\n", (int)st);
++        c->vt = NULL;
++        return -1;
++    }
++    c->sessions++;
++    CFBooleanRef hw = NULL;
++    VTSessionCopyProperty(c->vt, kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder, NULL, &hw);
++    virgl_info("vt: H.264 session %ux%u, %s decoder\n", c->width, c->height,
++               hw == kCFBooleanTrue ? "hardware" : "software");
++    if (hw)
++        CFRelease(hw);
++    return 0;
++}
++
++/* The format description from the SPS and every PPS seen; a new session only if the old one refuses it */
++static int vt_update_format(struct virgl_video_codec *c)
++{
++    const uint8_t *sets[1 + VT_MAX_PPS];
++    size_t sizes[1 + VT_MAX_PPS];
++    size_t n = 0;
++    CMVideoFormatDescriptionRef fmt = NULL;
++    OSStatus st;
++
++    sets[n] = c->sps, sizes[n++] = c->sps_len;
++    for (unsigned i = 0; i < VT_MAX_PPS; i++)
++        if (c->pps[i].len)
++            sets[n] = c->pps[i].nal, sizes[n++] = c->pps[i].len;
++    st = CMVideoFormatDescriptionCreateFromH264ParameterSets(NULL, n, sets, sizes, 4, &fmt);
++    if (st != noErr) {
++        virgl_error("vt: the parameter sets are refused (%d)\n", (int)st);
++        return -1;
++    }
++    if (c->fmt)
++        CFRelease(c->fmt);
++    c->fmt = fmt;
++    if (c->vt && !VTDecompressionSessionCanAcceptFormatDescription(c->vt, fmt)) {
++        virgl_warn("vt: new parameter sets need a new session\n");
++        vt_release_session(c);
++    }
++    return c->vt ? 0 : vt_create_session(c);
++}
++
++/* The session is lost (the app went to the background, or the decoder failed): a new one at the next intra picture */
++static bool vt_session_lost(OSStatus st)
++{
++    return st == kVTInvalidSessionErr || st == kVTVideoDecoderMalfunctionErr;
++}
++
++static int h264_decode(struct virgl_video_codec *c)
++{
++    uint8_t ps[VT_PS_MAX];
++    size_t len;
++    bool changed = false;
++    struct vt_pps *pp;
++
++    if (!c->have_desc || c->pps_id < 0 || !c->au_len)
++        return -1;
++    if (c->desc.field_pic_flag) {
++        if (!c->warned_field)
++            virgl_warn("vt: field pictures (PAFF) are not supported\n");
++        c->warned_field = true;
++        return -1;
++    }
++    /* VA-API has one PPS per picture */
++    if (c->pps_mixed) {
++        if (!c->warned_pps)
++            virgl_warn("vt: the slices of one picture name more than one PPS, not supported\n");
++        c->warned_pps = true;
++        return -1;
++    }
++    if (c->desc.pps.sps.pic_order_cnt_type == 1 && !c->warned_poc1) {
++        virgl_warn("vt: pic_order_cnt_type 1: VA-API does not carry the offsets, frames can be wrong\n");
++        c->warned_poc1 = true;
++    }
++
++    len = h264_write_sps(c, &c->desc, ps);
++    if (!len)
++        return -1;
++    if (len != c->sps_len || memcmp(ps, c->sps, len)) {
++        memcpy(c->sps, ps, len);
++        c->sps_len = len;
++        changed = true;
++    }
++    pp = &c->pps[c->pps_id];
++    len = h264_write_pps(c, &c->desc, (unsigned)c->pps_id, ps);
++    if (!len)
++        return -1;
++    if (len != pp->len || memcmp(ps, pp->nal, len)) {
++        uint8_t *n = realloc(pp->nal, len);
++        if (!n)
++            return -1;
++        memcpy(n, ps, len);
++        pp->nal = n, pp->len = len;
++        changed = true;
++    }
++    /* FFmpeg asks for I420 surfaces, mpv for NV12: the target's format picks the output */
++    if (c->vt && c->pixfmt != vt_pixfmt(c->target->format)) {
++        virgl_warn("vt: the target format changed, new session\n");
++        vt_release_session(c);
++    }
++    c->pixfmt = vt_pixfmt(c->target->format);
++    if (changed && c->vt)
++        c->ps_updates++;
++    if ((changed || !c->vt) && vt_update_format(c))
++        return -1;
++
++    CMBlockBufferRef bb = NULL;
++    CMSampleBufferRef sb = NULL;
++    size_t size = c->au_len;
++    OSStatus st = CMBlockBufferCreateWithMemoryBlock(NULL, c->au, c->au_len, kCFAllocatorNull, NULL, 0, c->au_len, 0, &bb);
++    if (st == noErr)
++        st = CMSampleBufferCreateReady(NULL, bb, c->fmt, 1, 0, NULL, 1, &size, &sb);
++    if (st != noErr) {
++        virgl_error("vt: no sample buffer (%d)\n", (int)st);
++        if (bb)
++            CFRelease(bb);
++        return -1;
++    }
++    c->out_status = noErr;
++    /* no asynchronous decode and no temporal processing: one frame out, in decode order */
++    st = VTDecompressionSessionDecodeFrame(c->vt, sb, 0, NULL, NULL);
++    if (st == noErr)
++        VTDecompressionSessionWaitForAsynchronousFrames(c->vt);
++    CFRelease(sb);
++    CFRelease(bb);
++    if (st != noErr || c->out_status != noErr || !c->out) {
++        virgl_error("vt: frame %u not decoded (%d, %d)\n", c->frames, (int)st, (int)c->out_status);
++        if (vt_session_lost(st) || vt_session_lost(c->out_status))
++            vt_release_session(c);
++        return -1;
++    }
++
++    CVPixelBufferRef out = c->out;
++    c->out = NULL;
++    if (callbacks && callbacks->decode_completed &&
++        CVPixelBufferLockBaseAddress(out, kCVPixelBufferLock_ReadOnly) == kCVReturnSuccess) {
++        struct virgl_video_dma_buf d;
++        memset(&d, 0, sizeof(d));
++        d.buf = c->target;
++        d.flags = VIRGL_VIDEO_DMABUF_READ_ONLY;
++        d.width = (uint32_t)CVPixelBufferGetWidth(out);
++        d.height = (uint32_t)CVPixelBufferGetHeight(out);
++        d.num_planes = (uint32_t)CVPixelBufferGetPlaneCount(out);
++        if (d.num_planes > 4)
++            d.num_planes = 4;
++        for (uint32_t i = 0; i < d.num_planes; i++) {
++            /* VideoToolbox's planar order is Y, Cb, Cr; YV12 is Y, Cr, Cb */
++            size_t src = c->target->format == PIPE_FORMAT_YV12 && i ? 3 - i : i;
++            d.planes[i].fd = -1;
++            d.planes[i].data = CVPixelBufferGetBaseAddressOfPlane(out, src);
++            d.planes[i].pitch = (uint32_t)CVPixelBufferGetBytesPerRowOfPlane(out, src);
++            d.planes[i].width = (uint32_t)CVPixelBufferGetWidthOfPlane(out, src);
++            d.planes[i].height = (uint32_t)CVPixelBufferGetHeightOfPlane(out, src);
++            d.planes[i].cpp = c->pixfmt == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange && src == 1 ? 2 : 1;
++        }
++        callbacks->decode_completed(c, &d);
++        CVPixelBufferUnlockBaseAddress(out, kCVPixelBufferLock_ReadOnly);
++    }
++    CVPixelBufferRelease(out);
++    return 0;
++}
++
++/* The guest sees no decode error: on one, the target keeps its old pixels until the next intra picture */
++static int h264_end_frame(struct virgl_video_codec *c)
++{
++    int rc;
++
++    if (c->need_intra && !c->pic_idr && !(c->pic_slices && c->pic_intra)) {
++        c->skipped++;
++        return -1;
++    }
++    if (c->need_intra)
++        virgl_info("vt: decoding again at frame %u, %u skipped so far\n", c->frames, c->skipped);
++    c->need_intra = false;
++    rc = h264_decode(c);
++    if (rc) {
++        c->failed++;
++        c->need_intra = true;
++        virgl_warn("vt: a picture failed, skipping to the next intra picture\n");
++    } else {
++        c->frames++;
++    }
++    if (c->au_cap > VT_AU_KEEP) {
++        free(c->au);
++        c->au = NULL;
++        c->au_cap = 0;
++    }
++    return rc;
++}
++
++/* ---- virgl_video.h ---- */
++
++int virgl_video_init(int drm_fd, struct virgl_video_callbacks *cbs, unsigned int flags)
++{
++    (void)drm_fd, (void)flags;
++    callbacks = cbs;
++    virgl_info("vt: video decode on VideoToolbox, H.264 hardware decoder %s\n",
++               VTIsHardwareDecodeSupported(kCMVideoCodecType_H264) ? "present" : "absent");
++    return 0;
++}
++
++void virgl_video_destroy(void)
++{
++    callbacks = NULL;
++}
++
++int virgl_video_fill_caps(union virgl_caps *caps)
++{
++    static const enum pipe_video_profile profiles[] = {
++        PIPE_VIDEO_PROFILE_MPEG4_AVC_CONSTRAINED_BASELINE,
++        PIPE_VIDEO_PROFILE_MPEG4_AVC_MAIN,
++        PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH,
++    };
++
++    if (!caps)
++        return -1;
++    caps->v2.num_video_caps = 0;
++    /* no init: the embedder did not ask for video */
++    if (!callbacks || !VTIsHardwareDecodeSupported(kCMVideoCodecType_H264))
++        return 0;
++    for (unsigned i = 0; i < sizeof(profiles) / sizeof(profiles[0]); i++) {
++        struct virgl_video_caps *v = &caps->v2.video_caps[caps->v2.num_video_caps++];
++        memset(v, 0, sizeof(*v));
++        v->profile = profiles[i];
++        v->entrypoint = PIPE_VIDEO_ENTRYPOINT_BITSTREAM;
++        v->max_level = 52;
++        v->max_width = 4096;
++        v->max_height = 4096;
++        v->prefered_format = VT_VIRGL_FORMAT_NV12;
++        v->max_macroblocks = 0xffff;
++        v->npot_texture = 1;
++        v->supports_progressive = 1;
++    }
++    return 0;
++}
++
++struct virgl_video_codec *virgl_video_create_codec(const struct virgl_video_create_codec_args *args)
++{
++    struct virgl_video_codec *c;
++
++    if (!args || args->entrypoint != PIPE_VIDEO_ENTRYPOINT_BITSTREAM || !is_h264(args->profile) ||
++        !args->width || !args->height || args->width > 4096 || args->height > 4096) {
++        virgl_warn("vt: codec refused (profile %d, entrypoint %d, %ux%u)\n", args ? (int)args->profile : -1,
++                   args ? (int)args->entrypoint : -1, args ? args->width : 0, args ? args->height : 0);
++        return NULL;
++    }
++    if (!callbacks)
++        return NULL;
++    c = calloc(1, sizeof(*c));
++    if (!c)
++        return NULL;
++    c->profile = args->profile;
++    c->entrypoint = args->entrypoint;
++    c->level = args->level;
++    c->width = args->width;
++    c->height = args->height;
++    c->opaque = args->opaque;
++    c->pps_id = -1;
++    return c;
++}
++
++void virgl_video_destroy_codec(struct virgl_video_codec *codec)
++{
++    if (!codec)
++        return;
++    if (codec->frames || codec->failed || codec->skipped)
++        virgl_info("vt: codec %ux%u done: %u frames decoded, %u failed, %u skipped, %u sessions, "
++                   "%u parameter set updates, at most %u slices per decode call\n",
++                   codec->width, codec->height, codec->frames, codec->failed, codec->skipped, codec->sessions,
++                   codec->ps_updates, codec->max_slices_per_call);
++    vt_release_session(codec);
++    if (codec->out)
++        CVPixelBufferRelease(codec->out);
++    if (codec->fmt)
++        CFRelease(codec->fmt);
++    for (unsigned i = 0; i < VT_MAX_PPS; i++)
++        free(codec->pps[i].nal);
++    free(codec->au);
++    free(codec);
++}
++
++enum pipe_video_profile virgl_video_codec_profile(const struct virgl_video_codec *codec)
++{
++    return codec ? codec->profile : PIPE_VIDEO_PROFILE_UNKNOWN;
++}
++
++void *virgl_video_codec_opaque_data(struct virgl_video_codec *codec)
++{
++    return codec ? codec->opaque : NULL;
++}
++
++struct virgl_video_buffer *virgl_video_create_buffer(const struct virgl_video_create_buffer_args *args)
++{
++    struct virgl_video_buffer *b;
++
++    /* any format: players probe surface formats, and the guest's video processing draws with GL */
++    if (!args)
++        return NULL;
++    b = calloc(1, sizeof(*b));
++    if (!b)
++        return NULL;
++    b->format = args->format;
++    b->width = args->width;
++    b->height = args->height;
++    b->opaque = args->opaque;
++    b->id = next_buffer_id++;
++    return b;
++}
++
++void virgl_video_destroy_buffer(struct virgl_video_buffer *buffer)
++{
++    free(buffer);
++}
++
++uint32_t virgl_video_buffer_id(const struct virgl_video_buffer *buffer)
++{
++    return buffer ? buffer->id : 0;
++}
++
++void *virgl_video_buffer_opaque_data(struct virgl_video_buffer *buffer)
++{
++    return buffer ? buffer->opaque : NULL;
++}
++
++static void vt_reset_picture(struct virgl_video_codec *c)
++{
++    c->au_len = 0;
++    c->have_desc = false;
++    c->pps_id = -1;
++    c->pps_mixed = false;
++    c->pic_idr = false;
++    c->pic_intra = true;
++    c->pic_slices = 0;
++    c->last.valid = false;
++}
++
++static bool decode_target(enum pipe_format f)
++{
++    return f == PIPE_FORMAT_NV12 || f == PIPE_FORMAT_IYUV || f == PIPE_FORMAT_YV12;
++}
++
++int virgl_video_begin_frame(struct virgl_video_codec *codec, struct virgl_video_buffer *target)
++{
++    if (!codec || !target)
++        return -1;
++    if (!decode_target(target->format)) {
++        virgl_warn("vt: decode target format %d refused, only NV12, IYUV and YV12\n", (int)target->format);
++        codec->target = NULL;
++        return -1;
++    }
++    codec->target = target;
++    vt_reset_picture(codec);
++    return 0;
++}
++
++int virgl_video_decode_bitstream(struct virgl_video_codec *codec, struct virgl_video_buffer *target,
++                                 const union virgl_picture_desc *desc, unsigned num_buffers,
++                                 const void *const *buffers, const unsigned *sizes)
++{
++    if (!codec || !target || !desc || !num_buffers || !buffers || !sizes)
++        return -1;
++    if (desc->base.profile != codec->profile || target != codec->target) {
++        virgl_error("vt: decode does not match the codec or the frame\n");
++        return -1;
++    }
++    unsigned before = codec->pic_slices;
++    memcpy(&codec->desc, &desc->h264, sizeof(codec->desc));
++    codec->have_desc = true;
++    codec->last.valid = false;
++    for (unsigned i = 0; i < num_buffers; i++)
++        if (buffers[i] && h264_take_annexb(codec, &codec->desc, buffers[i], sizes[i]))
++            return -1;
++    if (codec->pic_slices - before > codec->max_slices_per_call)
++        codec->max_slices_per_call = codec->pic_slices - before;
++    /* The descriptor's active counts belong to the call's last slice; without an override they are the PPS defaults.
++       Earlier slices of the call may have other counts, so only this one teaches. */
++    struct vt_slice *l = &codec->last;
++    if (l->valid && !l->override && (l->type == 0 || l->type == 1 || l->type == 3))
++        codec->pps[l->pps_id].l0 = codec->desc.num_ref_idx_l0_active_minus1;
++    if (l->valid && !l->override && l->type == 1)
++        codec->pps[l->pps_id].l1 = codec->desc.num_ref_idx_l1_active_minus1;
++    return 0;
++}
++
++int virgl_video_encode_bitstream(struct virgl_video_codec *codec, struct virgl_video_buffer *source,
++                                 const union virgl_picture_desc *desc)
++{
++    (void)codec, (void)source, (void)desc;
++    return -1;
++}
++
++int virgl_video_end_frame(struct virgl_video_codec *codec, struct virgl_video_buffer *target)
++{
++    int rc;
++
++    if (!codec || !target || target != codec->target)
++        return -1;
++    rc = h264_end_frame(codec);
++    vt_reset_picture(codec);
++    return rc;
++}
+diff --git a/src/vrend/vrend_decode.c b/src/vrend/vrend_decode.c
+index 7774a25..c56a49c 100644
+--- a/src/vrend/vrend_decode.c
++++ b/src/vrend/vrend_decode.c
+@@ -1772,6 +1772,9 @@ static int vrend_decode_create_video_codec(struct vrend_context *ctx,
+ {
+    struct vrend_video_context *vctx = vrend_context_get_video_ctx(ctx);
+ 
++   if (!vctx) /* video is off: as without ENABLE_VIDEO */
++      return EINVAL;
++
+    if (length < VIRGL_CREATE_VIDEO_CODEC_MIN_SIZE)
+       return EINVAL;
+ 
+@@ -1799,6 +1802,9 @@ static int vrend_decode_destroy_video_codec(struct vrend_context *ctx,
+ {
+    struct vrend_video_context *vctx = vrend_context_get_video_ctx(ctx);
+ 
++   if (!vctx) /* video is off: as without ENABLE_VIDEO */
++      return EINVAL;
++
+     if (length < VIRGL_DESTROY_VIDEO_CODEC_MIN_SIZE)
+        return EINVAL;
+ 
+@@ -1816,6 +1822,9 @@ static int vrend_decode_create_video_buffer(struct vrend_context *ctx,
+    uint32_t res_handles[VREND_VIDEO_BUFFER_PLANE_NUM];
+    struct vrend_video_context *vctx = vrend_context_get_video_ctx(ctx);
+ 
++   if (!vctx) /* video is off: as without ENABLE_VIDEO */
++      return EINVAL;
++
+    if (length < VIRGL_CREATE_VIDEO_BUFFER_MIN_SIZE)
+       return EINVAL;
+ 
+@@ -1845,6 +1854,9 @@ static int vrend_decode_destroy_video_buffer(struct vrend_context *ctx,
+ {
+    struct vrend_video_context *vctx = vrend_context_get_video_ctx(ctx);
+ 
++   if (!vctx) /* video is off: as without ENABLE_VIDEO */
++      return EINVAL;
++
+    if (length < VIRGL_DESTROY_VIDEO_BUFFER_MIN_SIZE)
+       return EINVAL;
+ 
+@@ -1860,6 +1872,9 @@ static int vrend_decode_begin_frame(struct vrend_context *ctx,
+ {
+    struct vrend_video_context *vctx = vrend_context_get_video_ctx(ctx);
+ 
++   if (!vctx) /* video is off: as without ENABLE_VIDEO */
++      return EINVAL;
++
+    if (length < VIRGL_BEGIN_FRAME_MIN_SIZE)
+       return EINVAL;
+ 
+@@ -1876,6 +1891,9 @@ static int vrend_decode_decode_bitstream(struct vrend_context *ctx,
+ {
+    struct vrend_video_context *vctx = vrend_context_get_video_ctx(ctx);
+ 
++   if (!vctx) /* video is off: as without ENABLE_VIDEO */
++      return EINVAL;
++
+    if (length < VIRGL_DECODE_BS_MIN_SIZE)
+       return EINVAL;
+ 
+@@ -1897,6 +1915,9 @@ static int vrend_decode_encode_bitstream(struct vrend_context *ctx,
+ {
+    struct vrend_video_context *vctx = vrend_context_get_video_ctx(ctx);
+ 
++   if (!vctx) /* video is off: as without ENABLE_VIDEO */
++      return EINVAL;
++
+    if (length < VIRGL_ENCODE_BS_MIN_SIZE)
+       return EINVAL;
+ 
+@@ -1918,6 +1939,9 @@ static int vrend_decode_end_frame(struct vrend_context *ctx,
+ {
+    struct vrend_video_context *vctx = vrend_context_get_video_ctx(ctx);
+ 
++   if (!vctx) /* video is off: as without ENABLE_VIDEO */
++      return EINVAL;
++
+    if (length < VIRGL_END_FRAME_MIN_SIZE)
+       return EINVAL;
+ 
+diff --git a/src/vrend/vrend_renderer.c b/src/vrend/vrend_renderer.c
+index ef033ad..5c12963 100644
+--- a/src/vrend/vrend_renderer.c
++++ b/src/vrend/vrend_renderer.c
+@@ -7934,10 +7934,14 @@ int vrend_renderer_init(const struct vrend_if_cbs *cbs, uint32_t flags)
+ 
+ #ifdef ENABLE_VIDEO
+    if (flags & VREND_USE_VIDEO) {
++#ifdef ENABLE_VIDEO_VT
++        vrend_video_init(-1);
++#else
+         if (vrend_clicbs->get_drm_fd)
+             vrend_video_init(vrend_clicbs->get_drm_fd());
+         else
+             virgl_warn("Video disabled due to missing get_drm_fd\n");
++#endif
+    }
+ #endif
+ 
+diff --git a/src/vrend/vrend_video.c b/src/vrend/vrend_video.c
+index 57341d8..e66fd71 100644
+--- a/src/vrend/vrend_video.c
++++ b/src/vrend/vrend_video.c
+@@ -73,6 +73,7 @@
+ #include "vrend_winsys.h"
+ #include "vrend_renderer.h"
+ #include "vrend_video.h"
++#include "util/u_format.h"
+ 
+ struct vrend_context;
+ 
+@@ -80,8 +81,15 @@ struct vrend_video_context {
+     struct vrend_context *ctx;
+     struct list_head codecs;
+     struct list_head buffers;
++    unsigned num_codecs;
+ };
+ 
++/* Each codec can hold a hardware session and its surface pool */
++#define VREND_VIDEO_MAX_CODECS 16
++
++/* Set by a vrend_video_init that worked: without it no context gets video, so the guest's video commands fail */
++static bool video_enabled;
++
+ struct vrend_video_codec {
+     struct virgl_video_codec *codec;
+     uint32_t handle;
+@@ -146,6 +154,62 @@ static struct vrend_video_buffer *get_video_buffer(
+ }
+ 
+ 
++/* The planes are CPU pointers (VideoToolbox): upload them into the plane textures.
++ * The plane resources are the guest's: only 2D R8 or R8G8 textures of the plane's pixel size take a copy. */
++static int sync_cpu_planes_to_video_buffer(struct vrend_video_buffer *buf,
++                                           const struct virgl_video_dma_buf *dmabuf)
++{
++    static bool warned;
++    GLint align, row_length, unpack_buf;
++
++    glGetIntegerv(GL_UNPACK_ALIGNMENT, &align);
++    glGetIntegerv(GL_UNPACK_ROW_LENGTH, &row_length);
++    glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &unpack_buf);
++    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
++    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
++
++    for (unsigned i = 0; i < dmabuf->num_planes && i < buf->num_planes; i++) {
++        const struct virgl_video_dma_buf_plane *p = &dmabuf->planes[i];
++        struct vrend_resource *res;
++        const struct vrend_format_table *tf;
++        enum virgl_formats want;
++        uint32_t w, h;
++
++        res = vrend_renderer_ctx_res_lookup(buf->ctx->ctx, buf->planes[i].res_handle);
++        if (!res) {
++            virgl_error("%s: res %d not found\n", __func__, buf->planes[i].res_handle);
++            continue;
++        }
++        want = p->cpp == 2 ? VIRGL_FORMAT_R8G8_UNORM : VIRGL_FORMAT_R8_UNORM;
++        tf = vrend_get_format_table_entry(res->base.format);
++        if (!p->data || (p->cpp != 1 && p->cpp != 2) || res->target != GL_TEXTURE_2D ||
++            !(res->storage_bits & VREND_STORAGE_GL_TEXTURE) || !res->gl_id ||
++            res->base.format != want || !tf || util_format_get_blocksize(res->base.format) != p->cpp) {
++            if (!warned)
++                virgl_warn("%s: plane %u: resource %d (format %d, target 0x%x) does not fit a %u-byte plane\n",
++                           __func__, i, buf->planes[i].res_handle, res->base.format, res->target, p->cpp);
++            warned = true;
++            continue;
++        }
++        w = MIN2(res->base.width0, p->width);
++        h = MIN2(res->base.height0, p->height);
++        /* GL reads h-1 strides plus one row: both inside the plane */
++        if (!w || !h || p->pitch % p->cpp || p->pitch < w * p->cpp)
++            continue;
++
++        glPixelStorei(GL_UNPACK_ROW_LENGTH, p->pitch / p->cpp);
++        glBindTexture(GL_TEXTURE_2D, res->gl_id);
++        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, tf->glformat, tf->gltype, p->data);
++        glBindTexture(GL_TEXTURE_2D, 0);
++    }
++
++    glPixelStorei(GL_UNPACK_ROW_LENGTH, row_length);
++    glPixelStorei(GL_UNPACK_ALIGNMENT, align);
++    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, unpack_buf);
++
++    return 0;
++}
++
+ static int sync_dmabuf_to_video_buffer(struct vrend_video_buffer *buf,
+                                        const struct virgl_video_dma_buf *dmabuf)
+ {
+@@ -154,6 +218,9 @@ static int sync_dmabuf_to_video_buffer(struct vrend_video_buffer *buf,
+         return -1;
+     }
+ 
++    if (dmabuf->num_planes && dmabuf->planes[0].data)
++        return sync_cpu_planes_to_video_buffer(buf, dmabuf);
++
+     for (unsigned i = 0; i < dmabuf->num_planes && i < buf->num_planes; i++) {
+         struct vrend_video_plane *plane = &buf->planes[i];
+         struct vrend_resource *res;
+@@ -354,15 +421,20 @@ static struct virgl_video_callbacks video_callbacks = {
+ 
+ int vrend_video_init(int drm_fd)
+ {
++#ifndef ENABLE_VIDEO_VT
+     if (drm_fd < 0)
+         return -1;
++#endif
+ 
+-    return virgl_video_init(drm_fd, &video_callbacks, 0);
++    video_enabled = virgl_video_init(drm_fd, &video_callbacks, 0) == 0;
++    return video_enabled ? 0 : -1;
+ }
+ 
+ void vrend_video_fini(void)
+ {
+-    virgl_video_destroy();
++    if (video_enabled)
++        virgl_video_destroy();
++    video_enabled = false;
+ }
+ 
+ int vrend_video_fill_caps(union virgl_caps *caps)
+@@ -381,12 +453,20 @@ int vrend_video_create_codec(struct vrend_video_context *ctx,
+                              uint32_t max_ref,
+                              uint32_t flags)
+ {
+-    struct vrend_video_codec *cdc = get_video_codec(ctx, handle);
++    struct vrend_video_codec *cdc;
+     struct virgl_video_create_codec_args args;
+ 
++    if (!ctx)
++        return -1;
++    cdc = get_video_codec(ctx, handle);
+     if (cdc)
+         return 0;
+ 
++    if (ctx->num_codecs >= VREND_VIDEO_MAX_CODECS) {
++        virgl_error("%s: more than %d video codecs in one context\n", __func__, VREND_VIDEO_MAX_CODECS);
++        return -1;
++    }
++
+     if (profile <= PIPE_VIDEO_PROFILE_UNKNOWN ||
+         profile >= PIPE_VIDEO_PROFILE_MAX)
+         return -1;
+@@ -423,6 +503,7 @@ int vrend_video_create_codec(struct vrend_video_context *ctx,
+     cdc->handle = handle;
+     cdc->ctx = ctx;
+     list_add(&cdc->head, &ctx->codecs);
++    ctx->num_codecs++;
+ 
+     return 0;
+ }
+@@ -431,6 +512,7 @@ static void destroy_video_codec(struct vrend_video_codec *cdc)
+ {
+     if (cdc) {
+         list_del(&cdc->head);
++        cdc->ctx->num_codecs--;
+         virgl_video_destroy_codec(cdc->codec);
+         free(cdc);
+     }
+@@ -439,7 +521,11 @@ static void destroy_video_codec(struct vrend_video_codec *cdc)
+ void vrend_video_destroy_codec(struct vrend_video_context *ctx,
+                                uint32_t handle)
+ {
+-    struct vrend_video_codec *cdc = get_video_codec(ctx, handle);
++    struct vrend_video_codec *cdc;
++
++    if (!ctx)
++        return;
++    cdc = get_video_codec(ctx, handle);
+ 
+     destroy_video_codec(cdc);
+ }
+@@ -454,9 +540,12 @@ int vrend_video_create_buffer(struct vrend_video_context *ctx,
+ {
+     unsigned i;
+     struct vrend_video_plane *plane;
+-    struct vrend_video_buffer *buf = get_video_buffer(ctx, handle);
++    struct vrend_video_buffer *buf;
+     struct virgl_video_create_buffer_args args;
+ 
++    if (!ctx)
++        return -1;
++    buf = get_video_buffer(ctx, handle);
+     if (buf)
+         return 0;
+ 
+@@ -465,8 +554,10 @@ int vrend_video_create_buffer(struct vrend_video_context *ctx,
+         return -1;
+     }
+ 
+-    if (!width || !height || !res_handles || !num_res)
++    if (!width || !height || !res_handles || !num_res) {
++        virgl_error("Invalid vrend video buffer: %ux%u, %u planes\n", width, height, num_res);
+         return -1;
++    }
+ 
+     buf = (struct vrend_video_buffer *)calloc(1, sizeof(*buf));
+     if (!buf)
+@@ -538,7 +629,11 @@ static void destroy_video_buffer(struct vrend_video_buffer *buf)
+ void vrend_video_destroy_buffer(struct vrend_video_context *ctx,
+                                 uint32_t handle)
+ {
+-    struct vrend_video_buffer *buf = get_video_buffer(ctx, handle);
++    struct vrend_video_buffer *buf;
++
++    if (!ctx)
++        return;
++    buf = get_video_buffer(ctx, handle);
+ 
+     destroy_video_buffer(buf);
+ }
+@@ -547,6 +642,8 @@ struct vrend_video_context *vrend_video_create_context(struct vrend_context *ctx
+ {
+     struct vrend_video_context *vctx;
+ 
++    if (!video_enabled)
++        return NULL;
+     vctx = (struct vrend_video_context *)calloc(1, sizeof(*vctx));
+     if (vctx) {
+         vctx->ctx = ctx;
+@@ -559,6 +656,9 @@ struct vrend_video_context *vrend_video_create_context(struct vrend_context *ctx
+ 
+ void vrend_video_destroy_context(struct vrend_video_context *ctx)
+ {
++   if (!ctx)
++      return;
++
+    list_for_each_entry_safe(struct vrend_video_codec, vcdc, &ctx->codecs, head)
+       destroy_video_codec(vcdc);
+ 
+@@ -572,8 +672,8 @@ int vrend_video_begin_frame(struct vrend_video_context *ctx,
+                             uint32_t cdc_handle,
+                             uint32_t tgt_handle)
+ {
+-    struct vrend_video_codec *cdc = get_video_codec(ctx, cdc_handle);
+-    struct vrend_video_buffer *tgt = get_video_buffer(ctx, tgt_handle);
++    struct vrend_video_codec *cdc = ctx ? get_video_codec(ctx, cdc_handle) : NULL;
++    struct vrend_video_buffer *tgt = ctx ? get_video_buffer(ctx, tgt_handle) : NULL;
+ 
+     if (!cdc || !tgt)
+         return -1;
+@@ -742,8 +842,8 @@ int vrend_video_decode_bitstream(struct vrend_video_context *ctx,
+     unsigned i, num_bs, *bs_sizes = NULL;
+     void **bs_buffers = NULL;
+     struct vrend_resource *res;
+-    struct vrend_video_codec  *cdc = get_video_codec(ctx, cdc_handle);
+-    struct vrend_video_buffer *tgt = get_video_buffer(ctx, tgt_handle);
++    struct vrend_video_codec  *cdc = ctx ? get_video_codec(ctx, cdc_handle) : NULL;
++    struct vrend_video_buffer *tgt = ctx ? get_video_buffer(ctx, tgt_handle) : NULL;
+     union virgl_picture_desc desc;
+ 
+     if (!cdc || !tgt){
+@@ -765,16 +865,16 @@ int vrend_video_decode_bitstream(struct vrend_video_context *ctx,
+ 
+     for (i = 0, num_bs = 0; i < num_buffers; i++) {
+         res = vrend_renderer_ctx_res_lookup(ctx->ctx, buffer_handles[i]);
+-        if (!res || !res->ptr) {
+-            virgl_warn("%s: bs res %d invalid or not found",
++        if (!res || !res->ptr || res->base.bind != VIRGL_BIND_CUSTOM) {
++            virgl_warn("%s: bs res %d invalid or not found\n",
+                        __func__, buffer_handles[i]);
+             continue;
+         }
+ 
+-        vrend_read_from_iovec(res->iov, res->num_iovs, 0,
+-                              res->ptr, buffer_sizes[i]);
++        /* res->ptr holds width0 bytes; the size and the backing are the guest's */
++        bs_sizes[num_bs] = vrend_read_from_iovec(res->iov, res->num_iovs, 0, res->ptr,
++                                                 MIN2(buffer_sizes[i], res->base.width0));
+         bs_buffers[num_bs] = res->ptr;
+-        bs_sizes[num_bs] = buffer_sizes[i];
+         num_bs++;
+     }
+ 
+@@ -807,8 +907,8 @@ int vrend_video_encode_bitstream(struct vrend_video_context *ctx,
+ {
+     union virgl_picture_desc desc;
+     struct vrend_resource *dest_res, *desc_res, *feed_res;
+-    struct vrend_video_codec  *cdc = get_video_codec(ctx, cdc_handle);
+-    struct vrend_video_buffer *src = get_video_buffer(ctx, src_handle);
++    struct vrend_video_codec  *cdc = ctx ? get_video_codec(ctx, cdc_handle) : NULL;
++    struct vrend_video_buffer *src = ctx ? get_video_buffer(ctx, src_handle) : NULL;
+ 
+     if (!cdc || !src)
+         return -1;
+@@ -847,8 +947,8 @@ int vrend_video_end_frame(struct vrend_video_context *ctx,
+                           uint32_t cdc_handle,
+                           uint32_t tgt_handle)
+ {
+-    struct vrend_video_codec *cdc = get_video_codec(ctx, cdc_handle);
+-    struct vrend_video_buffer *tgt = get_video_buffer(ctx, tgt_handle);
++    struct vrend_video_codec *cdc = ctx ? get_video_codec(ctx, cdc_handle) : NULL;
++    struct vrend_video_buffer *tgt = ctx ? get_video_buffer(ctx, tgt_handle) : NULL;
+ 
+     if (!cdc || !tgt)
+         return -1;
