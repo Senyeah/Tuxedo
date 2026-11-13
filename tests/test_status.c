@@ -80,6 +80,20 @@ static void test_brightness(void) {
     fake_ms += 3000;
     hv_status_guest_brightness(64);
     check("an old value after 2 s is a request", hv_status_take_brightness(&req), 1);
+
+    /* The helper rounds the served 3-decimal value half up; the echo test must see the same number. */
+    hv_status_reset(fake_clock);
+    fake_ms = 30000;
+    hv_status_set_brightness(0.2996);
+    check("the level given is what is served, to 3 decimals", lround(get().brightness * 1e6), 300000);
+    hv_status_guest_brightness(77); /* 0.300 * 255 = 76.5, half up */
+    check("the helper's write of 0.300 is no request", hv_status_take_brightness(&req), 0);
+    fake_ms += 600;
+    hv_status_set_brightness(0.7);
+    hv_status_guest_brightness(179); /* 178.5 */
+    check("the helper's write of 0.700 is no request", hv_status_take_brightness(&req), 0);
+    hv_status_guest_brightness(178);
+    check("one step below it is a request", hv_status_take_brightness(&req), 1);
 }
 
 static void test_volume(void) {

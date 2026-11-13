@@ -3,6 +3,7 @@
 The battery and the volume need no helper: the guest has them as devices.
 A long GET waits for news (a change, a resume, or 120 s); a short one then measures the clock."""
 import http.client
+import math
 import os
 import re
 import subprocess
@@ -71,6 +72,15 @@ def follow_zone(name):
     log(f"time zone {name}" if r.returncode == 0 else f"time zone {name}: {r.stderr.strip()}")
 
 
+def level255(level, top):
+    """Half up, as the host's lround: Python's round() goes to even, so 0.3 would give 76, not 77, and look like a slider move."""
+    q = level * top
+    want = math.floor(q)
+    if q - want >= 0.5:
+        want += 1
+    return max(0, min(top, want))
+
+
 def follow_brightness(value):
     try:
         level = float(value)
@@ -80,7 +90,7 @@ def follow_brightness(value):
             cur = int(f.read())
     except (TypeError, ValueError, OSError):
         return
-    want = max(0, min(top, round(level * top)))
+    want = level255(level, top)
     if want != cur:
         with open(BACKLIGHT + "/brightness", "w") as f:  # the kernel's uevent tells powerdevil
             f.write(str(want))

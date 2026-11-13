@@ -258,7 +258,7 @@ test-linux-suspend: $(B)/hengevm
 .PHONY: test-linux-suspend
 
 # DS6: the device's battery, brightness, volume, clock and time zone in a desktop guest (upower and brightnessctl are installed in the clone).
-# STATUS_ARGS="--image FILE" for an image with henge-guest 1.3.
+# STATUS_ARGS="--image FILE" for an image with henge-guest 1.3.1.
 test-linux-status: $(B)/hengevm
 	uv run tools/linux/status-check.py $(STATUS_ARGS)
 .PHONY: test-linux-status

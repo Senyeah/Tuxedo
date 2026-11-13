@@ -53,11 +53,14 @@ static void bump_locked(void) {
     pthread_cond_broadcast(&cond);
 }
 
+/* What the guest is given is what GET /.henge/status prints ("%.3f"), so henge-status, which rounds
+   that times 255 half up as lround does, writes exactly the level the echo test expects. */
+static double served(double v) { return round(v * 1000) / 1000; }
 static int to255(double v) { return (int)lround(v * 255); }
 
 static void publish_locked(uint64_t t) {
     previous = published, previous_ms = t;
-    published = latest, published_ms = t;
+    published = served(latest), published_ms = t;
     pending = 0;
     bump_locked();
 }
@@ -194,12 +197,12 @@ void hv_status_guest_brightness(int value) {
     pthread_mutex_lock(&mu);
     uint64_t t = now();
     int request = 0;
-    if (published < 0) published = latest = value / 255.0; /* no host value yet: the guest's own stands */
+    if (published < 0) published = latest = served(value / 255.0); /* no host value yet: the guest's own stands */
     else if (value == to255(published)) {}
     else if (previous >= 0 && value == to255(previous) && t - previous_ms < ECHO_MS) {} /* the helper wrote an older value */
     else {
         request = 1;
-        published = latest = value / 255.0;
+        published = latest = served(value / 255.0);
         pending = 0;
         brightness_req = 1, brightness_req_level = published;
     }

@@ -14,7 +14,7 @@ HV_STATUS_LOG (the guest's requests on stderr) and HV_SND_CAPTURE. It checks tha
   4. ALSA's Master is the device's volume both ways, mute plays silence, and PipeWire follows (wpctl);
   5. after a 60 s pause the helper puts the clock right within 3 s, and the RTC stays the host's time;
   6. a tz line sets the guest's time zone, and a bad name is refused.
-The image needs henge-guest 1.3 (henge-status); the check installs upower and brightnessctl in the clone.
+The image needs henge-guest 1.3.1 (henge-status); the check installs upower and brightnessctl in the clone.
 The shared image never changes: the guest writes to a clone. Exit 1 on a failed check.
 """
 import argparse
@@ -184,6 +184,15 @@ def run(p, host, args, cap):
     host.line("brightness 0.25")
     _, took = until(lambda: value(f"cat {BL}/brightness") == "64", 2, "the helper writes 64 for brightness 0.25")
     print(f"ok: brightness 0.25: the backlight is 64 after {took:.1f} s", flush=True)
+    # x.5 steps: the helper and the host must round alike, or the helper's own write is a request
+    mark = len(host.log())
+    for level, want in (("0.3", "77"), ("0.7", "179")):
+        host.line(f"brightness {level}")
+        until(lambda: value(f"cat {BL}/brightness") == want, 3, f"the helper writes {want} for brightness {level}")
+    time.sleep(1)
+    if host.requests("brightness", mark):
+        raise Fail(f"the helper's own writes were requests: {host.requests('brightness', mark)}")
+    print("ok: brightness 0.3 and 0.7: the backlight is 77 and 179, and neither write is a request", flush=True)
     mark = len(host.log())
     need("sudo brightnessctl -q set 50%")
     got, _ = until(lambda: host.requests("brightness", mark), 3, "a guest brightness change reaches the host")
