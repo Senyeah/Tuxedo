@@ -48,6 +48,17 @@ struct Trackpad: UIViewRepresentable {
             isMultipleTouchEnabled = true
             backgroundColor = .clear
             addInteraction(UIPointerInteraction(delegate: self))
+            addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered)))
+        }
+
+        private var hoversLogged = 0, typesLogged = 0
+        static var lastHover = CGPoint(x: -1, y: -1)
+        @objc private func hovered(_ g: UIHoverGestureRecognizer) {
+            Self.lastHover = g.location(in: self)
+            guard hoversLogged < 40 else { return }
+            hoversLogged += 1
+            let p = g.location(in: self)
+            HengeLog.log("input", "hover \(g.state.rawValue) at \(Int(p.x)),\(Int(p.y))")
         }
 
         /// Over the Mac there is only the Mac's pointer, if iPadOS hasn't locked its own away.
@@ -77,6 +88,10 @@ struct Trackpad: UIViewRepresentable {
         private static func ms(_ t: TimeInterval) -> UInt32 { UInt32(truncatingIfNeeded: Int(t * 1000)) }
 
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+            for t in touches where typesLogged < 200 {
+                typesLogged += 1
+                HengeLog.log("input", "touch began: type \(t.type.rawValue), buttons \(event?.buttonMask.rawValue ?? 0)")
+            }
             let touches = touches.filter { $0.type != .indirectPointer }
             guard !touches.isEmpty else { return }
             if fingers.isEmpty {

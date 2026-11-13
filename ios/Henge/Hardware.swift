@@ -121,6 +121,7 @@ enum HardwareKeys {
 enum PointerLock {
     private static var wanted = false
     private static var patched: Set<ObjectIdentifier> = []
+    private static var asked = false // an iPhone may never ask
 
     static func set(_ on: Bool) {
         wanted = on
@@ -129,7 +130,10 @@ enum PointerLock {
             guard let root = window.rootViewController else { continue }
             let kind: AnyClass = type(of: root)
             if patched.insert(ObjectIdentifier(kind)).inserted {
-                let answer: @convention(block) (UIViewController) -> Bool = { _ in wanted }
+                let answer: @convention(block) (UIViewController) -> Bool = { _ in
+                    if !asked { asked = true; HengeLog.log("input", "pointer lock: UIKit asked, answer \(wanted)") }
+                    return wanted
+                }
                 class_replaceMethod(kind, #selector(getter: UIViewController.prefersPointerLocked), imp_implementationWithBlock(answer), "B@:")
             }
             root.setNeedsUpdateOfPrefersPointerLocked()
@@ -162,9 +166,14 @@ final class HardwareMouse {
     private var speed: Float = 1
     private var reverse = false
     private var scrollsLogged = 0 // the first few, to see what a device's raw values look like
+    private var movesLogged = 0, movesSince = 0, lastMoveLog = Date()
+    private var sumX: Float = 0, sumY: Float = 0, zeroMoves = 0
+    private var edge = EdgePush()
+    private var pushed = 0
     private var lastScrollFirst: Float = 0, lastScrollSecond: Float = 0
 
     func start() {
+        stopObserving() // SessionView can start it twice
         let defaults = UserDefaults.standard
         speed = defaults.object(forKey: Self.speedKey) == nil ? 1 : Float(defaults.double(forKey: Self.speedKey))
         reverse = defaults.bool(forKey: Self.reverseKey)
@@ -173,15 +182,24 @@ final class HardwareMouse {
         buttons = PhysicalMouseButtons(swapsRightAndMiddle: swapButtons)
         buttonsLogged = 0
         HengeLog.log("input", "physical mouse: swap right/middle \(swapButtons ? "on" : "off")")
+        HengeLog.log("input", "AssistiveTouch \(UIAccessibility.isAssistiveTouchRunning ? "on" : "off"), idiom \(UIDevice.current.userInterfaceIdiom.rawValue)")
+        movesLogged = 0
+        movesSince = 0
         lastScrollFirst = 0
         lastScrollSecond = 0
-        GCMouse.mice().forEach(attach)
+        GCMouse.mice().forEach { attach($0) }
         observers.append(NotificationCenter.default.addObserver(forName: .GCMouseDidConnect, object: nil, queue: .main) { [weak self] note in
+            if let mouse = note.object as? GCMouse { self?.attach(mouse) }
+        })
+        // AssistiveTouch's pointer comes and goes; it can be current before its connect note arrives.
+        observers.append(NotificationCenter.default.addObserver(forName: .GCMouseDidBecomeCurrent, object: nil, queue: .main) { [weak self] note in
             if let mouse = note.object as? GCMouse { self?.attach(mouse) }
         })
         observers.append(NotificationCenter.default.addObserver(forName: .GCMouseDidDisconnect, object: nil, queue: .main) { [weak self] note in
             guard let self, let mouse = note.object as? GCMouse else { return }
-            self.releaseButtons()
+            HengeLog.log("input", "mouse gone: \(mouse.vendorName ?? "?")")
+            // Only this device's buttons: another device may be in a drag.
+            for button in self.buttons.releaseAll(for: Self.key(mouse)) { henge_vm_mouse_button(button, 0) }
             self.mice.removeAll { $0 === mouse }
         })
         observers.append(NotificationCenter.default.addObserver(forName: UIPointerLockState.didChangeNotification, object: nil, queue: .main) { note in
@@ -190,12 +208,22 @@ final class HardwareMouse {
             let locked = scene?.pointerLockState?.isLocked ?? false
             HengeLog.log("input", "pointer lock: \(locked ? "on" : "off")")
         })
+        edge = EdgePush()
+        if !Device.isPad {
+            PointerWatch.onPosition = { [weak self] x, y in self?.edge.pointer(x, y, now: CACurrentMediaTime()) }
+            PointerWatch.start()
+        }
         PointerLock.set(true)
     }
 
     func stop() {
+        PointerWatch.onPosition = nil
         PointerLock.set(false)
         releaseButtons()
+        stopObserving()
+    }
+
+    private func stopObserving() {
         observers.forEach(NotificationCenter.default.removeObserver)
         observers.removeAll()
         for mouse in mice {
@@ -213,19 +241,53 @@ final class HardwareMouse {
         for button in buttons.releaseAll() { henge_vm_mouse_button(button, 0) }
     }
 
-    private func attach(_ mouse: GCMouse) {
-        guard let input = mouse.mouseInput, !mice.contains(where: { $0 === mouse }) else { return }
+    private static func key(_ mouse: GCMouse) -> Int { ObjectIdentifier(mouse).hashValue }
+
+    private func attach(_ mouse: GCMouse, tries: Int = 0) {
+        guard !mice.contains(where: { $0 === mouse }) else { return }
+        guard let input = mouse.mouseInput else {
+            // A new device can come before its input profile does
+            if tries < 5 { DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in self?.attach(mouse, tries: tries + 1) } }
+            return
+        }
         mice.append(mouse)
-        HengeLog.log("input", "mouse: \(mouse.vendorName ?? "?"), right button \(input.rightButton != nil), middle \(input.middleButton != nil)")
+        HengeLog.log("input", "mouse: \(mouse.vendorName ?? "?"), right button \(input.rightButton != nil), middle \(input.middleButton != nil), pressed \(input.leftButton.isPressed) \(input.rightButton?.isPressed ?? false) \(input.middleButton?.isPressed ?? false), try \(tries)")
         input.mouseMovedHandler = { [weak self] _, dx, dy in self?.moved(dx, dy) }
-        input.leftButton.pressedChangedHandler = { [weak self] _, _, pressed in self?.button(0, pressed) }
-        input.rightButton?.pressedChangedHandler = { [weak self] _, _, pressed in self?.button(1, pressed) }
-        input.middleButton?.pressedChangedHandler = { [weak self] _, _, pressed in self?.button(2, pressed) }
+        let name = mouse.vendorName ?? "?", key = Self.key(mouse)
+        input.leftButton.pressedChangedHandler = { [weak self] _, _, pressed in self?.button(0, pressed, name, key) }
+        input.rightButton?.pressedChangedHandler = { [weak self] _, _, pressed in self?.button(1, pressed, name, key) }
+        input.middleButton?.pressedChangedHandler = { [weak self] _, _, pressed in self?.button(2, pressed, name, key) }
         input.scroll.valueChangedHandler = { [weak self] _, first, second in self?.scrolled(first, second) }
+        // The press that made AssistiveTouch's device appear came before these handlers
+        if input.leftButton.isPressed { button(0, true, name, key) }
+        if input.rightButton?.isPressed == true { button(1, true, name, key) }
+        if input.middleButton?.isPressed == true { button(2, true, name, key) }
     }
 
     /// GameController's Y runs upward. What doesn't make a whole step yet waits for the next move.
     private func moved(_ dx: Float, _ dy: Float) {
+        pushAtEdge(dx, dy)
+        if movesLogged < 40 {
+            movesLogged += 1
+            HengeLog.log("input", "mouse moved: \(dx), \(dy)")
+        } else {
+            movesSince += 1
+            sumX += abs(dx)
+            sumY += abs(dy)
+            if dx == 0 && dy == 0 { zeroMoves += 1 }
+            if Date().timeIntervalSince(lastMoveLog) >= 1 {
+                let h = Trackpad.Surface.lastHover
+                if pushed > 0 { // only while an edge push runs, so the log does not grow by a line a second
+                    HengeLog.log("input", "mouse moved: \(movesSince) deltas (\(zeroMoves) zero), sum |dx| \(Int(sumX)) |dy| \(Int(sumY)), edge push \(pushed) px, hover \(Int(h.x)),\(Int(h.y))")
+                }
+                pushed = 0
+                movesSince = 0
+                sumX = 0
+                sumY = 0
+                zeroMoves = 0
+                lastMoveLog = Date()
+            }
+        }
         restX += dx * speed
         restY -= dy * speed
         let x = restX.rounded(), y = restY.rounded()
@@ -235,11 +297,23 @@ final class HardwareMouse {
         henge_vm_mouse_move(Int32(x), Int32(y))
     }
 
-    private func button(_ physicalButton: Int32, _ pressed: Bool) {
-        guard let guestButton = buttons.event(physicalButton, pressed: pressed) else { return }
-        if buttonsLogged < 32 {
-            buttonsLogged += 1
-            HengeLog.log("input", "physical mouse button: raw=\(physicalButton) guest=\(guestButton) \(pressed ? "down" : "up")")
+    /// Runs for every delta, also the near-zero ones that come while the system pointer is held at an edge.
+    private func pushAtEdge(_ dx: Float, _ dy: Float) {
+        guard !Device.isPad else { return }
+        let (x, y) = edge.motion(Double(dx * speed), Double(-dy * speed), now: CACurrentMediaTime())
+        guard x != 0 || y != 0 else { return }
+        henge_vm_mouse_move(x, y)
+        pushed += Int(abs(x) + abs(y))
+    }
+
+    private func button(_ physicalButton: Int32, _ pressed: Bool, _ from: String, _ device: Int) {
+        guard let guestButton = buttons.event(physicalButton, pressed: pressed, device: device) else {
+            HengeLog.log("input", "physical mouse button: raw=\(physicalButton) \(pressed ? "down" : "up") from \(from) dropped")
+            return
+        }
+        do {
+            let h = Trackpad.Surface.lastHover
+            HengeLog.log("input", "physical mouse button: raw=\(physicalButton) guest=\(guestButton) \(pressed ? "down" : "up") from \(from), hover \(Int(h.x)),\(Int(h.y))")
         }
         henge_vm_mouse_button(guestButton, pressed ? 1 : 0)
         if !pressed { StickyKeys.shared.releaseAll() }

@@ -391,6 +391,20 @@ $(B)/test_scene_manifest: tests/test_scene_manifest.swift | $(B)
 	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
 
 # Guest mode sizes and when to send them: pure policy, no UIKit.
+$(B)/test_edge_push: ios/Henge/EdgePush.swift tests/test_edge_push.swift | $(B)
+	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
+
+test-edge-push: $(B)/test_edge_push
+	$<
+.PHONY: test-edge-push
+
+$(B)/test_physical_mouse_buttons: ios/Henge/PhysicalMouseButtons.swift tests/test_physical_mouse_buttons.swift | $(B)
+	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
+
+test-physical-mouse-buttons: $(B)/test_physical_mouse_buttons
+	$<
+.PHONY: test-physical-mouse-buttons
+
 $(B)/test_display_mode_policy: ios/Henge/DisplayModePolicy.swift tests/test_display_mode_policy.swift | $(B)
 	xcrun --sdk macosx swiftc $^ -o $@
 

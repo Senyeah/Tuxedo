@@ -35,6 +35,26 @@ struct PhysicalMouseButtonTests {
         check(swapped.event(3, pressed: true) == nil, "unsupported code must be ignored")
         check(swapped.held.isEmpty, "invalid input must not stick")
 
-        print("PASS: standard mapping, right/middle swap, left drag, releases and disconnect cleanup")
+        // Two devices: AssistiveTouch's pointer and the USB mouse can both report a button.
+        var two = PhysicalMouseButtons(swapsRightAndMiddle: false)
+        check(two.event(0, pressed: true, device: 1) == 0, "first device press must reach the guest")
+        check(two.event(0, pressed: true, device: 2) == nil, "second press of a held button must not repeat")
+        check(two.event(0, pressed: false, device: 1) == nil, "guest stays down while another device holds it")
+        check(two.held == [0], "the other device still holds left")
+        check(two.event(0, pressed: false, device: 2) == 0, "last release must reach the guest")
+        check(two.held.isEmpty, "both releases must clear left")
+
+        // A disconnect releases only that device's buttons.
+        check(two.event(0, pressed: true, device: 1) == 0, "drag start on device 1")
+        check(two.releaseAll(for: 2).isEmpty, "an idle device's disconnect must release nothing")
+        check(two.held == [0], "the drag must survive another device's disconnect")
+        check(two.event(1, pressed: true, device: 2) == 1, "right on device 2")
+        check(two.event(0, pressed: true, device: 2) == nil, "left already down")
+        check(two.releaseAll(for: 2) == [1], "disconnect releases right, not the left device 1 holds")
+        check(two.held == [0], "left stays down")
+        check(two.releaseAll(for: 1) == [0], "device 1 disconnect releases left")
+        check(two.releaseAll().isEmpty, "nothing left to release")
+
+        print("PASS: standard mapping, right/middle swap, left drag, releases, disconnect cleanup and per-device state")
     }
 }

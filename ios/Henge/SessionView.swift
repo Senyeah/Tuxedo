@@ -228,8 +228,10 @@ struct SessionView: View {
             .onChange(of: ScreenChoiceKey(current)) { _ in screenChoiceChanged() }
             .onChange(of: display.isExternal) { henge_vm_set_pointer_scale($0 ? 1 : 0) } // 1:1 on a big screen
         }
-        .statusBarHidden(zoomed || Device.isPad)
+        .statusBarHidden(zoomed || Device.isPad || display.isExternal)
         .persistentSystemOverlays(.hidden)
+        // With the guest on a monitor the phone is a pad: a pointer at its top must not open the system's panels
+        .defersSystemGestures(on: display.isExternal ? .all : [])
         .sheet(isPresented: $showDetails) { details }
         .confirmationDialog("Shut down \(mac.name)?", isPresented: $confirmStop, titleVisibility: .visible) {
             Button("Shut Down", role: .destructive) { finish() }
