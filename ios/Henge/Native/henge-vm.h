@@ -13,9 +13,11 @@ int henge_vm_boot(const char *rom, const char *disk, const char *aux, uint64_t e
                   int cpus, char *err, size_t errlen);
 /* Starts a Linux machine (the virt board): U-Boot's firmware file and a raw root disk, which may be NULL.
    Same rules as henge_vm_boot: on the app's JIT region. accel: the virtio GPU draws with virgl (the engine must be
-   built with GFX=1). video, with accel: the guest's VA-API decodes on VideoToolbox. 0, or -1 with a reason in err. */
-int henge_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb, int cpus, int accel, int video, char *err,
-                        size_t errlen);
+   built with GFX=1). video, with accel: the guest's VA-API decodes on VideoToolbox. encode: the guest's video codecs
+   (hvcodec) at 10.0.2.4:8470 and on /dev/hvcodec; henge_vm_set_background(1) ends their sessions. 0, or -1 with a
+   reason in err. */
+int henge_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb, int cpus, int accel, int video, int encode,
+                        char *err, size_t errlen);
 /* The serial console. Read drains what the guest wrote since the last call (a 256 KB ring; when it is full the
    oldest bytes go) and works after the machine stops. Write types bytes into it; ignored unless running. */
 size_t henge_vm_console_read(uint8_t *buf, size_t cap);
@@ -23,7 +25,8 @@ void henge_vm_console_write(const uint8_t *buf, size_t n);
 /* Presses the guest's power key (GPIO pin 3) for 100 ms: Debian shuts down cleanly. */
 void henge_vm_power_button(void);
 /* The app went to the background (1) or came back (0). The machine pauses, at once or when its sound stops, and
-   the guest's clock skips the time the app was away (hv_vm_set_background). Main thread; at most 2 s. */
+   the guest's clock skips the time the app was away (hv_vm_set_background). Going away also ends the guest's video
+   codec sessions. Main thread; at most 2 s. */
 void henge_vm_set_background(int on);
 /* The machine is paused. */
 int henge_vm_paused(void);

@@ -20,9 +20,11 @@
 #include "fs_server.h"
 #include "pvg_lite.h"
 #include "install.h"
+#include "vcodec.h"
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <unistd.h>
 
 HENGE_EXPORT HengeDualMapping *henge_ios_jit_get_mapping(void);
@@ -104,6 +106,7 @@ int henge_vm_boot(const char *rom, const char *disk, const char *aux, uint64_t e
     }
     HvVmConfig c = {.rom = rom, .disk = disk, .aux = aux, .ecid = ecid, .seed = seed, .ram_mb = ram_mb, .ncpus = cpus, .log = 1,
                     .jit_rx = jit->rx_addr, .jit_rw = jit->rw_addr, .jit_bytes = jit->size};
+    hv_net_set_vcodec_socket(NULL); /* a Linux machine before it may have had one */
     fprintf(stderr, "henge: booting with %d CPUs, %llu MB RAM, a %zu MB JIT region\n", cpus, (unsigned long long)ram_mb,
             jit->size >> 20);
     if (hv_vm_create(&c, err, errlen) != 0) return failed_start();
@@ -198,8 +201,25 @@ int henge_vm_folders_device(void) {
     return on;
 }
 
-int henge_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb, int cpus, int accel, int video, char *err,
-                        size_t errlen) {
+/* Started once, as share.c's: after a stop, the old listener could accept on a reused fd. Under api_lock. */
+static const char *vcodec_socket(void) {
+    static int rc = -2;
+    static char path[104]; /* sun_path */
+    if (rc == -2) {
+        char dir[PATH_MAX] = "";
+        const char *tmp = getenv("TMPDIR");
+        if (tmp && *tmp) snprintf(dir, sizeof dir, "%s", tmp);
+        else confstr(_CS_DARWIN_USER_TEMP_DIR, dir, sizeof dir);
+        size_t n = strlen(dir);
+        int w = snprintf(path, sizeof path, "%s%sv.sock", dir, n && dir[n - 1] == '/' ? "" : "/");
+        rc = w > 0 && (size_t)w < sizeof path ? hv_vcodec_start(path) : -1;
+        if (rc) fprintf(stderr, "henge: video encode: cannot listen on %s; /dev/hvcodec only\n", path);
+    }
+    return rc == 0 ? path : NULL;
+}
+
+int henge_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb, int cpus, int accel, int video, int encode,
+                        char *err, size_t errlen) {
     { extern void hv_prof_ios_start(void); hv_prof_ios_start(); }
     if (!firmware) {
         snprintf(err, errlen, "A Linux machine needs its firmware (u-boot.bin).");
@@ -222,9 +242,12 @@ int henge_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb,
     }
     HvVmConfig c = {.board = HV_BOARD_VIRT, .rom = firmware, .disk = disk, .ram_mb = ram_mb, .ncpus = cpus, .log = 1, .accel = accel,
                     .video = accel && video, .folders = folders, .nfolders = nfolders,
+                    .codec_ops = encode ? hv_vcodec_device_ops() : NULL,
                     .jit_rx = jit->rx_addr, .jit_rw = jit->rw_addr, .jit_bytes = jit->size};
-    fprintf(stderr, "henge: booting Linux with %d CPUs, %llu MB RAM, a %zu MB JIT region%s%s\n", cpus,
-            (unsigned long long)ram_mb, jit->size >> 20, accel ? ", graphics acceleration" : "", accel && video ? ", video decode" : "");
+    hv_net_set_vcodec_socket(encode ? vcodec_socket() : NULL); /* 10.0.2.4:8470 */
+    fprintf(stderr, "henge: booting Linux with %d CPUs, %llu MB RAM, a %zu MB JIT region%s%s%s\n", cpus,
+            (unsigned long long)ram_mb, jit->size >> 20, accel ? ", graphics acceleration" : "", accel && video ? ", video decode" : "",
+            encode ? ", video encode" : "");
     console_clear();
     hv_vm_console_set_output(console_out, NULL); /* destroy clears it, so every boot sets it */
     if (hv_vm_create(&c, err, errlen) != 0) {
@@ -266,6 +289,7 @@ int henge_vm_install(const char *rom, const char *disk, const char *aux, uint64_
     }
     HvVmConfig c = {.rom = rom, .disk = disk, .aux = aux, .ecid = ecid, .ram_mb = ram_mb, .ncpus = cpus, .log = 1,
                     .installer = 1, .no_sound = 1, .jit_rx = jit->rx_addr, .jit_rw = jit->rw_addr, .jit_bytes = jit->size};
+    hv_net_set_vcodec_socket(NULL);
     fprintf(stderr, "henge: installing %s with %d CPUs, %llu MB RAM\n", ipsw, cpus, (unsigned long long)ram_mb);
     if (hv_vm_create(&c, err, errlen) != 0) return failed_start();
     install_step = 0;
@@ -393,6 +417,7 @@ void henge_vm_set_background(int on) {
         hv_vm_set_background(0);
         return;
     }
+    hv_vcodec_lose_sessions(); /* decision 7, no encode in the background: the guest gets HV_VC_E_LOST */
     if (!lock_running()) return;
     hv_vm_set_background(1);
     pthread_rwlock_unlock(&api_lock);

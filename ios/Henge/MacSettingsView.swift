@@ -232,6 +232,11 @@ struct MacSettingsView: View {
                 Text("This \(Device.name)'s video decoder then parses data that the guest controls (H.264, VP9 and AV1 through VA-API). Applies the next time this machine starts.")
                     .font(.system(size: 13)).foregroundStyle(Desk.dim)
             }
+            Toggle("Video encode", isOn: Binding(get: { mac.encode ?? false }, set: { mac.encode = $0; save() }))
+                .font(.system(size: 16))
+                .padding(.top, 8)
+            Text("This \(Device.name)'s video codecs then take data that the guest controls (ffmpeg from henge-ffmpeg). Applies the next time this machine starts.")
+                .font(.system(size: 13)).foregroundStyle(Desk.dim)
         }
         .padding(17)
         .deskCard()

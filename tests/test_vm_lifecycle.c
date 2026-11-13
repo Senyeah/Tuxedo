@@ -2,6 +2,7 @@
 #include "henge-ios-jit.h"
 #include "install.h"
 #include "jit_region.h"
+#include "vcodec.h"
 #include "vm.h"
 
 #include <dispatch/dispatch.h>
@@ -12,6 +13,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 /* Real native bridge and device workers; only the debugger allocation and
@@ -98,6 +101,23 @@ static void fw_flood(Fw *f) {
     emit(f, 0x54000001u | ((uint32_t)(-2 & 0x7ffff) << 5));   /* b.ne to the strb */
 }
 /* Drains the console into out (cap bytes), waiting up to ms for the machine to stop or, with stop_on, for the text. */
+/* One hvcodec message on fd: the reply's status, and its payload in reply (at most cap bytes, the rest dropped). */
+static int vc_call(int fd, uint32_t type, const void *payload, uint32_t len, void *reply, size_t cap) {
+    static uint32_t seq;
+    HvVcHeader h = {type, len, ++seq, 0};
+    if (write(fd, &h, sizeof h) != (ssize_t)sizeof h || (len && write(fd, payload, len) != (ssize_t)len)) return 1;
+    if (recv(fd, &h, sizeof h, MSG_WAITALL) != (ssize_t)sizeof h || h.type != (type | HV_VC_REPLY)) return 1;
+    char sink[512];
+    for (uint32_t got = 0; got < h.len;) {
+        size_t want = h.len - got < sizeof sink ? h.len - got : sizeof sink;
+        ssize_t n = recv(fd, sink, want, MSG_WAITALL);
+        if (n <= 0) return 1;
+        if (reply && got < cap) memcpy((char *)reply + got, sink, (size_t)n < cap - got ? (size_t)n : cap - got);
+        got += (uint32_t)n;
+    }
+    return h.status;
+}
+
 static size_t drain(char *out, size_t cap, const char *stop_on, int until_stopped, int ms) {
     size_t n = 0;
     for (int t = 0; t < ms; t++) {
@@ -217,10 +237,10 @@ int main(void) {
               hv_vm_background_pauses(0, 0) && !hv_vm_background_pauses(0, 1) && hv_vm_background_pauses(1, 0) &&
                   hv_vm_background_pauses(1, 1));
         check("no board before a boot", henge_vm_board_kind() == -1);
-        check("missing firmware file fails", henge_vm_boot_linux("/nonexistent/u-boot.bin", disk, 64, 2, 0, 0, error, sizeof error) != 0 &&
+        check("missing firmware file fails", henge_vm_boot_linux("/nonexistent/u-boot.bin", disk, 64, 2, 0, 0, 0, error, sizeof error) != 0 &&
                                                 henge_vm_state() == 0 && henge_vm_can_start() && fds() == initial_fds &&
                                                 threads_settled());
-        check("no firmware fails", henge_vm_boot_linux(NULL, disk, 64, 2, 0, 0, error, sizeof error) != 0 && henge_vm_state() == 0);
+        check("no firmware fails", henge_vm_boot_linux(NULL, disk, 64, 2, 0, 0, 0, error, sizeof error) != 0 && henge_vm_state() == 0);
 #ifndef HV_GFX
         {
             Fw f = {0};
@@ -228,7 +248,7 @@ int main(void) {
             write_file(rom, f.w, f.n * sizeof f.w[0]);
             error[0] = 0;
             check("acceleration without a GFX engine fails cleanly",
-                  henge_vm_boot_linux(rom, disk, 64, 2, 1, 0, error, sizeof error) != 0 && strstr(error, "no graphics acceleration") &&
+                  henge_vm_boot_linux(rom, disk, 64, 2, 1, 0, 0, error, sizeof error) != 0 && strstr(error, "no graphics acceleration") &&
                       henge_vm_state() == 0 && henge_vm_can_start() && fds() == initial_fds && threads_settled());
         }
 #endif
@@ -239,13 +259,13 @@ int main(void) {
                 fw_print(&f, cases[i].say);
                 fw_end(&f, cases[i].how);
                 write_file(rom, f.w, f.n * sizeof f.w[0]);
-                int rc = henge_vm_boot_linux(rom, disk, 64, 2, 0, 0, error, sizeof error);
+                int rc = henge_vm_boot_linux(rom, disk, 64, 2, 0, 0, 0, error, sizeof error);
                 if (rc) fprintf(stderr, "virt %s: %s\n", cases[i].name, error);
                 check("virt boots through the bridge", rc == 0);
                 if (rc) break;
                 runs++;
                 check("virt board kind", henge_vm_board_kind() == HENGE_VM_BOARD_LINUX);
-                check("a second start is refused while running", henge_vm_boot_linux(rom, disk, 64, 2, 0, 0, error, sizeof error) != 0 &&
+                check("a second start is refused while running", henge_vm_boot_linux(rom, disk, 64, 2, 0, 0, 0, error, sizeof error) != 0 &&
                                                                   henge_vm_state() == 1);
                 henge_vm_console_write((const uint8_t *)"x", 1); /* nobody reads it; it must not hurt */
                 size_t n;
@@ -293,7 +313,7 @@ int main(void) {
         fw_flood(&f);
         fw_end(&f, FW_OFF);
         write_file(rom, f.w, f.n * sizeof f.w[0]);
-        check("virt flood boots", henge_vm_boot_linux(rom, disk, 64, 2, 0, 0, error, sizeof error) == 0);
+        check("virt flood boots", henge_vm_boot_linux(rom, disk, 64, 2, 0, 0, 0, error, sizeof error) == 0);
         for (int w = 0; w < 10000 && henge_vm_state() != 2; w++) usleep(1000);
         size_t total = 0, got;
         static uint8_t flood[(1 << 18) + 64];
@@ -312,11 +332,64 @@ int main(void) {
         check("mac generation after Linux", henge_vm_generation() == (uint64_t)base + runs + 1);
         check("mac wrote nothing to the console", henge_vm_console_read(flood, sizeof flood) == 0);
     }
+    /* Video encode, last: its listener stays for the process, as the shared folder's does. */
+    {
+        Fw f = {0};
+        fw_print(&f, "HENGE SPIN\n");
+        fw_end(&f, FW_SPIN);
+        write_file(rom, f.w, f.n * sizeof f.w[0]);
+        int rc = henge_vm_boot_linux(rom, disk, 64, 2, 0, 0, 1, error, sizeof error);
+        if (rc) fprintf(stderr, "virt with video encode: %s\n", error);
+        check("virt boots with video encode", rc == 0);
+        check("video encode adds the hvcodec device", hv_vm_virt() && hv_vm_virt()->codec);
+        char tmp[1024] = ""; /* where henge-vm.c puts it */
+        if (getenv("TMPDIR") && *getenv("TMPDIR")) snprintf(tmp, sizeof tmp, "%s", getenv("TMPDIR"));
+        else confstr(_CS_DARWIN_USER_TEMP_DIR, tmp, sizeof tmp);
+        struct sockaddr_un a = {.sun_family = AF_UNIX};
+        snprintf(a.sun_path, sizeof a.sun_path, "%s%sv.sock", tmp, *tmp && tmp[strlen(tmp) - 1] == '/' ? "" : "/");
+        int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        check("the codec service listens", fd >= 0 && connect(fd, (struct sockaddr *)&a, sizeof a) == 0);
+        HvVcEncOpen o = {.codec = HV_VC_H264, .width = 256, .height = 144, .format = HV_VC_FMT_NV12, .timescale = 30};
+        HvVcOpenReply open;
+        int st = vc_call(fd, HV_VC_ENC_OPEN, &o, sizeof o, &open, sizeof open);
+        if (st == HV_VC_E_NOSUP) {
+            printf("VM lifecycle: no hardware H.264 encoder here: the background loss is not checked\n");
+            henge_vm_set_background(1);
+        } else {
+            check("an encoder opens", st == 0);
+            HvVcFrameAlloc fa = {.width = 256, .height = 144, .format = HV_VC_FMT_NV12};
+            HvVcFrameReply fr = {0};
+            check("a frame", vc_call(fd, HV_VC_FRAME_ALLOC, &fa, sizeof fa, &fr, sizeof fr) == 0 && fr.handle);
+            HvVcEncFrame ef = {open.session, fr.handle, 0, 1, 0, 0};
+            check("it encodes in the foreground", vc_call(fd, HV_VC_ENC_FRAME, &ef, sizeof ef, NULL, 0) == 0);
+            henge_vm_set_background(1);
+            ef.pts = 1;
+            check("the background ends the encoder: one clear error", vc_call(fd, HV_VC_ENC_FRAME, &ef, sizeof ef, NULL, 0) == HV_VC_E_LOST);
+        }
+        check("the background pauses it", henge_vm_paused());
+        if (fd >= 0) close(fd);
+        henge_vm_stop();
+        for (int w = 0; w < 3000 && henge_vm_state() != 2; w++) usleep(1000);
+        henge_vm_set_background(0);
+        check("video encode machine stopped and released", henge_vm_state() == 2 && hv_vm_virt() == NULL);
+        HvVcodecStats vs;
+        for (int w = 0; w < 1000; w++) {
+            hv_vcodec_stats(&vs);
+            if (!vs.open) break;
+            usleep(1000);
+        }
+        check("no codec context is left", vs.open == 0 && vs.live_frames == 0 && vs.live_sessions == 0);
+        check("virt boots without video encode after it", henge_vm_boot_linux(rom, disk, 64, 2, 0, 0, 0, error, sizeof error) == 0);
+        check("and has no hvcodec device", hv_vm_virt() && !hv_vm_virt()->codec);
+        henge_vm_stop();
+        for (int w = 0; w < 3000 && henge_vm_state() != 2; w++) usleep(1000);
+        check("stopped", henge_vm_state() == 2);
+    }
     hv_vm_destroy();
     atomic_store(&reader_done, 1);
     pthread_join(reader, NULL);
     hv_jit_region_close(&jit);
     unlink(rom); unlink(disk); unlink(aux); rmdir(dir);
-    printf("VM lifecycle: 12 power cycles and 3 failed boots, then the virt board (4 endings twice, a flood), %d failures\n", failures);
+    printf("VM lifecycle: 12 power cycles and 3 failed boots, then the virt board (4 endings twice, a flood, video encode), %d failures\n", failures);
     return failures != 0;
 }

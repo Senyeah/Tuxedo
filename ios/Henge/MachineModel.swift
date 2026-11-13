@@ -57,6 +57,9 @@ struct VirtualMac: Identifiable, Codable, Hashable {
     /// Linux "Video decode": with acceleration, the guest's VA-API decodes on VideoToolbox. Missing: off.
     var video: Bool?
     var decodesVideo: Bool { guest == .linux && accel == true && video == true }
+    /// Linux "Video encode": the guest's ffmpeg on VideoToolbox (hvcodec), at 10.0.2.4:8470 and /dev/hvcodec. Missing: off.
+    var encode: Bool?
+    var encodesVideo: Bool { guest == .linux && encode == true }
     /// LINUX-PLAN-12: the picture takes direct touches (the toolbar's touch switch). Missing: the pointer.
     var touchInput: Bool?
     /// Never for a Mac: its board has no touchscreen.

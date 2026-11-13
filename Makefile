@@ -148,8 +148,8 @@ $(B)/test_status: tests/test_status.c $(B)/status.o $(B)/share.o $(B)/safe_path.
 $(B)/test_dns_lifecycle: tests/test_dns_lifecycle.c $(B)/dns_proxy.o
 	$(CC) $(CFLAGS) $^ -o $@
 
-$(B)/test_vm_lifecycle: tests/test_vm_lifecycle.c ios/Henge/Native/henge-vm.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/usb_host.o
-	$(CC) $(CFLAGS) -Iios/Henge/Native $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -o $@
+$(B)/test_vm_lifecycle: tests/test_vm_lifecycle.c ios/Henge/Native/henge-vm.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/usb_host.o $(VCODEC_OBJ)
+	$(CC) $(CFLAGS) -Iios/Henge/Native $^ $(SLIRP_LIBS) $(METAL_LIBS) $(VT_FRAMEWORKS) -framework AudioToolbox -o $@
 
 $(B)/test_console: tests/test_console.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/usb_host.o
 	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -o $@
@@ -427,7 +427,9 @@ IB = build/ios
 IOS_GFX_DIR ?= $(GFX_ROOT)/ios
 IOS_SRC = $(wildcard core/*.c) host/prof_ios.c host/jit_region.c host/disk.c host/vm.c host/linux_boot.c host/status.c $(IOS_NET) host/dns_proxy.c host/share.c host/safe_path.c host/fs_server.c host/secrets.c host/audio_mac.c host/hvsparse.c host/usb_host.c \
           $(filter-out devices/pvg_mac.m,$(wildcard devices/*.c))
-IOS_OBJ = $(patsubst %.c,$(IB)/%.o,$(IOS_SRC)) $(IB)/host/enter.o $(IB)/devices/pvg_metal.o $(IB)/devices/vgpu_metal.o $(if $(GFX),$(IB)/devices/vgpu_virgl.o)
+# hvcodec, for a machine's Video encode setting. The app links VideoToolbox for it (ios/project.yml).
+IOS_VCODEC_OBJ = $(IB)/host/vcodec.o $(IB)/host/vt_decode.o $(IB)/host/vt_caps.o
+IOS_OBJ = $(patsubst %.c,$(IB)/%.o,$(IOS_SRC)) $(IB)/host/enter.o $(IB)/devices/pvg_metal.o $(IB)/devices/vgpu_metal.o $(if $(GFX),$(IB)/devices/vgpu_virgl.o) $(IOS_VCODEC_OBJ)
 
 $(IB)/.gfx-stamp: FORCE
 	@mkdir -p $(IB)
@@ -448,6 +450,9 @@ $(IB)/devices/vgpu_virgl.o: devices/vgpu_virgl.m devices/*.h core/*.h host/*.h $
 	$(call GFX_CHECK,$(IOS_GFX_DIR))
 	@mkdir -p $(dir $@)
 	$(IOS_CC) $(IOS_CFLAGS) -fobjc-arc -Wno-unused-parameter -I$(IOS_GFX_DIR)/include -DHV_ANGLE_COMMIT='"$(ANGLE_COMMIT)"' -c $< -o $@
+$(IOS_VCODEC_OBJ): $(IB)/host/%.o: host/%.m host/*.h devices/virtio_hvcodec.h $(IB)/.gfx-stamp
+	@mkdir -p $(dir $@)
+	$(IOS_CC) $(IOS_CFLAGS) -fobjc-arc -c $< -o $@
 $(IB)/host/enter.o: host/enter.S
 	@mkdir -p $(dir $@)
 	$(IOS_CC) -c $< -o $@

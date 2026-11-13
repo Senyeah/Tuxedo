@@ -332,7 +332,7 @@ vainfo --display drm --device /dev/dri/renderD128
 
 ## ffmpeg with the device's codecs (henge-ffmpeg)
 
-`henge-ffmpeg` gives the guest an `ffmpeg` that decodes and encodes on the device's hardware, with the frames on the device (`docs/guest-video-encode-plan.md`). The host must offer the codec service (`hengevm --vcodec` on the Mac). `man ffmpeg-henge` gives the commands, the encoders and their options, and the limits.
+`henge-ffmpeg` gives the guest an `ffmpeg` that decodes and encodes on the device's hardware, with the frames on the device (`docs/guest-video-encode-plan.md`). The host must offer the codec service: `hengevm --vcodec` or `--vcodec-dma` on the Mac, or the machine's "Video encode" setting in the iOS app (the TCP service and the device). `man ffmpeg-henge` gives the commands, the encoders and their options, and the limits.
 
 What the package does:
 
