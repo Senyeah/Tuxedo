@@ -6,7 +6,8 @@
    folder's descriptor at each use, and an object that is no longer the node's inode is ESTALE, so the guest looks
    it up again. One node for each host inode, so hard links are one inode in the guest too.
 
-   No lock is held during I/O. The node and handle tables have one lock, the folder table another, never both. */
+   No lock is held during I/O. The node and handle tables have one lock, the folder table another, never both. A
+   FORGET that finds the node lock busy waits behind a small lock of its own for the next holder. */
 #include "fs_server.h"
 #include "fuse_proto.h"
 #include "safe_path.h"
@@ -33,7 +34,8 @@
 #define ID_NODE0 16
 #define GUEST_UID 1000
 #define GUEST_GID 1000
-#define MAX_NODES (1u << 20)
+#define MAX_NODES (1u << 18) /* a directory rename walks them all */
+#define MAX_PENDING 4096
 #define MAX_FDS 512
 #define REQ_MAX (16 * 1024) /* a request's header and arguments: two names and a link's text at most */
 #define FOLDERS_FILE ".henge-folders"
@@ -271,8 +273,15 @@ typedef struct Handle {
     size_t count;
 } Handle;
 
+typedef struct Forget {
+    uint64_t id, count;
+} Forget;
+
 struct HvFs {
     pthread_mutex_t mu;
+    pthread_mutex_t pmu; /* pending: FORGETs from the CPU thread while mu was busy (after mu, never before) */
+    Forget *pending;
+    uint32_t npending;
     Node *nodes;
     uint32_t cap, gen;
     int32_t free_node;
@@ -344,22 +353,29 @@ static int grow_buckets(HvFs *fs) {
     return 0;
 }
 
+/* Under mu: this inode's node in the folder, or NULL. */
+static Node *node_find(HvFs *fs, int folder, uint32_t fgen, const struct stat *st) {
+    if (!fs->nbuckets) return NULL;
+    for (int32_t i = fs->buckets[hash(st->st_dev, st->st_ino, folder) & (fs->nbuckets - 1)]; i >= 0; i = fs->nodes[i].next) {
+        Node *n = &fs->nodes[i];
+        if (n->folder == folder && n->fgen == fgen && n->dev == st->st_dev && n->ino == st->st_ino) return n;
+    }
+    return NULL;
+}
+
 /* Under mu: the node for this inode in this folder, made if new, with one more lookup and the path it was last
    found at. NULL at the limit. */
 static Node *node_get(HvFs *fs, int folder, uint32_t fgen, const struct stat *st, const char *path) {
-    if (fs->nbuckets) {
-        for (int32_t i = fs->buckets[hash(st->st_dev, st->st_ino, folder) & (fs->nbuckets - 1)]; i >= 0; i = fs->nodes[i].next) {
-            Node *n = &fs->nodes[i];
-            if (n->folder != folder || n->fgen != fgen || n->dev != st->st_dev || n->ino != st->st_ino) continue;
-            if (strcmp(n->path, path)) {
-                char *p = strdup(path);
-                if (!p) return NULL;
-                free(n->path);
-                n->path = p;
-            }
-            n->nlookup++;
-            return n;
+    Node *found = node_find(fs, folder, fgen, st);
+    if (found) {
+        if (strcmp(found->path, path)) {
+            char *p = strdup(path);
+            if (!p) return NULL;
+            free(found->path);
+            found->path = p;
         }
+        found->nlookup++;
+        return found;
     }
     if (fs->live >= MAX_NODES) return NULL;
     if (fs->free_node < 0) {
@@ -406,8 +422,40 @@ static void node_forget(HvFs *fs, uint64_t id, uint64_t count) {
     fs->live--;
 }
 
-/* Under mu: a rename moved from to to in a folder (and, for an exchange, to to from): the nodes below follow. */
-static void rename_paths(HvFs *fs, int folder, uint32_t fgen, const char *from, const char *to, int exchange) {
+/* Under mu. */
+static void drain_forgets(HvFs *fs) {
+    pthread_mutex_lock(&fs->pmu);
+    for (uint32_t i = 0; i < fs->npending; i++) node_forget(fs, fs->pending[i].id, fs->pending[i].count);
+    __atomic_store_n(&fs->npending, 0, __ATOMIC_RELAXED);
+    pthread_mutex_unlock(&fs->pmu);
+}
+
+/* mu for the nodes, with the FORGETs that waited for it done first: counts add, so their order does not matter. */
+static void nodes_lock(HvFs *fs) {
+    pthread_mutex_lock(&fs->mu);
+    if (__atomic_load_n(&fs->npending, __ATOMIC_RELAXED)) drain_forgets(fs);
+}
+
+/* Under mu: a node whose path was from is now at to. */
+static void node_moved(Node *n, const char *from, const char *to) {
+    if (!n || strcmp(n->path, from)) return; /* another link's path: still good */
+    char *p = strdup(to);
+    if (!p) return; /* left stale: the next use is ESTALE and the guest looks it up */
+    free(n->path);
+    n->path = p;
+}
+
+/* Under mu: a rename moved from to to in a folder (and, for an exchange, to to from): the nodes below follow. moved
+   is what is at to now, other what is at from after an exchange. Only a directory has nodes below it, so a file
+   needs no walk of every node. */
+static void rename_paths(HvFs *fs, int folder, uint32_t fgen, const char *from, const char *to, int exchange,
+                         const struct stat *moved, const struct stat *other) {
+    if (!S_ISDIR(moved->st_mode) && (!exchange || !S_ISDIR(other->st_mode))) {
+        Node *a = node_find(fs, folder, fgen, moved), *b = exchange ? node_find(fs, folder, fgen, other) : NULL;
+        node_moved(a, from, to);
+        if (b != a) node_moved(b, to, from);
+        return;
+    }
     size_t fl = strlen(from), tl = strlen(to);
     for (uint32_t i = 0; i < fs->cap; i++) {
         Node *n = &fs->nodes[i];
@@ -531,6 +579,12 @@ HvFs *hv_fs_create(void) {
     HvFs *fs = calloc(1, sizeof *fs);
     if (!fs) return NULL;
     pthread_mutex_init(&fs->mu, NULL);
+    pthread_mutex_init(&fs->pmu, NULL);
+    fs->pending = malloc(MAX_PENDING * sizeof *fs->pending);
+    if (!fs->pending) {
+        free(fs);
+        return NULL;
+    }
     fs->free_node = -1;
     struct rlimit rl;
     if (getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur < 4096) { /* 256 by default: the guest's files need more */
@@ -555,6 +609,9 @@ void hv_fs_reset(HvFs *fs) {
         handle_free(fs, h);
         pthread_mutex_lock(&fs->mu);
     }
+    pthread_mutex_lock(&fs->pmu);
+    __atomic_store_n(&fs->npending, 0, __ATOMIC_RELAXED);
+    pthread_mutex_unlock(&fs->pmu);
     for (uint32_t i = 0; i < fs->cap; i++) free(fs->nodes[i].path);
     free(fs->nodes);
     free(fs->buckets);
@@ -569,7 +626,9 @@ void hv_fs_destroy(HvFs *fs) {
     hv_fs_reset(fs);
     free(fs->handles);
     free(fs->hgens);
+    free(fs->pending);
     pthread_mutex_destroy(&fs->mu);
+    pthread_mutex_destroy(&fs->pmu);
     free(fs);
 }
 
@@ -614,7 +673,7 @@ static int ctx_get(HvFs *fs, uint64_t id, Ctx *c) {
         c->kind = K_FOLDER;
         return folder_take(c, (int)(id - ID_FOLDER0), 0, 1);
     }
-    pthread_mutex_lock(&fs->mu);
+    nodes_lock(fs);
     Node *n = node_of(fs, id);
     int folder = 0;
     uint32_t fgen = 0;
@@ -699,7 +758,12 @@ typedef struct Out {
     int n;
     size_t cap;
     uint64_t unique;
+    HvFsCall *call;
 } Out;
+
+/* The device still wants the reply. The check and the write are two steps, but a reset or stop waits a while
+   before it gives up on a request. */
+static int out_live(const Out *o) { return !o->call || !o->call->epoch || __atomic_load_n(o->call->epoch, __ATOMIC_ACQUIRE) == o->call->mine; }
 
 static size_t iov_total(const struct iovec *v, int n) {
     size_t t = 0;
@@ -757,7 +821,7 @@ static int iov_slice(const struct iovec *v, int n, size_t off, size_t len, struc
 }
 
 static size_t reply(Out *o, int err, const void *body, size_t len) {
-    if (o->cap < sizeof(FuseOutHeader)) return 0;
+    if (o->cap < sizeof(FuseOutHeader) || !out_live(o)) return 0;
     if (sizeof(FuseOutHeader) + len > o->cap) err = LX_EIO, len = 0; /* the driver gave no room for it */
     if (err) len = 0;
     FuseOutHeader h = {(uint32_t)(sizeof h + len), -err, o->unique};
@@ -844,7 +908,7 @@ static size_t entry_reply(Req *r, const Ctx *dir, const char *name, const struct
     char path[PATH_MAX];
     int err = join(path, dir->path, name);
     if (err) return reply_err(r->o, err);
-    pthread_mutex_lock(&r->fs->mu);
+    nodes_lock(r->fs);
     Node *n = node_get(r->fs, dir->folder, dir->fgen, st, path);
     uint64_t id = n ? id_of(r->fs, n) : 0;
     pthread_mutex_unlock(&r->fs->mu);
@@ -958,9 +1022,10 @@ static size_t op_setattr(Req *r, Ctx *c) {
     if (!h && c->kind == K_FOLDER) fd = c->rootfd;
     else if (!h && (err = ctx_parent(c, &dfd, leaf))) return reply_err(r->o, err);
     if (!h && c->kind == K_NODE && s.valid & FATTR_SIZE) {
-        own = openat(dfd, leaf, O_WRONLY | O_NOFOLLOW | O_CLOEXEC);
-        if (own < 0) err = lx(errno);
+        own = openat(dfd, leaf, O_WRONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC); /* a FIFO: ENXIO, not a wait */
+        if (own < 0) err = errno == ENXIO ? LX_EINVAL : lx(errno);
         else if (fstat(own, &st) != 0 || !same(c, &st)) err = LX_ESTALE;
+        else if (!S_ISREG(st.st_mode)) err = LX_EINVAL; /* as Linux's truncate of a FIFO */
         fd = own;
     }
     if (!err && s.valid & FATTR_MODE) {
@@ -1077,16 +1142,21 @@ static size_t op_rename(Req *r, Ctx *c, int two) {
     if (inside(c) && inside(&d) && (c->folder != d.folder || c->fgen != d.fgen)) err = LX_EXDEV;
     if (!err) err = change_in(c, &fdir);
     if (!err && (err = change_in(&d, &tdir))) close(fdir);
+    int exchange = (a.flags & LX_RENAME_EXCHANGE) != 0;
+    struct stat moved = {0}, other = {0};
+    int known = 0;
     if (!err) {
-        unsigned flags = (a.flags & LX_RENAME_NOREPLACE ? RENAME_EXCL : 0) | (a.flags & LX_RENAME_EXCHANGE ? RENAME_SWAP : 0);
+        unsigned flags = (a.flags & LX_RENAME_NOREPLACE ? RENAME_EXCL : 0) | (exchange ? RENAME_SWAP : 0);
         if ((flags ? renameatx_np(fdir, from, tdir, to, flags) : renameat(fdir, from, tdir, to)) != 0) err = lx(errno);
+        else known = fstatat(tdir, to, &moved, AT_SYMLINK_NOFOLLOW) == 0 && (!exchange || fstatat(fdir, from, &other, AT_SYMLINK_NOFOLLOW) == 0);
         close(fdir);
         close(tdir);
     }
+    if (!known) moved.st_mode = S_IFDIR; /* not known: walk them all */
     char fp[PATH_MAX], tp[PATH_MAX];
     if (!err && !join(fp, c->path, from) && !join(tp, d.path, to)) {
-        pthread_mutex_lock(&r->fs->mu);
-        rename_paths(r->fs, c->folder, c->fgen, fp, tp, (a.flags & LX_RENAME_EXCHANGE) != 0);
+        nodes_lock(r->fs);
+        rename_paths(r->fs, c->folder, c->fgen, fp, tp, exchange, &moved, &other);
         pthread_mutex_unlock(&r->fs->mu);
     }
     ctx_done(&d);
@@ -1133,9 +1203,24 @@ static int host_flags(uint32_t f) {
 
 static int writes(int flags) { return (flags & O_ACCMODE) != O_RDONLY || flags & O_TRUNC; }
 
+/* Opens are O_NONBLOCK, or a FIFO with no writer would hold a worker for ever: only a regular file (or a
+   directory, if dirs) is kept, back in blocking mode. */
+static int plain_file(int fd, const struct stat *st, int dirs) {
+    if (!S_ISREG(st->st_mode) && !(dirs && S_ISDIR(st->st_mode))) return LX_ENXIO;
+    int fl = fcntl(fd, F_GETFL);
+    return fl < 0 || fcntl(fd, F_SETFL, fl & ~O_NONBLOCK) != 0 ? lx(errno) : 0;
+}
+
 static size_t open_reply(Req *r, uint64_t fh, uint32_t flags) {
     FuseOpenOut o = {.fh = fh, .open_flags = flags};
     return reply(r->o, 0, &o, sizeof o);
+}
+
+/* No reply (the device gave up on the request): the guest never learns of the handle. */
+static size_t open_reply_or_close(Req *r, uint64_t fh) {
+    size_t n = open_reply(r, fh, 0);
+    if (!n) handle_close(r->fs, fh);
+    return n;
 }
 
 static size_t op_open(Req *r, Ctx *c) {
@@ -1147,16 +1232,20 @@ static size_t op_open(Req *r, Ctx *c) {
     if (c->kind != K_NODE) return reply_err(r->o, LX_EISDIR);
     if (!c->online) return reply_err(r->o, LX_EIO);
     if (writes(flags) && c->mode != HV_FS_RW) return reply_err(r->o, LX_EROFS);
-    int fd = safe_open(c->rootfd, c->path, flags, 0); /* no link in any part, the last one too */
+    int fd = safe_open(c->rootfd, c->path, flags | O_NONBLOCK, 0); /* no link in any part, the last one too */
     if (fd < 0) return reply_err(r->o, errno == ELOOP ? LX_ELOOP : path_err(c, errno));
     struct stat st;
     if (fstat(fd, &st) != 0 || !same(c, &st)) {
         close(fd);
         return reply_err(r->o, LX_ESTALE);
     }
+    if ((err = plain_file(fd, &st, 1))) {
+        close(fd);
+        return reply_err(r->o, err);
+    }
     if (a.open_flags & FUSE_OPEN_KILL_SUIDGID && flags & O_TRUNC) kill_suidgid(fd);
     uint64_t fh = handle_new(r->fs, fd, c->folder, c->fgen, &st, c->path, 0);
-    return fh ? open_reply(r, fh, 0) : reply_err(r->o, LX_ENFILE);
+    return fh ? open_reply_or_close(r, fh) : reply_err(r->o, LX_ENFILE);
 }
 
 static size_t op_create(Req *r, Ctx *c) {
@@ -1165,10 +1254,10 @@ static size_t op_create(Req *r, Ctx *c) {
     const char *name = err ? NULL : arg_name(r, sizeof a, &err);
     if (!name) return reply_err(r->o, err);
     if ((err = change_in(c, &dfd))) return reply_err(r->o, err);
-    int fd = openat(dfd, name, host_flags(a.flags) | O_CREAT | O_NOFOLLOW | O_CLOEXEC, (mode_t)(a.mode & 07777));
+    int fd = openat(dfd, name, host_flags(a.flags) | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, (mode_t)(a.mode & 07777));
     struct stat st;
-    if (fd < 0 || fstat(fd, &st) != 0) {
-        err = lx(errno);
+    if (fd < 0 || fstat(fd, &st) != 0 || (err = plain_file(fd, &st, 0))) {
+        if (!err) err = lx(errno);
         if (fd >= 0) close(fd);
         close(dfd);
         return reply_err(r->o, err);
@@ -1226,20 +1315,22 @@ static size_t op_read(Req *r) {
     }
     struct iovec v[HV_FS_MAX_IO / 4096 + 2];
     size_t got = 0;
-    while (got < want) { /* straight into the guest's pages */
+    while (got < want && out_live(r->o)) { /* straight into the guest's pages */
         int k = iov_slice(r->o->iov, r->o->n, sizeof(FuseOutHeader) + got, want - got, v, (int)(sizeof v / sizeof *v));
         ssize_t n = k ? preadv(h->fd, v, k, (off_t)(a.offset + got)) : 0;
         if (n < 0 && errno == EINTR) continue;
         if (n < 0) {
             err = lx(errno);
+            if (r->o->call) r->o->call->touched = sizeof(FuseOutHeader) + want; /* a failed preadv can still have written */
             break;
         }
         if (n == 0) break;
         got += (size_t)n;
     }
     handle_put(r->fs, h);
-    if (err) return reply_err(r->o, err);
-    FuseOutHeader oh = {(uint32_t)(sizeof oh + got), 0, r->o->unique};
+    if (err && !got) return reply_err(r->o, err);
+    if (!out_live(r->o)) return 0;
+    FuseOutHeader oh = {(uint32_t)(sizeof oh + got), 0, r->o->unique}; /* a short read: the next one gets the error */
     iov_copy_out(r->o->iov, r->o->n, 0, &oh, sizeof oh);
     return sizeof oh + got;
 }
@@ -1303,7 +1394,7 @@ static size_t op_opendir(Req *r, Ctx *c) {
     if ((err = ctx_dir(c, &dfd))) return reply_err(r->o, err);
     fstat(dfd, &st);
     uint64_t fh = handle_new(r->fs, dfd, c->folder, c->fgen, &st, c->path, 1);
-    return fh ? open_reply(r, fh, 0) : reply_err(r->o, LX_ENFILE);
+    return fh ? open_reply_or_close(r, fh) : reply_err(r->o, LX_ENFILE);
 }
 
 /* The directory's entries now, with "." and ".." first. */
@@ -1437,7 +1528,7 @@ static size_t op_readdir(Req *r, int plus) {
         if (plus && i >= 2 && fstatat(h->fd, en->name, &st, AT_SYMLINK_NOFOLLOW) == 0) {
             char path[PATH_MAX];
             if (!join(path, h->path, en->name)) {
-                pthread_mutex_lock(&r->fs->mu);
+                nodes_lock(r->fs);
                 Node *n = node_get(r->fs, h->folder, h->fgen, &st, path); /* the guest counts it as a lookup */
                 if (n) entry_valid(&e, id_of(r->fs, n));
                 pthread_mutex_unlock(&r->fs->mu);
@@ -1548,32 +1639,63 @@ static size_t op_lseek(Req *r) {
     return reply(r->o, err, &o, sizeof o);
 }
 
+/* On the CPU thread, which must not wait long: mu can be held for a while (a directory rename walks every node),
+   so a FORGET that finds it busy goes in pending for the next holder, unless pending is full. */
+static void forget_one(HvFs *fs, int *locked, uint64_t id, uint64_t count) {
+    if (!*locked && pthread_mutex_trylock(&fs->mu) == 0) *locked = 1;
+    if (!*locked) {
+        pthread_mutex_lock(&fs->pmu);
+        int room = fs->npending < MAX_PENDING;
+        if (room) {
+            fs->pending[fs->npending] = (Forget){id, count};
+            __atomic_store_n(&fs->npending, fs->npending + 1, __ATOMIC_RELAXED);
+        }
+        pthread_mutex_unlock(&fs->pmu);
+        if (room) return;
+        pthread_mutex_lock(&fs->mu);
+        *locked = 1;
+    }
+    node_forget(fs, id, count);
+}
+
 static size_t forget(Req *r) {
+    int locked = 0;
     if (r->h.opcode == FUSE_FORGET) {
         FuseForgetIn f;
-        if (arg_get(r, &f, sizeof f) == 0) {
-            pthread_mutex_lock(&r->fs->mu);
-            node_forget(r->fs, r->h.nodeid, f.nlookup);
-            pthread_mutex_unlock(&r->fs->mu);
+        if (arg_get(r, &f, sizeof f) == 0) forget_one(r->fs, &locked, r->h.nodeid, f.nlookup);
+    } else {
+        FuseBatchForgetIn b;
+        if (arg_get(r, &b, sizeof b) != 0) return 0;
+        for (uint32_t i = 0; i < b.count && sizeof b + (i + 1) * sizeof(FuseForgetOne) <= r->arglen; i++) {
+            FuseForgetOne one;
+            memcpy(&one, r->arg + sizeof b + i * sizeof one, sizeof one);
+            forget_one(r->fs, &locked, one.nodeid, one.nlookup);
         }
-        return 0;
     }
-    FuseBatchForgetIn b;
-    if (arg_get(r, &b, sizeof b) != 0) return 0;
-    pthread_mutex_lock(&r->fs->mu);
-    for (uint32_t i = 0; i < b.count && sizeof b + (i + 1) * sizeof(FuseForgetOne) <= r->arglen; i++) {
-        FuseForgetOne one;
-        memcpy(&one, r->arg + sizeof b + i * sizeof one, sizeof one);
-        node_forget(r->fs, one.nodeid, one.nlookup);
+    if (locked) {
+        if (__atomic_load_n(&r->fs->npending, __ATOMIC_RELAXED)) drain_forgets(r->fs);
+        pthread_mutex_unlock(&r->fs->mu);
     }
-    pthread_mutex_unlock(&r->fs->mu);
     return 0;
 }
 
+static void (*test_before)(uint32_t, uint64_t);
+
+void hv_fs_test_hook(void (*before)(uint32_t opcode, uint64_t nodeid)) { test_before = before; }
+
+void hv_fs_test_lock(HvFs *fs, int on) {
+    if (on) nodes_lock(fs);
+    else pthread_mutex_unlock(&fs->mu);
+}
+
 size_t hv_fs_handle(HvFs *fs, const struct iovec *in, int nin, const struct iovec *out, int nout) {
+    return hv_fs_call(fs, in, nin, out, nout, NULL);
+}
+
+size_t hv_fs_call(HvFs *fs, const struct iovec *in, int nin, const struct iovec *out, int nout, HvFsCall *call) {
     uint8_t buf[REQ_MAX];
     size_t total = iov_total(in, nin);
-    Out o = {out, nout, iov_total(out, nout), 0};
+    Out o = {out, nout, iov_total(out, nout), 0, call};
     Req r = {.fs = fs, .in = in, .nin = nin, .o = &o};
     if (total < sizeof r.h) return 0;
     iov_copy_in(in, nin, 0, &r.h, sizeof r.h);
@@ -1588,6 +1710,7 @@ size_t hv_fs_handle(HvFs *fs, const struct iovec *in, int nin, const struct iove
     r.arg = buf + sizeof r.h, r.arglen = take - sizeof r.h;
     uint32_t op = r.h.opcode;
     if (op == FUSE_FORGET || op == FUSE_BATCH_FORGET) return forget(&r);
+    if (test_before) test_before(op, r.h.nodeid);
     if (op == FUSE_INTERRUPT) return 0; /* Linux's virtio-fs sends none (6.12); nothing here waits long yet */
     if (op == FUSE_INIT) return op_init(&r);
     if (op == FUSE_DESTROY) {

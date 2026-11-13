@@ -2,7 +2,8 @@
    folders on the Mac: "..", ".", "/" and NUL in names; links to / and to .. in a directory part and the last part;
    a hard link out of a folder; every change in the Read-only and Copy-on-write modes; case and Unicode rules (on
    the Mac's case-insensitive volume and on a case-sensitive disk image); a folder renamed, deleted and offline
-   under the server. The escapes run twice: with O_NOFOLLOW_ANY and O_RESOLVE_BENEATH, then a part at a time. */
+   under the server; FIFOs that must not hold a worker, a read that fails part way, a FORGET while the node lock
+   is busy. The escapes run twice: with O_NOFOLLOW_ANY and O_RESOLVE_BENEATH, then a part at a time. */
 #include "fs_server.h"
 #include "fuse_proto.h"
 #include "safe_path.h"
@@ -14,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -540,6 +542,66 @@ static void test_readonly(const char *name) {
     if (k > 0) forget((uint64_t)k, 1);
 }
 
+/* Nothing waits: a FIFO is refused at open, create and truncate, as no writer may ever come; a read that fails
+   part way says what it wrote; a FORGET that finds the node lock busy is done by the next holder. */
+static void test_no_wait(void) {
+    uint64_t a = folder_node("a"), ro = folder_node("ro");
+    char p[PATH_MAX];
+    host_path(p, "a/fifo2");
+    mkfifo(p, 0644);
+    host_path(p, "ro/fifo");
+    mkfifo(p, 0644);
+    long long fi = lookup(a, "fifo2"), rf = lookup(ro, "fifo");
+    check("FIFO: open for reading, no writer", open_node((uint64_t)fi, 0, 0), -LX_ENXIO);
+    check("FIFO: open for writing, no reader", open_node((uint64_t)fi, 1, 0), -LX_ENXIO);
+    check("FIFO: open in a Read-only folder", open_node((uint64_t)rf, 0, 0), -LX_ENXIO);
+    check("FIFO: create over one", create_in(a, "fifo2", 0, NULL), -LX_ENXIO);
+    FuseSetattrIn s = {.valid = FATTR_SIZE};
+    check("FIFO: truncate", call(FUSE_SETATTR, (uint64_t)fi, &s, sizeof s, NULL, 0), -LX_EINVAL);
+    if (fi > 0) forget((uint64_t)fi, 1);
+    if (rf > 0) forget((uint64_t)rf, 1);
+
+    uint64_t n = 0;
+    long long fh = create_in(a, "part", LX_O_RDWR, &n);
+    static uint8_t data[8192];
+    memset(data, 'p', sizeof data);
+    check("partial: write", write_fh(n, (uint64_t)fh, 0, data, sizeof data), sizeof data);
+    uint8_t *mem = mmap(NULL, 2 * 16384, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
+    mprotect(mem + 16384, 16384, PROT_READ); /* the second buffer faults */
+    FuseInHeader h = {sizeof h + sizeof(FuseReadIn), FUSE_READ, ++uniq, n, 1000, 1000, 1, 0, 0};
+    FuseReadIn r = {(uint64_t)fh, 0, 8192, 0, 0, 0, 0};
+    uint8_t req[sizeof h + sizeof r];
+    memcpy(req, &h, sizeof h);
+    memcpy(req + sizeof h, &r, sizeof r);
+    size_t hl = sizeof(FuseOutHeader);
+    struct iovec in = {req, sizeof req}, out[2] = {{mem + 16384 - hl - 4096, hl + 4096}, {mem + 16384, 4096}};
+    HvFsCall c = {0};
+    size_t got = hv_fs_call(fs, &in, 1, out, 2, &c);
+    FuseOutHeader oh;
+    memcpy(&oh, out[0].iov_base, sizeof oh);
+    printf("test_fs_server: a read into a bad buffer: %zu bytes, error %d, %zu touched\n", got, oh.error, c.touched);
+    check("partial: the bytes in the good buffer are covered", (got > hl ? got : c.touched) >= hl + 4096, 1);
+    check("partial: a short read is a success", oh.error == 0 ? got == hl + 4096 : got == hl, 1);
+    munmap(mem, 2 * 16384);
+    release(n, (uint64_t)fh, 0);
+
+    host_write("a/r1", "r\n");
+    host_write("a/x1", "1\n");
+    host_write("a/x2", "2\n");
+    long long r1 = lookup(a, "r1"), x1 = lookup(a, "x1"), x2 = lookup(a, "x2");
+    check("rename a file", rename2(a, "r1", a, "r2", 0), 0);
+    check("rename a file: its node follows", getattr((uint64_t)r1), 0);
+    check("rename a file: the same node", lookup(a, "r2"), r1);
+    check("exchange two files", rename2(a, "x1", a, "x2", LX_RENAME_EXCHANGE), 0);
+    check("exchange: the first node follows", getattr((uint64_t)x1) == 0 && !strcmp(read_text(a, "x2"), "1\n"), 1);
+    check("exchange: and the second", getattr((uint64_t)x2) == 0 && lookup(a, "x1") == x2, 1);
+
+    hv_fs_test_lock(fs, 1);
+    check("FORGET with the node lock busy: no wait", call(FUSE_FORGET, (uint64_t)r1, &(FuseForgetIn){2}, sizeof(FuseForgetIn), NULL, 0), 1);
+    hv_fs_test_lock(fs, 0);
+    check("FORGET with the node lock busy: done by the next holder", getattr((uint64_t)r1), -LX_ESTALE);
+}
+
 /* A file open for writing when its folder becomes Read-only: the next write is refused. */
 static void test_mode_change(void) {
     uint64_t b = folder_node("b");
@@ -724,6 +786,7 @@ int main(void) {
     test_readonly("ro");
     test_readonly("cow");
     test_mode_change();
+    test_no_wait();
     test_case("the Mac's volume", folder_node("b"), 0);
     char cs[PATH_MAX];
     if (case_sensitive_image(cs)) {

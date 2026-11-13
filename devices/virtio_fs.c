@@ -1,9 +1,11 @@
 #include "virtio_fs.h"
 #include "fuse_proto.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #define Q_HIPRIO 0
@@ -42,34 +44,86 @@ static void written(HvVirtioFs *f, const HvVirtqElem *e, uint32_t len) {
     }
 }
 
-/* Worker thread, or the CPU thread for queue 0. */
-static uint32_t run(HvVirtioFs *f, HvVirtqElem *e) {
+/* Worker thread, or the CPU thread for queue 0. The bytes of the reply that can hold new data. */
+static uint32_t run(HvVirtioFs *f, const HvVirtqElem *e, HvFsCall *call, uint32_t *n) {
     struct iovec in[HV_VIRTQ_MAX_SEGS], out[HV_VIRTQ_MAX_SEGS];
     int nin, nout;
+    *n = 0;
     if (map(&f->vio, e, in, &nin, out, &nout) != 0) return 0;
-    uint32_t n = (uint32_t)hv_fs_handle(f->fs, in, nin, out, nout);
-    if (n) written(f, e, n);
-    return n;
+    *n = (uint32_t)hv_fs_call(f->fs, in, nin, out, nout, call);
+    return call && call->touched > *n ? (uint32_t)call->touched : *n;
+}
+
+static void device_free(HvVirtioFs *f) {
+    hv_fs_destroy(f->fs);
+    pthread_mutex_destroy(&f->mu);
+    pthread_cond_destroy(&f->cv);
+    pthread_cond_destroy(&f->idle);
+    free(f->ring);
+    free(f);
+}
+
+/* An open can wait for a download from the provider, so at most HV_VFS_OPENS of them run at once: one worker
+   is always free for the rest. */
+static int is_open(const HvVfsReq *r) { return r->opcode == FUSE_OPEN || r->opcode == FUSE_CREATE; }
+
+/* Under mu: the next request a worker can run, or NULL. */
+static HvVfsReq *next(HvVirtioFs *f) {
+    if (f->ndeferred && f->opening < HV_VFS_OPENS) {
+        HvVfsReq *r = &f->ring[f->deferred[f->deferred_at++ % HV_VFS_RING]];
+        f->ndeferred--;
+        return r;
+    }
+    while (f->claimed != f->submitted) {
+        uint32_t slot = f->claimed++ % HV_VFS_RING;
+        HvVfsReq *r = &f->ring[slot];
+        if (!is_open(r) || f->opening < HV_VFS_OPENS) return r;
+        f->deferred[(f->deferred_at + f->ndeferred++) % HV_VFS_RING] = slot;
+    }
+    return NULL;
 }
 
 static void *worker(void *opaque) {
-    HvVirtioFs *f = opaque;
+    HvVfsWorker *w = opaque;
+    HvVirtioFs *f = w->f;
+    HvVirtqElem e;
+    pthread_mutex_lock(&f->mu);
     for (;;) {
-        pthread_mutex_lock(&f->mu);
-        while (f->claimed == __atomic_load_n(&f->submitted, __ATOMIC_ACQUIRE)) {
-            if (f->stopping) {
-                pthread_mutex_unlock(&f->mu);
-                return NULL;
-            }
-            pthread_cond_wait(&f->cv, &f->mu);
-        }
-        HvVfsReq *r = &f->ring[f->claimed++ % HV_VFS_RING];
+        HvVfsReq *r = NULL;
+        while (!f->stopping && !(r = next(f))) pthread_cond_wait(&f->cv, &f->mu);
+        if (f->stopping) break;
+        e = r->e; /* a reset that gives up on this request can hand the slot to another */
+        int open = is_open(r);
+        f->opening += open;
+        HvFsCall call = {&f->epoch, f->epoch, 0};
         pthread_mutex_unlock(&f->mu);
-        r->written = run(f, &r->e);
-        __atomic_store_n(&r->done, 1, __ATOMIC_RELEASE);
-        __atomic_add_fetch(&f->completed, 1, __ATOMIC_RELEASE);
-        hv_machine_wake(f->vio.m);
+        uint32_t n, dirty = run(f, &e, &call, &n);
+        /* Under mu, so a stop that gave up has freed nothing this touches: the machine, for one. */
+        pthread_mutex_lock(&f->mu);
+        if (open) {
+            f->opening--;
+            if (f->ndeferred) pthread_cond_signal(&f->cv);
+        }
+        if (f->stopping) {
+            f->dropped++;
+        } else if (f->epoch != call.mine) { /* a reset gave up on it: drop the reply, but a read may have landed */
+            f->dropped++;
+            written(f, &e, (uint32_t)hv_virtq_writable(&e));
+        } else {
+            if (dirty) written(f, &e, dirty);
+            r->written = n;
+            r->done = 1;
+            f->completed++;
+            hv_machine_wake(f->vio.m);
+        }
+        pthread_cond_broadcast(&f->idle);
     }
+    w->exited = 1;
+    int last = f->abandoned;
+    for (int i = 0; i < HV_VFS_WORKERS; i++) last = last && (!f->worker[i].started || f->worker[i].exited);
+    pthread_cond_broadcast(&f->idle);
+    pthread_mutex_unlock(&f->mu);
+    if (last) device_free(f);
     return NULL;
 }
 
@@ -108,8 +162,10 @@ static void hiprio(HvVirtioFs *f) {
         FuseInHeader h = {0};
         hv_virtq_read(&f->vio, &e, 0, &h, sizeof h);
         uint32_t n = 0;
-        if (h.opcode == FUSE_FORGET || h.opcode == FUSE_BATCH_FORGET || h.opcode == FUSE_INTERRUPT) n = run(f, &e);
-        else if (logging()) fprintf(stderr, "virtio-fs: opcode %u on the high-priority queue ignored\n", h.opcode);
+        if (h.opcode == FUSE_FORGET || h.opcode == FUSE_BATCH_FORGET || h.opcode == FUSE_INTERRUPT) {
+            uint32_t dirty = run(f, &e, NULL, &n);
+            if (dirty) written(f, &e, dirty);
+        } else if (logging()) fprintf(stderr, "virtio-fs: opcode %u on the high-priority queue ignored\n", h.opcode);
         hv_virtq_push(&f->vio, Q_HIPRIO, &e, n);
         any = 1;
     }
@@ -132,8 +188,11 @@ static void notify(HvVirtio *v, int q) {
             continue;
         }
         count_segs(f, &r->e);
+        FuseInHeader h = {0};
+        hv_virtq_read(v, &r->e, 0, &h, sizeof h);
         pthread_mutex_lock(&f->mu);
-        __atomic_store_n(&f->submitted, f->submitted + 1, __ATOMIC_RELEASE);
+        r->opcode = h.opcode;
+        f->submitted++;
         pthread_mutex_unlock(&f->mu);
         any = 1;
     }
@@ -145,9 +204,10 @@ static void notify(HvVirtio *v, int q) {
 void hv_virtio_fs_poll(HvVirtioFs *f) {
     if (!f) return;
     int any = 0;
+    pthread_mutex_lock(&f->mu);
     for (uint32_t i = f->published; i != f->submitted; i++) {
         HvVfsReq *r = &f->ring[i % HV_VFS_RING];
-        if (r->pushed || !__atomic_load_n(&r->done, __ATOMIC_ACQUIRE)) continue;
+        if (r->pushed || !r->done) continue;
         hv_virtq_push(&f->vio, Q_REQUEST, &r->e, r->written);
         r->pushed = 1;
         f->requests++;
@@ -156,56 +216,102 @@ void hv_virtio_fs_poll(HvVirtioFs *f) {
     while (f->published != f->submitted && f->ring[f->published % HV_VFS_RING].pushed) {
         HvVfsReq *r = &f->ring[f->published % HV_VFS_RING];
         r->pushed = 0;
-        __atomic_store_n(&r->done, 0, __ATOMIC_RELAXED);
+        r->done = 0;
         f->published++;
     }
+    pthread_mutex_unlock(&f->mu);
     if (!any) return;
     hv_virtio_interrupt(&f->vio);
     if (f->vio.status & 4) notify(&f->vio, Q_REQUEST); /* requests that waited for room in the ring */
 }
 
-static void wait_done(HvVirtioFs *f) {
-    while (__atomic_load_n(&f->completed, __ATOMIC_ACQUIRE) != f->submitted) usleep(100);
+static struct timespec after_ms(int ms) {
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    struct timespec t = {now.tv_sec + ms / 1000, (long)now.tv_usec * 1000 + (long)(ms % 1000) * 1000000};
+    if (t.tv_nsec >= 1000000000) t.tv_sec++, t.tv_nsec -= 1000000000;
+    return t;
 }
 
+static int drain_ms(const HvVirtioFs *f) { return f->drain_ms > 0 ? f->drain_ms : HV_VFS_DRAIN_MS; }
+
 void hv_virtio_fs_drain(HvVirtioFs *f) {
-    wait_done(f);
+    pthread_mutex_lock(&f->mu);
+    while (f->completed != f->submitted) pthread_cond_wait(&f->idle, &f->mu);
+    pthread_mutex_unlock(&f->mu);
     hv_virtio_fs_poll(f);
 }
 
 /* The driver reset the device: the requests in flight finish (they write guest memory), their completions are
-   dropped with the queues, and the server forgets the old mount. */
+   dropped with the queues, and the server forgets the old mount. A request still running at the drain time (a
+   host call that hangs) is given up, so the vCPU, which waits here, does not freeze. */
 static void device_reset(HvVirtio *v) {
     HvVirtioFs *f = v->dev;
     if (!f) return;
-    if (f->workers_started) wait_done(f);
+    struct timespec until = after_ms(drain_ms(f));
+    pthread_mutex_lock(&f->mu);
+    int rc = 0;
+    while (f->completed != f->submitted && rc != ETIMEDOUT) rc = pthread_cond_timedwait(&f->idle, &f->mu, &until);
+    if (f->completed != f->submitted)
+        fprintf(stderr, "virtio-fs: reset: %u requests still running after %d ms; dropped\n", f->submitted - f->completed, drain_ms(f));
+    __atomic_store_n(&f->epoch, f->epoch + 1, __ATOMIC_RELEASE);
+    f->claimed = f->completed = f->submitted; /* ones no worker took never run */
+    f->ndeferred = 0;
     for (uint32_t i = f->published; i != f->submitted; i++) {
         HvVfsReq *r = &f->ring[i % HV_VFS_RING];
         r->pushed = 0;
-        __atomic_store_n(&r->done, 0, __ATOMIC_RELAXED);
+        r->done = 0;
     }
     f->published = f->submitted;
+    pthread_mutex_unlock(&f->mu);
     hv_fs_reset(f->fs);
 }
 
-void hv_virtio_fs_stop(HvVirtioFs *f) {
-    if (!f) return;
+int hv_virtio_fs_stop(HvVirtioFs *f) {
+    if (!f) return 1;
+    struct timespec until = after_ms(drain_ms(f));
     pthread_mutex_lock(&f->mu);
-    f->stopping = 1;
-    pthread_cond_broadcast(&f->cv);
+    if (!f->stopping) {
+        int rc = 0;
+        while (f->completed != f->submitted && rc != ETIMEDOUT) rc = pthread_cond_timedwait(&f->idle, &f->mu, &until);
+        f->stopping = 1;
+        __atomic_store_n(&f->epoch, f->epoch + 1, __ATOMIC_RELEASE);
+        pthread_cond_broadcast(&f->cv);
+    }
+    int rc = 0, all = 1;
+    for (;;) {
+        all = 1;
+        for (int i = 0; i < HV_VFS_WORKERS; i++) all = all && (!f->worker[i].started || f->worker[i].exited);
+        if (all || rc == ETIMEDOUT) break;
+        rc = pthread_cond_timedwait(&f->idle, &f->mu, &until);
+    }
+    for (int i = 0; i < HV_VFS_WORKERS; i++) {
+        HvVfsWorker *w = &f->worker[i];
+        if (!w->started || w->gone) continue;
+        w->gone = 1;
+        if (!w->exited) {
+            pthread_detach(w->t); /* stuck in a host call: it frees the device itself if it is the last */
+            continue;
+        }
+        pthread_mutex_unlock(&f->mu);
+        pthread_join(w->t, NULL);
+        pthread_mutex_lock(&f->mu);
+    }
+    if (!all) fprintf(stderr, "virtio-fs: stop: a worker is stuck in a host call after %d ms; left to finish\n", drain_ms(f));
     pthread_mutex_unlock(&f->mu);
-    for (int i = 0; i < f->workers_started; i++) pthread_join(f->worker[i], NULL);
-    f->workers_started = 0;
+    return all;
 }
 
-void hv_virtio_fs_destroy(HvVirtioFs *f) {
-    if (!f) return;
+int hv_virtio_fs_destroy(HvVirtioFs *f) {
+    if (!f) return 1;
     hv_virtio_fs_stop(f);
-    hv_fs_destroy(f->fs);
-    pthread_mutex_destroy(&f->mu);
-    pthread_cond_destroy(&f->cv);
-    free(f->ring);
-    free(f);
+    pthread_mutex_lock(&f->mu);
+    int all = 1;
+    for (int i = 0; i < HV_VFS_WORKERS; i++) all = all && (!f->worker[i].started || f->worker[i].exited);
+    if (!all) f->abandoned = 1;
+    pthread_mutex_unlock(&f->mu);
+    if (all) device_free(f);
+    return all;
 }
 
 HvVirtioFs *hv_virtio_fs_create(HvMachine *m, HvPcie *bus) {
@@ -218,17 +324,24 @@ HvVirtioFs *hv_virtio_fs_create(HvMachine *m, HvPcie *bus) {
     v->reset = device_reset;
     pthread_mutex_init(&f->mu, NULL);
     pthread_cond_init(&f->cv, NULL);
+    pthread_cond_init(&f->idle, NULL);
     f->ring = calloc(HV_VFS_RING, sizeof *f->ring);
     f->fs = hv_fs_create();
     if (!f->ring || !f->fs) {
         hv_virtio_fs_destroy(f);
         return NULL;
     }
+    int started = 0;
     for (int i = 0; i < HV_VFS_WORKERS; i++) {
-        if (pthread_create(&f->worker[i], NULL, worker, f) != 0) break;
-        f->workers_started++;
+        HvVfsWorker *w = &f->worker[i];
+        w->f = f;
+        pthread_mutex_lock(&f->mu);
+        w->started = pthread_create(&w->t, NULL, worker, w) == 0;
+        pthread_mutex_unlock(&f->mu);
+        if (!w->started) break;
+        started++;
     }
-    if (!f->workers_started) {
+    if (!started) {
         hv_virtio_fs_destroy(f);
         return NULL;
     }

@@ -166,7 +166,7 @@ void hv_virt_set_backlight(HvVirt *b, uint8_t level) { b->backlight.reg[0] = lev
 void hv_virt_destroy(HvVirt *b) {
     /* Device workers can still touch RAM and the GIC. */
     hv_virtio_blk_destroy(b->blk);
-    hv_virtio_fs_destroy(b->fs);
+    if (!hv_virtio_fs_destroy(b->fs)) hv_guest_ram_leak(&b->mem); /* a stuck worker's host read can still land */
     if (b->snd) { free(b->snd->ring); free(b->snd); }
     free(b->balloon);
     if (b->keyboard) { pthread_mutex_destroy(&b->keyboard->mu); free(b->keyboard); }

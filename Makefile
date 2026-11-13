@@ -164,7 +164,7 @@ $(B)/test_share_paths: tests/test_share_paths.c $(B)/share.o $(B)/safe_path.o $(
 $(B)/test_fs_server: tests/test_fs_server.c $(B)/fs_server.o $(B)/safe_path.o
 	$(CC) $(CFLAGS) $^ -o $@
 
-# The virtio-fs device on a fake ring: a 1 MB READ in 64 segments, 129 segments refused, FORGET, the workers.
+# The virtio-fs device on a fake ring: a 1 MB READ in 64 segments, 129 segments refused, FORGET, the workers, FIFOs, stuck requests.
 $(B)/test_virtio_fs: tests/test_virtio_fs.c $(B)/virtio_fs.o $(B)/virtio.o $(B)/pcie.o $(B)/gicv3.o $(B)/timer.o $(B)/fs_server.o $(B)/safe_path.o $(ENGINE)
 	$(CC) $(CFLAGS) $^ -o $@
 

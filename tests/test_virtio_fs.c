@@ -1,6 +1,7 @@
 /* The virtio-fs device (devices/virtio_fs.c) on a fake ring in guest RAM: its config, INIT and LOOKUP, a 1 MB READ
    across 64 segments (and the JIT's code for those pages dropped), a chain of 129 segments (refused, and the ring
-   still works), FORGET on the high-priority queue, and requests that finish out of order on the 4 workers. */
+   still works), FORGET on the high-priority queue, requests that finish out of order on the 4 workers (at most 3 of them in opens), FIFO opens
+   that cannot hold a worker, and a reset and a stop that give up on a request stuck in a host call. */
 #include "fuse_proto.h"
 #include "gicv3.h"
 #include "pcie.h"
@@ -8,10 +9,12 @@
 
 #include <fcntl.h>
 #include <limits.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 static int failed;
@@ -219,8 +222,134 @@ static void test_forget(uint64_t big) {
     check("queue 0: unanswered", len, 0);
 }
 
-/* Three opens of a FIFO hold three workers until a writer comes; the fourth still answers. */
-static void test_order(void) {
+/* The test hook holds OPENs of hold_node until let go: a host call that takes a long time. */
+static pthread_mutex_t hold_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t hold_cv = PTHREAD_COND_INITIALIZER;
+static uint64_t hold_node;
+static int holding, held;
+
+static void before(uint32_t op, uint64_t node) {
+    if (op != FUSE_OPEN || node != hold_node) return;
+    pthread_mutex_lock(&hold_mu);
+    held++;
+    pthread_cond_broadcast(&hold_cv);
+    while (holding) pthread_cond_wait(&hold_cv, &hold_mu);
+    held--;
+    pthread_cond_broadcast(&hold_cv);
+    pthread_mutex_unlock(&hold_mu);
+}
+
+static void hold(uint64_t node) {
+    pthread_mutex_lock(&hold_mu);
+    hold_node = node, holding = 1;
+    pthread_mutex_unlock(&hold_mu);
+}
+
+/* Waits until want requests are held (or none are, for 0). */
+static int wait_held(int want) {
+    pthread_mutex_lock(&hold_mu);
+    for (int tries = 0; held != want && tries < 2000; tries++) {
+        pthread_mutex_unlock(&hold_mu);
+        usleep(1000);
+        pthread_mutex_lock(&hold_mu);
+    }
+    int n = held;
+    pthread_mutex_unlock(&hold_mu);
+    return n;
+}
+
+static void let_go(void) {
+    pthread_mutex_lock(&hold_mu);
+    holding = 0;
+    pthread_cond_broadcast(&hold_cv);
+    pthread_mutex_unlock(&hold_mu);
+}
+
+/* count chains of one request each on queue 1, from head1: OPEN (O_RDONLY) of node if open, else GETATTR. Each
+   reply is 256 bytes at BUFS + 0x50800 + i * 0x1000, filled with 0xee. */
+static void send_some(int count, uint64_t node, const int *open, uint16_t *heads) {
+    for (int i = 0; i < count; i++) {
+        uint64_t in = BUFS + 0x50000 + (uint64_t)i * 0x1000, out = in + 0x800;
+        FuseInHeader h = {0, open[i] ? FUSE_OPEN : FUSE_GETATTR, ++uniq, node, 1000, 1000, 1, 0, 0};
+        FuseOpenIn o = {0, 0};
+        FuseGetattrIn g = {0};
+        h.len = sizeof h + (open[i] ? sizeof o : sizeof g);
+        memcpy(at(in), &h, sizeof h);
+        memcpy(at(in + sizeof h), open[i] ? (void *)&o : (void *)&g, open[i] ? sizeof o : sizeof g);
+        memset(at(out), 0xee, 256);
+        Seg sg[2] = {{in, h.len, 0}, {out, 256, 1}};
+        heads[i] = send(1, sg, 2, (uint16_t)(head1 + 2 * i));
+    }
+    head1 = (uint16_t)((head1 + 2 * count) % QSIZE);
+}
+
+static uint64_t locked(const uint64_t *v) {
+    pthread_mutex_lock(&dev->mu);
+    uint64_t n = *v;
+    pthread_mutex_unlock(&dev->mu);
+    return n;
+}
+
+static long long in_flight(void) {
+    pthread_mutex_lock(&dev->mu);
+    long long n = dev->submitted - dev->completed;
+    pthread_mutex_unlock(&dev->mu);
+    return n;
+}
+
+/* Polls for up to ms until want completions are in. */
+static int collect(uint32_t *ids, uint32_t *lens, int want, int ms) {
+    int got = 0;
+    for (int tries = 0; tries < ms && got < want; tries++) {
+        hv_virtio_fs_poll(dev);
+        got += take_used(1, ids + got, lens + got, want - got);
+        if (got < want) usleep(1000);
+    }
+    return got;
+}
+
+static int is_head(uint32_t id, const uint16_t *heads, int n) {
+    for (int i = 0; i < n; i++)
+        if (id == heads[i]) return 1;
+    return 0;
+}
+
+/* Four opens that wait: three hold three workers, the fourth waits for one of them, and the GETATTRs behind them
+   finish on the fourth worker first. */
+static void test_order(uint64_t big) {
+    hold(big);
+    uint16_t heads[7];
+    static const int open[7] = {1, 1, 1, 1, 0, 0, 0};
+    send_some(7, big, open, heads);
+    uint32_t ids[8], lens[8];
+    check("order: three opens held", wait_held(3), 3);
+    int got = collect(ids, lens, 3, 2000);
+    check("order: the three GETATTRs finish while the opens wait", got, 3);
+    int later = 1;
+    for (int i = 0; i < got; i++)
+        if (is_head(ids[i], heads, 4)) later = 0;
+    check("order: none of them is an open", later, 1);
+    check("order: four requests still in flight", in_flight(), 4);
+    usleep(20000);
+    check("order: the fourth open is not on a worker", wait_held(3), 3);
+    let_go();
+    hv_virtio_fs_drain(dev);
+    got = take_used(1, ids, lens, 8);
+    check("order: then the opens finish", got, 4);
+    int opens = 0;
+    for (int i = 0; i < got; i++) opens += is_head(ids[i], heads, 4);
+    check("order: they are the opens", opens, 4);
+    for (int i = 0; i < 4; i++) { /* the guest would release them */
+        FuseOpenOut oo;
+        memcpy(&oo, (uint8_t *)at(BUFS + 0x50800 + (uint64_t)i * 0x1000) + sizeof(FuseOutHeader), sizeof oo);
+        FuseReleaseIn rl = {oo.fh, 0, 0, 0};
+        request(FUSE_RELEASE, big, &rl, sizeof rl, 0, NULL);
+    }
+}
+
+/* Five opens of a FIFO with no writer, more than there are workers: each is refused at once, so the folder still
+   answers. */
+static void test_fifo(void) {
     char p[PATH_MAX];
     snprintf(p, sizeof p, "%s/a/fifo", base);
     mkfifo(p, 0644);
@@ -228,41 +357,70 @@ static void test_order(void) {
     FuseEntryOut e;
     memcpy(&e, reply_at, sizeof e);
     uint16_t heads[6];
-    for (int i = 0; i < 6; i++) {
-        uint64_t in = BUFS + 0x50000 + (uint64_t)i * 0x1000, out = in + 0x800;
-        int blocking = i < 3;
-        FuseInHeader h = {0, blocking ? FUSE_OPEN : FUSE_GETATTR, ++uniq, e.nodeid, 1000, 1000, 1, 0, 0};
-        FuseOpenIn o = {0, 0};
-        FuseGetattrIn g = {0};
-        h.len = sizeof h + (blocking ? sizeof o : sizeof g);
-        memcpy(at(in), &h, sizeof h);
-        memcpy(at(in + sizeof h), blocking ? (void *)&o : (void *)&g, blocking ? sizeof o : sizeof g);
-        Seg s[2] = {{in, h.len, 0}, {out, 256, 1}};
-        heads[i] = send(1, s, 2, (uint16_t)(head1 + 2 * i));
-    }
-    head1 = (uint16_t)((head1 + 12) % QSIZE);
+    static const int open[6] = {1, 1, 1, 1, 1, 0};
+    send_some(6, e.nodeid, open, heads);
     uint32_t ids[8], lens[8];
-    int got = 0;
-    for (int tries = 0; tries < 2000 && got < 3; tries++) {
-        hv_virtio_fs_poll(dev);
-        got += take_used(1, ids + got, lens + got, 8 - got);
-        if (got < 3) usleep(1000);
+    check("FIFO: all six answer with no writer", collect(ids, lens, 6, 2000), 6);
+    int enxio = 0;
+    for (int i = 0; i < 5; i++) {
+        FuseOutHeader oh;
+        memcpy(&oh, at(BUFS + 0x50800 + (uint64_t)i * 0x1000), sizeof oh);
+        enxio += oh.error == -LX_ENXIO;
     }
-    check("order: the three GETATTRs finish while the opens wait", got, 3);
-    int later = 1;
-    for (int i = 0; i < got; i++)
-        if (ids[i] == heads[0] || ids[i] == heads[1] || ids[i] == heads[2]) later = 0;
-    check("order: none of them is an open", later, 1);
-    check("order: three requests still in flight", (long long)(dev->submitted - dev->completed), 3);
-    int w = open(p, O_WRONLY | O_NONBLOCK);
-    check("order: a writer for the FIFO", w >= 0, 1);
-    hv_virtio_fs_drain(dev);
-    got = take_used(1, ids, lens, 8);
-    check("order: then the opens finish", got, 3);
-    int opens = 0;
-    for (int i = 0; i < got; i++) opens += ids[i] == heads[0] || ids[i] == heads[1] || ids[i] == heads[2];
-    check("order: they are the opens", opens, 3);
-    if (w >= 0) close(w);
+    check("FIFO: the opens are ENXIO", enxio, 5);
+    check("FIFO: then a LOOKUP", request(FUSE_LOOKUP, 3, "big", 4, sizeof(FuseEntryOut), NULL), 0);
+}
+
+/* A reset with a request stuck in a host call: the reset gives up after the drain time, the late reply writes
+   nothing, and the device works after it. */
+static void test_reset_stuck(uint64_t *big) {
+    check("LOOKUP big", request(FUSE_LOOKUP, 3, "big", 4, sizeof(FuseEntryOut), NULL), 0);
+    FuseEntryOut e;
+    memcpy(&e, reply_at, sizeof e);
+    *big = e.nodeid;
+    hold(*big);
+    uint16_t heads[1];
+    static const int open[1] = {1};
+    send_some(1, *big, open, heads);
+    check("reset: an open held", wait_held(1), 1);
+    dev->drain_ms = 50;
+    uint64_t dropped = locked(&dev->dropped);
+    struct timeval t0, t1;
+    gettimeofday(&t0, NULL);
+    dev->vio.reset(&dev->vio);
+    gettimeofday(&t1, NULL);
+    long ms = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_usec - t0.tv_usec) / 1000;
+    check("reset: gives up in about the drain time", ms >= 40 && ms < 1000, 1);
+    let_go();
+    check("reset: the held open ends", wait_held(0), 0);
+    for (int tries = 0; tries < 2000 && locked(&dev->dropped) == dropped; tries++) usleep(1000);
+    check("reset: its reply is dropped", (long long)(locked(&dev->dropped) - dropped), 1);
+    uint32_t ids[2], lens[2];
+    hv_virtio_fs_poll(dev);
+    check("reset: and never in the used ring", take_used(1, ids, lens, 2), 0);
+    check("reset: nor in guest memory", *(uint8_t *)at(BUFS + 0x50800), 0xee);
+    FuseInitIn in = {7, 41, 1 << 20, 0x7fffffff, 0, {0}};
+    check("reset: INIT again", request(FUSE_INIT, 0, &in, sizeof in, sizeof(FuseInitOut), NULL), 0);
+    check("reset: LOOKUP again", request(FUSE_LOOKUP, 3, "big", 4, sizeof(FuseEntryOut), NULL), 0);
+    memcpy(&e, reply_at, sizeof e);
+    *big = e.nodeid;
+    dev->drain_ms = 0;
+}
+
+/* The machine stops with a request stuck: destroy gives up on it and leaves the device to that worker, which
+   frees it when the call ends. */
+static void test_stop_stuck(uint64_t big) {
+    hold(big);
+    uint16_t heads[1];
+    static const int open[1] = {1};
+    send_some(1, big, open, heads);
+    check("stop: an open held", wait_held(1), 1);
+    dev->drain_ms = 50;
+    check("stop: destroy leaves the device", hv_virtio_fs_destroy(dev), 0);
+    dev = NULL;
+    let_go();
+    check("stop: the held open ends", wait_held(0), 0);
+    usleep(50000); /* the worker frees the device */
 }
 
 int main(void) {
@@ -298,9 +456,12 @@ int main(void) {
     test_read_1mb(big);
     test_too_many_segments(big);
     test_forget(big);
-    test_order();
-
-    hv_virtio_fs_destroy(dev);
+    hv_fs_test_hook(before);
+    test_reset_stuck(&big);
+    test_order(big);
+    test_fifo();
+    test_stop_stuck(big);
+    hv_fs_test_hook(NULL);
     hv_fs_folders_clear();
     char cmd[PATH_MAX + 16];
     snprintf(cmd, sizeof cmd, "rm -rf '%s'", base);

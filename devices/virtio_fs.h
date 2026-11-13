@@ -12,27 +12,40 @@
    provider's file may wait on the network. The board's tick publishes the completions. */
 #define HV_VFS_RING 256
 #define HV_VFS_WORKERS 4
+#define HV_VFS_OPENS (HV_VFS_WORKERS - 1) /* opens at once (one can wait on a download): a worker stays for the rest */
+#define HV_VFS_DRAIN_MS 1000 /* how long a reset or stop waits for requests in flight */
 
 typedef struct HvVfsReq {
     HvVirtqElem e;
-    uint32_t written;
+    uint32_t opcode, written;
     int done;   /* a worker finished it (the CPU thread pushes it) */
     int pushed; /* in the used ring (the slot is free once all before it are too) */
 } HvVfsReq;
+
+struct HvVirtioFs;
+typedef struct HvVfsWorker {
+    struct HvVirtioFs *f;
+    pthread_t t;
+    int started, exited, gone; /* under mu; gone: joined or detached */
+} HvVfsWorker;
 
 typedef struct HvVirtioFs {
     HvVirtio vio;
     HvFs *fs;
     HvVfsReq *ring;
-    uint32_t submitted; /* CPU thread: requests handed to the workers */
-    uint32_t claimed;   /* workers, under mu */
-    uint32_t completed; /* workers: done, in any order */
+    uint32_t submitted; /* CPU thread, under mu: requests handed to the workers */
+    uint32_t claimed;   /* under mu */
+    uint32_t completed; /* under mu: done, in any order */
     uint32_t published; /* CPU thread: pushed to the used ring */
+    uint32_t epoch;     /* under mu: a reset or stop moves it on, and the requests before it are dropped */
+    uint32_t deferred[HV_VFS_RING], deferred_at, ndeferred; /* under mu: claimed opens that wait for an opener */
+    int opening;                                            /* under mu: opens running */
     pthread_mutex_t mu;
-    pthread_cond_t cv;
-    pthread_t worker[HV_VFS_WORKERS];
-    int workers_started, stopping;
-    uint64_t requests, broken, dma_bytes; /* dma_bytes: guest memory the server wrote */
+    pthread_cond_t cv, idle; /* idle: a request finished or a worker left */
+    HvVfsWorker worker[HV_VFS_WORKERS];
+    int stopping, abandoned; /* abandoned: destroy left the device to its last stuck worker */
+    int drain_ms;            /* 0: HV_VFS_DRAIN_MS */
+    uint64_t requests, broken, dma_bytes, dropped; /* dma_bytes: guest memory the server wrote */
     int largest; /* the most segments one request has had */
 } HvVirtioFs;
 
@@ -41,8 +54,11 @@ HvVirtioFs *hv_virtio_fs_create(HvMachine *m, HvPcie *bus);
 void hv_virtio_fs_poll(HvVirtioFs *f);
 /* Tests: wait for the workers to finish everything submitted, then publish it. */
 void hv_virtio_fs_drain(HvVirtioFs *f);
-/* After the CPUs stop: finish the requests in flight (they write guest memory) and join the workers. */
-void hv_virtio_fs_stop(HvVirtioFs *f);
-void hv_virtio_fs_destroy(HvVirtioFs *f);
+/* After the CPUs stop: let the requests in flight finish (they write guest memory) for up to the drain time, and
+   end the workers. A worker still stuck then drops its reply, but a host read it is in can still land in guest
+   RAM. 1 if every worker ended. */
+int hv_virtio_fs_stop(HvVirtioFs *f);
+/* 0: a worker is stuck in a host call, so the device stays for it (it frees it), and guest RAM must stay mapped. */
+int hv_virtio_fs_destroy(HvVirtioFs *f);
 
 #endif
