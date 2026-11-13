@@ -10,6 +10,7 @@ typedef struct HvPl031 {
     HvGic *gic;
     int intid;
     int64_t offset;   /* guest seconds minus host seconds */
+    int host_time;    /* load writes are ignored: the host's clock is the time */
     uint32_t mr, imsc, ris;
 } HvPl031;
 

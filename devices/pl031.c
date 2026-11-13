@@ -44,7 +44,9 @@ static void pl031_write(void *opaque, uint64_t off, uint64_t v, unsigned size) {
     HvPl031 *r = opaque;
     switch (off) {
     case 0x04: r->mr = (uint32_t)v; hv_pl031_tick(r); break;
-    case 0x08: r->offset = (int64_t)(uint32_t)v - (int64_t)time(NULL); break;
+    case 0x08:
+        if (!r->host_time) r->offset = (int64_t)(uint32_t)v - (int64_t)time(NULL);
+        break;
     case 0x10: r->imsc = (uint32_t)v & 1; break;
     case 0x1c: r->ris &= ~((uint32_t)v & 1); break;
     default: break;

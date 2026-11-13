@@ -54,6 +54,7 @@ int hv_virt_create(HvVirt *b, HvMachine *m, HvCpu *cpus, int ncpus, uint64_t ram
     b->gic = hv_gicv3_create(m, VIRT_GIC_DIST, VIRT_GIC_REDIST);
     b->uart = hv_pl011_create(m, b->gic, VIRT_UART, 32 + VIRT_IRQ_UART);
     b->rtc = hv_pl031_create(m, b->gic, VIRT_RTC, 32 + VIRT_IRQ_RTC);
+    b->rtc->host_time = 1; /* Linux writes its clock back every 11 minutes, which is behind after a pause */
     b->gpio = hv_pl061_create(m, b->gic, VIRT_GPIO, 32 + VIRT_IRQ_GPIO);
     b->i2c = hv_ocores_i2c_create(m, b->gic, VIRT_I2C, 32 + VIRT_IRQ_I2C);
     hv_sbs_battery_init(&b->battery, VIRT_I2C_BATTERY);

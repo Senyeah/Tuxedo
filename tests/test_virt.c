@@ -1884,6 +1884,9 @@ static void test_primecell(void) {
     check("RTC: a write to DR changes nothing", rd32(&m, VIRT_RTC) >= t - 5, 1);
     check("RTC: control reads enabled", rd32(&m, VIRT_RTC + 0x0c), 1);
     wr32(&m, VIRT_RTC + 0x08, 1000000000);
+    check("RTC: the virt board ignores a load", rd32(&m, VIRT_RTC) >= t - 5, 1);
+    b.rtc->host_time = 0;
+    wr32(&m, VIRT_RTC + 0x08, 1000000000);
     dr = rd32(&m, VIRT_RTC);
     check("RTC: load sets the time", dr >= 1000000000 && dr <= 1000000030, 1);
     wr32(&m, VIRT_RTC + 0x10, 0xff);
@@ -1907,6 +1910,7 @@ static void test_primecell(void) {
     wr32(&m, VIRT_RTC + 0x04, 0);
     hv_pl031_tick(b.rtc);
     check("RTC: match 0 means off", rd32(&m, VIRT_RTC + 0x14), 0);
+    b.rtc->offset = 0, b.rtc->host_time = 1;
 
     /* PL061 on pins 5 and 6; pin 3 is the power key. */
     uint32_t p5 = 1u << 5, p6 = 1u << 6;
