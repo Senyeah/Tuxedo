@@ -282,6 +282,13 @@ test-linux-status: $(B)/hengevm
 	uv run tools/linux/status-check.py $(STATUS_ARGS)
 .PHONY: test-linux-status
 
+# The guest's wallet (henge-secrets) in hengevm's folder store, scoped to the machine; and with kwallet6 in a container.
+test-linux-secrets: $(B)/hengevm
+	uv run tools/linux/secrets-check.py $(SECRETS_ARGS)
+test-linux-secrets-container:
+	uv run tools/linux/secrets-check.py --container
+.PHONY: test-linux-secrets test-linux-secrets-container
+
 test-vm-lifecycle: $(B)/test_vm_lifecycle
 	$(B)/test_vm_lifecycle
 .PHONY: test-vm-lifecycle
