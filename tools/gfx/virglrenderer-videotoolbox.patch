@@ -63,26 +63,27 @@ index 26c7f58..a056590 100644
  
  if with_host_windows
 diff --git a/src/vrend/virgl_video.h b/src/vrend/virgl_video.h
-index e954559..0a02464 100644
+index e954559..6a5e05f 100644
 --- a/src/vrend/virgl_video.h
 +++ b/src/vrend/virgl_video.h
-@@ -96,6 +96,10 @@ struct virgl_video_dma_buf {
+@@ -96,6 +96,11 @@ struct virgl_video_dma_buf {
          int modifier;
          uint32_t offset;
          uint32_t pitch;
-+        /* CPU copy (VideoToolbox): fd is -1 and data points at the plane */
++        /* CPU copy (VideoToolbox): fd is -1, data points at height rows of pitch bytes, cpp bytes per pixel */
 +        const void *data;
 +        uint32_t width;
 +        uint32_t height;
++        uint32_t cpp;
      } planes[4];
  };
  
 diff --git a/src/vrend/virgl_video_vt.m b/src/vrend/virgl_video_vt.m
 new file mode 100644
-index 0000000..760cc7c
+index 0000000..7a3797c
 --- /dev/null
 +++ b/src/vrend/virgl_video_vt.m
-@@ -0,0 +1,863 @@
+@@ -0,0 +1,957 @@
 +/**************************************************************************
 + *
 + * Copyright (C) 2026 Henge contributors
@@ -140,6 +141,8 @@ index 0000000..760cc7c
 +#define VT_VIRGL_FORMAT_NV12 166 /* VIRGL_FORMAT_NV12 in Mesa's virgl_hw.h */
 +#define VT_MAX_PPS 256
 +#define VT_PS_MAX 2048 /* 8 scaling lists of 64 values fit with room */
++#define VT_AU_MAX (16u << 20) /* the slices of one picture */
++#define VT_AU_KEEP (4u << 20) /* a larger access unit buffer is freed after its frame */
 +
 +struct virgl_video_buffer {
 +    enum pipe_format format;
@@ -156,6 +159,12 @@ index 0000000..760cc7c
 +    uint8_t l0, l1;
 +};
 +
++/* The last slice that one decode_bitstream call gave: the descriptor's active ref counts are its own */
++struct vt_slice {
++    bool valid, override;
++    unsigned pps_id, type;
++};
++
 +struct virgl_video_codec {
 +    enum pipe_video_profile profile;
 +    enum pipe_video_entrypoint entrypoint;
@@ -170,6 +179,11 @@ index 0000000..760cc7c
 +    bool have_desc;
 +    struct virgl_h264_picture_desc desc;
 +    int pps_id;
++    bool pps_mixed;   /* the picture's slices name more than one PPS */
++    bool pic_idr;     /* an IDR slice in the picture */
++    bool pic_intra;   /* every slice of the picture is I or SI */
++    unsigned pic_slices;
++    struct vt_slice last;
 +
 +    uint8_t sps[VT_PS_MAX];
 +    size_t sps_len;
@@ -180,8 +194,10 @@ index 0000000..760cc7c
 +    CVPixelBufferRef out;
 +    OSStatus out_status;
 +    OSType pixfmt; /* the session's output: NV12, or planar for IYUV and YV12 targets */
-+    unsigned frames;
-+    bool warned;
++    /* after a failed picture VideoToolbox's references are wrong: skip to the next IDR or intra picture */
++    bool need_intra;
++    unsigned frames, failed, skipped, sessions, ps_updates, max_slices_per_call;
++    bool warned_field, warned_poc1, warned_pps;
 +};
 +
 +static struct virgl_video_callbacks *callbacks;
@@ -498,6 +514,10 @@ index 0000000..760cc7c
 +
 +static bool au_append(struct virgl_video_codec *c, const uint8_t *nal, size_t len)
 +{
++    if (len > VT_AU_MAX || c->au_len + 4 + len > VT_AU_MAX) {
++        virgl_error("vt: a picture has more than %u bytes of slices\n", VT_AU_MAX);
++        return false;
++    }
 +    if (c->au_len + 4 + len > c->au_cap) {
 +        size_t cap = c->au_cap ? c->au_cap : 1 << 16;
 +        while (cap < c->au_len + 4 + len)
@@ -534,13 +554,14 @@ index 0000000..760cc7c
 +    }
 +    if (c->pps_id < 0)
 +        c->pps_id = (int)pps_id;
-+    /* Mesa's desc has the last slice's active counts; without an override they are the PPS defaults */
-+    if (!override && (st == 0 || st == 3))
-+        c->pps[pps_id].l0 = d->num_ref_idx_l0_active_minus1;
-+    if (!override && st == 1) {
-+        c->pps[pps_id].l0 = d->num_ref_idx_l0_active_minus1;
-+        c->pps[pps_id].l1 = d->num_ref_idx_l1_active_minus1;
-+    }
++    else if ((unsigned)c->pps_id != pps_id)
++        c->pps_mixed = true;
++    if (type == 5)
++        c->pic_idr = true;
++    if (st != 2 && st != 4)
++        c->pic_intra = false;
++    c->pic_slices++;
++    c->last = (struct vt_slice){.valid = true, .override = override, .pps_id = pps_id, .type = st};
 +    return au_append(c, nal, len) ? 0 : -1;
 +}
 +
@@ -623,6 +644,7 @@ index 0000000..760cc7c
 +        c->vt = NULL;
 +        return -1;
 +    }
++    c->sessions++;
 +    CFBooleanRef hw = NULL;
 +    VTSessionCopyProperty(c->vt, kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder, NULL, &hw);
 +    virgl_info("vt: H.264 session %ux%u, %s decoder\n", c->width, c->height,
@@ -660,7 +682,13 @@ index 0000000..760cc7c
 +    return c->vt ? 0 : vt_create_session(c);
 +}
 +
-+static int h264_end_frame(struct virgl_video_codec *c)
++/* The session is lost (the app went to the background, or the decoder failed): a new one at the next intra picture */
++static bool vt_session_lost(OSStatus st)
++{
++    return st == kVTInvalidSessionErr || st == kVTVideoDecoderMalfunctionErr;
++}
++
++static int h264_decode(struct virgl_video_codec *c)
 +{
 +    uint8_t ps[VT_PS_MAX];
 +    size_t len;
@@ -670,10 +698,21 @@ index 0000000..760cc7c
 +    if (!c->have_desc || c->pps_id < 0 || !c->au_len)
 +        return -1;
 +    if (c->desc.field_pic_flag) {
-+        if (!c->warned)
-+            virgl_warn("vt: field pictures are not supported\n");
-+        c->warned = true;
++        if (!c->warned_field)
++            virgl_warn("vt: field pictures (PAFF) are not supported\n");
++        c->warned_field = true;
 +        return -1;
++    }
++    /* VA-API has one PPS per picture */
++    if (c->pps_mixed) {
++        if (!c->warned_pps)
++            virgl_warn("vt: the slices of one picture name more than one PPS, not supported\n");
++        c->warned_pps = true;
++        return -1;
++    }
++    if (c->desc.pps.sps.pic_order_cnt_type == 1 && !c->warned_poc1) {
++        virgl_warn("vt: pic_order_cnt_type 1: VA-API does not carry the offsets, frames can be wrong\n");
++        c->warned_poc1 = true;
 +    }
 +
 +    len = h264_write_sps(c, &c->desc, ps);
@@ -702,6 +741,8 @@ index 0000000..760cc7c
 +        vt_release_session(c);
 +    }
 +    c->pixfmt = vt_pixfmt(c->target->format);
++    if (changed && c->vt)
++        c->ps_updates++;
 +    if ((changed || !c->vt) && vt_update_format(c))
 +        return -1;
 +
@@ -726,11 +767,10 @@ index 0000000..760cc7c
 +    CFRelease(bb);
 +    if (st != noErr || c->out_status != noErr || !c->out) {
 +        virgl_error("vt: frame %u not decoded (%d, %d)\n", c->frames, (int)st, (int)c->out_status);
-+        if (st == kVTInvalidSessionErr)
++        if (vt_session_lost(st) || vt_session_lost(c->out_status))
 +            vt_release_session(c);
 +        return -1;
 +    }
-+    c->frames++;
 +
 +    CVPixelBufferRef out = c->out;
 +    c->out = NULL;
@@ -753,12 +793,41 @@ index 0000000..760cc7c
 +            d.planes[i].pitch = (uint32_t)CVPixelBufferGetBytesPerRowOfPlane(out, src);
 +            d.planes[i].width = (uint32_t)CVPixelBufferGetWidthOfPlane(out, src);
 +            d.planes[i].height = (uint32_t)CVPixelBufferGetHeightOfPlane(out, src);
++            d.planes[i].cpp = c->pixfmt == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange && src == 1 ? 2 : 1;
 +        }
 +        callbacks->decode_completed(c, &d);
 +        CVPixelBufferUnlockBaseAddress(out, kCVPixelBufferLock_ReadOnly);
 +    }
 +    CVPixelBufferRelease(out);
 +    return 0;
++}
++
++/* The guest sees no decode error: on one, the target keeps its old pixels until the next intra picture */
++static int h264_end_frame(struct virgl_video_codec *c)
++{
++    int rc;
++
++    if (c->need_intra && !c->pic_idr && !(c->pic_slices && c->pic_intra)) {
++        c->skipped++;
++        return -1;
++    }
++    if (c->need_intra)
++        virgl_info("vt: decoding again at frame %u, %u skipped so far\n", c->frames, c->skipped);
++    c->need_intra = false;
++    rc = h264_decode(c);
++    if (rc) {
++        c->failed++;
++        c->need_intra = true;
++        virgl_warn("vt: a picture failed, skipping to the next intra picture\n");
++    } else {
++        c->frames++;
++    }
++    if (c->au_cap > VT_AU_KEEP) {
++        free(c->au);
++        c->au = NULL;
++        c->au_cap = 0;
++    }
++    return rc;
 +}
 +
 +/* ---- virgl_video.h ---- */
@@ -817,6 +886,8 @@ index 0000000..760cc7c
 +                   args ? (int)args->entrypoint : -1, args ? args->width : 0, args ? args->height : 0);
 +        return NULL;
 +    }
++    if (!callbacks)
++        return NULL;
 +    c = calloc(1, sizeof(*c));
 +    if (!c)
 +        return NULL;
@@ -834,6 +905,11 @@ index 0000000..760cc7c
 +{
 +    if (!codec)
 +        return;
++    if (codec->frames || codec->failed || codec->skipped)
++        virgl_info("vt: codec %ux%u done: %u frames decoded, %u failed, %u skipped, %u sessions, "
++                   "%u parameter set updates, at most %u slices per decode call\n",
++                   codec->width, codec->height, codec->frames, codec->failed, codec->skipped, codec->sessions,
++                   codec->ps_updates, codec->max_slices_per_call);
 +    vt_release_session(codec);
 +    if (codec->out)
 +        CVPixelBufferRelease(codec->out);
@@ -888,6 +964,18 @@ index 0000000..760cc7c
 +    return buffer ? buffer->opaque : NULL;
 +}
 +
++static void vt_reset_picture(struct virgl_video_codec *c)
++{
++    c->au_len = 0;
++    c->have_desc = false;
++    c->pps_id = -1;
++    c->pps_mixed = false;
++    c->pic_idr = false;
++    c->pic_intra = true;
++    c->pic_slices = 0;
++    c->last.valid = false;
++}
++
 +static bool decode_target(enum pipe_format f)
 +{
 +    return f == PIPE_FORMAT_NV12 || f == PIPE_FORMAT_IYUV || f == PIPE_FORMAT_YV12;
@@ -903,9 +991,7 @@ index 0000000..760cc7c
 +        return -1;
 +    }
 +    codec->target = target;
-+    codec->au_len = 0;
-+    codec->have_desc = false;
-+    codec->pps_id = -1;
++    vt_reset_picture(codec);
 +    return 0;
 +}
 +
@@ -919,11 +1005,22 @@ index 0000000..760cc7c
 +        virgl_error("vt: decode does not match the codec or the frame\n");
 +        return -1;
 +    }
++    unsigned before = codec->pic_slices;
 +    memcpy(&codec->desc, &desc->h264, sizeof(codec->desc));
 +    codec->have_desc = true;
++    codec->last.valid = false;
 +    for (unsigned i = 0; i < num_buffers; i++)
 +        if (buffers[i] && h264_take_annexb(codec, &codec->desc, buffers[i], sizes[i]))
 +            return -1;
++    if (codec->pic_slices - before > codec->max_slices_per_call)
++        codec->max_slices_per_call = codec->pic_slices - before;
++    /* The descriptor's active counts belong to the call's last slice; without an override they are the PPS defaults.
++       Earlier slices of the call may have other counts, so only this one teaches. */
++    struct vt_slice *l = &codec->last;
++    if (l->valid && !l->override && (l->type == 0 || l->type == 1 || l->type == 3))
++        codec->pps[l->pps_id].l0 = codec->desc.num_ref_idx_l0_active_minus1;
++    if (l->valid && !l->override && l->type == 1)
++        codec->pps[l->pps_id].l1 = codec->desc.num_ref_idx_l1_active_minus1;
 +    return 0;
 +}
 +
@@ -941,11 +1038,93 @@ index 0000000..760cc7c
 +    if (!codec || !target || target != codec->target)
 +        return -1;
 +    rc = h264_end_frame(codec);
-+    codec->au_len = 0;
-+    codec->have_desc = false;
-+    codec->pps_id = -1;
++    vt_reset_picture(codec);
 +    return rc;
 +}
+diff --git a/src/vrend/vrend_decode.c b/src/vrend/vrend_decode.c
+index 7774a25..c56a49c 100644
+--- a/src/vrend/vrend_decode.c
++++ b/src/vrend/vrend_decode.c
+@@ -1772,6 +1772,9 @@ static int vrend_decode_create_video_codec(struct vrend_context *ctx,
+ {
+    struct vrend_video_context *vctx = vrend_context_get_video_ctx(ctx);
+ 
++   if (!vctx) /* video is off: as without ENABLE_VIDEO */
++      return EINVAL;
++
+    if (length < VIRGL_CREATE_VIDEO_CODEC_MIN_SIZE)
+       return EINVAL;
+ 
+@@ -1799,6 +1802,9 @@ static int vrend_decode_destroy_video_codec(struct vrend_context *ctx,
+ {
+    struct vrend_video_context *vctx = vrend_context_get_video_ctx(ctx);
+ 
++   if (!vctx) /* video is off: as without ENABLE_VIDEO */
++      return EINVAL;
++
+     if (length < VIRGL_DESTROY_VIDEO_CODEC_MIN_SIZE)
+        return EINVAL;
+ 
+@@ -1816,6 +1822,9 @@ static int vrend_decode_create_video_buffer(struct vrend_context *ctx,
+    uint32_t res_handles[VREND_VIDEO_BUFFER_PLANE_NUM];
+    struct vrend_video_context *vctx = vrend_context_get_video_ctx(ctx);
+ 
++   if (!vctx) /* video is off: as without ENABLE_VIDEO */
++      return EINVAL;
++
+    if (length < VIRGL_CREATE_VIDEO_BUFFER_MIN_SIZE)
+       return EINVAL;
+ 
+@@ -1845,6 +1854,9 @@ static int vrend_decode_destroy_video_buffer(struct vrend_context *ctx,
+ {
+    struct vrend_video_context *vctx = vrend_context_get_video_ctx(ctx);
+ 
++   if (!vctx) /* video is off: as without ENABLE_VIDEO */
++      return EINVAL;
++
+    if (length < VIRGL_DESTROY_VIDEO_BUFFER_MIN_SIZE)
+       return EINVAL;
+ 
+@@ -1860,6 +1872,9 @@ static int vrend_decode_begin_frame(struct vrend_context *ctx,
+ {
+    struct vrend_video_context *vctx = vrend_context_get_video_ctx(ctx);
+ 
++   if (!vctx) /* video is off: as without ENABLE_VIDEO */
++      return EINVAL;
++
+    if (length < VIRGL_BEGIN_FRAME_MIN_SIZE)
+       return EINVAL;
+ 
+@@ -1876,6 +1891,9 @@ static int vrend_decode_decode_bitstream(struct vrend_context *ctx,
+ {
+    struct vrend_video_context *vctx = vrend_context_get_video_ctx(ctx);
+ 
++   if (!vctx) /* video is off: as without ENABLE_VIDEO */
++      return EINVAL;
++
+    if (length < VIRGL_DECODE_BS_MIN_SIZE)
+       return EINVAL;
+ 
+@@ -1897,6 +1915,9 @@ static int vrend_decode_encode_bitstream(struct vrend_context *ctx,
+ {
+    struct vrend_video_context *vctx = vrend_context_get_video_ctx(ctx);
+ 
++   if (!vctx) /* video is off: as without ENABLE_VIDEO */
++      return EINVAL;
++
+    if (length < VIRGL_ENCODE_BS_MIN_SIZE)
+       return EINVAL;
+ 
+@@ -1918,6 +1939,9 @@ static int vrend_decode_end_frame(struct vrend_context *ctx,
+ {
+    struct vrend_video_context *vctx = vrend_context_get_video_ctx(ctx);
+ 
++   if (!vctx) /* video is off: as without ENABLE_VIDEO */
++      return EINVAL;
++
+    if (length < VIRGL_END_FRAME_MIN_SIZE)
+       return EINVAL;
+ 
 diff --git a/src/vrend/vrend_renderer.c b/src/vrend/vrend_renderer.c
 index ef033ad..5c12963 100644
 --- a/src/vrend/vrend_renderer.c
@@ -966,7 +1145,7 @@ index ef033ad..5c12963 100644
  #endif
  
 diff --git a/src/vrend/vrend_video.c b/src/vrend/vrend_video.c
-index 57341d8..656e9eb 100644
+index 57341d8..e66fd71 100644
 --- a/src/vrend/vrend_video.c
 +++ b/src/vrend/vrend_video.c
 @@ -73,6 +73,7 @@
@@ -977,14 +1156,32 @@ index 57341d8..656e9eb 100644
  
  struct vrend_context;
  
-@@ -146,6 +147,48 @@ static struct vrend_video_buffer *get_video_buffer(
+@@ -80,8 +81,15 @@ struct vrend_video_context {
+     struct vrend_context *ctx;
+     struct list_head codecs;
+     struct list_head buffers;
++    unsigned num_codecs;
+ };
+ 
++/* Each codec can hold a hardware session and its surface pool */
++#define VREND_VIDEO_MAX_CODECS 16
++
++/* Set by a vrend_video_init that worked: without it no context gets video, so the guest's video commands fail */
++static bool video_enabled;
++
+ struct vrend_video_codec {
+     struct virgl_video_codec *codec;
+     uint32_t handle;
+@@ -146,6 +154,62 @@ static struct vrend_video_buffer *get_video_buffer(
  }
  
  
-+/* The planes are CPU pointers (VideoToolbox): upload them into the plane textures */
++/* The planes are CPU pointers (VideoToolbox): upload them into the plane textures.
++ * The plane resources are the guest's: only 2D R8 or R8G8 textures of the plane's pixel size take a copy. */
 +static int sync_cpu_planes_to_video_buffer(struct vrend_video_buffer *buf,
 +                                           const struct virgl_video_dma_buf *dmabuf)
 +{
++    static bool warned;
 +    GLint align, row_length, unpack_buf;
 +
 +    glGetIntegerv(GL_UNPACK_ALIGNMENT, &align);
@@ -997,23 +1194,35 @@ index 57341d8..656e9eb 100644
 +        const struct virgl_video_dma_buf_plane *p = &dmabuf->planes[i];
 +        struct vrend_resource *res;
 +        const struct vrend_format_table *tf;
-+        unsigned bpp;
++        enum virgl_formats want;
++        uint32_t w, h;
 +
 +        res = vrend_renderer_ctx_res_lookup(buf->ctx->ctx, buf->planes[i].res_handle);
 +        if (!res) {
 +            virgl_error("%s: res %d not found\n", __func__, buf->planes[i].res_handle);
 +            continue;
 +        }
++        want = p->cpp == 2 ? VIRGL_FORMAT_R8G8_UNORM : VIRGL_FORMAT_R8_UNORM;
 +        tf = vrend_get_format_table_entry(res->base.format);
-+        bpp = util_format_get_blocksize(res->base.format);
-+        if (!p->data || !tf || !bpp || p->pitch % bpp)
++        if (!p->data || (p->cpp != 1 && p->cpp != 2) || res->target != GL_TEXTURE_2D ||
++            !(res->storage_bits & VREND_STORAGE_GL_TEXTURE) || !res->gl_id ||
++            res->base.format != want || !tf || util_format_get_blocksize(res->base.format) != p->cpp) {
++            if (!warned)
++                virgl_warn("%s: plane %u: resource %d (format %d, target 0x%x) does not fit a %u-byte plane\n",
++                           __func__, i, buf->planes[i].res_handle, res->base.format, res->target, p->cpp);
++            warned = true;
++            continue;
++        }
++        w = MIN2(res->base.width0, p->width);
++        h = MIN2(res->base.height0, p->height);
++        /* GL reads h-1 strides plus one row: both inside the plane */
++        if (!w || !h || p->pitch % p->cpp || p->pitch < w * p->cpp)
 +            continue;
 +
-+        glPixelStorei(GL_UNPACK_ROW_LENGTH, p->pitch / bpp);
-+        glBindTexture(res->target, res->gl_id);
-+        glTexSubImage2D(res->target, 0, 0, 0, MIN2(res->base.width0, p->width),
-+                        MIN2(res->base.height0, p->height), tf->glformat, tf->gltype, p->data);
-+        glBindTexture(res->target, 0);
++        glPixelStorei(GL_UNPACK_ROW_LENGTH, p->pitch / p->cpp);
++        glBindTexture(GL_TEXTURE_2D, res->gl_id);
++        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, tf->glformat, tf->gltype, p->data);
++        glBindTexture(GL_TEXTURE_2D, 0);
 +    }
 +
 +    glPixelStorei(GL_UNPACK_ROW_LENGTH, row_length);
@@ -1026,7 +1235,7 @@ index 57341d8..656e9eb 100644
  static int sync_dmabuf_to_video_buffer(struct vrend_video_buffer *buf,
                                         const struct virgl_video_dma_buf *dmabuf)
  {
-@@ -154,6 +197,9 @@ static int sync_dmabuf_to_video_buffer(struct vrend_video_buffer *buf,
+@@ -154,6 +218,9 @@ static int sync_dmabuf_to_video_buffer(struct vrend_video_buffer *buf,
          return -1;
      }
  
@@ -1036,7 +1245,7 @@ index 57341d8..656e9eb 100644
      for (unsigned i = 0; i < dmabuf->num_planes && i < buf->num_planes; i++) {
          struct vrend_video_plane *plane = &buf->planes[i];
          struct vrend_resource *res;
-@@ -354,8 +400,10 @@ static struct virgl_video_callbacks video_callbacks = {
+@@ -354,15 +421,20 @@ static struct virgl_video_callbacks video_callbacks = {
  
  int vrend_video_init(int drm_fd)
  {
@@ -1045,9 +1254,86 @@ index 57341d8..656e9eb 100644
          return -1;
 +#endif
  
-     return virgl_video_init(drm_fd, &video_callbacks, 0);
+-    return virgl_video_init(drm_fd, &video_callbacks, 0);
++    video_enabled = virgl_video_init(drm_fd, &video_callbacks, 0) == 0;
++    return video_enabled ? 0 : -1;
  }
-@@ -465,8 +513,10 @@ int vrend_video_create_buffer(struct vrend_video_context *ctx,
+ 
+ void vrend_video_fini(void)
+ {
+-    virgl_video_destroy();
++    if (video_enabled)
++        virgl_video_destroy();
++    video_enabled = false;
+ }
+ 
+ int vrend_video_fill_caps(union virgl_caps *caps)
+@@ -381,12 +453,20 @@ int vrend_video_create_codec(struct vrend_video_context *ctx,
+                              uint32_t max_ref,
+                              uint32_t flags)
+ {
+-    struct vrend_video_codec *cdc = get_video_codec(ctx, handle);
++    struct vrend_video_codec *cdc;
+     struct virgl_video_create_codec_args args;
+ 
++    if (!ctx)
++        return -1;
++    cdc = get_video_codec(ctx, handle);
+     if (cdc)
+         return 0;
+ 
++    if (ctx->num_codecs >= VREND_VIDEO_MAX_CODECS) {
++        virgl_error("%s: more than %d video codecs in one context\n", __func__, VREND_VIDEO_MAX_CODECS);
++        return -1;
++    }
++
+     if (profile <= PIPE_VIDEO_PROFILE_UNKNOWN ||
+         profile >= PIPE_VIDEO_PROFILE_MAX)
+         return -1;
+@@ -423,6 +503,7 @@ int vrend_video_create_codec(struct vrend_video_context *ctx,
+     cdc->handle = handle;
+     cdc->ctx = ctx;
+     list_add(&cdc->head, &ctx->codecs);
++    ctx->num_codecs++;
+ 
+     return 0;
+ }
+@@ -431,6 +512,7 @@ static void destroy_video_codec(struct vrend_video_codec *cdc)
+ {
+     if (cdc) {
+         list_del(&cdc->head);
++        cdc->ctx->num_codecs--;
+         virgl_video_destroy_codec(cdc->codec);
+         free(cdc);
+     }
+@@ -439,7 +521,11 @@ static void destroy_video_codec(struct vrend_video_codec *cdc)
+ void vrend_video_destroy_codec(struct vrend_video_context *ctx,
+                                uint32_t handle)
+ {
+-    struct vrend_video_codec *cdc = get_video_codec(ctx, handle);
++    struct vrend_video_codec *cdc;
++
++    if (!ctx)
++        return;
++    cdc = get_video_codec(ctx, handle);
+ 
+     destroy_video_codec(cdc);
+ }
+@@ -454,9 +540,12 @@ int vrend_video_create_buffer(struct vrend_video_context *ctx,
+ {
+     unsigned i;
+     struct vrend_video_plane *plane;
+-    struct vrend_video_buffer *buf = get_video_buffer(ctx, handle);
++    struct vrend_video_buffer *buf;
+     struct virgl_video_create_buffer_args args;
+ 
++    if (!ctx)
++        return -1;
++    buf = get_video_buffer(ctx, handle);
+     if (buf)
+         return 0;
+ 
+@@ -465,8 +554,10 @@ int vrend_video_create_buffer(struct vrend_video_context *ctx,
          return -1;
      }
  
@@ -1059,3 +1345,101 @@ index 57341d8..656e9eb 100644
  
      buf = (struct vrend_video_buffer *)calloc(1, sizeof(*buf));
      if (!buf)
+@@ -538,7 +629,11 @@ static void destroy_video_buffer(struct vrend_video_buffer *buf)
+ void vrend_video_destroy_buffer(struct vrend_video_context *ctx,
+                                 uint32_t handle)
+ {
+-    struct vrend_video_buffer *buf = get_video_buffer(ctx, handle);
++    struct vrend_video_buffer *buf;
++
++    if (!ctx)
++        return;
++    buf = get_video_buffer(ctx, handle);
+ 
+     destroy_video_buffer(buf);
+ }
+@@ -547,6 +642,8 @@ struct vrend_video_context *vrend_video_create_context(struct vrend_context *ctx
+ {
+     struct vrend_video_context *vctx;
+ 
++    if (!video_enabled)
++        return NULL;
+     vctx = (struct vrend_video_context *)calloc(1, sizeof(*vctx));
+     if (vctx) {
+         vctx->ctx = ctx;
+@@ -559,6 +656,9 @@ struct vrend_video_context *vrend_video_create_context(struct vrend_context *ctx
+ 
+ void vrend_video_destroy_context(struct vrend_video_context *ctx)
+ {
++   if (!ctx)
++      return;
++
+    list_for_each_entry_safe(struct vrend_video_codec, vcdc, &ctx->codecs, head)
+       destroy_video_codec(vcdc);
+ 
+@@ -572,8 +672,8 @@ int vrend_video_begin_frame(struct vrend_video_context *ctx,
+                             uint32_t cdc_handle,
+                             uint32_t tgt_handle)
+ {
+-    struct vrend_video_codec *cdc = get_video_codec(ctx, cdc_handle);
+-    struct vrend_video_buffer *tgt = get_video_buffer(ctx, tgt_handle);
++    struct vrend_video_codec *cdc = ctx ? get_video_codec(ctx, cdc_handle) : NULL;
++    struct vrend_video_buffer *tgt = ctx ? get_video_buffer(ctx, tgt_handle) : NULL;
+ 
+     if (!cdc || !tgt)
+         return -1;
+@@ -742,8 +842,8 @@ int vrend_video_decode_bitstream(struct vrend_video_context *ctx,
+     unsigned i, num_bs, *bs_sizes = NULL;
+     void **bs_buffers = NULL;
+     struct vrend_resource *res;
+-    struct vrend_video_codec  *cdc = get_video_codec(ctx, cdc_handle);
+-    struct vrend_video_buffer *tgt = get_video_buffer(ctx, tgt_handle);
++    struct vrend_video_codec  *cdc = ctx ? get_video_codec(ctx, cdc_handle) : NULL;
++    struct vrend_video_buffer *tgt = ctx ? get_video_buffer(ctx, tgt_handle) : NULL;
+     union virgl_picture_desc desc;
+ 
+     if (!cdc || !tgt){
+@@ -765,16 +865,16 @@ int vrend_video_decode_bitstream(struct vrend_video_context *ctx,
+ 
+     for (i = 0, num_bs = 0; i < num_buffers; i++) {
+         res = vrend_renderer_ctx_res_lookup(ctx->ctx, buffer_handles[i]);
+-        if (!res || !res->ptr) {
+-            virgl_warn("%s: bs res %d invalid or not found",
++        if (!res || !res->ptr || res->base.bind != VIRGL_BIND_CUSTOM) {
++            virgl_warn("%s: bs res %d invalid or not found\n",
+                        __func__, buffer_handles[i]);
+             continue;
+         }
+ 
+-        vrend_read_from_iovec(res->iov, res->num_iovs, 0,
+-                              res->ptr, buffer_sizes[i]);
++        /* res->ptr holds width0 bytes; the size and the backing are the guest's */
++        bs_sizes[num_bs] = vrend_read_from_iovec(res->iov, res->num_iovs, 0, res->ptr,
++                                                 MIN2(buffer_sizes[i], res->base.width0));
+         bs_buffers[num_bs] = res->ptr;
+-        bs_sizes[num_bs] = buffer_sizes[i];
+         num_bs++;
+     }
+ 
+@@ -807,8 +907,8 @@ int vrend_video_encode_bitstream(struct vrend_video_context *ctx,
+ {
+     union virgl_picture_desc desc;
+     struct vrend_resource *dest_res, *desc_res, *feed_res;
+-    struct vrend_video_codec  *cdc = get_video_codec(ctx, cdc_handle);
+-    struct vrend_video_buffer *src = get_video_buffer(ctx, src_handle);
++    struct vrend_video_codec  *cdc = ctx ? get_video_codec(ctx, cdc_handle) : NULL;
++    struct vrend_video_buffer *src = ctx ? get_video_buffer(ctx, src_handle) : NULL;
+ 
+     if (!cdc || !src)
+         return -1;
+@@ -847,8 +947,8 @@ int vrend_video_end_frame(struct vrend_video_context *ctx,
+                           uint32_t cdc_handle,
+                           uint32_t tgt_handle)
+ {
+-    struct vrend_video_codec *cdc = get_video_codec(ctx, cdc_handle);
+-    struct vrend_video_buffer *tgt = get_video_buffer(ctx, tgt_handle);
++    struct vrend_video_codec *cdc = ctx ? get_video_codec(ctx, cdc_handle) : NULL;
++    struct vrend_video_buffer *tgt = ctx ? get_video_buffer(ctx, tgt_handle) : NULL;
+ 
+     if (!cdc || !tgt)
+         return -1;

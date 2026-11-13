@@ -386,6 +386,51 @@ static void test_flood(void) {
     check("res 3 unref'd", c_res_unref(3), OK);
 }
 
+/* Guest video decode (tools/gfx/virglrenderer-videotoolbox.patch). Off by default: the video commands fail as
+   in a library without video. On (VGPU_VIRGL_VIDEO=1): a DECODE_BITSTREAM size larger than the 16-byte bitstream
+   resource, with a 64 KiB backing, copies at most 16 bytes (run it under libgmalloc to catch an overflow). */
+enum { CCMD_CREATE_VIDEO_CODEC = 53, CCMD_CREATE_VIDEO_BUFFER = 55, CCMD_BEGIN_FRAME = 57, CCMD_DECODE_BITSTREAM = 59,
+       CCMD_END_FRAME = 61, PROFILE_H264_HIGH = 13, ENTRYPOINT_BITSTREAM = 1, FORMAT_NV12 = 166 };
+#define VBS (BACKING + 0x800000)
+static uint32_t c_res_3d(uint32_t id, uint32_t target, uint32_t format, uint32_t bind, uint32_t w, uint32_t h) {
+    q_hdr(0x204, 0, 0);
+    q32(24, id), q32(28, target), q32(32, format), q32(36, bind), q32(40, w), q32(44, h), q32(48, 1), q32(52, 1);
+    rq_len = 72;
+    return cmd();
+}
+static void test_video(int on) {
+    check("video: ctx 6", c_ctx_create(6, "video"), OK);
+    uint32_t codec[] = {CMD0(CCMD_CREATE_VIDEO_CODEC, 0, 8), 1, PROFILE_H264_HIGH, ENTRYPOINT_BITSTREAM, 1, 41, 64, 64, 2};
+    q_submit(6, codec, sizeof codec / 4, 0);
+    if (!on) {
+        check("video off: CREATE_VIDEO_CODEC is refused", cmd(), UNSPEC);
+        check("video off: ctx 6 destroyed", c_ctx_destroy(6), OK);
+        return;
+    }
+    check("video: codec created", cmd(), OK);
+    check("video: a 16-byte bitstream buffer", c_res_3d(70, 0, 64, 1u << 17, 16, 1), OK);
+    check("video: its 64 KiB backing", c_attach(70, VBS, 0x10000), OK);
+    check("video: a picture descriptor buffer", c_res_3d(71, 0, 64, 1u << 17, 4096, 1), OK);
+    check("video: its backing", c_attach(71, VBS + 0x10000, 4096), OK);
+    check("video: an R8 luma plane", c_res_3d(72, 2, 64, 0x8, 64, 64), OK);
+    check("video: an R8G8 chroma plane", c_res_3d(73, 2, 65, 0x8, 32, 32), OK);
+    for (uint32_t r = 70; r <= 73; r++) check("video: resource in ctx 6", c_ctx_attach(0x202, 6, r), OK);
+    memset(ram(VBS), 0xab, 0x10000); // no start code: nothing to decode
+    memset(ram(VBS + 0x10000), 0, 4096);
+    wr16(VBS + 0x10000, PROFILE_H264_HIGH);
+    uint32_t dw[] = {
+        CMD0(CCMD_CREATE_VIDEO_BUFFER, 0, 7), 2, FORMAT_NV12, 64, 64, 72, 73, 0,
+        CMD0(CCMD_BEGIN_FRAME, 0, 2), 1, 2,
+        CMD0(CCMD_DECODE_BITSTREAM, 0, 5), 1, 2, 71, 70, 0x10000,
+        CMD0(CCMD_END_FRAME, 0, 2), 1, 2,
+    };
+    q_submit(6, dw, sizeof dw / 4, 0);
+    check("video: an oversized DECODE_BITSTREAM is answered", cmd(), OK);
+    check("video: ctx 6 destroyed", c_ctx_destroy(6), OK);
+    for (uint32_t r = 70; r <= 73; r++) check("video: resource unref'd", c_res_unref(r), OK);
+    clear_and_read("ctx 1 after the video commands", 1, 1, BLUE, BACKING, 2000);
+}
+
 /* A6: a 3D resource as the scanout, shown through the presenter's snapshot; and back and forth with a 2D one. */
 static int shot_bad(HvVgpuMetal *pm, const uint8_t rgba[4], uint32_t y0, uint32_t y1) {
     static uint8_t shot[64 * 64 * 4];
@@ -672,6 +717,8 @@ int main(void) {
     }
     hv_virt_reset(&b);
 
+    int video = getenv("VGPU_VIRGL_VIDEO") != NULL;
+    hv_vgpu_virgl_set_video(video);
     rend = hv_vgpu_virgl_create();
     check("the renderer starts", rend != NULL, 1);
     if (!rend) {
@@ -694,6 +741,7 @@ int main(void) {
     test_timestamp();
     test_isolation();
     test_flood();
+    test_video(video);
     test_reset();
     test_pause();
     test_scanout();
@@ -715,7 +763,7 @@ int main(void) {
     hv_vgpu_virgl_stats(rend, &st);
     printf("  renderer: %llu requests, %llu errors, %llu fences\n", (unsigned long long)st.requests, (unsigned long long)st.errors,
            (unsigned long long)st.fences);
-    check("the only error was the junk", st.errors, 1);
+    check("the only errors were the junk and, with video off, the video command", st.errors, video ? 1 : 2);
 
     // Destroy order: the board (the device resets the renderer), then the renderer, then guest RAM.
     check("a context left live for the destroy", c_ctx_create(9, "left"), OK);

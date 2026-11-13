@@ -90,7 +90,7 @@ $(B)/henge-agent.gz: $(B)/henge-agent
 $(B)/share.o: host/share.c host/*.h devices/*.h core/*.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(B)/hengevm: host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(B)/mac-restore/libhengerestore.a $(if $(GFX),$(GFX_LIBS))
+$(B)/hengevm: host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(B)/mac-restore/libhengerestore.a $(if $(GFX),$(wildcard $(GFX_LIBS)))
 	$(CC) $(CFLAGS) host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(B)/mac-restore/libhengerestore.a -lz -framework Foundation -framework CFNetwork -framework Security -framework SystemConfiguration -framework IOKit $(SLIRP_LIBS) -framework AudioToolbox -framework ParavirtualizedGraphics -framework Metal -framework IOSurface \
 	    -framework Foundation -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers -framework CoreFoundation \
 	    -framework AppKit -framework QuartzCore $(GFX_LDLIBS) -o $@
@@ -526,7 +526,9 @@ $(B)/test_vgpu_virgl: tests/test_vgpu_virgl.c $(ENGINE) $(filter-out $(B)/vgpu_v
 	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) $(GFX_FRAMEWORKS) -framework AudioToolbox -o $@
 
 test-vgpu-virgl:
-	@if [ -d "$(GFX_DIR)" ]; then $(MAKE) --no-print-directory $(B)/test_vgpu_virgl GFX_DIR="$(GFX_DIR)" && ulimit -s 65520 && $(B)/test_vgpu_virgl; \
+	@if [ -d "$(GFX_DIR)" ]; then $(MAKE) --no-print-directory $(B)/test_vgpu_virgl GFX_DIR="$(GFX_DIR)" && ulimit -s 65520 && $(B)/test_vgpu_virgl && \
+	  if grep -q virglrenderer-video-patch "$(GFX_DIR)/MANIFEST.txt"; then echo "test-vgpu-virgl: again with guest video on, under libgmalloc" && \
+	  VGPU_VIRGL_VIDEO=1 DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib $(B)/test_vgpu_virgl; fi; \
 	else echo "test-vgpu-virgl: skipped: no graphics libraries in $(GFX_DIR)"; fi
 .PHONY: test-vgpu-virgl
 

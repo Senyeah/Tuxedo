@@ -5,7 +5,7 @@
 # ///
 """Guest video decode spike (docs/guest-video-decode-research.md, "First spike"): VA-API in the guest on VideoToolbox.
 
-Boots a clone of the desktop image with `hengevm --gpu-accel` (built with GFX=1 against a virglrenderer that has
+Boots a clone of the desktop image with `hengevm --gpu-accel --gpu-video` (built with GFX=1 against a virglrenderer that has
 tools/gfx/virglrenderer-videotoolbox.patch) and checks, over the serial console:
   1. packages: mesa-va-drivers, vainfo, ffmpeg and mpv (apt install when missing; --image names an image that has them).
   2. vainfo lists VAProfileH264Main and VAProfileH264High with VAEntrypointVLD.
@@ -15,7 +15,9 @@ tools/gfx/virglrenderer-videotoolbox.patch) and checks, over the serial console:
   4. speed: `ffmpeg -benchmark -hwaccel vaapi -hwaccel_output_format vaapi -f null -` against `-hwaccel none`: frames
      per second and the guest CPU time (user + system). The hardware path must beat the clip's frame rate.
   5. mpv --hwdec=vaapi --vo=gpu on the desktop: dropped frames (printed; not a gate).
-  6. hengevm's log: VideoToolbox sessions on the hardware decoder and no frame that failed to decode.
+  6. hengevm's log: VideoToolbox sessions on the hardware decoder, no decode error, and one codec per VA-API run that
+     decoded every frame of the clip on VideoToolbox (the back end logs its totals when the guest destroys it).
+With --no-video, hengevm runs without --gpu-video: vainfo must list no decode profile and the back end must not start.
 The shared image never changes: the guest runs on an APFS clone. Exit 1 on a failed check.
 """
 import argparse
@@ -109,8 +111,8 @@ def boot(args, disk, share, err_log):
             "--kernel", os.path.join(d, "Image"), "--initrd", os.path.join(d, "initrd.img"),
             "--append", f"console=ttyAMA0 root=PARTUUID={partuuid} rw", "--disk", disk, "--ram", str(args.ram),
             "--cpus", str(args.cpus), "--display", "1920x1080", "--gpu-accel", "--share", share]
-    if args.no_video:
-        argv.append("--no-gpu-video")
+    if not args.no_video:
+        argv.append("--gpu-video")
     env = dict(os.environ, HV_VIRGL_VERBOSE="1")  # the VideoToolbox session lines are info level
     print(f"--   booting {os.path.basename(disk)} (host load average {os.getloadavg()[0]:.1f})")
     p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 250), env=env)
@@ -199,10 +201,10 @@ def bench(p, pid, name, hw):
     if rc or not frames or not gt:
         raise Fail(f"[{name}] ffmpeg {tag} benchmark gave status {rc}: {out.strip()[-1500:]}")
     n, real, user, syst = int(frames[-1]), float(gt.group(1)), float(gt.group(2)), float(gt.group(3))
-    host = 100 * (c1 - c0) / (t1 - t0) if c0 is not None and c1 is not None else float("nan")
+    host = c1 - c0 if c0 is not None and c1 is not None else float("nan")
     fps = n / real
     line = (f"{tag}: {n} frames in {real:.2f} s = {fps:.1f} fps, guest CPU {user + syst:.2f} s "
-            f"(user {user:.2f}, sys {syst:.2f}), hengevm {host:.0f}% of one core")
+            f"(user {user:.2f}, sys {syst:.2f}), hengevm CPU {host:.2f} s ({100 * host / (t1 - t0):.0f}% of one core)")
     print(f"     [{name}] {line}")
     return fps, line
 
@@ -241,8 +243,15 @@ def mpv(p, name, seconds):
 def host_log(err_log):
     text = open(err_log, errors="replace").read() if os.path.exists(err_log) else ""
     sessions = re.findall(r"vt: H\.264 session (\d+x\d+), (\w+) decoder", text)
-    bad = re.findall(r"vt: [^\n]*(?:not decoded|refused|failed|does not parse|no sample buffer)[^\n]*", text)
-    return sessions, bad
+    # (decoded, failed, skipped, sessions, parameter set updates, slices per call) per codec
+    codecs = [tuple(map(int, m)) for m in re.findall(
+        r"vt: codec \d+x\d+ done: (\d+) frames decoded, (\d+) failed, (\d+) skipped, (\d+) sessions, "
+        r"(\d+) parameter set updates, at most (\d+) slices", text)]
+    bad = [l for l in re.findall(r"[^\n]*(?:vt: |video)[^\n]*", text, re.I)
+           if " done: " not in l and re.search(r"not decoded|refused|failed|does not parse|does not fit|no sample buffer|"
+                                               r"more than|not supported|invalid|not found", l)]
+    started = "vt: video decode on VideoToolbox" in text
+    return sessions, codecs, bad, started
 
 
 def main():
@@ -257,7 +266,7 @@ def main():
     ap.add_argument("--cpus", type=int, default=4)
     ap.add_argument("--ram", type=int, default=3072)
     ap.add_argument("--no-mpv", action="store_true")
-    ap.add_argument("--no-video", action="store_true", help="boot with --no-gpu-video: vainfo must then fail")
+    ap.add_argument("--no-video", action="store_true", help="boot without --gpu-video: vainfo must then list no decode profile")
     args = ap.parse_args()
     args.linux_dir = args.linux_dir or linux_dir()
     image = args.image or os.path.join(args.linux_dir, "debian-desktop.img")
@@ -281,34 +290,34 @@ def main():
             if args.no_video:
                 out, rc = sh(p, f"vainfo --display drm --device {RENDER} 2>&1 | grep -c VAEntrypointVLD", 120)
                 if out.strip().splitlines()[-1].strip() != "0":
-                    raise Fail(f"--no-gpu-video: vainfo still lists decode profiles: {out.strip()}")
-                print("ok   --no-gpu-video: vainfo lists no decode profile")
-                return
-            results["vainfo"] = check_vainfo(p)
-            fetch_clips(p)
-            sums = []
-            for name in CLIPS:
-                good, line = framemd5(p, name)
-                ok &= good
-                sums.append(line)
-            results["checksum"] = "; ".join(sums)
-            name = next(iter(CLIPS))
-            hw_fps, hw_line = bench(p, p.pid, name, True)
-            _, sw_line = bench(p, p.pid, name, False)
-            results["speed"] = f"{hw_line}; {sw_line}"
-            if hw_fps <= FPS:
-                print(f"FAIL the hardware path decodes {hw_fps:.1f} fps, not faster than real time ({FPS} fps)")
-                ok = False
+                    raise Fail(f"without --gpu-video vainfo still lists decode profiles: {out.strip()}")
+                print("ok   without --gpu-video vainfo lists no decode profile")
             else:
-                print(f"ok   the hardware path decodes {hw_fps:.1f} fps > {FPS} fps (real time)")
-            if not args.no_mpv:
-                line = mpv(p, name, args.seconds)
-                print(f"     {line}")
-                results["speed"] += f"; {line}"
-            out, _ = sh(p, "sudo dmesg | grep -i -E 'virtio_gpu.*(error|fail|timed? ?out)|\\[drm.*(error|fail)|\\*ERROR\\*'")
-            if out.strip():
-                print(f"FAIL the guest logged virtio_gpu or DRM errors:\n{out.strip()}")
-                ok = False
+                results["vainfo"] = check_vainfo(p)
+                fetch_clips(p)
+                sums = []
+                for name in CLIPS:
+                    good, line = framemd5(p, name)
+                    ok &= good
+                    sums.append(line)
+                results["checksum"] = "; ".join(sums)
+                name = next(iter(CLIPS))
+                hw_fps, hw_line = bench(p, p.pid, name, True)
+                _, sw_line = bench(p, p.pid, name, False)
+                results["speed"] = f"{hw_line}; {sw_line}"
+                if hw_fps <= FPS:
+                    print(f"FAIL the hardware path decodes {hw_fps:.1f} fps, not faster than real time ({FPS} fps)")
+                    ok = False
+                else:
+                    print(f"ok   the hardware path decodes {hw_fps:.1f} fps > {FPS} fps (real time)")
+                if not args.no_mpv:
+                    line = mpv(p, name, args.seconds)
+                    print(f"     {line}")
+                    results["speed"] += f"; {line}"
+                out, _ = sh(p, "sudo dmesg | grep -i -E 'virtio_gpu.*(error|fail|timed? ?out)|\\[drm.*(error|fail)|\\*ERROR\\*'")
+                if out.strip():
+                    print(f"FAIL the guest logged virtio_gpu or DRM errors:\n{out.strip()}")
+                    ok = False
         except pexpect.TIMEOUT:
             raise Fail("timeout waiting for the guest; tail:\n" + (p.before or "")[-1500:])
         except pexpect.EOF:
@@ -321,12 +330,15 @@ def main():
                 except pexpect.TIMEOUT:
                     p.terminate(force=True)
             p.close()
-            sessions, bad = host_log(err_log)
+            sessions, codecs, bad, started = host_log(err_log)
             if args.keep_log and os.path.exists(err_log):
                 shutil.copy(err_log, args.keep_log)
             print(f"     hengevm: {len(sessions)} VideoToolbox session(s): " + ", ".join(f"{s} {k}" for s, k in sessions[:6]))
+            for c in codecs:
+                print(f"     hengevm codec: {c[0]} frames decoded on VideoToolbox, {c[1]} failed, {c[2]} skipped, "
+                      f"{c[3]} session(s), {c[4]} parameter set updates, at most {c[5]} slice(s) per decode call")
             if bad:
-                print(f"FAIL hengevm logged {len(bad)} decode errors, first: {bad[0]}")
+                print(f"FAIL hengevm logged {len(bad)} video errors, first: {bad[0].strip()}")
                 ok = False
             if args.keep_image:
                 shutil.move(disk, args.keep_image)
@@ -334,9 +346,25 @@ def main():
         if p.exitstatus != 0:
             raise Fail(f"hengevm exit status {p.exitstatus}, expected 0 after poweroff")
         print("ok   power off: exit status 0")
-        if not args.no_video and not any(k == "hardware" for _, k in sessions):
-            print("FAIL no VideoToolbox session used the hardware decoder")
-            ok = False
+        if args.no_video:
+            if started or sessions or codecs:
+                raise Fail("without --gpu-video the VideoToolbox back end still started")
+            print("ok   without --gpu-video the VideoToolbox back end did not start")
+        else:
+            if not sessions or any(k != "hardware" for _, k in sessions):
+                print("FAIL not every VideoToolbox session used the hardware decoder")
+                ok = False
+            # framemd5 twice, the benchmark, mpv: each run's codec decodes the whole clip on VideoToolbox
+            runs = len(CLIPS) + 1 + (0 if args.no_mpv else 1)
+            whole = [c for c in codecs if c[0] >= FPS * args.seconds and not c[1] and not c[2]]
+            line = (f"{len(whole)} of {runs} VA-API runs decoded all {FPS * args.seconds} frames on VideoToolbox, "
+                    f"{sum(c[1] for c in codecs)} failed, {sum(c[2] for c in codecs)} skipped")
+            results["host"] = line
+            if len(whole) < runs or any(c[1] or c[2] for c in codecs):
+                print(f"FAIL {line}")
+                ok = False
+            else:
+                print(f"ok   {line}")
     for k, v in results.items():
         print(f"RESULT {k}: {v}")
     if not ok:

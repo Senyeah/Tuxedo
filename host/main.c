@@ -1353,7 +1353,7 @@ static void *cpu_thread(void *unused) {
 }
 
 static void usage(void) {
-    fprintf(stderr, "usage: hengevm --board virt (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N] [--display WxH] [--gpu-accel [--no-gpu-video]] [--screenshot PNG] [--window [--touch]]\n"
+    fprintf(stderr, "usage: hengevm --board virt (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N] [--display WxH] [--gpu-accel [--gpu-video]] [--screenshot PNG] [--window [--touch]]\n"
                     "       (virt: Ctrl-A x quits, Ctrl-A p and SIGTERM press the power key, Ctrl-A s pauses and resumes, Ctrl-A b is the app's background, SIGTSTP pauses and stops until SIGCONT; exit status 0 shutdown, 3 restart with --no-reboot, 4 panic or engine error)\n");
     fprintf(stderr, "usage: hengevm [--board vmapple] --rom FILE --disk FILE --aux FILE --ecid N [--seed N] [--ram MB] [--log N] [--trace 1] [--screenshot PNG] [--watch VA] [--stats SECONDS [--profile 1]] [--cpus N] [--window] [--no-pvg] [--no-chain] [--break PC [--break-hits N]] [--dump PA LEN FILE] [--aux-offset BYTES] [--install IPSW]\n");
     exit(2);
@@ -1382,7 +1382,7 @@ int main(int argc, char **argv) {
     const char *install_ipsw = NULL;
     const char *share_folder = NULL;
     const char *secrets_dir = NULL, *machine_id = "hengevm";
-    int log = 1, trace = 0, use_pvg = 1, no_chain = 0, gpu_accel = 0, no_video = 0;
+    int log = 1, trace = 0, use_pvg = 1, no_chain = 0, gpu_accel = 0, gpu_video = 0;
     const char *screenshot = NULL;
     uint64_t watch = 0, watch_pa = 0;
     int stats = 0, profile = 0, window = 0;
@@ -1422,8 +1422,8 @@ int main(int argc, char **argv) {
             gpu_accel = 1;
             continue;
         }
-        if (!strcmp(argv[i], "--no-gpu-video")) {
-            no_video = 1;
+        if (!strcmp(argv[i], "--gpu-video")) {
+            gpu_video = 1;
             continue;
         }
         if (i + 1 >= argc) usage();
@@ -1504,7 +1504,7 @@ int main(int argc, char **argv) {
                      .aux_offset = aux_offset, .ecid = ecid, .seed = seed,
                      .ram_mb = ram_mb, .ncpus = ncpus, .log = log, .no_net = dump_dtb || getenv("HV_NO_NET") != NULL,
                      .no_sound = dump_dtb != NULL, .installer = install_ipsw != NULL, .accel = gpu_accel,
-                     .no_video = no_video};
+                     .video = gpu_video};
     set_board_kind(&vc, board_kind);
     if (getenv("HV_JIT_MB")) vc.jit_bytes = (size_t)atoi(getenv("HV_JIT_MB")) << 20; /* debugging: a small region flushes often */
     hv_prof_register = hv_prof_register_thread;
