@@ -147,7 +147,7 @@ Wayland has one event for "this program wants text": a client enables its `text-
 `henge-keyboard` (`/usr/lib/henge/`, the user unit `henge-keyboard.service`) uses the first of these that it finds:
 
 - It speaks the Wayland wire protocol itself, as `wlprobe.py` does, and binds `zwp_input_method_manager_v2`. It sends no text and takes no keyboard grab, so typing is not changed. If the seat has an input method already (`unavailable`), it stops and exit status 0 keeps systemd from a restart.
-- On KWin it runs `busctl --user monitor` for `activeChanged` and reads `active` with `busctl get-property`.
+- On KWin, when it is not KWin's input method, it runs `busctl --user monitor` for `activeChanged` and reads `active` with `busctl get-property`. When it is the input method, see "Plasma: windows stay above the keyboard" below.
 - It sends `PUT /.henge/keyboard` with the body `show` or `hide` to `host/share.c`. A `hide` waits 0.3 s, because focus that moves between two fields is `deactivate` then `activate`. A send with no answer or a 5xx status is tried again after 2 s. A 4xx status (an app with no such endpoint) is not tried again until the state changes, and is logged once. It sends `hide` when it stops.
 - labwc's `autostart` starts the unit; in Plasma `/etc/xdg/autostart/henge-keyboard.desktop` (KDE only) does.
 
@@ -172,6 +172,41 @@ Limits:
 - Not tested: a full Plasma session in the guest (KWin was tested alone, with its virtual backend), and the app on a device.
 
 `keyboard-check.py` (`uv run`, `make test-linux-keyboard`) boots a clone of the desktop image with `--share` and `HV_INPUT_FILE` (`getkbd` prints the last request), and checks in the labwc session: the service runs; foot in focus gives `show`; a window with no text field gives `hide` and `show` comes back when it closes; no window gives `hide`; the helper sends `hide` when it stops and `show` when it starts with a text field in focus. `--gtk` installs zenity in the clone and checks a GTK entry. `tests/test_share_keyboard.c` (in `make test`) checks the endpoint and `make test-keyboard-follow` the app's policy.
+
+### Plasma: windows stay above the keyboard
+
+In Plasma, KWin makes the active window shorter (or moves it up) while the device's keyboard is up, so its text fields stay in view. The window gets its size back when the keyboard goes down. labwc has nothing like this, and is not changed.
+
+KWin does this only for the panel of its own input method (`InputMethod::updateInputPanelState` gives the panel's frame to `Window::setVirtualKeyboardGeometry`; not for fullscreen or desktop windows). So `henge-keyboard` is KWin's input method here:
+
+- `/etc/xdg/kwinrc` in the image sets `[Wayland] InputMethod` to `/usr/share/applications/henge-keyboard.desktop` (in the package). KWin starts the program with `WAYLAND_SOCKET` and gives it `zwp_input_method_v1` and `zwp_input_panel_v1`.
+- `activate` and `deactivate` of `zwp_input_method_v1` are the `show` and `hide` for the host; the `busctl` path is not used. The helper that the desktop's autostart runs sees the input method's lock (`$XDG_RUNTIME_DIR/henge-keyboard.im`) and stops, so one program sends.
+- The panel is one clear pixel, stretched (`wp_viewporter`) to the output's width, as a `set_toplevel` input panel surface. KWin takes the surface's input region as the keyboard's place (as for Maliit), so the region is the keyboard's height, and empty when the keyboard is down. It sends no text and takes no keys.
+- The height comes from the app. `KeyboardPanelProbe` lies over the picture in `SessionView`, hears the keyboard notifications and gives `henge_share_set_keyboard_height` the part of the picture under the keyboard (`KeyboardPanel.fraction`, 0 to 1; 0 on the console, on an external screen and while zoomed). The helper reads `GET /.henge/keyboard` ("height F"; `?since=N` waits up to 25 s for a change) and multiplies by the output's logical height (xdg-output).
+
+What KWin needs to show the panel (KWin 6.3.6 source, and the check below):
+
+- `InputPanelV1Window::maybeShow` wants three things: the surface has a buffer and `set_toplevel`; `allow()`; and `show()`.
+- `allow()` comes only when `InputMethod::shouldShowOnActive()` is true: the last input was a touch or a tablet tool, or `KWIN_IM_SHOW_ALWAYS=1` is in KWin's environment. The trackpad and a hardware mouse are not a touch, so the package has `/etc/xdg/plasma-workspace/env/henge-keyboard.sh`, which `startplasma` sources. Without the variable the window keeps its size (checked).
+- `show()` comes from a text-input-v3 `enable`, from `show_input_panel` of v1 and v2, and from the D-Bus method `forceActivate`. So when the height goes above 0 and KWin does not show the panel (the property `visible`), the helper calls `forceActivate`. That is also how a keyboard that the person opens by hand, with no text field, moves the window. The context that `forceActivate` makes is not a request to the host; KWin sends `surrounding_text` only for a real text field, which is how the helper tells them apart. When the height goes back to 0 the helper ends its own context (`active` = false), so the next text field is news.
+- KWin hides the panel on `hide_input_panel` (v1, v2) and on the screen lock. While the height is above 0 the helper looks at `visible` every 5 s and calls `forceActivate` again.
+
+Costs and limits:
+
+- This takes KWin's input method place. Maliit (the Plasma on-screen keyboard) and Fcitx 5 or IBus through KWin cannot run at the same time. A person who needs one of them chooses it in System Settings, Virtual Keyboard (that writes `~/.config/kwinrc`, which wins); the helper then goes back to the `busctl` path: the keyboard still follows the focus, and windows are not moved.
+- KWin puts the panel at the bottom of the area for maximized windows, which is above a Plasma panel at the bottom edge. The window then ends that much higher than it must.
+- The height is right when the picture's bottom edge is under the keyboard. A zoomed picture and a floating iPad keyboard give 0.
+- Not tested: a full Plasma session in the guest (the env script through `startplasma`, the Plasma panel), and the app on a device.
+
+To turn it on in a machine that has Plasma already (after henge-guest 1.5.0 is installed), then reboot:
+
+```sh
+kwriteconfig6 --file kwinrc --group Wayland --key InputMethod /usr/share/applications/henge-keyboard.desktop
+```
+
+To turn it off: `kwriteconfig6 --file kwinrc --group Wayland --key InputMethod ""`.
+
+`keyboard-panel-check.sh` (`make test-linux-keyboard-panel`, needs Docker) runs `kwin_wayland --virtual` 6.3.6 at 1280x800 in a Debian trixie container with the package's files and the image's `kwinrc` in place, a stand-in for the host (`kwin-panel/host.py`) and a maximized test window (`kwin-panel/window.py`, which writes each size KWin gives it). It checks: KWin starts the helper from `kwinrc`; a text field gives `show`; a height of 0.4 makes the window 1280x480, 0.25 makes it 1280x600, and 0 gives 1280x800 back; the same with no text field, with no request to the host, and a text field after that gives `show`; a window that opens with the keyboard up; a second helper stops; and KWin without `KWIN_IM_SHOW_ALWAYS` leaves the window at 1280x800.
 
 ## Checks on the Mac
 

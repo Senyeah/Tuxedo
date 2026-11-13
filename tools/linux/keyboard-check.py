@@ -9,9 +9,9 @@ Boots a clone of the desktop image on hengevm with --share and HV_INPUT_FILE. Th
 what the guest last asked for ("show" or "hide") and the request count on hengevm's stderr. In the labwc session
 it checks: the service runs; foot with the focus gives "show" and still gets keys; a window with no text field (wlprobe.py) gives
 "hide", and "show" comes back when it closes; no window gives "hide"; the helper says "hide" when it stops, and
-"show" when it starts with a text field in focus. --gtk also installs zenity in the clone (needs the network):
+"show" when it starts with a text field in focus; the guest reads the height that "kbdheight F" sets. --gtk also installs zenity in the clone (needs the network):
 a GTK entry gives "show", a GTK dialog with no entry does not.
-The image needs henge-guest 1.2.2 (--image FILE names a rebuilt copy). The shared image never changes: the guest
+The image needs henge-guest 1.2.2 or later (--image FILE names a rebuilt copy). The shared image never changes: the guest
 writes to a clone. Exit 1 on a failed check.
 """
 import argparse
@@ -179,6 +179,16 @@ def one(args):
                 need("systemctl --user start henge-keyboard", what="start the service")
                 t = host.wait("show", "the helper started with foot in focus", 30)
                 print(f"ok: the helper starts with a text field in focus: show ({t:.1f} s)", flush=True)
+
+                # The device keyboard's height reaches the guest (KWin's panel reads it; labwc has no use for it)
+                get = ("python3 -c 'import urllib.request;print(urllib.request.urlopen"
+                       "(\"http://10.0.2.4/.henge/keyboard\",timeout=5).read().decode().strip())'")
+                for line, want in (("kbdheight 0.4", "height 0.400"), ("kbdheight 0", "height 0.000")):
+                    host.line(line)
+                    got = need(f"sleep 1; {get}", what="GET /.henge/keyboard")
+                    if got != want:
+                        raise Fail(f"after '{line}' the guest reads {got!r}, not {want!r}")
+                print("ok: the guest reads the device keyboard's height", flush=True)
 
                 if args.gtk:
                     need("sudo apt-get update -q && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends zenity",

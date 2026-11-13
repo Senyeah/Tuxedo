@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Henge keyboard
+Comment=The device keyboard as the virtual keyboard of KWin
+Exec=/usr/lib/henge/henge-keyboard
+NoDisplay=true
+X-KDE-Wayland-VirtualKeyboard=true
