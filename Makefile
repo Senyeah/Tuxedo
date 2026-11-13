@@ -29,6 +29,10 @@ DEV = $(B)/pvg_lite.o $(B)/pvg_metal.o $(B)/vgpu_metal.o $(B)/gicv3.o $(B)/timer
       $(B)/virtio.o $(B)/virtio_blk.o $(B)/virtio_net.o $(B)/virtio_rng.o $(B)/virtio_input.o $(B)/virtio_gpu.o $(B)/virtio_snd.o $(B)/virtio_usb.o $(B)/virtio_balloon.o $(B)/xhci.o $(B)/vmapple.o $(B)/aes.o $(B)/pl061.o $(B)/metallib.o $(B)/fdt.o $(B)/guest_ram.o $(B)/virt.o $(B)/virt_fdt.o $(B)/ocores_i2c.o $(B)/devstatus.o $(GFX_OBJ)
 ENGINE = $(CORE) $(HOST)
 VM = $(B)/vm.o $(B)/linux_boot.o $(B)/status.o
+# hvcodec, the guest's video codecs (host/vcodec.m, hengevm --vcodec), on VideoToolbox.
+VT_FRAMEWORKS = -framework Foundation -framework VideoToolbox -framework CoreMedia -framework CoreVideo -framework CoreFoundation -framework IOSurface
+VT_OBJ = $(B)/vt_decode.o $(B)/vt_caps.o
+VCODEC_OBJ = $(B)/vcodec.o $(VT_OBJ)
 METAL_LIBS = -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers $(GFX_LDLIBS)
 
 TESTS = $(B)/test_classify $(B)/test_jit_region $(B)/test_operands $(B)/test_jit $(B)/test_mem $(B)/test_share_keyboard \
@@ -90,8 +94,8 @@ $(B)/henge-agent.gz: $(B)/henge-agent
 $(B)/share.o: host/share.c host/*.h devices/*.h core/*.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(B)/hengevm: host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(B)/mac-restore/libhengerestore.a $(if $(GFX),$(wildcard $(GFX_LIBS)))
-	$(CC) $(CFLAGS) host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(B)/mac-restore/libhengerestore.a -lz -framework Foundation -framework CFNetwork -framework Security -framework SystemConfiguration -framework IOKit $(SLIRP_LIBS) -framework AudioToolbox -framework ParavirtualizedGraphics -framework Metal -framework IOSurface \
+$(B)/hengevm: host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(VCODEC_OBJ) $(B)/mac-restore/libhengerestore.a $(if $(GFX),$(wildcard $(GFX_LIBS)))
+	$(CC) $(CFLAGS) host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(VCODEC_OBJ) $(B)/mac-restore/libhengerestore.a -lz $(VT_FRAMEWORKS) -framework Foundation -framework CFNetwork -framework Security -framework SystemConfiguration -framework IOKit $(SLIRP_LIBS) -framework AudioToolbox -framework ParavirtualizedGraphics -framework Metal -framework IOSurface \
 	    -framework Foundation -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers -framework CoreFoundation \
 	    -framework AppKit -framework QuartzCore $(GFX_LDLIBS) -o $@
 
@@ -534,9 +538,7 @@ test-vgpu-virgl:
 
 # Guest video codecs (hvcodec, docs/guest-video-encode-plan.md): VideoToolbox on the host. vt_decode.m is the
 # decode code that the virgl video back end can share; vt_caps.m is the run-time codec table.
-VT_FRAMEWORKS = -framework Foundation -framework VideoToolbox -framework CoreMedia -framework CoreVideo -framework CoreFoundation -framework IOSurface
-VT_OBJ = $(B)/vt_decode.o $(B)/vt_caps.o
-$(B)/vt_decode.o $(B)/vt_caps.o: $(B)/%.o: host/%.m host/*.h | $(B)
+$(VCODEC_OBJ): $(B)/%.o: host/%.m host/*.h | $(B)
 	$(CC) $(CFLAGS) -fobjc-arc -c $< -o $@
 
 # VE0.1 and VE0.2: the transcode limit with no guest, and the codec table. VT_BENCH_ARGS: clips, --probe-only, --write DIR.
@@ -549,6 +551,13 @@ ios-vt-bench: | $(B)
 	xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=17.0 -fobjc-arc -Wall -Wextra -O2 -Ihost tests/vt_transcode_bench.m host/vt_decode.m host/vt_caps.m \
 	  -framework AVFoundation $(VT_FRAMEWORKS) -o $(B)/vt_transcode_bench_ios
 .PHONY: vt-transcode-bench ios-vt-bench
+
+# hvcodec's core through a socket pair: decode, encode, transfers, limits and the parser fuzz. No guest; part of make test.
+$(B)/test_vcodec: tests/test_vcodec.m $(VCODEC_OBJ)
+	$(CC) $(CFLAGS) -fobjc-arc $^ $(VT_FRAMEWORKS) -o $@
+test-vcodec: $(B)/test_vcodec
+	$(B)/test_vcodec
+.PHONY: test-vcodec
 
 # A5: both iOS libraries with the renderer, linked with the static graphics libraries. The device binary is only linked.
 # The simulator binary runs when a simulator is booted (xcrun simctl spawn).

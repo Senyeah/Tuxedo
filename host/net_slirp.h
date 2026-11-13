@@ -6,6 +6,8 @@
 
 /* Before hv_net_attach: the Unix socket behind the guest's 10.0.2.4:80 (share.c). */
 void hv_net_set_share_socket(const char *path);
+/* Before hv_net_attach: the Unix socket behind 10.0.2.4:8470 (vcodec.m), or NULL for none. */
+void hv_net_set_vcodec_socket(const char *path);
 /* User-mode NAT for the guest's virtio-net (see net_slirp.c). Returns 0 on success. */
 int hv_net_attach(HvMachine *m, HvVirtioNet *n);
 /* CPUs must be stopped. Joins the network worker before its machine is freed. */
