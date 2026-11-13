@@ -208,6 +208,65 @@ struct MachineModelTests {
         precondition(PreviewShape.aspect(width: 640, height: 1386, fallback: 16.0 / 9) == 640.0 / 1386)
         precondition(PreviewShape.aspect(width: 0, height: 0, fallback: 16.0 / 9) == 16.0 / 9)
 
+        // Port forwards: none by default, off for old JSON, and a list round-trips.
+        precondition(old[0].forwards == nil && linux.forwards == nil)
+        precondition(!String(decoding: data, as: UTF8.self).contains("forwards"))
+        let ssh = ForwardPolicy.sshPreset()
+        precondition(ssh.name == "SSH" && ssh.phonePort == 2222 && ssh.guestPort == 22 && ssh.enabled)
+        precondition(ForwardPolicy.sshPreset().id != ssh.id) // a new rule each tap
+        var web = PortForward(phonePort: 8000, guestPort: 8000)
+        web.enabled = false
+        var forwarding = linux
+        forwarding.forwards = [ssh, web]
+        let fwdData = try JSONEncoder().encode([forwarding])
+        let fwdBack = MachineList.decode(fwdData, diskExists: { _ in true })!
+        precondition(fwdBack[0].forwards == [ssh, web] && fwdBack[0].forwards![1].name == nil && !fwdBack[0].forwards![1].enabled)
+        precondition(String(decoding: fwdData, as: UTF8.self).contains("\"phonePort\":2222"))
+
+        // Validation: phone ports 1024-65535, guest 1-65535, a phone port once, at most 16.
+        precondition(ForwardPolicy.isValid([]) && ForwardPolicy.isValid([ssh, web]))
+        precondition(ForwardPolicy.problem([PortForward(phonePort: 22, guestPort: 22)], at: 0) == .phonePort)
+        precondition(ForwardPolicy.problem([PortForward(phonePort: 1023, guestPort: 22)], at: 0) == .phonePort)
+        precondition(ForwardPolicy.problem([PortForward(phonePort: 1024, guestPort: 22)], at: 0) == nil)
+        precondition(ForwardPolicy.problem([PortForward(phonePort: 65536, guestPort: 22)], at: 0) == .phonePort)
+        precondition(ForwardPolicy.problem([PortForward(phonePort: 65535, guestPort: 65535)], at: 0) == nil)
+        precondition(ForwardPolicy.problem([PortForward(phonePort: 2000, guestPort: 0)], at: 0) == .guestPort)
+        precondition(ForwardPolicy.problem([PortForward(phonePort: 2000, guestPort: 65536)], at: 0) == .guestPort)
+        let twice = [ssh, PortForward(phonePort: 2222, guestPort: 80)]
+        precondition(ForwardPolicy.problem(twice, at: 0) == nil && ForwardPolicy.problem(twice, at: 1) == .duplicate)
+        precondition(!ForwardPolicy.isValid(twice))
+        var offTwice = twice
+        offTwice[0].enabled = false // a disabled rule still holds its phone port
+        precondition(ForwardPolicy.problem(offTwice, at: 1) == .duplicate)
+        let sixteen = (0..<16).map { PortForward(phonePort: 3000 + $0, guestPort: 22) }
+        precondition(ForwardPolicy.isValid(sixteen) && !ForwardPolicy.isValid(sixteen + [PortForward(phonePort: 4000, guestPort: 22)]))
+        precondition(!ForwardPolicy.canAddSSH(sixteen) && ForwardPolicy.canAddSSH([web]) && !ForwardPolicy.canAddSSH([ssh]))
+
+        // The engine gets the enabled rules with no problem, at most 16.
+        precondition(ForwardPolicy.active([ssh, web]) == [ssh])
+        precondition(ForwardPolicy.active(twice) == [ssh])
+        precondition(ForwardPolicy.active(sixteen + [PortForward(phonePort: 4000, guestPort: 22)]).count == 16)
+        precondition(ForwardPolicy.newRule([web]).phonePort == 8001 && ForwardPolicy.newRule([]).guestPort == 8000)
+
+        // What Details shows.
+        precondition(ForwardPolicy.title(ssh) == "SSH" && ForwardPolicy.title(web) == "Port 8000")
+        precondition(ForwardPolicy.connectText(ssh, address: "192.168.1.20") == "ssh -p 2222 henge@192.168.1.20")
+        precondition(ForwardPolicy.connectText(web, address: "192.168.1.20") == "192.168.1.20:8000")
+        let lines = "127.0.0.1 lo0\n100.101.102.103 utun3\n192.168.1.20 en0\n"
+        precondition(ForwardPolicy.parseAddresses(lines).map(\.ip) == ["192.168.1.20", "100.101.102.103", "127.0.0.1"])
+        precondition(ForwardPolicy.networkName("en0") == "Wi-Fi" && ForwardPolicy.networkName("utun3") == "VPN"
+                     && ForwardPolicy.networkName("en5") == "Ethernet" && ForwardPolicy.networkName("bridge100") == "Personal Hotspot")
+        let up = ForwardPolicy.shown(count: 3, err: 0, text: lines, phonePort: 2222, device: "iPhone")
+        guard case .listening(let local, true) = up, local.map(\.ip) == ["192.168.1.20", "100.101.102.103"] else { preconditionFailure("\(up)") }
+        precondition(ForwardPolicy.shown(count: 1, err: 0, text: "127.0.0.1 lo0\n", phonePort: 2222, device: "iPhone") == .noLocalNetwork(loopback: true))
+        precondition(ForwardPolicy.shown(count: 0, err: 0, text: "", phonePort: 2222, device: "iPhone") == .noLocalNetwork(loopback: false))
+        precondition(ForwardPolicy.shown(count: -1, err: 0, text: "", phonePort: 2222, device: "iPhone") == .off)
+        precondition(ForwardPolicy.shown(count: 0, err: 48, text: "", phonePort: 2222, device: "iPad")
+                     == .failed("Port 2222 is in use on this iPad.", local: []))
+        guard case .failed("Port 2222 is in use on this iPhone on some of its addresses.", let some) =
+                ForwardPolicy.shown(count: 1, err: 48, text: "192.168.1.20 en0\n", phonePort: 2222, device: "iPhone"),
+              some.map(\.ip) == ["192.168.1.20"] else { preconditionFailure("partly in use") }
+
         print("machine model: ok")
     }
 }

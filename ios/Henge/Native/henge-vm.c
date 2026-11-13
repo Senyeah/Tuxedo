@@ -22,6 +22,7 @@
 #include "install.h"
 #include "vcodec.h"
 
+#include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -107,6 +108,7 @@ int henge_vm_boot(const char *rom, const char *disk, const char *aux, uint64_t e
     HvVmConfig c = {.rom = rom, .disk = disk, .aux = aux, .ecid = ecid, .seed = seed, .ram_mb = ram_mb, .ncpus = cpus, .log = 1,
                     .jit_rx = jit->rx_addr, .jit_rw = jit->rw_addr, .jit_bytes = jit->size};
     hv_net_set_vcodec_socket(NULL); /* a Linux machine before it may have had one */
+    hv_net_forward_set(NULL, 0); /* forwards are a Linux machine's */
     fprintf(stderr, "henge: booting with %d CPUs, %llu MB RAM, a %zu MB JIT region\n", cpus, (unsigned long long)ram_mb,
             jit->size >> 20);
     if (hv_vm_create(&c, err, errlen) != 0) return failed_start();
@@ -290,6 +292,7 @@ int henge_vm_install(const char *rom, const char *disk, const char *aux, uint64_
     HvVmConfig c = {.rom = rom, .disk = disk, .aux = aux, .ecid = ecid, .ram_mb = ram_mb, .ncpus = cpus, .log = 1,
                     .installer = 1, .no_sound = 1, .jit_rx = jit->rx_addr, .jit_rw = jit->rw_addr, .jit_bytes = jit->size};
     hv_net_set_vcodec_socket(NULL);
+    hv_net_forward_set(NULL, 0);
     fprintf(stderr, "henge: installing %s with %d CPUs, %llu MB RAM\n", ipsw, cpus, (unsigned long long)ram_mb);
     if (hv_vm_create(&c, err, errlen) != 0) return failed_start();
     install_step = 0;
@@ -430,6 +433,45 @@ int henge_vm_board_kind(void) {
     int kind = hv_vm_board() ? HENGE_VM_BOARD_MAC : hv_vm_virt() ? HENGE_VM_BOARD_LINUX : -1;
     pthread_rwlock_unlock(&api_lock);
     return kind;
+}
+
+int henge_vm_forwards_set(const uint16_t *phone_ports, const uint16_t *guest_ports, int n) {
+    HvFwdRule rules[HV_FWD_MAX_RULES];
+    if (n < 0 || n > HV_FWD_MAX_RULES || (n && (!phone_ports || !guest_ports))) {
+        errno = EINVAL;
+        return -1;
+    }
+    for (int i = 0; i < n; i++) rules[i] = (HvFwdRule){phone_ports[i], guest_ports[i]};
+    int rc = hv_fwd_check(rules, n, 1024); /* iOS binds nothing lower */
+    if (rc) {
+        errno = rc;
+        return -1;
+    }
+    return hv_net_forward_set(rules, n);
+}
+
+void henge_vm_forwards_refresh(void) { hv_net_forward_refresh(); }
+
+int henge_vm_forward_state(int index, char *addrs, size_t cap, int *err) {
+    HvFwdAddr a[HV_FWD_MAX_ADDRS];
+    int e = 0;
+    int n = hv_net_forward_state(index, a, HV_FWD_MAX_ADDRS, &e);
+    if (err) *err = e;
+    if (addrs && cap) {
+        size_t used = 0;
+        addrs[0] = 0;
+        for (int i = 0; i < n; i++) {
+            char ip[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &a[i].ip, ip, sizeof ip);
+            int w = snprintf(addrs + used, cap - used, "%s %s\n", ip, a[i].ifname);
+            if (w < 0 || (size_t)w >= cap - used) {
+                addrs[used] = 0; /* whole lines only */
+                break;
+            }
+            used += (size_t)w;
+        }
+    }
+    return n;
 }
 
 uint64_t henge_vm_dns(int which) {

@@ -70,6 +70,8 @@ struct VirtualMac: Identifiable, Codable, Hashable {
     var showsConsole: Bool?
     /// Linux: folders from the Files app, at /media/henge/<name> in the guest. Missing: none.
     var folders: [SharedFolder]?
+    /// Linux: TCP ports on the phone's local networks that lead into the guest (ForwardPolicy). Missing: none.
+    var forwards: [PortForward]?
 
     var directory: URL { MachinePaths.directory(for: id) }
     var rom: URL { directory.appendingPathComponent("AVPBooter.vmapple2.bin") }
@@ -110,6 +112,16 @@ struct SharedFolder: Codable, Hashable, Identifiable {
     enum Mode: String, Codable, CaseIterable {
         case readWrite, copyOnWrite, readOnly
     }
+}
+
+/// A port on the phone's local networks that leads to a port in a Linux guest (host/net_forward.h).
+struct PortForward: Codable, Hashable, Identifiable {
+    var id = UUID()
+    /// Shown in settings and Details, e.g. "SSH". Missing: the guest port.
+    var name: String?
+    var phonePort: Int
+    var guestPort: Int
+    var enabled = true
 }
 
 enum MachinePaths {

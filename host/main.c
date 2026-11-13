@@ -1481,7 +1481,7 @@ static void *cpu_thread(void *unused) {
 }
 
 static void usage(void) {
-    fprintf(stderr, "usage: hengevm --board virt (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N] [--display WxH] [--gpu-accel [--gpu-video]] [--vcodec | --vcodec-dma] [--screenshot PNG] [--window [--touch]] [--folder NAME=DIR[:ro|cow|rw]]...\n"
+    fprintf(stderr, "usage: hengevm --board virt (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N] [--display WxH] [--gpu-accel [--gpu-video]] [--vcodec | --vcodec-dma] [--screenshot PNG] [--window [--touch]] [--folder NAME=DIR[:ro|cow|rw]]... [--forward HOSTPORT:GUESTPORT]... [--forward-addr IPV4|local]\n"
                     "       (virt: Ctrl-A x quits, Ctrl-A p and SIGTERM press the power key, Ctrl-A s pauses and resumes, Ctrl-A b is the app's background, SIGTSTP pauses and stops until SIGCONT; exit status 0 shutdown, 3 restart with --no-reboot, 4 panic or engine error)\n");
     fprintf(stderr, "usage: hengevm [--board vmapple] --rom FILE --disk FILE --aux FILE --ecid N [--seed N] [--ram MB] [--log N] [--trace 1] [--screenshot PNG] [--watch VA] [--stats SECONDS [--profile 1]] [--cpus N] [--window] [--no-pvg] [--no-chain] [--break PC [--break-hits N]] [--dump PA LEN FILE] [--aux-offset BYTES] [--install IPSW]\n");
     exit(2);
@@ -1516,6 +1516,9 @@ int main(int argc, char **argv) {
     int stats = 0, profile = 0, window = 0;
     uint64_t brk = ~0ull, brk_hits = 1, dump_pa = 0, dump_len = 0;
     const char *dump_path = NULL;
+    HvFwdRule forwards[HV_FWD_MAX_RULES];
+    int nforwards = 0;
+    const char *forward_addr = "127.0.0.1"; /* this Mac only, unless asked */
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--window")) {
             window = 1;
@@ -1582,6 +1585,14 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--folder")) { /* NAME=DIR[:ro|cow|rw], as a folder from the Files app (rw if no mode) */
             if (folder_arg(argv[++i]) != 0) usage();
         }
+        else if (!strcmp(argv[i], "--forward")) { /* HOSTPORT:GUESTPORT, TCP into the guest (HV_NET_FWD adds one more) */
+            if (nforwards == HV_FWD_MAX_RULES || hv_fwd_parse(argv[++i], &forwards[nforwards]) != 0) {
+                fprintf(stderr, "hengevm: --forward %s: want HOSTPORT:GUESTPORT, at most %d\n", argv[i], HV_FWD_MAX_RULES);
+                usage();
+            }
+            nforwards++;
+        }
+        else if (!strcmp(argv[i], "--forward-addr")) forward_addr = argv[++i]; /* an IPv4 address, or local: as the app */
         else if (!strcmp(argv[i], "--machine-id")) machine_id = argv[++i];
         else if (!strcmp(argv[i], "--display")) { /* WxH: virt, or vmapple in --phone mode */
             unsigned w = 0, h = 0;
@@ -1653,6 +1664,10 @@ int main(int argc, char **argv) {
         char sock[256];
         snprintf(sock, sizeof sock, "%s.sock", share_folder);
         if (hv_share_start(share_folder, sock, getenv("HV_AGENT")) == 0) hv_net_set_share_socket(sock);
+    }
+    if (hv_net_forward_listen(forward_addr) != 0 || hv_net_forward_set(forwards, nforwards) != 0) {
+        fprintf(stderr, "hengevm: --forward-addr %s or a --forward port given twice\n", forward_addr);
+        return 2;
     }
     if (vcodec) {
         static char sock[104];

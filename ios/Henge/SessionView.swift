@@ -48,6 +48,7 @@ struct SessionView: View {
     @State private var typing = false
     @State private var zoomed = false
     @State private var showDetails = false
+    @State private var detailsPath: [String] = []
     @State private var controlsHidden = false
     @State private var showRevealHint = false
     @State private var pointerRefused = false
@@ -307,6 +308,10 @@ struct SessionView: View {
         // With the guest on a monitor the phone is a pad: a pointer at its top must not open the system's panels
         .defersSystemGestures(on: display.isExternal || touchActive ? .all : [])
         .sheet(isPresented: $showDetails) { details }
+        .onReceive(NotificationCenter.default.publisher(for: Autopilot.details)) { note in
+            detailsPath = (note.object as? String) == "forwards" ? ["forwards"] : []
+            showDetails = true
+        }
         .confirmationDialog("Shut down \(mac.name)?", isPresented: $confirmStop, titleVisibility: .visible) {
             Button("Shut Down", role: .destructive) { finish() }
         } message: {
@@ -384,6 +389,7 @@ struct SessionView: View {
             gate.end()
             KeychainStore.shared.setUnlocked(false)
             FolderSession.shared.end()
+            ForwardSession.shared.end()
         }
         .modifier(ExternalMacDisplayModifier(presentation: MacPresentation(display: display, aspect: layoutAspect, isLinux: mac.guest == .linux)))
         .task(id: bootAttempt) { await run() }
@@ -955,7 +961,7 @@ struct SessionView: View {
     }
 
     private var details: some View {
-        NavigationStack {
+        NavigationStack(path: $detailsPath) {
             List {
                 Section(phase) {
                     LabeledContent("CPUs on", value: "\(cpusOn) of \(cpus)")
@@ -963,6 +969,9 @@ struct SessionView: View {
                     LabeledContent("Translated blocks", value: String(format: "%.1f M/s", blocksPerSecond / 1e6))
                     LabeledContent("Network frames", value: "\(framesOut) out, \(framesIn) in")
                     LabeledContent("Up", value: "\(Int(Date().timeIntervalSince(started))) s")
+                }
+                if mac.guest == .linux { // where to connect is what Details is opened for
+                    Section("Port forwards") { ForwardsDetails(machine: mac.id) }
                 }
                 Section("Display") {
                     Toggle("Color matching", isOn: $matchScreenColors)
@@ -1052,6 +1061,7 @@ struct SessionView: View {
             }
             .navigationTitle("Details")
             .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(for: String.self) { _ in ForwardsPage(machine: mac.id) }
         }
     }
 
@@ -1113,6 +1123,7 @@ struct SessionView: View {
         Sharing.prepare()
         // After the Face ID check: the folders are private. They stay open while the wallet is locked (decision 6).
         if mac.guest == .linux { FolderSession.shared.start(current) } else { FolderSession.shared.end() }
+        if mac.guest == .linux { ForwardSession.shared.start(current) } else { ForwardSession.shared.end() }
         KeychainStore.shared.attach(mac)
         KeychainStore.shared.setUnlocked(gate.secretsUnlocked)
         if mac.guest == .linux { DeviceStatus.shared.start { [display] in !display.isExternal } }
@@ -1175,6 +1186,7 @@ struct SessionView: View {
         if rc != 0 {
             error = String(cString: buffer)
             FolderSession.shared.end()
+            ForwardSession.shared.end()
             return
         }
         started = Date()
@@ -1219,6 +1231,7 @@ struct SessionView: View {
                 gate.end() // no machine runs: the wallet locks
                 KeychainStore.shared.setUnlocked(false)
                 FolderSession.shared.end()
+                ForwardSession.shared.end()
                 let outcome = henge_vm_exit_outcome()
                 if shutdownAsked != nil && outcome == Int32(HENGE_VM_OUTCOME_SHUTDOWN.rawValue) {
                     close() // the person asked for it: no stopped card

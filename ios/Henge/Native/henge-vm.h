@@ -114,6 +114,19 @@ int henge_vm_folder_answered(int index, long ask, int *ok, char **text);
 typedef int (*HengeFolderHook)(void *user, int index, const char *path, int event);
 void henge_vm_folders_hook(HengeFolderHook hook, void *user);
 
+/* A Linux machine's TCP forwards from the phone into the guest (host/net_forward.h): rule i is phone_ports[i] to
+   guest_ports[i]. Each listens on every local network address (Wi-Fi, Ethernet, the hotspot, VPNs) and on 127.0.0.1,
+   never on cellular, and follows the addresses as they change. Kept for the next henge_vm_boot_linux and applied to a
+   running machine at once; henge_vm_boot and henge_vm_install clear them. Any thread. 0, or -1 with errno EINVAL (a
+   phone port below 1024, a port 0, a phone port twice, more than 16). */
+int henge_vm_forwards_set(const uint16_t *phone_ports, const uint16_t *guest_ports, int n);
+/* The phone's network changed (NWPathMonitor): look at its addresses now, not at the next 5 s poll. Any thread. */
+void henge_vm_forwards_refresh(void);
+/* Rule index of the running machine: how many addresses it listens on, written to addrs as "IP IFNAME\n" lines
+   (cap bytes, NUL-terminated), and in *err the errno of an address that failed (EADDRINUSE: the port is taken) or
+   0. -1 when no machine runs or its network has not taken rule index yet. */
+int henge_vm_forward_state(int index, char *addrs, size_t cap, int *err);
+
 /* The phone's status for a Linux guest (host/status.h). Any time, before boot too; kept for the next machine.
    state: UIDeviceBatteryState (0 unknown, 1 unplugged, 2 charging, 3 full); level 0-100, or -1. */
 void henge_vm_set_battery(int level, int state);
