@@ -1106,7 +1106,10 @@ static void test_fuzz(const Stream *in, int iterations) {
 
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
-    if (argc == 3 && !strcmp(argv[1], "--serve")) { /* a host for henge-xcode --unix PATH, with no guest */
+    /* a host for henge-xcode --unix PATH, with no guest; the budgets make the host's limits easy to reach */
+    if (argc >= 3 && argc <= 6 && !strcmp(argv[1], "--serve")) {
+        hv_vcodec_set_budgets(argc > 3 ? strtoull(argv[3], NULL, 0) : 0, argc > 4 ? strtoull(argv[4], NULL, 0) : 0,
+                              argc > 5 ? strtoull(argv[5], NULL, 0) : 0);
         if (hv_vcodec_start(argv[2])) return 1;
         printf("serving on %s\n", argv[2]);
         for (;;) pause();

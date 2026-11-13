@@ -706,7 +706,9 @@ static int do_enc_frame(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     if (!s) return fail(c, req, HV_VC_E_HANDLE, "no such encoder");
     pthread_mutex_lock(&s->mu);
     OSStatus aerr = s->async_err;
-    int eos = s->eos, full = s->npk >= MAX_PACKETS || s->pk_bytes >= MAX_PACKET_BYTES || atomic_load(&all_packet_bytes) >= max_all_packet_bytes;
+    /* no packet can be read before the third frame, so a full queue must not refuse one of the first three */
+    int eos = s->eos, full = dts_known(s) && (s->npk >= MAX_PACKETS || s->pk_bytes >= MAX_PACKET_BYTES ||
+                                              atomic_load(&all_packet_bytes) >= max_all_packet_bytes);
     pthread_mutex_unlock(&s->mu);
     if (aerr != noErr) return vt_fail(c, req, "encode", aerr);
     if (eos) return fail(c, req, HV_VC_E_INVAL, "the stream is finished");

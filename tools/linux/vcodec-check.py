@@ -20,7 +20,8 @@ henge-codec-info to the guest, checks `henge-codec-info --json`, and runs the pl
   ffmpeg -hwaccel henge -hwaccel_output_format henge -i CLIP -c:v hevc_henge -b:v 20M -c:a copy out.mp4
 The output must have the clip's frames, decode with no error, reach MIN_PSNR, and keep the audio in sync: the same
 video times as the clip, and the same audio start, duration and packet count. Its fps is set against henge-xcode's
-on the same clip in the same run. Then a scale_henge, a software filter chain and an h264_henge output.
+on the same clip in the same run. Then a scale_henge, a software filter chain and an h264_henge output. Before the clips,
+each input format goes to h264_henge and hevc_henge, and the profile must follow the rule in PROFILE_RULE.
 The shared image never changes: the guest runs on an APFS clone, deleted at the end. Exit 1 on a failed check.
 """
 import argparse
@@ -45,6 +46,46 @@ FPS = 60
 # The clips carry noise, so the transcode loses more than test_vcodec's clean frames; black or swapped planes give 10 to 20 dB.
 MIN_PSNR = 35.0
 MIN_FRAME_PSNR = 30.0
+
+
+# The encoders' profile when -profile is not set (hengeenc.c auto_profiles): input format to profile, and a fallback
+# where the device does not list the first. The output's chroma must be the input's (bgra: 4:2:0).
+PROFILE_RULE = {
+    "hevc_henge": {"nv12": ["HEVC_Main_AutoLevel"], "p010le": ["HEVC_Main10_AutoLevel"], "nv16": ["HEVC_Main42210_AutoLevel"],
+                   "p210le": ["HEVC_Main42210_AutoLevel"], "nv24": ["HEVC_Main444_AutoLevel"], "p410le": ["HEVC_Main44410_AutoLevel"],
+                   "bgra": ["HEVC_Main_AutoLevel"]},
+    "h264_henge": {"nv12": ["H264_High_AutoLevel"], "p010le": ["H264_High10_AutoLevel", "H264_High_AutoLevel"],
+                   "nv16": ["H264_High422_AutoLevel"], "p210le": ["H264_High422_AutoLevel"],
+                   "nv24": ["H264_High444Predictive_AutoLevel"], "p410le": ["H264_High444Predictive_AutoLevel"],
+                   "bgra": ["H264_High_AutoLevel"]},
+}
+
+
+def chroma_of(pix_fmt):
+    return "4:4:4" if "444" in pix_fmt or pix_fmt.startswith(("nv24", "p410")) else \
+           "4:2:2" if "422" in pix_fmt or pix_fmt.startswith(("nv16", "p210")) else "4:2:0"
+
+
+def check_profiles(p, encs):
+    """Each input format to h264_henge and hevc_henge: the profile in the verbose log must follow PROFILE_RULE for the
+    device's list, and the output must keep the input's chroma."""
+    ok = True
+    for enc, codec in (("hevc_henge", "hvc1"), ("h264_henge", "avc1")):
+        listed = {x["name"] for x in encs[codec].get("profiles", [])}
+        for fmt, names in PROFILE_RULE[enc].items():
+            want = next((n for n in names if n in listed), "default")
+            out = need(p, f"./ffmpeg -hide_banner -nostats -v verbose -y -f lavfi -i testsrc2=size=640x360:rate=30 -frames:v 10 "
+                          f"-pix_fmt {fmt} -c:v {enc} -b:v 2M /tmp/prof.mp4 2>&1 | grep -E 'Henge .* encoder|no profile|has no'; "
+                          "./ffprobe -v error -select_streams v -show_entries stream=profile,pix_fmt -of csv=p=0 /tmp/prof.mp4",
+                       f"{enc} from {fmt}", 120)
+            m = re.search(r"profile (\S+), ", out)
+            got = m.group(1) if m else "?"
+            pix = out.strip().splitlines()[-1].split(",")[-1] if out.strip() else "?"
+            want_chroma = "4:2:0" if fmt == "bgra" else chroma_of(fmt)
+            good = got == want and chroma_of(pix) == want_chroma
+            ok &= good
+            print(f"{'ok  ' if good else 'FAIL'} {enc} from {fmt}: profile {got} (rule: {want}), output {out.strip().splitlines()[-1]}")
+    return ok
 
 
 class Fail(Exception):
@@ -366,6 +407,7 @@ def main():
                     raise Fail("henge-codec-info lists no H.264 or no HEVC hardware encoder")
                 listed = ", ".join(f"{k} ({e['ffmpeg']})" for k, e in encs.items())
                 print(f"ok   henge-codec-info --json: encoders {listed}; decoders {', '.join(d['codec'] for d in table['decoders'])}")
+                ok &= check_profiles(p, encs)
             mem = need(p, "./hvbench", "hvbench")
             for line in re.findall(r"hvbench: [^\n]+", mem):
                 print(f"     {line}")

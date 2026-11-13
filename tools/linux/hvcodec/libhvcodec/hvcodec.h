@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* libhvcodec: the guest's client for hvcodec, the host's VideoToolbox service (docs/guest-video-encode-plan.md).
    The messages are in vcodec_proto.h. One HvClient is one connection, and so one host context: frame handles
-   are good only on the connection that made them. All calls are thread-safe: a lock serialises them.
+   are good only on the connection that made them. All calls are thread-safe: the threads take turns in order, and
+   each holds the connection from its request to its reply. So a caller that waits on the host (ENC_PACKET with
+   HV_VC_PACKET_WAIT) must use a short timeout: every other thread on the connection waits behind it.
 
    The channel: "unix:PATH", "HOST:PORT" or "HOST" (port 8470). NULL or "" takes $HENGE_VCODEC, then 10.0.2.4:8470,
    the address that libslirp gives the host service. */

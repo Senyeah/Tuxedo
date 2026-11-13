@@ -29,6 +29,8 @@
 
 struct HvClient {
     pthread_mutex_t mu;
+    pthread_cond_t turn_cv;
+    uint64_t next_turn, serving; /* FIFO turns: a thread that loops on short calls cannot starve the others */
     int fd, broken;
     uint32_t seq, posted;
     char addr[160];
@@ -121,6 +123,7 @@ HvClient *hv_client_open(const char *addr, char *err, size_t errlen) {
         return NULL;
     }
     pthread_mutex_init(&c->mu, NULL);
+    pthread_cond_init(&c->turn_cv, NULL);
     c->fd = fd;
     snprintf(c->addr, sizeof c->addr, "%s", addr);
     return c;
@@ -129,16 +132,32 @@ HvClient *hv_client_open(const char *addr, char *err, size_t errlen) {
 void hv_client_close(HvClient *c) {
     if (!c) return;
     close(c->fd);
+    pthread_cond_destroy(&c->turn_cv);
     pthread_mutex_destroy(&c->mu);
     free(c);
 }
 
 const char *hv_client_addr(const HvClient *c) { return c->addr; }
 
-void hv_client_stats(HvClient *c, HvStats *s) {
+/* The connection is held from the request to its reply. */
+static void take_turn(HvClient *c) {
     pthread_mutex_lock(&c->mu);
-    *s = c->st;
+    uint64_t t = c->next_turn++;
+    while (t != c->serving) pthread_cond_wait(&c->turn_cv, &c->mu);
     pthread_mutex_unlock(&c->mu);
+}
+
+static void end_turn(HvClient *c) {
+    pthread_mutex_lock(&c->mu);
+    c->serving++;
+    pthread_cond_broadcast(&c->turn_cv);
+    pthread_mutex_unlock(&c->mu);
+}
+
+void hv_client_stats(HvClient *c, HvStats *s) {
+    take_turn(c);
+    *s = c->st;
+    end_turn(c);
 }
 
 static int send_iov(HvClient *c, struct iovec *iov, int n) {
@@ -210,30 +229,30 @@ static int broken(HvClient *c, HvReply *r) {
 }
 
 int hv_call(HvClient *c, uint32_t type, const void *a, size_t alen, const void *b, size_t blen, HvReply *r) {
-    pthread_mutex_lock(&c->mu);
+    take_turn(c);
     if (r) r->data = NULL, r->len = 0, r->err[0] = 0, r->status = 0;
     if (c->broken || read_posted(c)) {
         int st = broken(c, r);
-        pthread_mutex_unlock(&c->mu);
+        end_turn(c);
         return st;
     }
     int st = send_req(c, type, a, alen, b, blen);
     if (st) {
         if (st == HV_CLIENT_E_IO) broken(c, r);
         else if (r) r->status = st, snprintf(r->err, sizeof r->err, "the request is too large");
-        pthread_mutex_unlock(&c->mu);
+        end_turn(c);
         return st;
     }
     c->st.calls++;
     HvVcHeader h;
     if (recv_all(c, &h, sizeof h) || h.type != (type | HV_VC_REPLY) || h.seq != c->seq || h.len > MAX_REPLY) {
         st = broken(c, r);
-        pthread_mutex_unlock(&c->mu);
+        end_turn(c);
         return st;
     }
     if (!r) {
         st = drop(c, h.len) ? broken(c, NULL) : h.status;
-        pthread_mutex_unlock(&c->mu);
+        end_turn(c);
         return st;
     }
     if ((size_t)h.len + 1 > r->cap_) {
@@ -242,17 +261,17 @@ int hv_call(HvClient *c, uint32_t type, const void *a, size_t alen, const void *
             /* keep the stream in step */
             st = drop(c, h.len) ? broken(c, r) : HV_VC_E_NOMEM;
             if (st == HV_VC_E_NOMEM) r->status = st, snprintf(r->err, sizeof r->err, "no memory for a reply of %u bytes", h.len);
-            pthread_mutex_unlock(&c->mu);
+            end_turn(c);
             return st;
         }
         r->heap_ = n, r->cap_ = (size_t)h.len + 1;
     }
     if (h.len && recv_all(c, r->heap_, h.len)) {
         st = broken(c, r);
-        pthread_mutex_unlock(&c->mu);
+        end_turn(c);
         return st;
     }
-    pthread_mutex_unlock(&c->mu);
+    end_turn(c);
     r->heap_[h.len] = 0;
     r->data = r->heap_, r->len = h.len, r->status = h.status;
     if (h.status) {
@@ -265,13 +284,13 @@ int hv_call(HvClient *c, uint32_t type, const void *a, size_t alen, const void *
 }
 
 int hv_post(HvClient *c, uint32_t type, const void *a, size_t alen) {
-    pthread_mutex_lock(&c->mu);
+    take_turn(c);
     int st = c->broken ? HV_CLIENT_E_IO : 0;
     if (!st && c->posted >= MAX_POSTED) st = read_posted(c);
     if (!st) st = send_req(c, type, a, alen, NULL, 0);
     if (!st) c->posted++, c->st.posts++;
     else if (st == HV_CLIENT_E_IO) c->broken = 1;
-    pthread_mutex_unlock(&c->mu);
+    end_turn(c);
     return st;
 }
 
