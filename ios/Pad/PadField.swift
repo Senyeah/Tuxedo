@@ -20,8 +20,11 @@ struct PadField {
     /// The first dot's centre, in the host view's points.
     private(set) var originX = 0.0, originY = 0.0
     private(set) var core: [Float] = [], tail: [Float] = [], grab: [Float] = []
+    /// Rings drawn fresh each frame (ripples, the drag ring), so they leave no smear.
+    private(set) var flash: [Float] = []
     private(set) var time = 0.0
     private var lastDt = 0.0
+    private var flashDirty = false
     private(set) var smoothSpeed = 0.0
     private(set) var grabLevel = 0.0
     /// The brightest cell after the last step.
@@ -60,6 +63,7 @@ struct PadField {
         core = Array(repeating: 0, count: cols * rows)
         tail = core
         grab = core
+        flash = core
         fingers = [:]
         ripples = []
         flashes = []
@@ -117,6 +121,10 @@ struct PadField {
         pending.removeAll(keepingCapacity: true)
         for s in samples { apply(s, tauC: tauC, tauT: tauT) }
 
+        if flashDirty {
+            flash.withUnsafeMutableBufferPointer { f in for i in 0..<f.count { f[i] = 0 } }
+            flashDirty = false
+        }
         if reduceMotion {
             for i in core.indices { core[i] = 0; tail[i] = 0 }
             brightest = 0
@@ -128,7 +136,7 @@ struct PadField {
     /// e ← e·exp(−dt/τ), less a linear drain: the exact step of de/dt = −e/τ − drain,
     /// so the look is the same at 60 Hz and 120 Hz.
     private mutating func decay(dt: Double, tauC: Double, tauT: Double) {
-        guard dt > 0 else { return }
+        guard dt > 0, brightest > 0 else { return }
         let k = tuning.trail.drain
         let ac = exp(-dt / tauC), at = exp(-dt / tauT)
         let a1 = Float(ac), b1 = Float(k * tauC * (1 - ac))
@@ -298,7 +306,7 @@ struct PadField {
         brightest = top
     }
 
-    /// A ring into the core only, so it leaves no trail. `gaussian` mixes a plain band toward
+    /// A ring into the frame's own channel, so it leaves no trail or smear. `gaussian` mixes a plain band toward
     /// a Gaussian profile across the width.
     mutating func ring(x: Double, y: Double, radius: Double, sigma: Double, peak: Double, gaussian: Double) {
         guard cols > 0, peak > 0 else { return }
@@ -307,6 +315,7 @@ struct PadField {
         let i0 = max(0, Int(floor((x - reach - originX) / p))), i1 = min(cols - 1, Int(ceil((x + reach - originX) / p)))
         let j0 = max(0, Int(floor((y - reach - originY) / p))), j1 = min(rows - 1, Int(ceil((y + reach - originY) / p)))
         guard i0 <= i1, j0 <= j1 else { return }
+        flashDirty = true
         var top = brightest
         for j in j0...j1 {
             let dy = originY + Double(j) * p - y
@@ -317,7 +326,7 @@ struct PadField {
                 let gauss = exp(-d * d / (2 * sigma * sigma))
                 let v = Float(peak * (band + (gauss - band) * gaussian))
                 let n = j * cols + i
-                if v > core[n] { core[n] = v }
+                if v > flash[n] { flash[n] = v }
                 top = max(top, v)
             }
         }
@@ -326,16 +335,18 @@ struct PadField {
 
     // MARK: Upload
 
-    /// RGBA8 for each cell: √core, √tail (more steps at the dim end), grab, 0.
+    /// RGBA8 for each cell: √core, √tail (more steps at the dim end), grab, √ring.
     func encode(into out: UnsafeMutablePointer<UInt8>) {
         core.withUnsafeBufferPointer { c in
             tail.withUnsafeBufferPointer { t in
                 grab.withUnsafeBufferPointer { g in
-                    for i in 0..<c.count {
-                        out[4 * i] = UInt8(min(c[i].squareRoot(), 1) * 255 + 0.5)
-                        out[4 * i + 1] = UInt8(min(t[i].squareRoot(), 1) * 255 + 0.5)
-                        out[4 * i + 2] = UInt8(min(max(g[i], 0), 1) * 255 + 0.5)
-                        out[4 * i + 3] = 0
+                    flash.withUnsafeBufferPointer { f in
+                        for i in 0..<c.count {
+                            out[4 * i] = UInt8(min(c[i].squareRoot(), 1) * 255 + 0.5)
+                            out[4 * i + 1] = UInt8(min(t[i].squareRoot(), 1) * 255 + 0.5)
+                            out[4 * i + 2] = UInt8(min(max(g[i], 0), 1) * 255 + 0.5)
+                            out[4 * i + 3] = UInt8(min(f[i].squareRoot(), 1) * 255 + 0.5)
+                        }
                     }
                 }
             }
@@ -343,9 +354,9 @@ struct PadField {
     }
 
     /// A cell's values, for tests.
-    func cell(_ i: Int, _ j: Int) -> (core: Float, tail: Float, grab: Float) {
+    func cell(_ i: Int, _ j: Int) -> (core: Float, tail: Float, grab: Float, ring: Float) {
         let n = j * cols + i
-        return (core[n], tail[n], grab[n])
+        return (core[n], tail[n], grab[n], flash[n])
     }
 }
 

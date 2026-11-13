@@ -141,6 +141,8 @@ struct PadTuning: Codable, Equatable {
         var bottomGap = 4.0
         var pillCentre = 33.0
         var minPadRadius = 14.0
+        /// 0 is a circular corner, 1 a continuous one, as the system draws.
+        var cornerSmoothing = 1.0
     }
 
     struct Keyboard: Codable, Equatable {

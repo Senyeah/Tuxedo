@@ -38,7 +38,7 @@ struct PadFieldTests {
 
     static func maxCell(_ f: PadField) -> Float {
         var m: Float = 0
-        for j in 0..<f.rows { for i in 0..<f.cols { let c = f.cell(i, j); m = max(m, max(c.core, c.tail)) } }
+        for j in 0..<f.rows { for i in 0..<f.cols { let c = f.cell(i, j); m = max(m, max(max(c.core, c.tail), c.ring)) } }
         return m
     }
 
@@ -143,7 +143,7 @@ struct PadFieldTests {
             let u = (now - 1.0 / 120) / t.ripple.duration
             let r = t.ripple.radius * (1 - pow(1 - u, 3))
             let ri = Int(((200 + r - f.originX) / 5).rounded()), rj = Int(((200 - f.originY) / 5).rounded())
-            let v = f.cell(ri, rj).core
+            let v = f.cell(ri, rj).ring
             if rm { check(v < 0.01, "Reduce Motion draws no ripple ring: \(v)") } else { check(v > 0.2, "a ripple lights its ring: \(v)") }
         }
 
