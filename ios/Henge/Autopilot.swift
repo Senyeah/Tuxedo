@@ -27,12 +27,14 @@ import UIKit
 ///   linux-install ID NAME DISK_GB RAM_MB keep|delete  download, unpack and list a machine, then wait
 ///   snap [NAME]        the guest's screen (1920x1080) into Documents/NAME.jpg (snap.jpg)
 ///   log TEXT           a marker in henge.log
+///   details [forwards] open the session's Details (and its Port Forwards page), for a screenshot
 ///   stop               stop the machine
 ///   exit               quit Henge
 /// Each command is written to henge.log as it runs, so the log has the timeline.
 /// HENGE_AUTOPILOT in the launch environment (not the once file) also skips a Linux machine's Face ID check
 /// (SessionGate). The wallet stays locked unless HENGE_AUTOPILOT_WALLET=unlocked is in the launch environment too.
 enum Autopilot {
+    static let details = Notification.Name("henge.autopilot.details")
     private static let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
 
     /// Launched for testing: by environment, or by a one-time file (used up here).
@@ -196,6 +198,8 @@ enum Autopilot {
             HengeLog.log("autopilot", got < 0 ? "no balloon (set HV_BALLOON in henge-env.txt)" : "balloon: the guest has handed over \(got) MB")
         case "log": // already in the log; the wall clock too, to line it up with things measured elsewhere
             HengeLog.log("autopilot", String(format: "at %.3f", Date().timeIntervalSince1970))
+        case "details":
+            NotificationCenter.default.post(name: Autopilot.details, object: arg)
         case "stop":
             henge_vm_stop()
         case "exit":

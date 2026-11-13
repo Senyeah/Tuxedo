@@ -38,7 +38,7 @@ METAL_LIBS = -framework Foundation -framework QuartzCore -framework Metal -frame
 
 TESTS = $(B)/test_classify $(B)/test_jit_region $(B)/test_operands $(B)/test_jit $(B)/test_mem $(B)/test_share_keyboard \
         $(B)/test_mmu $(B)/test_exc $(B)/test_devices $(B)/test_virtio_hvcodec $(B)/test_shutdown $(B)/test_pause $(B)/test_big_lock $(B)/test_machine_rebuild $(B)/test_fdt $(B)/test_console $(B)/test_virt \
-        $(B)/test_status $(B)/test_secrets $(B)/test_share_paths $(B)/test_fs_server $(B)/test_virtio_fs $(B)/test_vgpu_metal $(B)/test_vcodec $(if $(GFX),$(B)/test_vgpu_virgl)
+        $(B)/test_status $(B)/test_secrets $(B)/test_share_paths $(B)/test_fs_server $(B)/test_virtio_fs $(B)/test_vgpu_metal $(B)/test_vcodec $(B)/test_net_forward $(if $(GFX),$(B)/test_vgpu_virgl)
 
 all: $(TESTS) $(B)/hengevm $(B)/hengevm-ref $(B)/hvsparse
 
@@ -69,6 +69,7 @@ SLIRP_CFLAGS = $(shell pkg-config --cflags slirp)
 SLIRP_LIBS = $(shell pkg-config --libs slirp)
 $(B)/net_slirp.o: host/net_slirp.c host/*.h devices/*.h core/*.h | $(B)
 	$(CC) $(CFLAGS) $(SLIRP_CFLAGS) -c $< -o $@
+NET_OBJ = $(B)/net_slirp.o $(B)/net_forward.o
 $(B)/dns_proxy.o: host/dns_proxy.c host/dns_proxy.h core/machine.h | $(B)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -95,8 +96,8 @@ $(B)/henge-agent.gz: $(B)/henge-agent
 $(B)/share.o: host/share.c host/*.h devices/*.h core/*.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(B)/hengevm: host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(VCODEC_OBJ) $(B)/mac-restore/libhengerestore.a $(if $(GFX),$(wildcard $(GFX_LIBS)))
-	$(CC) $(CFLAGS) host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(VCODEC_OBJ) $(B)/mac-restore/libhengerestore.a -lz $(VT_FRAMEWORKS) -framework Foundation -framework CFNetwork -framework Security -framework SystemConfiguration -framework IOKit $(SLIRP_LIBS) -framework AudioToolbox -framework ParavirtualizedGraphics -framework Metal -framework IOSurface \
+$(B)/hengevm: host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(NET_OBJ) $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(VCODEC_OBJ) $(B)/mac-restore/libhengerestore.a $(if $(GFX),$(wildcard $(GFX_LIBS)))
+	$(CC) $(CFLAGS) host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(NET_OBJ) $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(VCODEC_OBJ) $(B)/mac-restore/libhengerestore.a -lz $(VT_FRAMEWORKS) -framework Foundation -framework CFNetwork -framework Security -framework SystemConfiguration -framework IOKit $(SLIRP_LIBS) -framework AudioToolbox -framework ParavirtualizedGraphics -framework Metal -framework IOSurface \
 	    -framework Foundation -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers -framework CoreFoundation \
 	    -framework AppKit -framework QuartzCore $(GFX_LDLIBS) -o $@
 
@@ -144,17 +145,21 @@ $(B)/test_fdt: tests/test_fdt.c $(B)/fdt.o
 $(B)/test_status: tests/test_status.c $(B)/status.o $(B)/share.o $(B)/safe_path.o $(B)/fs_server.o $(B)/secrets.o
 	$(CC) $(CFLAGS) $^ -o $@
 
+# The forward table against fake interface lists and a fake libslirp.
+$(B)/test_net_forward: tests/test_net_forward.c $(B)/net_forward.o
+	$(CC) $(CFLAGS) $^ -o $@
+
 # Native app lifecycle with real devices and networking; no restore assets.
 $(B)/test_dns_lifecycle: tests/test_dns_lifecycle.c $(B)/dns_proxy.o
 	$(CC) $(CFLAGS) $^ -o $@
 
-$(B)/test_vm_lifecycle: tests/test_vm_lifecycle.c ios/Henge/Native/henge-vm.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/usb_host.o $(VCODEC_OBJ)
+$(B)/test_vm_lifecycle: tests/test_vm_lifecycle.c ios/Henge/Native/henge-vm.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(NET_OBJ) $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/usb_host.o $(VCODEC_OBJ)
 	$(CC) $(CFLAGS) -Iios/Henge/Native $^ $(SLIRP_LIBS) $(METAL_LIBS) $(VT_FRAMEWORKS) -framework AudioToolbox -o $@
 
-$(B)/test_console: tests/test_console.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/usb_host.o
+$(B)/test_console: tests/test_console.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(NET_OBJ) $(B)/dns_proxy.o $(B)/usb_host.o
 	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -o $@
 
-$(B)/test_virt: tests/test_virt.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/usb_host.o
+$(B)/test_virt: tests/test_virt.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(NET_OBJ) $(B)/dns_proxy.o $(B)/usb_host.o
 	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -o $@
 
 # PUT /.henge/keyboard: what henge-keyboard in a Linux desktop asks of the device.
@@ -314,6 +319,12 @@ test-linux-share: $(B)/hengevm
 	uv run tools/linux/share-check.py $(SHARE_ARGS)
 .PHONY: test-linux-share
 
+# Port forwards: ssh and an http.server in a console clone through --forward, a port in use, --forward-addr local and
+# HV_NET_FWD. Installs openssh-server in the clone. FORWARD_ARGS="--keep-logs DIR" keeps hengevm's logs.
+test-linux-forward: $(B)/hengevm
+	uv run tools/linux/forward-check.py $(FORWARD_ARGS)
+.PHONY: test-linux-forward
+
 # FM6: the folders from the Files app (virtio-fs, henge-files) at /media/henge against --folder. Installs henge-guest from
 # tools/linux/henge-guest in the clone (needs Docker); FILES_ARGS="--image FILE --no-install" for a disk saved with --save-image.
 test-linux-files: $(B)/hengevm
@@ -425,7 +436,7 @@ IOS_DEPS ?= $(if $(wildcard ios/deps/include/slirp/libslirp.h),$(CURDIR)/ios/dep
 IOS_CFLAGS = -std=c11 -Wall -Wextra -O2 -g -Icore -Ihost -Idevices -I$(IOS_DEPS)/include/slirp $(if $(GFX),-DHV_GFX=1)
 IB = build/ios
 IOS_GFX_DIR ?= $(GFX_ROOT)/ios
-IOS_SRC = $(wildcard core/*.c) host/prof_ios.c host/jit_region.c host/disk.c host/vm.c host/linux_boot.c host/status.c $(IOS_NET) host/dns_proxy.c host/share.c host/safe_path.c host/fs_server.c host/secrets.c host/audio_mac.c host/hvsparse.c host/usb_host.c \
+IOS_SRC = $(wildcard core/*.c) host/prof_ios.c host/jit_region.c host/disk.c host/vm.c host/linux_boot.c host/status.c $(IOS_NET) host/net_forward.c host/dns_proxy.c host/share.c host/safe_path.c host/fs_server.c host/secrets.c host/audio_mac.c host/hvsparse.c host/usb_host.c \
           $(filter-out devices/pvg_mac.m,$(wildcard devices/*.c))
 # hvcodec, for a machine's Video encode setting. The app links VideoToolbox for it (ios/project.yml).
 IOS_VCODEC_OBJ = $(IB)/host/vcodec.o $(IB)/host/vt_decode.o $(IB)/host/vt_caps.o
@@ -594,7 +605,7 @@ test-virgl-host:
 
 # A5: the real virgl renderer behind the virtio GPU, driven through its control queue. Same libraries; with GFX=1 it
 # is also part of make test. Skipped (exit 0) when GFX_DIR is missing.
-$(B)/test_vgpu_virgl: tests/test_vgpu_virgl.c $(ENGINE) $(filter-out $(B)/vgpu_virgl.o,$(DEV)) $(B)/vgpu_virgl.o $(VM) $(B)/audio_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/usb_host.o $(GFX_LIBS)
+$(B)/test_vgpu_virgl: tests/test_vgpu_virgl.c $(ENGINE) $(filter-out $(B)/vgpu_virgl.o,$(DEV)) $(B)/vgpu_virgl.o $(VM) $(B)/audio_mac.o $(NET_OBJ) $(B)/dns_proxy.o $(B)/usb_host.o $(GFX_LIBS)
 	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) $(GFX_FRAMEWORKS) -framework AudioToolbox -o $@
 
 test-vgpu-virgl:
@@ -672,7 +683,7 @@ ios-gfx-ldflags:
 .PHONY: ios-gfx-ldflags
 
 # The machine list: lists from before Linux guests still decode, and a Linux folder is recovered like a Mac's.
-$(B)/test_machine_model: ios/Henge/MachineModel.swift tests/test_machine_model.swift | $(B)
+$(B)/test_machine_model: ios/Henge/MachineModel.swift ios/Henge/ForwardPolicy.swift tests/test_machine_model.swift | $(B)
 	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
 
 test-machine-model: $(B)/test_machine_model

@@ -76,7 +76,10 @@ struct MacSettingsView: View {
                 .padding(17)
                 .deskCard()
 
-                if mac.guest == .linux { FoldersSection(machine: mac.id) }
+                if mac.guest == .linux {
+                    FoldersSection(machine: mac.id)
+                    ForwardsSection(machine: mac.id)
+                }
 
                 DeskHeading("Manage")
                 manage

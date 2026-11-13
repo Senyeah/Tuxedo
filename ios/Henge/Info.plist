@@ -71,7 +71,7 @@
 	<key>NSFaceIDUsageDescription</key>
 	<string>Henge asks for Face ID before a machine opens or comes back, and to unlock the passwords a Linux machine keeps in the Keychain.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Henge uses the local network to pair with this iPhone for JIT, and to download Linux images from a computer on your network.</string>
+	<string>Henge uses the local network to pair with this iPhone for JIT, to download Linux images from a computer on your network, and to accept connections from your other devices to a Linux machine's port forwards, such as SSH.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
