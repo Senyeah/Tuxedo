@@ -261,6 +261,12 @@ test-linux-display: $(B)/hengevm
 	uv run tools/linux/display-check.py $(DISPLAY_ARGS)
 .PHONY: test-linux-display
 
+# VE0.4, VE0.5: hvcodec from a clone of the desktop image: henge-xcode built against Debian's libavformat transcodes
+# 4K60 and 1080p60 clips with the frames on the host, and the speeds are measured. VCODEC_ARGS="--image FILE --clips DIR".
+test-linux-vcodec: $(B)/hengevm
+	uv run tools/linux/vcodec-check.py --hengevm $(B)/hengevm $(VCODEC_ARGS)
+.PHONY: test-linux-vcodec
+
 # P6: the shared folder (~/Henge, davfs2) against --share. SHARE_ARGS="--image FILE" for an image that has davfs2.
 test-linux-share: $(B)/hengevm
 	uv run tools/linux/share-check.py $(SHARE_ARGS)
