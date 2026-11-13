@@ -81,12 +81,29 @@ def start_kwin(show_always):
     for f in (HOSTLOG, WINLOG, KWINLOG):
         open(f, "w").close()
     p = subprocess.Popen(["kwin_wayland", "--virtual", "--width", str(W), "--height", str(H), "--no-lockscreen",
-                          "--socket", "wayland-0"], env=env, stdout=open(KWINLOG, "w"), stderr=subprocess.STDOUT)
+                          "--socket", "wayland-0", "--xwayland"], env=env, stdout=open(KWINLOG, "w"), stderr=subprocess.STDOUT)
     wait("KWin did not start", lambda: os.path.exists(f"{RT}/wayland-0") and active().startswith("b "), 30)
     wait("KWin did not start henge-keyboard as its input method",
          lambda: subprocess.run(["pgrep", "-f", "/usr/lib/henge/henge-keyboard"], capture_output=True).returncode == 0
          and lines(HOSTLOG)[:1] == ["hide"], 20)
     return p, env
+
+
+def x11_height(env):
+    """The height of the xterm window, or None."""
+    names = [n for n in os.listdir("/tmp/.X11-unix") if n.startswith("X")]
+    if not names:
+        return None
+    r = subprocess.run(["xwininfo", "-name", "xterm"], env=dict(env, DISPLAY=":" + names[0][1:]), capture_output=True, text=True)
+    for line in r.stdout.split("\n"):
+        if line.strip().startswith("Height:"):
+            return int(line.split()[1])
+    return None
+
+
+def x11_is(env, h, what):
+    wait(f"{what}: the X11 window's height is {x11_height(env)}, not {h}", lambda: x11_height(env) == h)
+    print(f"ok: {what}: height {h}", flush=True)
 
 
 def start_window(env, *args):
@@ -104,6 +121,8 @@ def stop(p):
 
 def main():
     os.makedirs(RT, mode=0o700, exist_ok=True)
+    os.makedirs("/tmp/.X11-unix", mode=0o1777, exist_ok=True)  # Xwayland wants it
+    os.chmod("/tmp/.X11-unix", 0o1777)
     install()
     host = subprocess.Popen(["python3", f"{TOOLS}/kwin-panel/host.py", str(PORT), HOSTLOG])
     print(subprocess.run(["kwin_wayland", "--version"], capture_output=True, text=True).stdout.strip(), flush=True)
@@ -160,6 +179,26 @@ def main():
         window_is(W, H, "no panel")
         stop(win)
         wait("the window closed: no hide at the host", lambda: lines(HOSTLOG)[-1:] == ["hide"])
+
+        # An X11 window (XWayland): KWin does not move it, the script does
+        wait("Xwayland did not start", lambda: any(n.startswith("X") for n in os.listdir("/tmp/.X11-unix")), 30)
+        display = ":" + [n for n in os.listdir("/tmp/.X11-unix") if n.startswith("X")][0][1:]
+        xterm = subprocess.Popen(["xterm", "-maximized"], env=dict(env, DISPLAY=display), stderr=subprocess.DEVNULL)
+        x11_is(env, H, "a maximized X11 window")
+        set_height(0.4)
+        x11_is(env, H - 320, "the keyboard covers 0.4")
+        set_height(0.25)
+        x11_is(env, H - 200, "the keyboard changes to 0.25")
+        # Another window gets the focus: the X11 window gets its size back, the new window gets the keyboard
+        win = start_window(env, "--text")
+        window_is(W, H - 200, "a Wayland window opens over it")
+        x11_is(env, H, "the X11 window is not the active one")
+        stop(win)
+        x11_is(env, H - 200, "the X11 window is the active one again")
+        set_height(0)
+        x11_is(env, H, "the keyboard goes down")
+        stop(xterm)
+        time.sleep(1)  # the last hide waits 0.3 s in the helper
 
         # No text field: the person opened the keyboard
         requests = lines(HOSTLOG)
