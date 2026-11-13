@@ -67,6 +67,16 @@ PROFILE_RULE = {
 }
 
 
+def deb_key(v):
+    """Sort key for a Debian version (epoch, then dpkg's order of upstream and revision, without ~)."""
+    epoch, _, rest = v.rpartition(":") if ":" in v else ("0", "", v)
+    def part(x):
+        return [int(t) if t.isdigit() else [(ord(c) if c.isalpha() else ord(c) + 256) for c in t]
+                for t in re.findall(r"\d+|\D+", x)]
+    up, _, rev = rest.rpartition("-") if "-" in rest else (rest, "", "0")
+    return (int(epoch or 0), part(up), part(rev))
+
+
 def chroma_of(pix_fmt):
     return "4:4:4" if "444" in pix_fmt or pix_fmt.startswith(("nv24", "p410")) else \
            "4:2:2" if "422" in pix_fmt or pix_fmt.startswith(("nv16", "p210")) else "4:2:0"
@@ -358,7 +368,9 @@ def apt_checks(p, share, tree, clips):
     for block in open(os.path.join(tree, "dists", "trixie", "main", "binary-arm64", "Packages")).read().split("\n\n"):
         f = dict(l.split(": ", 1) for l in block.splitlines() if ": " in l and not l.startswith(" "))
         if f:
-            pool[f["Package"]] = f["Version"]
+            # The pool keeps old versions: apt's candidate is the highest
+            if f["Package"] not in pool or deb_key(f["Version"]) > deb_key(pool[f["Package"]]):
+                pool[f["Package"]] = f["Version"]
     print(f"     repository {tree}: " + ", ".join(f"{k} {v}" for k, v in sorted(pool.items())))
     keyring_sha = subprocess.run(["shasum", "-a", "256", os.path.join(ROOT, "tools/linux/henge-guest/usr/share/keyrings/henge-archive.gpg")],
                                  capture_output=True, text=True, check=True).stdout.split()[0]
