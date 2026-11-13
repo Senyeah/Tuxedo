@@ -223,6 +223,7 @@ final class LabDemo {
             "frames": s.frames, "restFrames": s.restFrames,
             "cpuMedianMs": PadFrameStats.median(s.cpu), "cpuP95Ms": PadFrameStats.p95(s.cpu),
             "gpuMedianMs": PadFrameStats.median(s.gpu), "gpuP95Ms": PadFrameStats.p95(s.gpu),
+            "modelMedianMs": PadFrameStats.median(s.model), "modelP95Ms": PadFrameStats.p95(s.model),
             "touchMedianUs": PadFrameStats.median(s.touch), "touchP95Us": PadFrameStats.p95(s.touch),
             "gpuSamples": s.gpu.count, "cpuSamples": s.cpu.count,
             "grid": [host.surface.field.cols, host.surface.field.rows],

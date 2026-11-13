@@ -132,8 +132,8 @@ final class LabModel: ObservableObject {
 
     var statsText: String {
         guard let s = host?.surface.stats else { return "" }
-        return String(format: "%d frames, %d at rest. Main thread %.3f ms (p95 %.3f). GPU %.3f ms (p95 %.3f). Touch %.1f µs.",
-                      s.frames, s.restFrames, PadFrameStats.median(s.cpu), PadFrameStats.p95(s.cpu),
+        return String(format: "%d frames, %d at rest. Main thread %.3f ms (p95 %.3f), of which the field %.3f ms. GPU %.3f ms (p95 %.3f). Touch %.1f µs.",
+                      s.frames, s.restFrames, PadFrameStats.median(s.cpu), PadFrameStats.p95(s.cpu), PadFrameStats.median(s.model),
                       PadFrameStats.median(s.gpu), PadFrameStats.p95(s.gpu), PadFrameStats.median(s.touch))
     }
 }

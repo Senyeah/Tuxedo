@@ -10,6 +10,7 @@ final class PadButtons: UIView {
     var onHold: ((Bool) -> Void)?
 
     private(set) var keys: [KeyView] = []
+    private let clip = CALayer()
     var tuning: PadTuning { didSet { restyle() } }
     var labels = false { didSet { if labels != oldValue { restyle() } } }
     var increaseContrast = false { didSet { if increaseContrast != oldValue { restyle() } } }
@@ -18,6 +19,8 @@ final class PadButtons: UIView {
         self.tuning = tuning
         super.init(frame: .zero)
         backgroundColor = .clear
+        clip.backgroundColor = UIColor.black.cgColor
+        layer.mask = clip
         keys = [KeyView(button: 0), KeyView(button: 1)]
         for k in keys {
             k.onPress = { [weak self] b, down in self?.onKey?(b, down) }
@@ -40,6 +43,11 @@ final class PadButtons: UIView {
         keys[0].frame = CGRect(x: l.leftNow.x, y: l.leftNow.y, width: l.leftNow.w, height: l.leftNow.h)
         keys[1].frame = CGRect(x: l.rightNow.x, y: l.rightNow.y, width: l.rightNow.w, height: l.rightNow.h)
         alpha = CGFloat(l.keysOpacity)
+        // Nothing of a key shows below the pad's edge, where the keyboard's row has gaps.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        clip.frame = CGRect(x: 0, y: 0, width: bounds.width, height: CGFloat(l.padBottom))
+        CATransaction.commit()
         isUserInteractionEnabled = l.keysTakeTouches
         // Hidden keys are not accessibility elements.
         accessibilityElementsHidden = !l.keysTakeTouches

@@ -17,6 +17,7 @@ struct PadFrameStats {
     var cpu: [Double] = []   // ms, the main thread's part of a frame
     var gpu: [Double] = []   // ms, from the command buffer's GPU times
     var touch: [Double] = [] // µs, the visual part of a touch handler
+    var model: [Double] = [] // ms, the field's step and its upload, inside `cpu`
 
     mutating func add(_ v: Double, to a: WritableKeyPath<PadFrameStats, [Double]>) {
         self[keyPath: a].append(v)
@@ -62,6 +63,7 @@ final class PadSurfaceView: UIView {
     private var lastFingers = false
     private var clock: CFTimeInterval = 0
     private var needFrame = false
+    private var modelTime: CFTimeInterval = 0
 
     init(tuning: PadTuning) {
         self.tuning = tuning
@@ -180,7 +182,9 @@ final class PadSurfaceView: UIView {
         let wasLit = field.isLit
         let hostWants = host?.padWillStep(self, at: clock) ?? false
         regrid()
+        let m0 = CACurrentMediaTime()
         if !frozen { field.step(to: clock) }
+        modelTime = CACurrentMediaTime() - m0
         let asked = needFrame
         needFrame = false
         let lit = field.isLit
@@ -218,10 +222,12 @@ final class PadSurfaceView: UIView {
         guard inFlight.wait(timeout: .now() + .milliseconds(50)) == .success else { return }
         textureIndex = (textureIndex + 1) % textures.count
         let tex = textures[textureIndex]
+        let e0 = CACurrentMediaTime()
         bytes.withUnsafeMutableBufferPointer { b in
             field.encode(into: b.baseAddress!)
             tex.replace(region: MTLRegionMake2D(0, 0, field.cols, field.rows), mipmapLevel: 0, withBytes: b.baseAddress!, bytesPerRow: field.cols * 4)
         }
+        stats.add((modelTime + CACurrentMediaTime() - e0) * 1000, to: \.model)
         var u = uniforms()
         guard let cb = queue.makeCommandBuffer() else { inFlight.signal(); return }
         let pass = MTLRenderPassDescriptor()
