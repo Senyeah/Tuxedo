@@ -33,9 +33,10 @@ OSStatus hv_vtd_session_create(CMVideoFormatDescriptionRef fmt, OSType pixfmt, i
 void hv_vtd_session_destroy(VTDecompressionSessionRef s);
 
 /* One frame, synchronously: no asynchronous decode and no temporal processing, so one picture out in decode order,
-   or none (*out NULL with noErr, as for a frame that is not shown). data must stay valid for the call only. */
+   or none (*out NULL with noErr, as for a frame that is not shown). *out_pts: the picture's own time, which the
+   caller can check against pts. data must stay valid for the call only. */
 OSStatus hv_vtd_decode(VTDecompressionSessionRef s, CMVideoFormatDescriptionRef fmt, const uint8_t *data, size_t len,
-                       CMTime pts, CMTime duration, CVPixelBufferRef *out, VTDecodeInfoFlags *flags);
+                       CMTime pts, CMTime duration, CVPixelBufferRef *out, VTDecodeInfoFlags *flags, CMTime *out_pts);
 
 /* The system stopped the session (iOS: the app left the screen) or the decoder failed: make a new one. */
 int hv_vtd_session_lost(OSStatus st);

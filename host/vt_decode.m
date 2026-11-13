@@ -55,6 +55,50 @@ static OSStatus format_from_annexb(CMVideoCodecType codec, const uint8_t *p, siz
     return n ? hv_vtd_format_from_sets(codec, n, sets, sizes, out) : kVTParameterErr;
 }
 
+/* The parameter sets in an avcC or hvcC atom, and its NAL length size. Returns the count, 0 for a bad atom. */
+static size_t sets_from_atom(CMVideoCodecType codec, const uint8_t *p, size_t len, const uint8_t **sets, size_t *sizes, int *nal_len) {
+    size_t n = 0, q;
+    if (codec == kCMVideoCodecType_H264) {
+        if (len < 7) return 0;
+        *nal_len = (p[4] & 3) + 1;
+        q = 5;
+        for (int list = 0; list < 2; list++) { /* SPS, then PPS */
+            if (q >= len) return 0;
+            size_t cnt = list ? p[q] : p[q] & 0x1f;
+            q++;
+            for (size_t k = 0; k < cnt; k++) {
+                if (q + 2 > len) return 0;
+                size_t l = (size_t)p[q] << 8 | p[q + 1];
+                if (!l || l > len - q - 2 || n >= MAX_SETS) return 0;
+                sets[n] = p + q + 2, sizes[n++] = l;
+                q += 2 + l;
+            }
+        }
+        return n;
+    }
+    if (len < 23) return 0;
+    *nal_len = (p[21] & 3) + 1;
+    size_t arrays = p[22];
+    q = 23;
+    for (size_t a = 0; a < arrays; a++) {
+        if (q + 3 > len) return 0;
+        int type = p[q] & 0x3f;
+        size_t cnt = (size_t)p[q + 1] << 8 | p[q + 2];
+        q += 3;
+        for (size_t k = 0; k < cnt; k++) {
+            if (q + 2 > len) return 0;
+            size_t l = (size_t)p[q] << 8 | p[q + 1];
+            if (l > len - q - 2) return 0;
+            if (type >= 32 && type <= 34 && l) { /* VPS, SPS, PPS; SEI arrays are not needed */
+                if (n >= MAX_SETS) return 0;
+                sets[n] = p + q + 2, sizes[n++] = l;
+            }
+            q += 2 + l;
+        }
+    }
+    return n;
+}
+
 /* VP9 with no codec private data: profile 0, 8 bit, 4:2:0, as an MP4 muxer would write it. */
 static const uint8_t default_vpcc[12] = {1, 0, 0, 0, 0, 10, 0x82, 2, 2, 2, 0, 0};
 
@@ -76,6 +120,19 @@ OSStatus hv_vtd_format_create(CMVideoCodecType codec, uint32_t width, uint32_t h
     }
     if (codec == kCMVideoCodecType_VP9 && !len) extra = default_vpcc, len = sizeof default_vpcc;
     if (!extra || len < 4) return kVTParameterErr;
+    /* From the parameter sets, CoreMedia reads the SPS's colour description. From the atom alone it reads none, and
+       the decoder then tags its frames BT.709 by guess, so an encoder set to BT.2020 and PQ converts them. */
+    if (codec == kCMVideoCodecType_H264 || codec == kCMVideoCodecType_HEVC) {
+        const uint8_t *sets[MAX_SETS];
+        size_t sizes[MAX_SETS];
+        int nal_len = 4;
+        size_t n = sets_from_atom(codec, extra, len, sets, sizes, &nal_len);
+        OSStatus st = !n ? kVTParameterErr
+                      : codec == kCMVideoCodecType_H264 ? CMVideoFormatDescriptionCreateFromH264ParameterSets(NULL, n, sets, sizes, nal_len, out)
+                                                        : CMVideoFormatDescriptionCreateFromHEVCParameterSets(NULL, n, sets, sizes, nal_len, NULL, out);
+        if (st == noErr) return noErr;
+        *out = NULL; /* fall back to the atom */
+    }
     CFDataRef data = CFDataCreate(NULL, extra, (CFIndex)len);
     CFDictionaryRef atoms = CFDictionaryCreate(NULL, (const void **)&key, (const void **)&data, 1, &kCFTypeDictionaryKeyCallBacks,
                                                &kCFTypeDictionaryValueCallBacks);
@@ -146,9 +203,10 @@ void hv_vtd_session_destroy(VTDecompressionSessionRef s) {
 }
 
 OSStatus hv_vtd_decode(VTDecompressionSessionRef s, CMVideoFormatDescriptionRef fmt, const uint8_t *data, size_t len,
-                       CMTime pts, CMTime duration, CVPixelBufferRef *out, VTDecodeInfoFlags *flags) {
+                       CMTime pts, CMTime duration, CVPixelBufferRef *out, VTDecodeInfoFlags *flags, CMTime *out_pts) {
     *out = NULL;
     if (flags) *flags = 0;
+    if (out_pts) *out_pts = kCMTimeInvalid;
     CMBlockBufferRef bb = NULL;
     CMSampleBufferRef sb = NULL;
     CMSampleTimingInfo timing = {duration, pts, kCMTimeInvalid};
@@ -161,11 +219,12 @@ OSStatus hv_vtd_decode(VTDecompressionSessionRef s, CMVideoFormatDescriptionRef 
     __block OSStatus result = noErr;
     __block CVPixelBufferRef image = NULL;
     __block VTDecodeInfoFlags info = 0;
+    __block CMTime image_pts = kCMTimeInvalid;
     st = VTDecompressionSessionDecodeFrameWithOutputHandler(s, sb, 0, NULL,
         ^(OSStatus status, VTDecodeInfoFlags f, CVImageBufferRef img, CMTime t, CMTime d) {
-            (void)t, (void)d;
+            (void)d;
             result = status, info |= f;
-            if (status == noErr && img && !image) image = CVPixelBufferRetain(img);
+            if (status == noErr && img && !image) image = CVPixelBufferRetain(img), image_pts = t;
         });
     if (st == noErr) VTDecompressionSessionWaitForAsynchronousFrames(s);
     CFRelease(sb);
@@ -177,6 +236,7 @@ OSStatus hv_vtd_decode(VTDecompressionSessionRef s, CMVideoFormatDescriptionRef 
         return st;
     }
     *out = image;
+    if (out_pts) *out_pts = image_pts;
     return noErr;
 }
 

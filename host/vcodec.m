@@ -24,17 +24,40 @@
 #include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
+#include <TargetConditionals.h>
 
 #define MAX_CONTEXTS 8
-#define MAX_FRAME_BYTES (1ull << 30) /* live frames in one context: 32 frames of 4K P010 is 800 MB */
 #define MAX_PACKETS 256 /* encoder output waiting for ENC_PACKET */
 #define MAX_PACKET_BYTES (64u << 20)
+/* Process-wide caps as well as per-context ones: a guest can open every context. Lower on iOS, where the app
+   shares its memory limit with guest RAM and jetsam ends it. VideoToolbox's own pools and reference frames are
+   not counted; the session cap bounds them. */
+#if TARGET_OS_IPHONE
+#define MAX_FRAME_BYTES (512ull << 20) /* live frames in one context: 20 frames of 4K P010 */
+#define MAX_ALL_FRAME_BYTES (512ull << 20)
+#define MAX_ALL_WIRE_BYTES (256ull << 20) /* receive buffers and FRAME_DOWNLOAD replies */
+#define MAX_ALL_PACKET_BYTES (128ull << 20)
+#define MAX_ALL_SESSIONS 8
+#else
+#define MAX_FRAME_BYTES (1ull << 30) /* 32 frames of 4K P010 is 800 MB */
+#define MAX_ALL_FRAME_BYTES (2ull << 30)
+#define MAX_ALL_WIRE_BYTES (512ull << 20)
+#define MAX_ALL_PACKET_BYTES (512ull << 20)
+#define MAX_ALL_SESSIONS 16
+#endif
 static int message_timeout_ms = 30000; /* the rest of a message, once its first byte is here */
 static uint32_t max_wait_ms = 10000;
+static uint64_t max_all_frame_bytes = MAX_ALL_FRAME_BYTES, max_all_wire_bytes = MAX_ALL_WIRE_BYTES, max_all_packet_bytes = MAX_ALL_PACKET_BYTES;
 
 void hv_vcodec_set_timeouts(int message_ms, uint32_t wait_ms) {
     message_timeout_ms = message_ms;
     max_wait_ms = wait_ms;
+}
+
+void hv_vcodec_set_budgets(uint64_t frame_bytes, uint64_t wire_bytes, uint64_t packet_bytes) {
+    max_all_frame_bytes = frame_bytes ? frame_bytes : MAX_ALL_FRAME_BYTES;
+    max_all_wire_bytes = wire_bytes ? wire_bytes : MAX_ALL_WIRE_BYTES;
+    max_all_packet_bytes = packet_bytes ? packet_bytes : MAX_ALL_PACKET_BYTES;
 }
 
 enum { KIND_NONE, KIND_DEC, KIND_ENC };
@@ -49,7 +72,8 @@ typedef struct Packet {
 typedef struct {
     CVPixelBufferRef pb;
     uint32_t gen, fmt, range, w, h;
-    uint64_t bytes;
+    uint64_t bytes; /* tightly packed, as on the wire */
+    uint64_t cost; /* what the buffer holds, stride and padding included */
 } Frame;
 
 typedef struct Session {
@@ -85,6 +109,9 @@ typedef struct {
     Frame frames[HV_VC_MAX_FRAMES];
     int nframes;
     uint64_t frame_bytes;
+    /* Held for each change of a session's dec or enc and for each VideoToolbox call on them, because
+       hv_vcodec_lose_sessions invalidates them from another thread. */
+    pthread_mutex_t mu;
     Session sess[HV_VC_MAX_SESSIONS];
     uint32_t next_gen;
     uint64_t bytes_in, bytes_out, decoded, packets;
@@ -97,6 +124,7 @@ static pthread_mutex_t registry_mu = PTHREAD_MUTEX_INITIALIZER;
 static void *registry[MAX_CONTEXTS];
 static _Atomic uint64_t total_contexts, total_messages, total_proto_errors;
 static _Atomic int64_t live_frames, live_sessions;
+static _Atomic uint64_t all_frame_bytes, all_wire_bytes, all_packet_bytes;
 
 void hv_vcodec_stats(HvVcodecStats *s) {
     s->contexts = atomic_load(&total_contexts);
@@ -105,7 +133,21 @@ void hv_vcodec_stats(HvVcodecStats *s) {
     s->protocol_errors = atomic_load(&total_proto_errors);
     s->live_frames = atomic_load(&live_frames);
     s->live_sessions = atomic_load(&live_sessions);
+    s->frame_bytes = atomic_load(&all_frame_bytes);
+    s->wire_bytes = atomic_load(&all_wire_bytes);
+    s->packet_bytes = atomic_load(&all_packet_bytes);
 }
+
+/* Adds n to *used if the total stays within limit. */
+static int budget_take(_Atomic uint64_t *used, uint64_t n, uint64_t limit) {
+    uint64_t cur = atomic_load(used);
+    do
+        if (n > limit || cur > limit - n) return 0;
+    while (!atomic_compare_exchange_weak(used, &cur, cur + n));
+    return 1;
+}
+
+static void budget_give(_Atomic uint64_t *used, uint64_t n) { atomic_fetch_sub(used, n); }
 
 /* ---- the wire ---- */
 
@@ -214,30 +256,39 @@ static Frame *frame_get(Ctx *c, uint32_t handle) {
     return &c->frames[i];
 }
 
+/* Room in this context and in the process for a frame of at least bytes: checked before anything allocates one. */
+static int frame_room(const Ctx *c, uint64_t bytes) {
+    return c->nframes < HV_VC_MAX_FRAMES && c->frame_bytes + bytes <= MAX_FRAME_BYTES && atomic_load(&all_frame_bytes) + bytes <= max_all_frame_bytes;
+}
+
 /* Takes the reference. Returns the handle, or 0 at the limit (and releases pb). */
 static uint32_t frame_put(Ctx *c, CVPixelBufferRef pb, uint32_t fmt, uint32_t range) {
     uint32_t w = (uint32_t)CVPixelBufferGetWidth(pb), h = (uint32_t)CVPixelBufferGetHeight(pb);
-    uint64_t bytes = hv_vc_frame_bytes(fmt, w, h);
-    if (!bytes || bytes > HV_VC_MAX_PAYLOAD - sizeof(HvVcFrameReply) || c->nframes >= HV_VC_MAX_FRAMES || c->frame_bytes + bytes > MAX_FRAME_BYTES) {
+    uint64_t bytes = hv_vc_frame_bytes(fmt, w, h), cost = CVPixelBufferGetDataSize(pb);
+    if (cost < bytes) cost = bytes;
+    if (!bytes || bytes > HV_VC_MAX_PAYLOAD - sizeof(HvVcFrameReply) || c->nframes >= HV_VC_MAX_FRAMES || c->frame_bytes + cost > MAX_FRAME_BYTES ||
+        !budget_take(&all_frame_bytes, cost, max_all_frame_bytes)) {
         CVPixelBufferRelease(pb);
         return 0;
     }
     for (uint32_t i = 0; i < HV_VC_MAX_FRAMES; i++) {
         Frame *f = &c->frames[i];
         if (f->pb) continue;
-        *f = (Frame){pb, new_gen(c), fmt, range, w, h, bytes};
+        *f = (Frame){pb, new_gen(c), fmt, range, w, h, bytes, cost};
         c->nframes++;
-        c->frame_bytes += bytes;
+        c->frame_bytes += cost;
         atomic_fetch_add(&live_frames, 1);
         return f->gen << 8 | (i + 1);
     }
+    budget_give(&all_frame_bytes, cost);
     CVPixelBufferRelease(pb);
     return 0;
 }
 
 static void frame_drop(Ctx *c, Frame *f) {
     CVPixelBufferRelease(f->pb);
-    c->frame_bytes -= f->bytes;
+    c->frame_bytes -= f->cost;
+    budget_give(&all_frame_bytes, f->cost);
     c->nframes--;
     atomic_fetch_sub(&live_frames, 1);
     memset(f, 0, sizeof *f);
@@ -249,30 +300,56 @@ static Session *session_get(Ctx *c, uint32_t id, int kind) {
     return &c->sess[i];
 }
 
-static Session *session_new(Ctx *c, int kind, uint32_t *id) {
+/* NULL at the limit: *all says whether the process's limit, not this context's, was the cause. */
+static Session *session_new(Ctx *c, int kind, uint32_t *id, int *all) {
+    *all = 0;
     for (uint32_t i = 0; i < HV_VC_MAX_SESSIONS; i++) {
         Session *s = &c->sess[i];
         if (s->kind != KIND_NONE) continue;
+        if (atomic_fetch_add(&live_sessions, 1) >= MAX_ALL_SESSIONS) {
+            atomic_fetch_sub(&live_sessions, 1);
+            *all = 1;
+            return NULL;
+        }
+        pthread_mutex_lock(&c->mu);
         memset(s, 0, sizeof *s);
+        pthread_mutex_unlock(&c->mu);
         s->kind = kind, s->gen = new_gen(c);
         pthread_mutex_init(&s->mu, NULL);
         pthread_cond_init(&s->cv, NULL);
         *id = s->gen << 8 | (i + 1);
-        atomic_fetch_add(&live_sessions, 1);
         return s;
     }
     return NULL;
 }
 
-static void session_free(Session *s) {
+static int session_limit(Ctx *c, const HvVcHeader *req, int all) {
+    if (all) return fail(c, req, HV_VC_E_LIMIT, "%d sessions open in all connections already", MAX_ALL_SESSIONS);
+    return fail(c, req, HV_VC_E_LIMIT, "%d sessions open already", HV_VC_MAX_SESSIONS);
+}
+
+/* Takes the VideoToolbox session out of s under c->mu, so hv_vcodec_lose_sessions cannot see it, then ends it. */
+static void dec_drop(Ctx *c, Session *s) {
+    pthread_mutex_lock(&c->mu);
+    VTDecompressionSessionRef d = s->dec;
+    s->dec = NULL;
+    pthread_mutex_unlock(&c->mu);
+    hv_vtd_session_destroy(d);
+}
+
+static void session_free(Ctx *c, Session *s) {
     if (s->kind == KIND_NONE) return;
-    if (s->dec) hv_vtd_session_destroy(s->dec);
+    dec_drop(c, s);
     if (s->fmt) CFRelease(s->fmt);
     free(s->conv);
-    if (s->enc) {
-        VTCompressionSessionCompleteFrames(s->enc, kCMTimeInvalid); /* no callback after this */
-        VTCompressionSessionInvalidate(s->enc);
-        CFRelease(s->enc);
+    pthread_mutex_lock(&c->mu);
+    VTCompressionSessionRef e = s->enc;
+    s->enc = NULL;
+    pthread_mutex_unlock(&c->mu);
+    if (e) {
+        VTCompressionSessionCompleteFrames(e, kCMTimeInvalid); /* no callback after this */
+        VTCompressionSessionInvalidate(e);
+        CFRelease(e);
     }
     if (s->mastering) CFRelease(s->mastering);
     if (s->light) CFRelease(s->light);
@@ -280,9 +357,12 @@ static void session_free(Session *s) {
         n = p->next;
         free(p->extra), free(p->data), free(p);
     }
+    budget_give(&all_packet_bytes, s->pk_bytes);
     pthread_mutex_destroy(&s->mu);
     pthread_cond_destroy(&s->cv);
+    pthread_mutex_lock(&c->mu);
     memset(s, 0, sizeof *s);
+    pthread_mutex_unlock(&c->mu);
     atomic_fetch_sub(&live_sessions, 1);
 }
 
@@ -336,15 +416,20 @@ static int do_dec_open(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     if (o.codec != HV_VC_H264 && o.codec != HV_VC_HEVC && o.codec != HV_VC_AV1 && o.codec != HV_VC_VP9) return fail(c, req, HV_VC_E_NOSUP, "no such decoder");
     if (!decodable(o.codec)) return fail(c, req, HV_VC_E_NOSUP, "no hardware decoder for this codec");
     uint32_t id;
-    Session *s = session_new(c, KIND_DEC, &id);
-    if (!s) return fail(c, req, HV_VC_E_LIMIT, "%d sessions open already", HV_VC_MAX_SESSIONS);
+    int all;
+    Session *s = session_new(c, KIND_DEC, &id, &all);
+    if (!s) return session_limit(c, req, all);
     s->codec = o.codec, s->w = o.width, s->h = o.height, s->out_fmt = o.format, s->out_range = o.range == HV_VC_RANGE_FULL ? HV_VC_RANGE_FULL : HV_VC_RANGE_VIDEO;
+    VTDecompressionSessionRef dec = NULL;
     OSStatus st = hv_vtd_format_create(o.codec, o.width, o.height, p + sizeof o, o.extradata_len, &s->fmt, &s->annexb);
-    if (st == noErr) st = hv_vtd_session_create(s->fmt, pixfmt, 1, &s->dec, &s->hw);
+    if (st == noErr) st = hv_vtd_session_create(s->fmt, pixfmt, 1, &dec, &s->hw);
     if (st != noErr) {
-        session_free(s);
+        session_free(c, s);
         return vt_fail(c, req, "decoder", st);
     }
+    pthread_mutex_lock(&c->mu);
+    s->dec = dec;
+    pthread_mutex_unlock(&c->mu);
     HvVcOpenReply r = {id, s->hw ? HV_VC_DEC_HW : 0};
     return ok(c, req, &r, sizeof r);
 }
@@ -360,6 +445,7 @@ static int do_dec_frame(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     size_t len = req->len - sizeof d;
     if (!len || len > HV_VC_MAX_BITSTREAM) return fail(c, req, HV_VC_E_INVAL, "bad frame length");
     if (c->nframes >= HV_VC_MAX_FRAMES) return fail(c, req, HV_VC_E_LIMIT, "%d frames live: free some", HV_VC_MAX_FRAMES);
+    if (!frame_room(c, hv_vc_frame_bytes(s->out_fmt, s->w, s->h))) return fail(c, req, HV_VC_E_LIMIT, "frame memory at the limit: free some");
     if (s->annexb) {
         size_t need = len + len / 3 + 8; /* a 3-byte start code becomes a 4-byte length */
         if (need > s->conv_cap) {
@@ -373,18 +459,23 @@ static int do_dec_frame(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     }
     CVPixelBufferRef pb = NULL;
     VTDecodeInfoFlags info = 0;
-    OSStatus st = hv_vtd_decode(s->dec, s->fmt, data, len, CMTimeMake(d.pts, 1), d.duration > 0 ? CMTimeMake(d.duration, 1) : kCMTimeInvalid, &pb, &info);
+    CMTime want = CMTimeMake(d.pts, 1), got;
+    pthread_mutex_lock(&c->mu);
+    OSStatus st = hv_vtd_decode(s->dec, s->fmt, data, len, want, d.duration > 0 ? CMTimeMake(d.duration, 1) : kCMTimeInvalid, &pb, &info, &got);
+    pthread_mutex_unlock(&c->mu);
     if (st != noErr) {
-        if (hv_vtd_session_lost(st)) {
-            hv_vtd_session_destroy(s->dec);
-            s->dec = NULL;
-        }
+        if (hv_vtd_session_lost(st)) dec_drop(c, s);
         return vt_fail(c, req, "decode", st);
     }
     HvVcFrameReply r = {0, 0, 0, 0, s->out_fmt, s->out_range, d.pts};
     if (!pb) {
         r.flags = HV_VC_FRAME_NONE | (info & kVTDecodeInfo_FrameDropped ? HV_VC_FRAME_DROPPED : 0);
         return ok(c, req, &r, sizeof r);
+    }
+    /* The reply names this packet's picture: a decoder that held one back would label it wrongly. */
+    if (!CMTIME_IS_NUMERIC(got) || CMTimeCompare(got, want)) {
+        CVPixelBufferRelease(pb);
+        return fail(c, req, HV_VC_E_CODEC, "the decoder gave a picture for another time (%lld, not %lld)", CMTIME_IS_NUMERIC(got) ? (long long)CMTimeConvertScale(got, 1, kCMTimeRoundingMethod_RoundHalfAwayFromZero).value : -1ll, (long long)d.pts);
     }
     r.width = (uint32_t)CVPixelBufferGetWidth(pb), r.height = (uint32_t)CVPixelBufferGetHeight(pb);
     uint32_t range = 0, fmt = hv_vt_format_of(CVPixelBufferGetPixelFormatType(pb), &range);
@@ -456,6 +547,7 @@ static void enc_output(void *ref, void *frame_ref, OSStatus st, VTEncodeInfoFlag
         s->tail = p;
         s->npk++;
         s->pk_bytes += p->data_len + p->h.extradata_len;
+        atomic_fetch_add(&all_packet_bytes, p->data_len + p->h.extradata_len);
     }
     s->pending--;
     pthread_cond_broadcast(&s->cv);
@@ -505,8 +597,9 @@ static int do_enc_open(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     if (!e) return fail(c, req, HV_VC_E_NOSUP, "no hardware encoder for this codec on this device");
     if (o.profile[0] && !profile_known(e, o.profile)) return fail(c, req, HV_VC_E_NOSUP, "the encoder has no profile %s", o.profile);
     uint32_t id;
-    Session *s = session_new(c, KIND_ENC, &id);
-    if (!s) return fail(c, req, HV_VC_E_LIMIT, "%d sessions open already", HV_VC_MAX_SESSIONS);
+    int all;
+    Session *s = session_new(c, KIND_ENC, &id, &all);
+    if (!s) return session_limit(c, req, all);
     s->codec = o.codec, s->w = o.width, s->h = o.height, s->timescale = (int32_t)o.timescale, s->bframes = !!(o.flags & HV_VC_ENC_F_BFRAMES);
     CFMutableDictionaryRef spec = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     CFStringRef eid = CFStringCreateWithCString(NULL, e->info.encoder_id, kCFStringEncodingUTF8);
@@ -516,16 +609,16 @@ static int do_enc_open(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
         if (@available(macOS 10.9, iOS 17.4, *)) CFDictionarySetValue(spec, kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder, kCFBooleanTrue);
     }
     CFDictionaryRef src_attrs = hv_vtd_buffer_attrs(hv_vt_pixfmt(o.format, o.range));
-    OSStatus st = VTCompressionSessionCreate(NULL, (int32_t)o.width, (int32_t)o.height, o.codec, spec, src_attrs, NULL, enc_output, s, &s->enc);
+    /* not in s->enc until it is set up, so hv_vcodec_lose_sessions cannot reach it before */
+    VTCompressionSessionRef v = NULL;
+    OSStatus st = VTCompressionSessionCreate(NULL, (int32_t)o.width, (int32_t)o.height, o.codec, spec, src_attrs, NULL, enc_output, s, &v);
     CFRelease(src_attrs);
     CFRelease(spec);
     if (st != noErr) {
-        s->enc = NULL;
-        session_free(s);
+        session_free(c, s);
         return vt_fail(c, req, "encoder", st);
     }
     const char *what = NULL;
-    VTCompressionSessionRef v = s->enc;
     set_prop(v, kVTCompressionPropertyKey_AllowFrameReordering, o.flags & HV_VC_ENC_F_BFRAMES ? kCFBooleanTrue : kCFBooleanFalse, &what, "B-frames");
     set_prop(v, kVTCompressionPropertyKey_RealTime, o.flags & HV_VC_ENC_F_REALTIME ? kCFBooleanTrue : kCFBooleanFalse, &what, "real time");
     if (o.profile[0]) {
@@ -573,14 +666,12 @@ static int do_enc_open(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
         s->light = data_of(o.light, sizeof o.light);
         set_prop(v, kVTCompressionPropertyKey_ContentLightLevelInfo, s->light, &what, "content light level");
     }
-    if (what) {
-        session_free(s);
-        return fail(c, req, HV_VC_E_NOSUP, "the encoder refused the %s setting", what);
-    }
-    st = VTCompressionSessionPrepareToEncodeFrames(v);
-    if (st != noErr) {
-        session_free(s);
-        return vt_fail(c, req, "encoder settings", st);
+    if (!what) st = VTCompressionSessionPrepareToEncodeFrames(v);
+    if (what || st != noErr) {
+        VTCompressionSessionInvalidate(v);
+        CFRelease(v);
+        session_free(c, s);
+        return what ? fail(c, req, HV_VC_E_NOSUP, "the encoder refused the %s setting", what) : vt_fail(c, req, "encoder settings", st);
     }
     if (@available(macOS 10.9, iOS 17.4, *)) {
         CFBooleanRef using = NULL;
@@ -589,6 +680,9 @@ static int do_enc_open(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
             CFRelease(using);
         }
     }
+    pthread_mutex_lock(&c->mu);
+    s->enc = v;
+    pthread_mutex_unlock(&c->mu);
     HvVcOpenReply r = {id, s->hw ? HV_VC_ENC_HW : 0};
     return ok(c, req, &r, sizeof r);
 }
@@ -609,12 +703,14 @@ static int do_enc_frame(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     if (!s) return fail(c, req, HV_VC_E_HANDLE, "no such encoder");
     pthread_mutex_lock(&s->mu);
     OSStatus aerr = s->async_err;
-    int eos = s->eos, full = s->npk >= MAX_PACKETS || s->pk_bytes >= MAX_PACKET_BYTES;
+    int eos = s->eos, full = s->npk >= MAX_PACKETS || s->pk_bytes >= MAX_PACKET_BYTES || atomic_load(&all_packet_bytes) >= max_all_packet_bytes;
     pthread_mutex_unlock(&s->mu);
     if (aerr != noErr) return vt_fail(c, req, "encode", aerr);
     if (eos) return fail(c, req, HV_VC_E_INVAL, "the stream is finished");
     if (f.flags & HV_VC_ENC_FRAME_EOS) {
+        pthread_mutex_lock(&c->mu);
         OSStatus st = VTCompressionSessionCompleteFrames(s->enc, kCMTimeInvalid);
+        pthread_mutex_unlock(&c->mu);
         pthread_mutex_lock(&s->mu);
         s->eos = 1;
         pthread_cond_broadcast(&s->cv);
@@ -636,8 +732,10 @@ static int do_enc_frame(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     pthread_mutex_lock(&s->mu);
     if (s->nin < 3) s->in_pts[s->nin++] = f.pts;
     pthread_mutex_unlock(&s->mu);
+    pthread_mutex_lock(&c->mu);
     OSStatus st = VTCompressionSessionEncodeFrame(s->enc, fr->pb, CMTimeMake(f.pts, s->timescale),
                                                   f.duration > 0 ? CMTimeMake(f.duration, s->timescale) : kCMTimeInvalid, props, NULL, NULL);
+    pthread_mutex_unlock(&c->mu);
     if (props) CFRelease(props);
     if (st != noErr) return vt_fail(c, req, "encode", st);
     if (f.flags & HV_VC_ENC_FRAME_FREE) frame_drop(c, fr);
@@ -671,6 +769,7 @@ static int do_enc_packet(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
         if (!s->head) s->tail = NULL;
         s->npk--;
         s->pk_bytes -= pk->data_len + pk->h.extradata_len;
+        budget_give(&all_packet_bytes, pk->data_len + pk->h.extradata_len);
         c->packets++;
     }
     int eos = s->eos && s->pending <= 0, pending = s->pending;
@@ -695,7 +794,7 @@ static int do_close(Ctx *c, const HvVcHeader *req, const uint8_t *p, int kind) {
     memcpy(&m, p, sizeof m);
     Session *s = session_get(c, m.session, kind);
     if (!s) return fail(c, req, HV_VC_E_HANDLE, "no such session");
-    session_free(s);
+    session_free(c, s);
     return ok(c, req, NULL, 0);
 }
 
@@ -759,6 +858,7 @@ static int do_frame_alloc(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     CFStringRef tags[3];
     if (colour_tags(a.primaries, a.transfer, a.matrix, tags)) return fail(c, req, HV_VC_E_NOSUP, "unknown colour code point");
     if (c->nframes >= HV_VC_MAX_FRAMES) return fail(c, req, HV_VC_E_LIMIT, "%d frames live: free some", HV_VC_MAX_FRAMES);
+    if (!frame_room(c, hv_vc_frame_bytes(a.format, a.width, a.height))) return fail(c, req, HV_VC_E_LIMIT, "frame memory at the limit: free some");
     CVPixelBufferRef pb = new_buffer(a.format, a.range, a.width, a.height);
     if (!pb) return fail(c, req, HV_VC_E_NOMEM, "no pixel buffer");
     tag_buffer(pb, tags);
@@ -786,15 +886,18 @@ static int do_frame_download(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     memcpy(&m, p, sizeof m);
     Frame *f = frame_get(c, m.handle);
     if (!f) return fail(c, req, HV_VC_E_HANDLE, "no such frame");
-    uint8_t *out = malloc(f->bytes);
-    if (!out) return fail(c, req, HV_VC_E_NOMEM, "no memory");
-    if (planes_copy(f, out, 1)) {
-        free(out);
-        return fail(c, req, HV_VC_E_CODEC, "the frame's planes do not match its format");
+    uint64_t n = f->bytes;
+    if (!budget_take(&all_wire_bytes, n, max_all_wire_bytes)) return fail(c, req, HV_VC_E_LIMIT, "transfer memory at the limit: try again");
+    uint8_t *out = malloc(n);
+    int rc;
+    if (!out) rc = fail(c, req, HV_VC_E_NOMEM, "no memory");
+    else if (planes_copy(f, out, 1)) rc = fail(c, req, HV_VC_E_CODEC, "the frame's planes do not match its format");
+    else {
+        HvVcFrameReply r = frame_reply(f, m.handle);
+        rc = reply(c, req, HV_VC_OK, &r, sizeof r, out, n, NULL, 0);
     }
-    HvVcFrameReply r = frame_reply(f, m.handle);
-    int rc = reply(c, req, HV_VC_OK, &r, sizeof r, out, f->bytes, NULL, 0);
     free(out);
+    budget_give(&all_wire_bytes, n);
     return rc;
 }
 
@@ -809,6 +912,7 @@ static int do_xfer(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     CFStringRef tags[3];
     if (colour_tags(x.primaries, x.transfer, x.matrix, tags)) return fail(c, req, HV_VC_E_NOSUP, "unknown colour code point");
     if (c->nframes >= HV_VC_MAX_FRAMES) return fail(c, req, HV_VC_E_LIMIT, "%d frames live: free some", HV_VC_MAX_FRAMES);
+    if (!frame_room(c, hv_vc_frame_bytes(x.format, x.width, x.height))) return fail(c, req, HV_VC_E_LIMIT, "frame memory at the limit: free some");
     if (!c->xfer) {
         OSStatus st = VTPixelTransferSessionCreate(NULL, &c->xfer);
         if (st != noErr) {
@@ -835,6 +939,23 @@ static int do_xfer(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
 }
 
 /* ---- the connection ---- */
+
+static void buf_free(Ctx *c) {
+    free(c->buf);
+    budget_give(&all_wire_bytes, c->cap);
+    c->buf = NULL, c->cap = 0;
+}
+
+/* Reads and drops a payload the host has no room for, so the stream stays in step. */
+static int skip(Ctx *c, size_t len) {
+    uint8_t junk[16384];
+    while (len) {
+        size_t n = len < sizeof junk ? len : sizeof junk;
+        if (read_full(c, junk, n, 0)) return -1;
+        len -= n;
+    }
+    return 0;
+}
 
 static int dispatch(Ctx *c, const HvVcHeader *h, uint8_t *p) {
     switch (h->type) {
@@ -873,6 +994,7 @@ void hv_vcodec_serve(int fd) {
         return;
     }
     c->fd = fd;
+    pthread_mutex_init(&c->mu, NULL);
     clock_gettime(CLOCK_MONOTONIC, &c->started);
     pthread_mutex_lock(&registry_mu);
     for (int i = 0; i < MAX_CONTEXTS; i++)
@@ -889,24 +1011,28 @@ void hv_vcodec_serve(int fd) {
             break;
         }
         if (h.len > c->cap) {
-            free(c->buf);
-            c->cap = 0;
-            if (!(c->buf = malloc(h.len))) break;
+            buf_free(c);
+            if (!budget_take(&all_wire_bytes, h.len, max_all_wire_bytes)) {
+                atomic_fetch_add(&total_messages, 1);
+                if (skip(c, h.len) || fail(c, &h, HV_VC_E_LIMIT, "message memory at the limit: try again")) break;
+                continue;
+            }
+            if (!(c->buf = malloc(h.len))) {
+                budget_give(&all_wire_bytes, h.len);
+                break;
+            }
             c->cap = h.len;
         }
         if (h.len && read_full(c, c->buf, h.len, 0)) break;
         atomic_fetch_add(&total_messages, 1);
         if (dispatch(c, &h, c->buf)) break;
-        if (c->cap > (16u << 20)) { /* keep no frame-sized buffer while idle */
-            free(c->buf);
-            c->buf = NULL, c->cap = 0;
-        }
+        if (c->cap > (16u << 20)) buf_free(c); /* keep no frame-sized buffer while idle */
     }
     pthread_mutex_lock(&registry_mu);
     for (int i = 0; i < MAX_CONTEXTS; i++)
         if (registry[i] == c) registry[i] = NULL;
     pthread_mutex_unlock(&registry_mu);
-    for (int i = 0; i < HV_VC_MAX_SESSIONS; i++) session_free(&c->sess[i]);
+    for (int i = 0; i < HV_VC_MAX_SESSIONS; i++) session_free(c, &c->sess[i]);
     for (int i = 0; i < HV_VC_MAX_FRAMES; i++)
         if (c->frames[i].pb) frame_drop(c, &c->frames[i]);
     if (c->xfer) {
@@ -918,20 +1044,25 @@ void hv_vcodec_serve(int fd) {
         fprintf(stderr, "hengevm: vcodec: context closed after %.1f s: in %.1f MB, out %.1f MB (%.2f MB/s), %llu frames decoded, %llu packets\n", secs,
                 c->bytes_in / 1e6, c->bytes_out / 1e6, secs > 0 ? (c->bytes_in + c->bytes_out) / 1e6 / secs : 0, (unsigned long long)c->decoded,
                 (unsigned long long)c->packets);
-    free(c->buf);
+    buf_free(c);
+    pthread_mutex_destroy(&c->mu);
     close(fd);
     free(c);
     atomic_fetch_sub(&open_contexts, 1);
 }
 
+/* registry_mu keeps each context alive and c->mu each session; the connection threads take only c->mu. */
 void hv_vcodec_lose_sessions(void) {
     pthread_mutex_lock(&registry_mu);
     for (int i = 0; i < MAX_CONTEXTS; i++) {
         Ctx *c = registry[i];
-        for (int j = 0; c && j < HV_VC_MAX_SESSIONS; j++) {
+        if (!c) continue;
+        pthread_mutex_lock(&c->mu);
+        for (int j = 0; j < HV_VC_MAX_SESSIONS; j++) {
             if (c->sess[j].dec) VTDecompressionSessionInvalidate(c->sess[j].dec);
             if (c->sess[j].enc) VTCompressionSessionInvalidate(c->sess[j].enc);
         }
+        pthread_mutex_unlock(&c->mu);
     }
     pthread_mutex_unlock(&registry_mu);
 }

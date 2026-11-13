@@ -19,12 +19,15 @@ typedef struct {
     int32_t open; /* connections now */
     uint64_t messages, protocol_errors;
     int64_t live_frames, live_sessions; /* in all connections */
+    uint64_t frame_bytes, wire_bytes, packet_bytes; /* the process-wide budgets in use */
 } HvVcodecStats;
 void hv_vcodec_stats(HvVcodecStats *s);
 
 /* Tests only. The time for the rest of a message, and the longest ENC_PACKET wait (defaults 30000 and 10000 ms). */
 void hv_vcodec_set_timeouts(int message_ms, uint32_t wait_ms);
-/* Tests only, with every connection idle: invalidate all VideoToolbox sessions, as iOS does in the background. */
+/* Tests only, with no connection open: the process-wide frame, message and packet budgets in bytes (0: the default). */
+void hv_vcodec_set_budgets(uint64_t frame_bytes, uint64_t wire_bytes, uint64_t packet_bytes);
+/* Invalidates all VideoToolbox sessions, as iOS does in the background. Any thread, while connections run. */
 void hv_vcodec_lose_sessions(void);
 
 #endif

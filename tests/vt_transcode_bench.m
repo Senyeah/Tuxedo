@@ -248,7 +248,7 @@ static double run(const Clip *c, uint32_t target, int ten_bit, int async, int sp
             CVPixelBufferRef img = NULL;
             CMTime pts = CMSampleBufferGetPresentationTimeStamp(c->s[i]), dur = CMSampleBufferGetDuration(c->s[i]);
             if (CMBlockBufferGetDataPointer(bb, 0, NULL, &len, &p) == noErr && len == CMBlockBufferGetDataLength(bb))
-                st = hv_vtd_decode(dec, c->fmt, (const uint8_t *)p, len, pts, dur, &img, NULL);
+                st = hv_vtd_decode(dec, c->fmt, (const uint8_t *)p, len, pts, dur, &img, NULL, NULL);
             else
                 st = kVTParameterErr;
             if (st != noErr || !img) r->dec_errors++;

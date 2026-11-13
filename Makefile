@@ -562,9 +562,13 @@ ios-vt-bench: | $(B)
 # (about 5 s). test-vcodec runs it again with a longer fuzz under libgmalloc. Skipped where there is no media engine.
 $(B)/test_vcodec: tests/test_vcodec.m $(VCODEC_OBJ)
 	$(CC) $(CFLAGS) -fobjc-arc $^ $(VT_FRAMEWORKS) -o $@
-test-vcodec: $(B)/test_vcodec
+# And under ThreadSanitizer, for hv_vcodec_lose_sessions against the connection threads.
+$(B)/test_vcodec_tsan: tests/test_vcodec.m host/vcodec.m host/vt_decode.m host/vt_caps.m host/*.h | $(B)
+	$(CC) $(CFLAGS) -O1 -fsanitize=thread -fobjc-arc tests/test_vcodec.m host/vcodec.m host/vt_decode.m host/vt_caps.m $(VT_FRAMEWORKS) -o $@
+test-vcodec: $(B)/test_vcodec $(B)/test_vcodec_tsan
 	$(B)/test_vcodec
 	DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib VCODEC_FUZZ=10000 $(B)/test_vcodec
+	TSAN_OPTIONS=halt_on_error=1 $(B)/test_vcodec_tsan
 .PHONY: test-vcodec
 
 # A5: both iOS libraries with the renderer, linked with the static graphics libraries. The device binary is only linked.

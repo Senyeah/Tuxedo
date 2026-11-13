@@ -11,7 +11,8 @@ Boots a clone of the desktop image with `hengevm --vcodec --share DIR` and, over
   3. `henge-xcode --query` must list an HEVC and an H.264 hardware encoder;
   4. transcodes each test clip (3840x2160 and 1920x1080, 60 fps: H.264, HEVC 8 bit, HEVC 10 bit, AV1) to HEVC with
      the frames on the host, and copies the output back through the share. On the Mac, ffprobe must count the
-     clip's frames and ffmpeg must decode it with no error (the VE0.4 exit);
+     clip's frames, ffmpeg must decode it with no error (the VE0.4 exit), and ffmpeg's psnr filter against the clip
+     must reach MIN_PSNR on Y, U and V and MIN_FRAME_PSNR on the worst frame;
   5. measures (VE0.5): henge-xcode's fps, its CPU time and the whole guest's, the MB/s on the socket, hengevm's CPU,
      Debian's software decode of the same clip to -f null, and the guest memcpy speed (hvbench).
 The shared image never changes: the guest runs on an APFS clone, deleted at the end. Exit 1 on a failed check.
@@ -34,6 +35,9 @@ PACKAGES = ["ffmpeg", "gcc", "libc6-dev", "pkg-config", "libavformat-dev", "liba
 SIZES = {"4k": "3840x2160", "1080p": "1920x1080"}
 CODECS = ["h264", "hevc8", "hevc10", "av1"]
 FPS = 60
+# The clips carry noise, so the transcode loses more than test_vcodec's clean frames; black or swapped planes give 10 to 20 dB.
+MIN_PSNR = 35.0
+MIN_FRAME_PSNR = 30.0
 
 
 class Fail(Exception):
@@ -97,6 +101,16 @@ def probe(path):
                         "stream=codec_name,profile,pix_fmt,width,height,nb_read_frames,color_transfer", "-of", "csv=p=0", path],
                        capture_output=True, text=True)
     return r.stdout.strip()
+
+
+def psnr(out, src):
+    """ffmpeg's psnr filter, the output against the clip: the average of each plane and of the worst frame."""
+    r = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-loglevel", "info", "-i", out, "-i", src, "-lavfi", "[0:v][1:v]psnr", "-f", "null", "-"],
+                       capture_output=True, text=True)
+    m = re.search(r"PSNR y:([\d.inf]+) u:([\d.inf]+) v:([\d.inf]+) average:([\d.inf]+) min:([\d.inf]+)", r.stderr)
+    if r.returncode or not m:
+        return None
+    return dict(zip(("y", "u", "v", "average", "min"), (float(x) for x in m.groups())))
 
 
 def boot(args, disk, share, err_log):
@@ -249,10 +263,15 @@ def main():
                     got = probe(os.path.join(share, oname))
                     dec = subprocess.run(["ffmpeg", "-v", "error", "-i", os.path.join(share, oname), "-f", "null", "-"], capture_output=True, text=True)
                     frames = int(got.split(",")[-1]) if got and got.split(",")[-1].isdigit() else -1
-                    good = frames == want and not dec.stderr.strip() and dec.returncode == 0 and r["packets"] == want
+                    q = psnr(os.path.join(share, oname), os.path.join(share, name))
+                    sharp = q is not None and min(q["y"], q["u"], q["v"]) >= MIN_PSNR and q["min"] >= MIN_FRAME_PSNR
+                    good = frames == want and not dec.stderr.strip() and dec.returncode == 0 and r["packets"] == want and sharp
                     ok &= good
+                    pq = f"PSNR y {q['y']:.1f} u {q['u']:.1f} v {q['v']:.1f} dB, worst frame {q['min']:.1f} dB" if q else "no PSNR"
                     print(f"{'ok  ' if good else 'FAIL'} {tag}: {r['fps']:.1f} fps, {r['packets']} packets, output {got} "
-                          f"({frames} of {want} frames, {len(dec.stderr.strip().splitlines())} decode errors)")
+                          f"({frames} of {want} frames, {len(dec.stderr.strip().splitlines())} decode errors), {pq}")
+                    if q:
+                        r.update(psnr_y=q["y"], psnr_u=q["u"], psnr_v=q["v"], psnr_min=q["min"])
                     print(f"     socket {r['sent']:.1f} MB up, {r['recv']:.1f} MB down, {r['mbs']:.1f} MB/s, {r['calls']} calls; "
                           f"henge-xcode CPU {r['cpu']:.2f} s ({r['cpu'] / r['secs'] * 100:.0f}% of one core), guest busy {r['guest_busy']:.0f}% "
                           f"of {args.cpus} CPUs, hengevm {r['host_cpu']:.0f}% of one host core")

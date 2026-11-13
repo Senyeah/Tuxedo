@@ -240,7 +240,7 @@ The two plans do not compete:
 
 Code that both can share, written one time:
 
-- The VideoToolbox decode code: format descriptions from parameter sets, `CMSampleBuffer` building, `CVPixelBuffer` pool settings, and the error handling. Put it in one host file that both the virglrenderer back end and the `hvcodec` core call. That file is `host/vt_decode.m` (plain C interface in `host/vt_decode.h`), written on 14/11/2026 for `hvcodec`. The virglrenderer back end does not call it yet: its patch still has its own copy.
+- The VideoToolbox decode code: format descriptions from parameter sets, `CMSampleBuffer` building, `CVPixelBuffer` pool settings, and the error handling. Put it in one host file that both the virglrenderer back end and the `hvcodec` core call. That file is `host/vt_decode.m` (plain C interface in `host/vt_decode.h`), written on 14/11/2026 for `hvcodec`. The virglrenderer back end does not call it yet: its patch still has its own copy. `hv_vtd_decode` also returns the picture's own presentation time; `hvcodec` refuses a picture whose time is not the packet's, and the back end can do the same when it moves to this file.
 - The codec probe (encode plan VE0.2). It registers the supplemental decoders first, as this file's Mac probe did. Run it on the Mac and on the phone, for decode and encode.
 - The host frame table (encode plan VE0.3, in the `hvcodec` codec core). A frame that path 1 decoded is in an IOSurface already. A later stage could give it to an `hvcodec` encoder session.
 

@@ -4,6 +4,7 @@
 #include <VideoToolbox/VideoToolbox.h>
 #include <math.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -99,7 +100,17 @@ static int call(Conn *c, uint32_t type, const void *a, size_t alen, const void *
 #define W 640
 #define H 360
 
-static uint8_t luma(int x, int y, int i) { return (uint8_t)(128 + 70 * sin(x / 23.0 + i / 6.0) * cos(y / 17.0 - i / 9.0)); }
+/* Picture content, 0 to 255 with fractions, so 10-bit frames use their low bits. Cb and Cr differ, so a swap shows.
+   The top band is a slow ramp: one 8-bit step is 16 pixels wide there, too wide for the codec to smooth away. */
+#define BAND 48
+static double lumaf(int x, int y, int i) { return y < BAND ? 60 + x / 16.0 : 128 + 70 * sin(x / 23.0 + i / 6.0) * cos(y / 17.0 - i / 9.0); }
+static double cbf(int x, int y, int i) { return 128 + 40 * sin(x / 11.0 + i / 5.0) + y / 40.0; }
+static double crf(int x, int y, int i) { return 128 + 40 * cos(y / 7.0 - i / 7.0) - x / 30.0; }
+/* Video range samples: 8 bit, or 10 bit for P010 (which stores them in the top bits). */
+static int sample(double v, int chroma, int ten) {
+    double s = chroma ? 16 + v * 224 / 255 : 16 + v * 219 / 255;
+    return (int)lround(ten ? s * 4 : s);
+}
 
 static CVPixelBufferRef make_frame(int i) {
     CVPixelBufferRef pb = NULL;
@@ -110,28 +121,37 @@ static CVPixelBufferRef make_frame(int i) {
     uint8_t *y = CVPixelBufferGetBaseAddressOfPlane(pb, 0), *uv = CVPixelBufferGetBaseAddressOfPlane(pb, 1);
     size_t ys = CVPixelBufferGetBytesPerRowOfPlane(pb, 0), uvs = CVPixelBufferGetBytesPerRowOfPlane(pb, 1);
     for (int r = 0; r < H; r++)
-        for (int x = 0; x < W; x++) y[r * ys + (size_t)x] = (uint8_t)(16 + luma(x, r, i) * 219 / 255);
+        for (int x = 0; x < W; x++) y[r * ys + (size_t)x] = (uint8_t)sample(lumaf(x, r, i), 0, 0);
     for (int r = 0; r < H / 2; r++)
-        for (int x = 0; x < W / 2; x++) uv[r * uvs + (size_t)x * 2] = (uint8_t)(128 + x / 8 - 20), uv[r * uvs + (size_t)x * 2 + 1] = (uint8_t)(128 + r / 6 - 15);
+        for (int x = 0; x < W / 2; x++) uv[r * uvs + (size_t)x * 2] = (uint8_t)sample(cbf(x, r, i), 1, 0), uv[r * uvs + (size_t)x * 2 + 1] = (uint8_t)sample(crf(x, r, i), 1, 0);
     CVPixelBufferUnlockBaseAddress(pb, 0);
     return pb;
 }
 
-static double psnr_y(CVPixelBufferRef a, CVPixelBufferRef b) {
+typedef struct {
+    double y, c; /* PSNR of luma and of both chroma planes, in dB */
+} Psnr;
+
+static double psnr_of(double se, double n, double peak) { return se > 0 ? 10 * log10(peak * peak * n / se) : 99; }
+static double psnr_min(Psnr p) { return p.y < p.c ? p.y : p.c; }
+
+/* Two NV12 pixel buffers, W x H. */
+static Psnr psnr_pb(CVPixelBufferRef a, CVPixelBufferRef b) {
     CVPixelBufferLockBaseAddress(a, kCVPixelBufferLock_ReadOnly);
     CVPixelBufferLockBaseAddress(b, kCVPixelBufferLock_ReadOnly);
-    const uint8_t *pa = CVPixelBufferGetBaseAddressOfPlane(a, 0), *pb = CVPixelBufferGetBaseAddressOfPlane(b, 0);
-    size_t sa = CVPixelBufferGetBytesPerRowOfPlane(a, 0), sb = CVPixelBufferGetBytesPerRowOfPlane(b, 0);
-    double se = 0;
-    for (int r = 0; r < H; r++)
-        for (int x = 0; x < W; x++) {
-            double d = (double)pa[r * sa + (size_t)x] - pb[r * sb + (size_t)x];
-            se += d * d;
-        }
+    double se[2] = {0, 0};
+    for (int pl = 0; pl < 2; pl++) {
+        const uint8_t *pa = CVPixelBufferGetBaseAddressOfPlane(a, (size_t)pl), *pb = CVPixelBufferGetBaseAddressOfPlane(b, (size_t)pl);
+        size_t sa = CVPixelBufferGetBytesPerRowOfPlane(a, (size_t)pl), sb = CVPixelBufferGetBytesPerRowOfPlane(b, (size_t)pl);
+        for (int r = 0; r < (pl ? H / 2 : H); r++)
+            for (int x = 0; x < W; x++) {
+                double d = (double)pa[r * sa + (size_t)x] - pb[r * sb + (size_t)x];
+                se[pl] += d * d;
+            }
+    }
     CVPixelBufferUnlockBaseAddress(a, kCVPixelBufferLock_ReadOnly);
     CVPixelBufferUnlockBaseAddress(b, kCVPixelBufferLock_ReadOnly);
-    double mse = se / (W * H);
-    return mse > 0 ? 10 * log10(255.0 * 255.0 / mse) : 99;
+    return (Psnr){psnr_of(se[0], W * H, 255), psnr_of(se[1], W * H / 2, 255)};
 }
 
 /* ---- a source stream, encoded here with VideoToolbox directly ---- */
@@ -148,9 +168,10 @@ typedef struct {
     size_t extra_len;
 } Stream;
 
-static void stream_out(void *ref, void *fr, OSStatus st, VTEncodeInfoFlags f, CMSampleBufferRef sb) {
-    Stream *s = ref;
-    (void)fr, (void)f;
+/* VideoToolbox's own ordering is invisible to ThreadSanitizer: this lock shows it. */
+static pthread_mutex_t stream_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static void stream_out_locked(Stream *s, OSStatus st, CMSampleBufferRef sb) {
     if (st != noErr || !sb || s->n >= NFRAMES + 4) return;
     CMBlockBufferRef bb = CMSampleBufferGetDataBuffer(sb);
     size_t len = CMBlockBufferGetDataLength(bb);
@@ -169,6 +190,13 @@ static void stream_out(void *ref, void *fr, OSStatus st, VTEncodeInfoFlags f, CM
     s->n++;
 }
 
+static void stream_out(void *ref, void *fr, OSStatus st, VTEncodeInfoFlags f, CMSampleBufferRef sb) {
+    (void)fr, (void)f;
+    pthread_mutex_lock(&stream_mu);
+    stream_out_locked(ref, st, sb);
+    pthread_mutex_unlock(&stream_mu);
+}
+
 static void make_stream(Stream *s, CVPixelBufferRef *src) {
     memset(s, 0, sizeof *s);
     VTCompressionSessionRef e = NULL;
@@ -182,6 +210,8 @@ static void make_stream(Stream *s, CVPixelBufferRef *src) {
     VTCompressionSessionCompleteFrames(e, kCMTimeInvalid);
     VTCompressionSessionInvalidate(e);
     CFRelease(e);
+    pthread_mutex_lock(&stream_mu);
+    pthread_mutex_unlock(&stream_mu);
 }
 
 static void stream_free(Stream *s) {
@@ -282,7 +312,7 @@ static void drain(Conn *c, uint32_t sess, Stream *s, int wait) {
     }
 }
 
-/* Decodes s here and gives each frame's PSNR against src[pts]. Returns the lowest. */
+/* Decodes s here and gives each frame's PSNR, luma and chroma, against src[pts]. Returns the lowest. */
 static double check_stream(const Stream *s, uint32_t codec, CVPixelBufferRef *src, int *decoded) {
     CMVideoFormatDescriptionRef fmt = NULL;
     int annexb = 0;
@@ -293,9 +323,9 @@ static double check_stream(const Stream *s, uint32_t codec, CVPixelBufferRef *sr
     if (hv_vtd_session_create(fmt, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, 0, &d, NULL) == noErr) {
         for (int i = 0; i < s->n; i++) {
             CVPixelBufferRef out = NULL;
-            if (hv_vtd_decode(d, fmt, s->data[i], s->len[i], CMTimeMake(s->pts[i], 30), kCMTimeInvalid, &out, NULL) != noErr || !out) continue;
+            if (hv_vtd_decode(d, fmt, s->data[i], s->len[i], CMTimeMake(s->pts[i], 30), kCMTimeInvalid, &out, NULL, NULL) != noErr || !out) continue;
             if (s->pts[i] >= 0 && s->pts[i] < NFRAMES) {
-                double p = psnr_y(out, src[s->pts[i]]);
+                double p = psnr_min(psnr_pb(out, src[s->pts[i]]));
                 if (p < worst) worst = p;
                 (*decoded)++;
             }
@@ -375,7 +405,7 @@ static void test_transcode(CVPixelBufferRef *src, const Stream *in) {
         int decoded = 0;
         double p = check_stream(&out, HV_VC_HEVC, src, &decoded);
         printf("transcode H.264 to HEVC: %d packets, re-decoded %d, lowest PSNR %.1f dB\n", out.n, decoded, p);
-        CHECK(decoded == NFRAMES && p > 35, "PSNR %.1f dB over %d frames", p, decoded);
+        CHECK(decoded == NFRAMES && p > 45, "PSNR %.1f dB over %d frames", p, decoded);
     }
     stream_free(&out);
     HvVcodecStats s;
@@ -524,6 +554,15 @@ static void test_rate_control(const Stream *in) {
             CHECK(trc && CFEqual(trc, kCMFormatDescriptionTransferFunction_SMPTE_ST_2084_PQ), "PQ in the SPS");
             CFRelease(fd);
         }
+        /* the decoder's format from the hvcC atom must carry them too, or VideoToolbox tags decoded frames BT.709 */
+        int annexb = 0;
+        fd = NULL;
+        CHECK(hv_vtd_format_create(kCMVideoCodecType_HEVC, W, H, out.extra, out.extra_len, &fd, &annexb) == noErr && fd, "format from hvcC");
+        if (fd) {
+            CFTypeRef prim = CMFormatDescriptionGetExtension(fd, kCMFormatDescriptionExtension_ColorPrimaries);
+            CHECK(prim && CFEqual(prim, kCMFormatDescriptionColorPrimaries_ITU_R_2020), "BT.2020 in the decoder's format from hvcC");
+            CFRelease(fd);
+        }
     }
     stream_free(&out);
     conn_close(&c);
@@ -542,15 +581,15 @@ static int upload(Conn *c, uint32_t fmt, int i, uint32_t *handle, uint8_t **plan
     int ten = fmt == HV_VC_FMT_P010;
     for (int y = 0; y < H; y++)
         for (int x = 0; x < W; x++) {
-            int v = 16 + luma(x, y, i) * 219 / 255;
-            if (ten) ((uint16_t *)p)[y * W + x] = (uint16_t)(v << 8);
+            int v = sample(lumaf(x, y, i), 0, ten);
+            if (ten) ((uint16_t *)p)[y * W + x] = (uint16_t)(v << 6);
             else p[y * W + x] = (uint8_t)v;
         }
     uint8_t *uv = p + (size_t)W * H * (ten ? 2 : 1);
     for (int y = 0; y < H / 2; y++)
         for (int x = 0; x < W / 2; x++) {
-            int u = 128 + x / 8 - 20, v = 128 + y / 6 - 15;
-            if (ten) ((uint16_t *)uv)[(y * W / 2 + x) * 2] = (uint16_t)(u << 8), ((uint16_t *)uv)[(y * W / 2 + x) * 2 + 1] = (uint16_t)(v << 8);
+            int u = sample(cbf(x, y, i), 1, ten), v = sample(crf(x, y, i), 1, ten);
+            if (ten) ((uint16_t *)uv)[(y * W / 2 + x) * 2] = (uint16_t)(u << 6), ((uint16_t *)uv)[(y * W / 2 + x) * 2 + 1] = (uint16_t)(v << 6);
             else uv[(y * W / 2 + x) * 2] = (uint8_t)u, uv[(y * W / 2 + x) * 2 + 1] = (uint8_t)v;
         }
     HvVcHandle m = {r.handle, 0};
@@ -560,15 +599,29 @@ static int upload(Conn *c, uint32_t fmt, int i, uint32_t *handle, uint8_t **plan
     return st;
 }
 
-/* Y PSNR of a downloaded frame (8 or 10 bit, tightly packed) against the uploaded planes */
-static double psnr_planes(const uint8_t *a, const uint8_t *b, int ten_a, int ten_b) {
-    double se = 0;
-    for (int i = 0; i < W * H; i++) {
-        double va = ten_a ? ((const uint16_t *)a)[i] / 256.0 : a[i], vb = ten_b ? ((const uint16_t *)b)[i] / 256.0 : b[i];
-        se += (va - vb) * (va - vb);
+/* A packed NV12 or P010 sample on the 10-bit scale. */
+static int s10(const uint8_t *p, int i, int ten) { return ten ? ((const uint16_t *)p)[i] >> 6 : p[i] << 2; }
+
+/* PSNR at 10 bit of a downloaded frame (NV12 or P010, tightly packed) against the uploaded planes, per plane. */
+static Psnr psnr_planes(const uint8_t *a, const uint8_t *b, int ten_a, int ten_b) {
+    double se[2] = {0, 0};
+    for (int i = 0; i < W * H * 3 / 2; i++) {
+        double d = s10(a, i, ten_a) - s10(b, i, ten_b);
+        se[i >= W * H] += d * d;
     }
-    double mse = se / (W * H);
-    return mse > 0 ? 10 * log10(255.0 * 255.0 / mse) : 99;
+    return (Psnr){psnr_of(se[0], W * H, 1023), psnr_of(se[1], W * H / 2, 1023)};
+}
+
+/* Luma error of out (P010) against the 10-bit source in the ramp band, as a ratio to its error against the same source
+   cut to 8 bits (the lower of truncated and rounded). Below 1 only if the path kept the low bits. */
+static double ten_bit_ratio(const uint8_t *out, const uint8_t *src) {
+    double se = 0, se_floor = 0, se_round = 0;
+    for (int i = 0; i < W * BAND; i++) {
+        int o = s10(out, i, 1), v = s10(src, i, 1), fl = v & ~3, rd = (v + 2) & ~3;
+        se += (double)(o - v) * (o - v), se_floor += (double)(o - fl) * (o - fl), se_round += (double)(o - rd) * (o - rd);
+    }
+    double cut = se_floor < se_round ? se_floor : se_round;
+    return cut > 0 ? se / cut : 99;
 }
 
 static const uint32_t bt709[3] = {1, 1, 1}, hdr10[3] = {9, 16, 9};
@@ -599,11 +652,13 @@ static void test_raw(void) {
         CHECK(call(&c, HV_VC_ENC_FRAME, &eos, sizeof eos, NULL, 0) == 0, "EOS");
         drain(&c, enc, &out, 1);
         CHECK(out.n == NFRAMES, "%d packets", out.n);
+        CHECK(out.extra_len > 17 && (out.extra[17] & 7) == (ten ? 2 : 0), "luma bit depth %d in hvcC", out.extra_len > 17 ? (out.extra[17] & 7) + 8 : -1);
         HvVcDecOpen d = {HV_VC_HEVC, W, H, fmt, 0, (uint32_t)out.extra_len};
         st = call(&c, HV_VC_DEC_OPEN, &d, sizeof d, out.extra, out.extra_len);
         CHECK(st == 0, "DEC_OPEN: %d %s", st, c.err);
         if (!st) memcpy(&dec, c.buf, sizeof dec);
-        double worst = 99;
+        Psnr worst = {99, 99};
+        double ratio = 0;
         int got = 0;
         for (int i = 0; i < out.n && !st; i++) {
             HvVcFrameReply r;
@@ -612,14 +667,21 @@ static void test_raw(void) {
             int s2 = call(&c, HV_VC_FRAME_DOWNLOAD, &m, sizeof m, NULL, 0);
             CHECK(s2 == 0 && c.len == sizeof r + hv_vc_frame_bytes(fmt, W, H), "FRAME_DOWNLOAD: %d %s", s2, c.err);
             if (!s2 && r.pts >= 0 && r.pts < NFRAMES) {
-                double p = psnr_planes(c.buf + sizeof r, planes[r.pts], ten, ten);
-                if (p < worst) worst = p;
+                Psnr p = psnr_planes(c.buf + sizeof r, planes[r.pts], ten, ten);
+                if (p.y < worst.y) worst.y = p.y;
+                if (p.c < worst.c) worst.c = p.c;
+                if (ten && ten_bit_ratio(c.buf + sizeof r, planes[r.pts]) > ratio) ratio = ten_bit_ratio(c.buf + sizeof r, planes[r.pts]);
                 got++;
             }
             frame_free(&c, r.handle);
         }
-        printf("upload, encode %s, decode, download: %d frames, lowest PSNR %.1f dB\n", ten ? "Main10 from P010" : "Main from NV12", got, worst);
-        CHECK(got == NFRAMES && worst > 35, "PSNR %.1f dB over %d frames", worst, got);
+        printf("upload, encode %s, decode, download: %d frames, lowest PSNR at 10 bit Y %.1f dB, CbCr %.1f dB", ten ? "Main10 from P010" : "Main from NV12",
+               got, worst.y, worst.c);
+        if (ten) printf(", error against 10 bit / against 8 bit at most %.2f", ratio);
+        printf("\n");
+        CHECK(got == NFRAMES && psnr_min(worst) > 45, "PSNR Y %.1f CbCr %.1f dB over %d frames", worst.y, worst.c, got);
+        /* an 8-bit step inside the Main10 path keeps the PSNR above the threshold, but not this */
+        if (ten) CHECK(ratio < 0.5, "the decoded P010 frames are nearer the 10-bit source than its 8-bit cut: ratio %.2f", ratio);
         for (int i = 0; i < NFRAMES; i++) free(planes[i]);
         stream_free(&out);
         HvVcSession m = {enc, 0};
@@ -639,9 +701,9 @@ static void test_raw(void) {
         memcpy(&r, c.buf, sizeof r);
         HvVcHandle m = {r.handle, 0};
         CHECK(call(&c, HV_VC_FRAME_DOWNLOAD, &m, sizeof m, NULL, 0) == 0, "download");
-        double p = psnr_planes(c.buf + sizeof r, planes, 1, 0);
-        printf("XFER NV12 to P010: PSNR %.1f dB\n", p);
-        CHECK(p > 40, "XFER PSNR %.1f", p);
+        Psnr p = psnr_planes(c.buf + sizeof r, planes, 1, 0);
+        printf("XFER NV12 to P010: PSNR at 10 bit Y %.1f dB, CbCr %.1f dB\n", p.y, p.c);
+        CHECK(psnr_min(p) > 45, "XFER PSNR Y %.1f CbCr %.1f", p.y, p.c);
         frame_free(&c, r.handle);
     }
     x = (HvVcXfer){h, 320, 180, HV_VC_FMT_NV12, 0, 1, 1, 1, 1, 0};
@@ -789,6 +851,132 @@ static void test_lost_and_timeouts(const Stream *in) {
     for (int i = 0; i < 9; i++) closed += call(&many[i], HV_VC_QUERY, NULL, 0, NULL, 0) == -1000;
     CHECK(closed == 1, "a ninth context is refused (%d refused)", closed);
     for (int i = 0; i < 9; i++) conn_close(&many[i]);
+}
+
+/* The process-wide budgets: frames, messages, downloads and sessions, summed over contexts. */
+static int alloc(Conn *c, uint32_t w, uint32_t h, uint32_t *handle) {
+    HvVcFrameAlloc a = {w, h, HV_VC_FMT_NV12, 0, 1, 1, 1, 0};
+    int st = call(c, HV_VC_FRAME_ALLOC, &a, sizeof a, NULL, 0);
+    if (!st) memcpy(handle, c->buf, sizeof *handle);
+    return st;
+}
+
+static void test_budgets(const Stream *in) {
+    CVPixelBufferRef probe = make_frame(0);
+    const uint64_t one = CVPixelBufferGetDataSize(probe); /* the host counts this, not the packed size */
+    CVPixelBufferRelease(probe);
+    hv_vcodec_set_budgets(3 * one + one / 2, 1 << 20, 0);
+    Conn a, b;
+    conn_open(&a), conn_open(&b);
+    uint32_t h[4] = {0};
+    CHECK(alloc(&a, W, H, &h[0]) == 0 && alloc(&a, W, H, &h[1]) == 0 && alloc(&b, W, H, &h[2]) == 0, "three frames in two contexts");
+    int st = alloc(&b, W, H, &h[3]);
+    CHECK(st == HV_VC_E_LIMIT && strstr(b.err, "frame memory"), "a fourth over the process budget: %d %s", st, b.err);
+    HvVcXfer x = {h[2], W, H, HV_VC_FMT_NV12, 0, 0, 0, 0, 0, 0};
+    CHECK(call(&b, HV_VC_XFER, &x, sizeof x, NULL, 0) == HV_VC_E_LIMIT, "XFER over the budget");
+    uint32_t dec = 0;
+    HvVcFrameReply r;
+    CHECK(dec_open(&b, HV_VC_H264, in->extra, in->extra_len, 0, &dec) == 0, "DEC_OPEN");
+    st = dec_frame(&b, dec, in->data[0], in->len[0], 0, &r);
+    CHECK(st == HV_VC_E_LIMIT, "DEC_FRAME over the budget: %d %s", st, b.err);
+    CHECK(frame_free(&a, h[0]) == 0 && alloc(&b, W, H, &h[3]) == 0, "room again after a free in another context");
+    HvVcodecStats s;
+    hv_vcodec_stats(&s);
+    CHECK(s.frame_bytes == 3 * one, "frame bytes counted as CoreVideo's size: %llu", (unsigned long long)s.frame_bytes);
+    /* a message larger than the message budget: refused, and the stream stays in step */
+    uint8_t *big = calloc(1, 2 << 20);
+    HvVcHandle m = {h[1], 0};
+    st = call(&a, HV_VC_FRAME_UPLOAD, &m, sizeof m, big, 2 << 20);
+    CHECK(st == HV_VC_E_LIMIT && strstr(a.err, "message memory"), "a message over the budget: %d %s", st, a.err);
+    CHECK(call(&a, HV_VC_QUERY, NULL, 0, NULL, 0) == 0, "the next message works");
+    free(big);
+    hv_vcodec_set_budgets(3 * one + one / 2, one / 2, 0);
+    st = call(&a, HV_VC_FRAME_DOWNLOAD, &m, sizeof m, NULL, 0);
+    CHECK(st == HV_VC_E_LIMIT && strstr(a.err, "transfer memory"), "a download over the budget: %d %s", st, a.err);
+    conn_close(&a), conn_close(&b);
+    hv_vcodec_set_budgets(0, 0, 0);
+    hv_vcodec_stats(&s);
+    CHECK(s.frame_bytes == 0 && s.wire_bytes == 0 && s.live_frames == 0, "budgets given back: %llu frame bytes, %llu message bytes", (unsigned long long)s.frame_bytes,
+          (unsigned long long)s.wire_bytes);
+
+    /* sessions: at most 4 in a context, and a cap over all of them */
+    Conn many[5];
+    int opened = 0, all = 0;
+    for (int i = 0; i < 5; i++) {
+        conn_open(&many[i]);
+        for (int k = 0; k < HV_VC_MAX_SESSIONS; k++) {
+            uint32_t id;
+            st = dec_open(&many[i], HV_VC_H264, in->extra, in->extra_len, 0, &id);
+            opened += st == 0;
+            all += st == HV_VC_E_LIMIT && strstr(many[i].err, "in all connections") != NULL;
+        }
+    }
+    printf("sessions: %d opened in 5 contexts, %d refused by the process cap\n", opened, all);
+    CHECK(opened < 5 * HV_VC_MAX_SESSIONS && all == 5 * HV_VC_MAX_SESSIONS - opened, "a process-wide session cap: %d opened, %d refused", opened, all);
+    for (int i = 0; i < 5; i++) conn_close(&many[i]);
+}
+
+/* hv_vcodec_lose_sessions from another thread while sessions open, run and close, as on iOS. */
+static _Atomic int race_stop;
+static _Atomic long race_losses;
+static void *loser(void *arg) {
+    (void)arg;
+    while (!atomic_load(&race_stop)) {
+        hv_vcodec_lose_sessions();
+        atomic_fetch_add(&race_losses, 1);
+        usleep(200 + arc4random_uniform(800));
+    }
+    return NULL;
+}
+
+static void test_lose_race(const Stream *in) {
+    Conn c[2];
+    conn_open(&c[0]), conn_open(&c[1]);
+    pthread_t t;
+    atomic_store(&race_stop, 0);
+    pthread_create(&t, NULL, loser, NULL);
+    int lost = 0, done = 0;
+    for (int k = 0; k < 120; k++) {
+        Conn *cc = &c[k & 1];
+        uint32_t dec = 0, enc = 0;
+        HvVcFrameReply r = {0};
+        int st = dec_open(cc, HV_VC_H264, in->extra, in->extra_len, 0, &dec);
+        if (!st) st = dec_frame(cc, dec, in->data[0], in->len[0], 0, &r);
+        lost += st == HV_VC_E_LOST;
+        uint32_t bad = 0;
+        if (k % 5 == 0 && dec_open(cc, HV_VC_H264, in->extra, 4, 0, &bad) == 0) { /* a failed open frees its session */
+            HvVcSession m = {bad, 0};
+            call(cc, HV_VC_DEC_CLOSE, &m, sizeof m, NULL, 0);
+        }
+        HvVcEncOpen o = enc_params(HV_VC_H264);
+        if (enc_open(cc, &o, &enc) == 0) {
+            if (r.handle) {
+                HvVcEncFrame f = {enc, r.handle, 0, 1, HV_VC_ENC_FRAME_FREE, 0};
+                st = call(cc, HV_VC_ENC_FRAME, &f, sizeof f, NULL, 0);
+                lost += st == HV_VC_E_LOST;
+                if (st) frame_free(cc, r.handle);
+                HvVcEncFrame eos = {enc, 0, 0, 0, HV_VC_ENC_FRAME_EOS, 0};
+                call(cc, HV_VC_ENC_FRAME, &eos, sizeof eos, NULL, 0);
+            }
+            HvVcSession m = {enc, 0};
+            call(cc, HV_VC_ENC_CLOSE, &m, sizeof m, NULL, 0);
+        } else if (r.handle)
+            frame_free(cc, r.handle);
+        HvVcSession m = {dec, 0};
+        if (dec) call(cc, HV_VC_DEC_CLOSE, &m, sizeof m, NULL, 0);
+        done++;
+    }
+    conn_close(&c[0]);
+    atomic_store(&race_stop, 1);
+    pthread_join(t, NULL);
+    conn_close(&c[1]);
+    HvVcodecStats s;
+    hv_vcodec_stats(&s);
+    printf("lose race: %d rounds, %ld losses, %d calls lost\n", done, atomic_load(&race_losses), lost);
+    CHECK(s.open == 0 && s.live_frames == 0 && s.live_sessions == 0 && s.frame_bytes == 0 && s.wire_bytes == 0 && s.packet_bytes == 0,
+          "lose race: all freed: %d open, %lld frames, %lld sessions, %llu frame bytes, %llu wire bytes, %llu packet bytes", s.open,
+          (long long)s.live_frames, (long long)s.live_sessions, (unsigned long long)s.frame_bytes, (unsigned long long)s.wire_bytes,
+          (unsigned long long)s.packet_bytes);
 }
 
 /* VE1.5: random, mutated and truncated messages must not crash the host, and every context must be freed. */
@@ -943,6 +1131,8 @@ int main(int argc, char **argv) {
     test_raw();
     test_limits();
     test_lost_and_timeouts(&in);
+    test_lose_race(&in);
+    test_budgets(&in);
     test_fuzz(&in, getenv("VCODEC_FUZZ") ? atoi(getenv("VCODEC_FUZZ")) : 3000);
     stream_free(&in);
     for (int i = 0; i < NFRAMES; i++) CVPixelBufferRelease(src[i]);
