@@ -1525,6 +1525,9 @@ static void test_snd_controls(void) {
     check("snd: switch name", !strcmp((const char *)info + 96 + 24, "Master Playback Switch"), 1);
     check("snd: CTL_INFO past the last control", snd_ctl_req(&d, 0x0300, 1, 2, 96, NULL, 192), 0x8001);
     check("snd: CTL_INFO with a short size", snd_ctl_req(&d, 0x0300, 0, 1, 64, NULL, 64), 0x8001);
+    check("snd: CTL_INFO whose count times size wraps", snd_ctl_req(&d, 0x0300, 0, 2, 0x80000060u, NULL, 192), 0x8001);
+    check("snd: CTL_INFO whose start plus count wraps", snd_ctl_req(&d, 0x0300, 0xffffffffu, 2, 96, NULL, 192), 0x8001);
+    check("snd: CTL_READ of a control past the last", snd_ctl_req(&d, 0x0302, 0xffffffffu, 0, 0, NULL, 512), 0x8001);
     check("snd: enum items not supported", snd_ctl_req(&d, 0x0301, 0, 0, 0, NULL, 0), 0x8002);
     check("snd: TLV not supported", snd_ctl_req(&d, 0x0304, 0, 0, 0, NULL, 64), 0x8002);
     check("snd: full volume at first", snd_read(&d, 0, 0), 100);

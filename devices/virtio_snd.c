@@ -191,7 +191,9 @@ static uint32_t control(HvVirtioSnd *d, const HvVirtqElem *e) {
     case R_JACK_REMAP:
         break;
     case R_CTL_INFO:
-        if (!d->controls || start + count > 2 || count == 0 || size < sizeof(CtlInfo) || count * size > CTL_VALUE_BYTES) {
+        /* Each bound comes before a sum or product: the guest's numbers can wrap 32 bits. */
+        if (!d->controls || start > 2 || count == 0 || count > 2 - start || size < sizeof(CtlInfo) ||
+            size > CTL_VALUE_BYTES / count) {
             status = S_BAD_MSG;
             break;
         }
