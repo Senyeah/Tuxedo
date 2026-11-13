@@ -6,8 +6,9 @@ Its root has a directory for each folder and .henge-folders, the table as JSON. 
 mounts each folder by its mode: Read-write and Read-only as bind mounts, Copy-on-write as an overlay with the
 upper layer in /var/lib/henge/files/<id> on the root disk. The host refuses changes in Read-only and
 Copy-on-write folders itself, so a remount here cannot get past it.
-News (a folder added, removed, renamed, a new mode, offline or online) comes from a long GET of /.henge/folders
-on the share server; without the share the table is read every 2 s.
+News (a folder added, removed, renamed, a new mode, offline or online, a changed original) comes from a long GET
+of /.henge/folders on the share server; without the share the table is read every 2 s. The app's Export Changes
+and Discard Changes come as an "ask" in the table; the answer goes to POST /.henge/folders/done.
 
   henge-files list               the folders, and Copy-on-write layers with no folder (with their keys)
   henge-files export NAME [DEST] the changes of a Copy-on-write folder, to ~/Henge/Exports by default
@@ -221,7 +222,9 @@ def reconcile(table):
         elif f["state"] == "ready" and name in away:
             log(f"{name}: available again")
             away.discard(name)
-        if old and (old["mode"] != f["mode"] or (f["mode"] == "cow" and old.get("gen") != f.get("gen"))):
+        # The overlay keeps its own "no such file" for a name, so a changed original needs a remount to show
+        cow_news = f["mode"] == "cow" and old and (old.get("gen") != f.get("gen") or old.get("orig") != f.get("orig"))
+        if old and (old["mode"] != f["mode"] or cow_news):
             if not unmount_one(name, lazy=False):  # a new mode or another original applies when nothing is open
                 pending = True
                 continue
@@ -234,7 +237,7 @@ def reconcile(table):
             log(f"{name}: not mounted: {why}")
             pending = True
             continue
-        st[name] = {"id": f["id"], "key": key_of(f["id"]), "mode": f["mode"], "gen": f.get("gen")}
+        st[name] = {"id": f["id"], "key": key_of(f["id"]), "mode": f["mode"], "gen": f.get("gen"), "orig": f.get("orig")}
         log(f"{name}: mounted at {os.path.join(MEDIA, name)} ({f['mode']})")
     save_state(st)
     return pending
@@ -257,6 +260,43 @@ def poll(seq, limit):
         c.close()
 
 
+def answer(f, ok, text):
+    c = http.client.HTTPConnection(HOST, 80, timeout=10)
+    try:
+        c.request("POST", f"/.henge/folders/done?index={f['index']}&ask={f['ask']['n']}&ok={int(ok)}", body=text.encode())
+        c.getresponse().read()
+    except (OSError, http.client.HTTPException) as e:
+        log(f"{f['name']}: the answer did not reach the app: {e}")
+    finally:
+        c.close()
+
+
+asked = set()  # (index, n): an ask stays in the table until the host has the answer
+
+
+def do_asks(table):
+    """The app's Export Changes and Discard Changes."""
+    for f in table.get("folders", []):
+        a = f.get("ask")
+        if not a or (f["index"], a["n"]) in asked:
+            continue
+        asked.add((f["index"], a["n"]))
+        try:
+            if a["do"] == "export":
+                ok, text = True, export_for_app(f["name"])
+            elif a["do"] == "discard":
+                cmd_reset(f["name"])
+                ok, text = True, "discarded"
+            else:
+                ok, text = False, f"henge-files: no such ask: {a['do']}"
+        except SystemExit as e:
+            ok, text = False, str(e.code)
+        except OSError as e:
+            ok, text = False, f"henge-files: {e}"
+        log(f"{f['name']}: {a['do']} for the app: {'done' if ok else text}")
+        answer(f, ok, text)
+
+
 def run():
     signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))  # the mounts stay: a restart takes them over
     if ROOT not in mounts():
@@ -269,6 +309,7 @@ def run():
         if table is not None:
             with Locked():  # each time, so a change made by a command (remount, reset) is taken up too
                 pending = reconcile(table)
+            do_asks(table)
         if time.monotonic() >= share_back:
             got = poll(seq, 10 if pending else 130)
             if got is not None:
@@ -366,6 +407,25 @@ def opaque(path):
 
 
 def cmd_export(arg, dest):
+    dest, files, deletions, links = export(arg, dest)
+    print(f"{files} files, {deletions} deletions, {links} links: {dest}")
+
+
+def export_for_app(name):
+    """An export to ~/Henge/Exports, where Files shows it: its path below ~/Henge, then what it has."""
+    share = os.path.join(pwd.getpwuid(GUEST_UID).pw_dir, "Henge")
+    try:
+        os.listdir(share)  # the automount
+    except OSError:
+        pass
+    if not os.path.ismount(share):
+        sys.exit("henge-files: ~/Henge is not mounted, so Files would not show the export")
+    dest, files, deletions, links = export(name, None)
+    return f"{os.path.relpath(dest, share)}\n{files} files, {deletions} deletions, {links} links"
+
+
+def export(arg, dest):
+    """Copies a Copy-on-write folder's changes to dest; (dest, files, deletions, links)."""
     f, key, name = find(arg)
     if not key:
         sys.exit(f"henge-files: {name} is not a Copy-on-write folder" if f else f"henge-files: no folder {name}")
@@ -374,7 +434,10 @@ def cmd_export(arg, dest):
     user = os.environ.get("SUDO_USER") or pwd.getpwuid(GUEST_UID).pw_name
     pw = pwd.getpwnam(user)
     if not dest:
-        dest = os.path.join(pw.pw_dir, "Henge", "Exports", f"{name}-{time.strftime('%d-%m-%Y-%H%M')}")
+        stem = os.path.join(pw.pw_dir, "Henge", "Exports", f"{name}-{time.strftime('%d-%m-%Y-%H%M')}")
+        dest, k = stem, 2
+        while os.path.lexists(dest):  # two in a minute: each its own
+            dest, k = f"{stem}-{k}", k + 1
     missing, d = [], dest
     while not os.path.isdir(d):
         missing.append(d)
@@ -433,7 +496,7 @@ def cmd_export(arg, dest):
             with open(os.path.join(dest, what), "w") as fh:
                 fh.write("".join(line + "\n" for line in lines))
             own(os.path.join(dest, what))
-    print(f"{files} files, {len(deletions)} deletions, {len(links)} links: {dest}")
+    return dest, files, len(deletions), len(links)
 
 
 def cmd_reset(arg):

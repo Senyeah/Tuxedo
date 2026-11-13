@@ -34,6 +34,30 @@ int hv_fs_folder_online(int index, int online);
 int hv_fs_folder_find(const char *name); /* the index, or -1 */
 int hv_fs_folder_count(void);
 void hv_fs_folders_clear(void);
+/* Where a folder is (the app knows; hengevm's are all local). The server calls the hook for a provider folder only. */
+enum { HV_FS_LOCAL = 0, HV_FS_PROVIDER = 1 }; /* PROVIDER: iCloud Drive or another app's File Provider */
+int hv_fs_folder_kind(int index, int kind); /* a different folder at the index is LOCAL until this says not */
+/* The app's part in a provider folder, on the worker that runs the request (it may wait for the network). OPEN:
+   before a file opens, the app coordinates a read, which makes the provider fetch it; the result is 0 or a Darwin
+   errno for the open. WRITTEN: after a file that was written is closed, the app coordinates a write, so the
+   provider and other apps hear of it; the result is not used. path is below the folder. NULL: no hook. */
+enum { HV_FS_EVENT_OPEN = 0, HV_FS_EVENT_WRITTEN = 1 };
+typedef int (*HvFsHook)(void *user, int index, const char *path, int event);
+void hv_fs_set_hook(HvFsHook hook, void *user);
+/* The original changed under a Copy-on-write folder (the app's presenter): the guest remounts the overlay when
+   nothing in it is open, because the overlay keeps its own "no such file" for names it looked up. */
+int hv_fs_folder_touch(int index);
+/* The app asks the guest's helper to export or discard a Copy-on-write folder's changes; NONE takes an ask back.
+   .henge-folders carries the ask until the helper answers it (POST /.henge/folders/done). Returns the ask's
+   number (> 0), 0 for NONE, or -1 with errno. */
+enum { HV_FS_ASK_NONE = 0, HV_FS_ASK_EXPORT = 1, HV_FS_ASK_DISCARD = 2 };
+long hv_fs_folder_ask(int index, int what);
+/* The helper's answer: ok, and text (an export's folder below ~/Henge and what it has, or why not). -1 (ESTALE)
+   when ask is not the folder's open ask. */
+int hv_fs_folder_answer(int index, long ask, int ok, const char *text);
+/* 1 when ask has its answer (*text malloc'd, may be NULL), 0 while it waits, -1 when it is gone (taken back, a
+   later ask answered, or the folder cleared). */
+int hv_fs_folder_answered(int index, long ask, int *ok, char **text);
 /* "ro", "cow" or "rw"; -1 for anything else. */
 int hv_fs_mode_parse(const char *s);
 const char *hv_fs_mode_name(int mode);

@@ -8,7 +8,7 @@
    waits for the device's clipboard and sends the guest's, and what it takes to install that helper.
    It also serves the Linux display follower: GET /.henge/display is "W H SCALE"; henge-status:
    GET /.henge/status is the device's time, time zone and brightness; and henge-files: GET /.henge/folders is the
-   Files folders' table (fs_server.h).
+   Files folders' table (fs_server.h), and POST /.henge/folders/done answers the app's export or discard.
 
    Locks are accepted but not enforced: macOS only writes to a server that offers them, and there is one client. */
 #include "share.h"
@@ -842,6 +842,18 @@ static int folders_get(Conn *c, Request *r) {
     return rc;
 }
 
+/* henge-files' answer to an ask in .henge-folders: POST /.henge/folders/done?index=I&ask=N&ok=0|1, with the text as
+   the body. 409 for an ask that is no longer open. */
+static int folders_done(Conn *c, Request *r) {
+    size_t len;
+    char *text = body_small(c, r, &len);
+    if (!text) return -1;
+    const char *i = strstr(r->query, "index="), *a = strstr(r->query, "ask="), *k = strstr(r->query, "ok=");
+    int rc = i && a && k ? hv_fs_folder_answer(atoi(i + 6), strtol(a + 4, NULL, 10), k[3] == '1', text) : -1;
+    free(text);
+    return rc == 0 ? respond_empty(c, r, 200, "OK") : respond_empty(c, r, 409, "Conflict");
+}
+
 /* A Linux guest's wallet (secrets.c). */
 static int secrets_route(Conn *c, Request *r, const char *path) {
     char *body = NULL;
@@ -885,6 +897,7 @@ static int serve_henge(Conn *c, Request *r) {
     }
     if (!strcmp(what, "status") && !strcmp(r->method, "GET")) return status_get(c, r);
     if (!strcmp(what, "folders") && !strcmp(r->method, "GET")) return folders_get(c, r);
+    if (!strcmp(what, "folders/done") && !strcmp(r->method, "POST")) return folders_done(c, r);
     if (!strcmp(what, "agent") && !strcmp(r->method, "GET")) return serve_agent(c, r);
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "GET")) return clipboard_get(c, r);
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "PUT")) return clipboard_put(c, r);

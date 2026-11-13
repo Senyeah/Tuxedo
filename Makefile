@@ -591,6 +591,14 @@ test-session-gate: $(B)/test_session_gate
 	$(B)/test_session_gate
 .PHONY: test-session-gate
 
+# FM8: a Linux machine's folders from Files: names, slots, bookmarks, states, modes, exports. Pure policy.
+$(B)/test_folder_policy: ios/Henge/MachineModel.swift ios/Henge/FolderPolicy.swift tests/test_folder_policy.swift | $(B)
+	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
+
+test-folder-policy: $(B)/test_folder_policy
+	$(B)/test_folder_policy
+.PHONY: test-folder-policy
+
 test-linux-catalogue: $(B)/test_linux_catalogue
 	$(B)/test_linux_catalogue
 .PHONY: test-linux-catalogue

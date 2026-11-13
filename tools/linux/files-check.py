@@ -10,7 +10,8 @@ make; fsx from LTP; pjdfstest with --pjdfstest) in a clone of --image. Boot 1 ha
 c=DIR (Read-write, the default) and --share, and checks the mounts and owners, that a Read-only folder refuses
 every change (also after root remounts it rw), the same changes in Copy-on-write (the Mac's folder stays as it
 was; export and reset) and in Read-write (the Mac sees them), a new original under a Copy-on-write folder (the
-guest's changes stay on top), two layers with no folder and one name, host changes within 2 s, a new mode,
+guest's changes stay on top), two layers with no folder and one name, host changes within 2 s, the app's touch,
+export and discard asks, a new mode,
 offline and online, a folder added and removed while running, a program built and run on the folder, a shared
 mmap, links from the Mac that point out of the folder, fsx, and times for tar, git, dd and rm on each folder, on
 ~/Henge (davfs2) and on the root disk.
@@ -223,7 +224,7 @@ def prepare(vm, args, deb):
             f"noninteractive apt-get install -y -qq --reinstall --no-install-recommends {pkgs} "
             f"{'/tmp/' + os.path.basename(deb) if deb else ''} >>/var/tmp/apt.log 2>&1; tail -2 /var/tmp/apt.log",
             what="apt-get install", limit=1200)
-    vm.need("dpkg --compare-versions $(dpkg-query -W -f='${Version}' henge-guest) ge 1.7.0", what="henge-guest 1.7.0")
+    vm.need("dpkg --compare-versions $(dpkg-query -W -f='${Version}' henge-guest) ge 1.8.0", what="henge-guest 1.8.0")
     vm.need(f"python3 -c \"import urllib.request; open('/tmp/fsx.c','wb').write(urllib.request.urlopen('{FSX_URL}').read())\" "
             f"&& echo '{FSX_SHA}  /tmp/fsx.c' | sha256sum -c --quiet && gcc -O2 -w -include libgen.h -o /tmp/fsx /tmp/fsx.c "
             "&& sudo install -m 0755 /tmp/fsx /usr/local/bin/fsx", what="fsx", limit=300)
@@ -414,6 +415,63 @@ def check_host_change(vm, dirs, times):
        "original after henge-files remount b")
 
 
+def answer_of(vm, name, since, limit=60):
+    """The helper's answer to an ask from hengevm's log (folder_answer_wait), after byte since."""
+    end = time.monotonic() + limit
+    while time.monotonic() < end:
+        with open(vm.err, errors="replace") as f:
+            f.seek(since)
+            m = re.search(rf"hengevm: folder {re.escape(name)} (answer: (ok|failed): (.*)|: no answer)\n((?:.*\n)*)", f.read())
+        if m:
+            return m.group(2), m.group(3), m.group(4)
+        time.sleep(0.3)
+    raise Fail(f"{name}: no answer to the ask in {limit} s")
+
+
+def check_app_asks(vm, dirs, share):
+    """FM8 and FM10: the presenter's touch, Export Changes and Discard Changes, as the app sends them."""
+    vm.need(f"cat {MEDIA}/b/from-app.txt 2>/dev/null; true")  # the overlay keeps "no such file" for it
+    with open(os.path.join(dirs["b"], "from-app.txt"), "w") as f:
+        f.write("new in the original")
+    vm.input_line("folder touch b")
+    took = vm.wait_guest(f"grep -qx 'new in the original' {MEDIA}/b/from-app.txt", "a touch shows a new original file", 20)
+    os.remove(os.path.join(dirs["b"], "from-app.txt"))
+    vm.input_line("folder touch b")
+    vm.wait_guest(f"! [ -e {MEDIA}/b/from-app.txt ]", "a touch after the file went", 20)
+    vm.need(f"echo exported > {MEDIA}/b/app-export.txt")
+    since = os.path.getsize(vm.err)
+    vm.input_line("folder export b")
+    state, text, rest = answer_of(vm, "b", since)
+    if state != "ok" or not text.startswith("Exports/b-"):
+        raise Fail(f"export for the app: {state} {text!r}")
+    exported, host_dest = text, os.path.join(share, text)
+    if "1 files" not in rest.splitlines()[0]:
+        raise Fail(f"export for the app: the counts: {rest!r}")
+    end = time.monotonic() + 60  # davfs2 uploads a second after close
+    path = os.path.join(host_dest, "app-export.txt")
+    while time.monotonic() < end and not (os.path.exists(path) and open(path).read() == "exported\n"):
+        time.sleep(0.5)
+    if not os.path.exists(path):
+        raise Fail(f"export for the app: {path} is not on the Mac")
+    since = os.path.getsize(vm.err)
+    vm.input_line("folder discard b")
+    state, text, _ = answer_of(vm, "b", since)
+    if state != "ok":
+        raise Fail(f"discard for the app: {state} {text!r}")
+    vm.need(f"! [ -e {MEDIA}/b/app-export.txt ] && sudo find /var/lib/henge/files/b/upper -mindepth 1 | wc -l",
+            lambda o: o == "0", "discard: the upper layer is empty")
+    since = os.path.getsize(vm.err)
+    vm.input_line("folder export c")
+    end = time.monotonic() + 10
+    while time.monotonic() < end and "folder c: Invalid argument" not in open(vm.err, errors="replace").read()[since:]:
+        time.sleep(0.2)
+    if "folder c: Invalid argument" not in open(vm.err, errors="replace").read()[since:]:
+        raise Fail("export of a Read-write folder: the host did not refuse it")
+    shutil.rmtree(host_dest, ignore_errors=True)
+    ok(f"the app's part: a touch showed a new file in b's original in {took} s; Export Changes put b's change in the "
+       f"share's {exported}; Discard Changes emptied the upper layer; the host refuses an export of Read-write c")
+
+
 def check_mode(vm, dirs):
     vm.input_line(f"folder add a {dirs['a']} rw")
     vm.wait_guest(f"findmnt -rn -o OPTIONS {MEDIA}/a | grep -q '^rw,'", "a new mode", 20)
@@ -595,7 +653,7 @@ def main():
     ap.add_argument("--firmware", help="default u-boot.bin next to the image")
     ap.add_argument("--hengevm", default=os.path.join(ROOT, "build", "hengevm"))
     ap.add_argument("--deb", help="henge-guest package to install (default: built from tools/linux/henge-guest)")
-    ap.add_argument("--no-install", action="store_true", help="the image has henge-guest 1.7.0, the tools and fsx")
+    ap.add_argument("--no-install", action="store_true", help="the image has henge-guest 1.8.0, the tools and fsx")
     ap.add_argument("--save-image", help="keep the disk after boot 0 here, for --image and --no-install")
     ap.add_argument("--cpus", type=int, default=4)
     ap.add_argument("--ram", type=int, default=2048)
@@ -644,6 +702,7 @@ def main():
             check_new_original(vm, dirs, folders)
             check_orphans(vm)
             check_host_change(vm, dirs, times)
+            check_app_asks(vm, dirs, share)
             check_mode(vm, dirs)
             check_offline(vm, dirs, folders, times)
             check_programs(vm, dirs)

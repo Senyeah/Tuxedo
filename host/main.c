@@ -593,7 +593,27 @@ static int folder_arg(const char *arg) {
     return folder_put(name, path, mode, 0);
 }
 
-/* folder add NAME PATH ro|cow|rw (PATH may have spaces), folder remove|offline|online NAME, folders (prints them). */
+typedef struct FolderAsk {
+    int index;
+    long ask;
+    char name[HV_FS_NAME_MAX + 1];
+} FolderAsk;
+
+/* Prints the helper's answer as "hengevm: folder NAME answer: ok|failed: TEXT" (files-check waits for it). */
+static void *folder_answer_wait(void *arg) {
+    FolderAsk *a = arg;
+    int ok = 0, rc = 0;
+    char *text = NULL;
+    for (int t = 0; t < 1800 && (rc = hv_fs_folder_answered(a->index, a->ask, &ok, &text)) == 0; t++) usleep(100000);
+    if (rc == 1) fprintf(stderr, "hengevm: folder %s answer: %s: %s\n", a->name, ok ? "ok" : "failed", text ? text : "");
+    else fprintf(stderr, "hengevm: folder %s: no answer\n", a->name);
+    free(text);
+    free(a);
+    return NULL;
+}
+
+/* folder add NAME PATH ro|cow|rw (PATH may have spaces), folder remove|offline|online|touch|export|discard NAME,
+   folders (prints them). */
 static void folder_line(const char *line) {
     char name[HV_FS_NAME_MAX + 2] = "";
     if (!strcmp(line, "folders")) {
@@ -616,8 +636,9 @@ static void folder_line(const char *line) {
             fprintf(stderr, "hengevm: folder %s is in the table, but this machine has no virtio-fs device (boot with --folder)\n", name);
         return;
     }
-    static const char *const verbs[] = {"folder remove ", "folder offline ", "folder online "};
-    for (int k = 0; k < 3; k++) {
+    static const char *const verbs[] = {"folder remove ", "folder offline ", "folder online ", "folder touch ",
+                                        "folder export ", "folder discard "};
+    for (int k = 0; k < 6; k++) {
         if (strncmp(line, verbs[k], strlen(verbs[k]))) continue;
         snprintf(name, sizeof name, "%s", line + strlen(verbs[k]));
         int i = hv_fs_folder_find(name);
@@ -625,16 +646,30 @@ static void folder_line(const char *line) {
         else if (k == 0) {
             hv_fs_folder_clear(i);
             folder_list[i].name = NULL; /* a hole: the others keep their indexes, so the guest's nodes stay good */
-        } else hv_fs_folder_online(i, k == 2);
+        } else if (k < 3) hv_fs_folder_online(i, k == 2);
+        else if (k == 3) hv_fs_folder_touch(i);
+        else {
+            long ask = hv_fs_folder_ask(i, k == 4 ? HV_FS_ASK_EXPORT : HV_FS_ASK_DISCARD);
+            FolderAsk *a = ask > 0 ? malloc(sizeof *a) : NULL;
+            pthread_t t;
+            if (ask < 0) fprintf(stderr, "hengevm: folder %s: %s\n", name, strerror(errno));
+            else if (a) {
+                *a = (FolderAsk){i, ask, ""};
+                snprintf(a->name, sizeof a->name, "%s", name);
+                if (pthread_create(&t, NULL, folder_answer_wait, a) == 0) pthread_detach(t);
+                else free(a);
+            }
+        }
         return;
     }
-    fprintf(stderr, "hengevm: input: %s: want folder add|remove|offline|online\n", line);
+    fprintf(stderr, "hengevm: input: %s: want folder add|remove|offline|online|touch|export|discard\n", line);
 }
 
 /* HV_INPUT_FILE lines for the virt board: rel DX DY, rclick, msleep MS, tpframe (ends a touch batch), mode WxH [SCALE] (live display mode), and btn, tp, tpclick as on vmapple.
    Device status: battery LEVEL unplugged|charging|full|unknown, brightness F, volume F, tz NAME, and status (prints it). HV_STATUS_LOG=1 logs the guest's requests.
    Touchscreen: ts SLOT PHASE X Y, tsframe, tscancel, tsmode 0|1.
-   Files folders: folder add NAME PATH ro|cow|rw, folder remove NAME, folder offline NAME, folder online NAME, folders.
+   Files folders: folder add NAME PATH ro|cow|rw, folder remove NAME, folder offline NAME, folder online NAME, folders;
+   folder touch NAME (the original changed), folder export NAME and folder discard NAME (asks to the guest's helper).
    --screenshot still writes the --display size, so read the size from the guest after a mode line. */
 static int virt_input(const char *line) {
     int a, b;

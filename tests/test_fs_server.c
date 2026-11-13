@@ -792,6 +792,88 @@ static void test_table(void) {
     check("news: a stale count answers at once", hv_fs_folders_wait(seq + 100, 5000) != seq + 100, 1);
 }
 
+static int hook_calls, hook_index, hook_event, hook_result;
+static char hook_path[PATH_MAX];
+
+static int app_hook(void *user, int index, const char *path, int event) {
+    check("hook: its user", user == &hook_calls, 1);
+    hook_calls++, hook_index = index, hook_event = event;
+    snprintf(hook_path, sizeof hook_path, "%s", path);
+    return event == HV_FS_EVENT_OPEN ? hook_result : 0;
+}
+
+/* What the app adds: the provider hook, a changed original, and the export and discard asks. */
+static void test_app(void) {
+    int a = hv_fs_folder_find("a"), cw = hv_fs_folder_find("cow");
+    uint64_t an = folder_node("a"), dn = (uint64_t)lookup(an, "d");
+    long long g = lookup(dn, "g");
+    hv_fs_set_hook(app_hook, &hook_calls);
+    long long fh = open_node((uint64_t)g, 0, 0);
+    check("hook: not for a local folder", hook_calls, 0);
+    if (fh > 0) release((uint64_t)g, (uint64_t)fh, 0);
+    check("kind: provider", hv_fs_folder_kind(a, HV_FS_PROVIDER), 0);
+    check("kind: a bad kind", hv_fs_folder_kind(a, 5), -1);
+    check("kind: an empty index", hv_fs_folder_kind(6, HV_FS_PROVIDER), -1);
+    fh = open_node((uint64_t)g, 0, 0);
+    check("hook: open of a provider folder's file", hook_calls * 10 + hook_event, 10 + HV_FS_EVENT_OPEN);
+    check("hook: the folder's index", hook_index, a);
+    check("hook: the path below the folder", strcmp(hook_path, "d/g"), 0);
+    if (fh > 0) release((uint64_t)g, (uint64_t)fh, 0);
+    check("hook: no WRITTEN after a read", hook_calls, 1);
+    hook_result = EIO;
+    check("hook: the app's error fails the open", open_node((uint64_t)g, 0, 0), -LX_EIO);
+    hook_result = 0;
+    fh = open_node((uint64_t)g, 1, 0);
+    check("hook: write", write_fh((uint64_t)g, (uint64_t)fh, 0, "g\n", 2), 2);
+    hook_calls = 0;
+    check("hook: release", release((uint64_t)g, (uint64_t)fh, 0), 0);
+    check("hook: WRITTEN after a written file closes", hook_calls * 10 + hook_event, 10 + HV_FS_EVENT_WRITTEN);
+    check("hook: its path", strcmp(hook_path, "d/g"), 0);
+    char p[PATH_MAX];
+    host_path(p, "a");
+    hv_fs_folder_set(a, "id-a", "a", p, HV_FS_RW);
+    check("kind: the same folder set again keeps it", (hook_calls = 0, release((uint64_t)g, (uint64_t)open_node((uint64_t)g, 0, 0), 0), hook_calls), 1);
+    hv_fs_set_hook(NULL, NULL);
+    hv_fs_folder_kind(a, HV_FS_LOCAL);
+
+    const char *j = read_text(FUSE_ROOT_ID, ".henge-folders");
+    check(".henge-folders: orig 0", strstr(j, "\"name\":\"cow\",") && strstr(strstr(j, "\"name\":\"cow\","), "\"orig\":0") != NULL, 1);
+    unsigned long seq = 0;
+    free(hv_fs_folders_json(&seq));
+    check("touch", hv_fs_folder_touch(cw), 0);
+    check("touch: news", hv_fs_folders_wait(seq, 50), seq + 1);
+    j = read_text(FUSE_ROOT_ID, ".henge-folders");
+    check(".henge-folders: orig 1 after a touch", strstr(strstr(j, "\"name\":\"cow\","), "\"orig\":1") != NULL, 1);
+    check("touch: an empty index", hv_fs_folder_touch(6), -1);
+
+    check("ask: not for a Read-write folder", hv_fs_folder_ask(a, HV_FS_ASK_EXPORT), -1);
+    check("ask: a bad ask", hv_fs_folder_ask(cw, 3), -1);
+    long n = hv_fs_folder_ask(cw, HV_FS_ASK_EXPORT);
+    check("ask: export", n > 0, 1);
+    char want[96];
+    snprintf(want, sizeof want, "\"ask\":{\"n\":%ld,\"do\":\"export\"}", n);
+    check(".henge-folders: the ask", strstr(read_text(FUSE_ROOT_ID, ".henge-folders"), want) != NULL, 1);
+    int ok = -1;
+    char *text = NULL;
+    check("ask: no answer yet", hv_fs_folder_answered(cw, n, &ok, &text), 0);
+    check("answer: another ask", hv_fs_folder_answer(cw, n + 1, 1, "x"), -1);
+    check("answer: another folder", hv_fs_folder_answer(a, n, 1, "x"), -1);
+    check("answer", hv_fs_folder_answer(cw, n, 1, "Exports/cow-14-11-2026-1200\n3 files"), 0);
+    check("answer: once", hv_fs_folder_answer(cw, n, 1, "x"), -1);
+    check("answered", hv_fs_folder_answered(cw, n, &ok, &text), 1);
+    check("answered: ok", ok, 1);
+    check("answered: the text", text && !strcmp(text, "Exports/cow-14-11-2026-1200\n3 files"), 1);
+    free(text);
+    check(".henge-folders: no ask once answered", strstr(read_text(FUSE_ROOT_ID, ".henge-folders"), "\"ask\"") == NULL, 1);
+    long d = hv_fs_folder_ask(cw, HV_FS_ASK_DISCARD);
+    check("ask: discard has a new number", d > n, 1);
+    check(".henge-folders: discard", strstr(read_text(FUSE_ROOT_ID, ".henge-folders"), "\"do\":\"discard\"") != NULL, 1);
+    check("answered: a new ask leaves the last answer", hv_fs_folder_answered(cw, n, &ok, NULL), 1);
+    check("ask: taken back", hv_fs_folder_ask(cw, HV_FS_ASK_NONE), 0);
+    check("answered: a taken-back ask is gone", hv_fs_folder_answered(cw, d, &ok, NULL), -1);
+    check("answer: a taken-back ask", hv_fs_folder_answer(cw, d, 1, ""), -1);
+}
+
 /* A case-sensitive APFS image, or 0 if hdiutil can't make one. */
 static int case_sensitive_image(char mnt[PATH_MAX]) {
     char cmd[3 * PATH_MAX];
@@ -871,6 +953,7 @@ int main(void) {
         fprintf(stderr, "test_fs_server: no case-sensitive image (hdiutil failed); its checks are skipped\n");
     }
     check(".henge-folders: b is case-insensitive", strstr(read_text(FUSE_ROOT_ID, ".henge-folders"), "\"name\":\"b\",\"mode\":\"rw\",\"state\":\"ready\",\"case\":\"insensitive\"") != NULL, 1);
+    test_app();
     test_folder_changes();
     test_table();
     FuseInitIn in = {7, 41, 0, 0, 0, {0}};

@@ -42,12 +42,18 @@
 
 /* ---- the folder table ---- */
 
+#define ANSWER_MAX 1024
+
 typedef struct Folder {
-    int used, online, mode, rootfd, case_sensitive;
-    uint32_t gen; /* a different folder at this index: old nodes go stale */
+    int used, online, mode, rootfd, case_sensitive, kind;
+    uint32_t gen;  /* a different folder at this index: old nodes go stale */
+    uint32_t orig; /* the original changed (hv_fs_folder_touch) */
     dev_t dev;
     ino_t ino;
     char id[HV_FS_NAME_MAX + 1], name[HV_FS_NAME_MAX + 1];
+    long ask, answered; /* the open ask (0: none) and the last one answered */
+    int ask_what, answer_ok;
+    char answer[ANSWER_MAX];
 } Folder;
 
 static pthread_mutex_t fmu = PTHREAD_MUTEX_INITIALIZER;
@@ -55,7 +61,10 @@ static pthread_cond_t fcond = PTHREAD_COND_INITIALIZER;
 static Folder folders[HV_FS_MAX_FOLDERS];
 static unsigned long news;
 static uint32_t gens;
+static long asks;
 static time_t started;
+static HvFsHook hook;
+static void *hook_user;
 
 static int logging(void) {
     static int on = -1;
@@ -123,6 +132,7 @@ int hv_fs_folder_set(int index, const char *id, const char *name, const char *pa
         f->gen = ++gens;
         f->dev = st.st_dev, f->ino = st.st_ino;
         f->online = 1;
+        f->kind = HV_FS_LOCAL;
     }
     f->used = 1;
     f->mode = mode;
@@ -175,6 +185,93 @@ int hv_fs_folder_online(int index, int online) {
     return rc;
 }
 
+int hv_fs_folder_kind(int index, int kind) {
+    if (index < 0 || index >= HV_FS_MAX_FOLDERS || (kind != HV_FS_LOCAL && kind != HV_FS_PROVIDER)) {
+        errno = EINVAL;
+        return -1;
+    }
+    pthread_mutex_lock(&fmu);
+    int rc = folders[index].used ? 0 : -1;
+    if (!rc) folders[index].kind = kind;
+    pthread_mutex_unlock(&fmu);
+    if (rc) errno = ENOENT;
+    return rc;
+}
+
+void hv_fs_set_hook(HvFsHook fn, void *user) {
+    pthread_mutex_lock(&fmu);
+    hook = fn, hook_user = user;
+    pthread_mutex_unlock(&fmu);
+}
+
+int hv_fs_folder_touch(int index) {
+    if (index < 0 || index >= HV_FS_MAX_FOLDERS) {
+        errno = EINVAL;
+        return -1;
+    }
+    pthread_mutex_lock(&fmu);
+    int rc = folders[index].used ? 0 : -1;
+    if (!rc) {
+        folders[index].orig++;
+        changed_locked();
+    }
+    pthread_mutex_unlock(&fmu);
+    if (rc) errno = ENOENT;
+    return rc;
+}
+
+long hv_fs_folder_ask(int index, int what) {
+    if (index < 0 || index >= HV_FS_MAX_FOLDERS || what < HV_FS_ASK_NONE || what > HV_FS_ASK_DISCARD) {
+        errno = EINVAL;
+        return -1;
+    }
+    pthread_mutex_lock(&fmu);
+    Folder *f = &folders[index];
+    long n = -1;
+    int e = !f->used ? ENOENT : EINVAL; /* only a Copy-on-write folder has changes of its own */
+    if (f->used && (what == HV_FS_ASK_NONE || f->mode == HV_FS_COW)) {
+        n = what == HV_FS_ASK_NONE ? 0 : ++asks;
+        f->ask = n, f->ask_what = what;
+        changed_locked();
+    }
+    pthread_mutex_unlock(&fmu);
+    if (n < 0) errno = e;
+    return n;
+}
+
+int hv_fs_folder_answer(int index, long ask, int ok, const char *text) {
+    if (index < 0 || index >= HV_FS_MAX_FOLDERS) {
+        errno = EINVAL;
+        return -1;
+    }
+    pthread_mutex_lock(&fmu);
+    Folder *f = &folders[index];
+    int rc = f->used && ask > 0 && f->ask == ask ? 0 : -1;
+    if (!rc) {
+        f->answered = ask, f->answer_ok = !!ok;
+        snprintf(f->answer, sizeof f->answer, "%s", text ? text : "");
+        f->ask = 0, f->ask_what = 0; /* out of .henge-folders, so a helper that starts again does not do it twice */
+        changed_locked();
+    }
+    pthread_mutex_unlock(&fmu);
+    if (rc) errno = ESTALE;
+    return rc;
+}
+
+int hv_fs_folder_answered(int index, long ask, int *ok, char **text) {
+    if (text) *text = NULL;
+    if (index < 0 || index >= HV_FS_MAX_FOLDERS || ask <= 0) return -1;
+    pthread_mutex_lock(&fmu);
+    const Folder *f = &folders[index];
+    int rc = !f->used ? -1 : f->answered == ask ? 1 : f->ask == ask ? 0 : -1;
+    if (rc == 1) {
+        if (ok) *ok = f->answer_ok;
+        if (text) *text = strdup(f->answer);
+    }
+    pthread_mutex_unlock(&fmu);
+    return rc;
+}
+
 int hv_fs_folder_find(const char *name) {
     int found = -1;
     pthread_mutex_lock(&fmu);
@@ -205,7 +302,7 @@ static void json_str(char *out, size_t cap, size_t *n, const char *s) {
 }
 
 char *hv_fs_folders_json(unsigned long *seq) {
-    enum { CAP = 16384 }; /* 8 folders with an id and a name of 64 bytes, each byte escaped at most 6 times over */
+    enum { CAP = 20480 }; /* 8 folders with an id and a name of 64 bytes, each byte escaped at most 6 times over */
     char *out = malloc(CAP);
     if (!out) return NULL;
     size_t n = 0;
@@ -220,9 +317,13 @@ char *hv_fs_folders_json(unsigned long *seq) {
         if (n < CAP) n += (size_t)snprintf(out + n, CAP - n, ",\"name\":");
         json_str(out, CAP, &n, f->name);
         if (n < CAP)
-            n += (size_t)snprintf(out + n, CAP - n, ",\"mode\":\"%s\",\"state\":\"%s\",\"case\":\"%s\",\"gen\":%u}",
+            n += (size_t)snprintf(out + n, CAP - n, ",\"mode\":\"%s\",\"state\":\"%s\",\"case\":\"%s\",\"gen\":%u,\"orig\":%u",
                                   hv_fs_mode_name(f->mode), f->online ? "ready" : "unavailable",
-                                  f->case_sensitive ? "sensitive" : "insensitive", f->gen);
+                                  f->case_sensitive ? "sensitive" : "insensitive", f->gen, f->orig);
+        if (n < CAP && f->ask)
+            n += (size_t)snprintf(out + n, CAP - n, ",\"ask\":{\"n\":%ld,\"do\":\"%s\"}", f->ask,
+                                  f->ask_what == HV_FS_ASK_EXPORT ? "export" : "discard");
+        if (n < CAP) out[n++] = '}';
         first = 0;
     }
     if (seq) *seq = news;
@@ -264,11 +365,11 @@ typedef struct Entry {
 } Entry;
 
 typedef struct Handle {
-    int fd, folder, dir, closing, refs;
+    int fd, folder, dir, closing, refs, wrote;
     uint32_t fgen;
     dev_t dev;
     ino_t ino;
-    char *path; /* a directory's, for its entries' nodes */
+    char *path; /* a directory's for its entries' nodes; a file's for the provider hook */
     pthread_mutex_t mu; /* a directory's listing */
     Entry *list;
     size_t count;
@@ -496,11 +597,11 @@ static void handle_free(HvFs *fs, Handle *h) {
 /* A new handle for fd (which it then owns); the fh, or 0 at the limit (fd closed). */
 static uint64_t handle_new(HvFs *fs, int fd, int folder, uint32_t fgen, const struct stat *st, const char *path, int dir) {
     Handle *h = calloc(1, sizeof *h);
-    char *p = dir ? strdup(path) : NULL;
+    char *p = strdup(path);
     pthread_mutex_lock(&fs->mu);
     uint32_t slot = 0;
     while (slot < fs->hcap && fs->handles[slot]) slot++;
-    if (h && (!dir || p) && fs->fds < MAX_FDS && slot == fs->hcap) {
+    if (h && p && fs->fds < MAX_FDS && slot == fs->hcap) {
         uint32_t cap = fs->hcap ? fs->hcap * 2 : 64;
         Handle **more = realloc(fs->handles, cap * sizeof *more);
         uint32_t *gens2 = more ? realloc(fs->hgens, cap * sizeof *gens2) : NULL;
@@ -511,7 +612,7 @@ static uint64_t handle_new(HvFs *fs, int fd, int folder, uint32_t fgen, const st
             fs->hgens = gens2, fs->hcap = cap;
         }
     }
-    if (!h || (dir && !p) || fs->fds >= MAX_FDS || slot >= fs->hcap) {
+    if (!h || !p || fs->fds >= MAX_FDS || slot >= fs->hcap) {
         pthread_mutex_unlock(&fs->mu);
         free(h);
         free(p);
@@ -1258,6 +1359,16 @@ static size_t open_reply_or_close(Req *r, uint64_t fh) {
     return n;
 }
 
+/* The app's hook for a folder of the provider kind at this gen, or NULL. */
+static HvFsHook provider_hook(int index, uint32_t fgen, void **user) {
+    pthread_mutex_lock(&fmu);
+    const Folder *f = &folders[index];
+    HvFsHook fn = f->used && f->gen == fgen && f->kind == HV_FS_PROVIDER ? hook : NULL;
+    *user = hook_user;
+    pthread_mutex_unlock(&fmu);
+    return fn;
+}
+
 static size_t op_open(Req *r, Ctx *c) {
     FuseOpenIn a;
     int err = arg_get(r, &a, sizeof a);
@@ -1267,6 +1378,9 @@ static size_t op_open(Req *r, Ctx *c) {
     if (c->kind != K_NODE) return reply_err(r->o, LX_EISDIR);
     if (!c->online) return reply_err(r->o, LX_EIO);
     if (writes(flags) && c->mode != HV_FS_RW) return reply_err(r->o, LX_EROFS);
+    void *user;
+    HvFsHook fn = provider_hook(c->folder, c->fgen, &user);
+    if (fn && (err = fn(user, c->folder, c->path, HV_FS_EVENT_OPEN))) return reply_err(r->o, lx(err));
     int fd = safe_open(c->rootfd, c->path, flags | O_NONBLOCK, 0); /* no link in any part, the last one too */
     if (fd < 0) return reply_err(r->o, errno == ELOOP ? LX_ELOOP : path_err(c, errno));
     struct stat st;
@@ -1399,6 +1513,7 @@ static size_t op_write(Req *r) {
         }
         done += (size_t)n;
     }
+    if (done) __atomic_store_n(&h->wrote, 1, __ATOMIC_RELAXED);
     if (!err && a.write_flags & FUSE_WRITE_KILL_SUIDGID) kill_suidgid(h->fd);
     handle_put(r->fs, h);
     if (err && !done) return reply_err(r->o, err);
@@ -1589,9 +1704,22 @@ static size_t op_readdir(Req *r, int plus) {
 
 static size_t op_release(Req *r) {
     FuseReleaseIn a;
-    int err = arg_get(r, &a, sizeof a);
-    if (!err && a.fh) handle_close(r->fs, a.fh);
-    return reply(r->o, err, NULL, 0);
+    int err = arg_get(r, &a, sizeof a), index = -1;
+    char *written = NULL;
+    void *user = NULL;
+    HvFsHook fn = NULL;
+    if (!err && a.fh) {
+        Handle *h = handle_get(r->fs, a.fh);
+        if (h && !h->dir && __atomic_load_n(&h->wrote, __ATOMIC_RELAXED) &&
+            (fn = provider_hook(h->folder, h->fgen, &user)) && (written = strdup(h->path)))
+            index = h->folder;
+        if (h) handle_put(r->fs, h);
+        handle_close(r->fs, a.fh);
+    }
+    size_t n = reply(r->o, err, NULL, 0);
+    if (written) fn(user, index, written, HV_FS_EVENT_WRITTEN); /* the guest's close() does not wait for a RELEASE */
+    free(written);
+    return n;
 }
 
 static size_t op_fsync(Req *r) {
