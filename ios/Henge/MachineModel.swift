@@ -54,6 +54,9 @@ struct VirtualMac: Identifiable, Codable, Hashable {
     var sharpText: Bool?
     /// A9: Linux "Graphics acceleration" (virgl). Missing: off.
     var accel: Bool?
+    /// Linux "Video decode": with acceleration, the guest's VA-API decodes on VideoToolbox. Missing: off.
+    var video: Bool?
+    var decodesVideo: Bool { guest == .linux && accel == true && video == true }
     /// LINUX-PLAN-12: the picture takes direct touches (the toolbar's touch switch). Missing: the pointer.
     var touchInput: Bool?
     /// Never for a Mac: its board has no touchscreen.

@@ -420,3 +420,26 @@ The second decode costs decoder time, not CPU time: 19% of the frames for preset
 
 Not shown: global motion and segmentation (the clips have none, so that code ran only with identity parameters and no segments), error-resilient frames, intra block copy, lossless frames, a key frame shown with `show_existing_frame` (its refresh of every slot never reaches the host; the map by surface still holds, but this was not tested), streams from libaom, and AV1 on the phone.
 
+## Stage 6 results
+
+Run on 14/11/2026. This is stage 6 of [Stages](#stages): the machine setting, the guest documentation and the tests.
+
+- The iOS app has a "Video decode" switch for each Linux machine, under "Graphics acceleration" and shown only when that is on. It is off by default (`MachineModel.video`, missing means off). Its note says that the device's video decoder then parses data that the guest controls. `henge_vm_boot_linux` has a `video` argument; with acceleration it sets `HvVmConfig.video`, the flag that `hengevm --gpu-video` sets, which passes `VIRGL_RENDERER_USE_VIDEO`. `make test-machine-model` checks the default and that the switch has no effect without acceleration or on a Mac.
+- `tools/linux/README.md` ("Video decode (VA-API)") tells the guest what to install, how to check it with `vainfo`, the players' options, and what stays in software.
+- `make test-linux-video` is the frame checksum test for each codec: two H.264, two VP9 and three AV1 clips, each decoded with `-hwaccel vaapi` and with `-hwaccel none`, every frame equal. It also checks the speed, `mpv`, and `hengevm`'s log.
+- The patched virglrenderer is built for `ios` and `sim` into the shared `build/gfx` (the earlier libraries are in `build/gfx/ios.pre-video` and `build/gfx/sim.pre-video`). The Henge device build and `make ios-lib` succeed with it. The phone was not run. Video stays off until the switch is on, so the phone's behaviour does not change.
+
+The final run on the Mac, with one patched library and one boot:
+
+| Check | Result |
+|---|---|
+| `vainfo` | `VAProfileH264Main`, `VAProfileH264High`, `VAProfileVP9Profile0`, `VAProfileVP9Profile2`, `VAProfileAV1Profile0` |
+| framemd5 | 450 of 450 frames equal for each of the 7 clips |
+| VA-API frame rate | H.264 418.2 fps, VP9 356.9 fps, AV1 581.4 fps (software: 159.9, 266.1, 217.5) |
+| `mpv --hwdec=vaapi --vo=gpu`, H.264 | 0 frames dropped |
+| `hengevm`'s log | 11 VA-API runs: each decoded all its frames on a hardware decoder, 0 failed, 0 skipped; every frame copied on the GPU |
+| Without `--gpu-video` | no decode profile, and the back end does not start |
+| `make test-vgpu-virgl` | passes with video off (197 checks) and on under `libgmalloc` (217 checks) |
+
+A one-off fuzz run (not in the repository) linked the back end with AddressSanitizer and UndefinedBehaviorSanitizer and sent it 3,000 codecs of random descriptors and bitstreams, with H.264 start codes, VP9 frame markers and AV1 tile layouts that fit, so that 1,596 AV1 frames reached the header writers and VideoToolbox. Nothing faulted.
+

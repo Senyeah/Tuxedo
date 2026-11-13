@@ -13,8 +13,9 @@ int henge_vm_boot(const char *rom, const char *disk, const char *aux, uint64_t e
                   int cpus, char *err, size_t errlen);
 /* Starts a Linux machine (the virt board): U-Boot's firmware file and a raw root disk, which may be NULL.
    Same rules as henge_vm_boot: on the app's JIT region. accel: the virtio GPU draws with virgl (the engine must be
-   built with GFX=1). 0, or -1 with a reason in err. */
-int henge_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb, int cpus, int accel, char *err, size_t errlen);
+   built with GFX=1). video, with accel: the guest's VA-API decodes on VideoToolbox. 0, or -1 with a reason in err. */
+int henge_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb, int cpus, int accel, int video, char *err,
+                        size_t errlen);
 /* The serial console. Read drains what the guest wrote since the last call (a 256 KB ring; when it is full the
    oldest bytes go) and works after the machine stops. Write types bytes into it; ignored unless running. */
 size_t henge_vm_console_read(uint8_t *buf, size_t cap);
