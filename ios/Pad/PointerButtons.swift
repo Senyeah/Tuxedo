@@ -10,6 +10,7 @@ final class PointerButtons {
         case hold           // a touch-and-hold drag on the pad
         case latch          // a held left key that the keyboard covered: it lets go at the last lift
         case accessibility  // VoiceOver's "Hold"
+        case volume         // Henge's volume buttons: a physical key, so the keyboard leaves it held
     }
 
     private let send: (Int, Bool) -> Void
@@ -28,6 +29,7 @@ final class PointerButtons {
     func isDown(_ b: Int) -> Bool { owners.indices.contains(b) && !owners[b].isEmpty }
     func holds(_ b: Int, _ o: Owner) -> Bool { owners.indices.contains(b) && owners[b].contains(o) }
     var keyHeld: Bool { owners[0].contains(.key) || owners[1].contains(.key) }
+    var anyDown: Bool { isDown(0) || isDown(1) }
 
     /// Returns true when the guest heard a press.
     @discardableResult

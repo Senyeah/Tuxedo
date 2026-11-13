@@ -54,6 +54,8 @@ final class PadHostView: UIView, PadSurfaceHost, PadFeedback {
     var forced = PadAccessibility() { didSet { if forced != oldValue { accessibilityChanged() } } }
     /// The pad's VoiceOver value: where the guest is.
     var padValue = "Linux is on the external display" { didSet { updateAccessibility() } }
+    /// Stands in for the screen's corner, for a pad that is not at the screen's edges.
+    var corner: Double? { didSet { if corner != oldValue { setNeedsLayout() } } }
 
     private var keyTarget = [false, false]
     private var keyLevel = [0.0, 0.0]
@@ -152,7 +154,7 @@ final class PadHostView: UIView, PadSurfaceHost, PadFeedback {
         let i = PadLayout.Input(width: Double(bounds.width), height: Double(bounds.height),
                                 safeTop: Double(safeAreaInsets.top), safeLeft: Double(safeAreaInsets.left),
                                 safeBottom: Double(safeAreaInsets.bottom), safeRight: Double(safeAreaInsets.right),
-                                deviceCorner: deviceCorner, labels: labels)
+                                deviceCorner: corner ?? deviceCorner, labels: labels)
         return PadLayout.make(i, keyboard: keyboard.state, tuning: tuning, reduceMotion: reduceMotion)
     }
 
@@ -171,7 +173,7 @@ final class PadHostView: UIView, PadSurfaceHost, PadFeedback {
         let wasUp = keyboardUp
         layout = l
         let r = CGRect(x: l.pad.x, y: l.pad.y, width: l.pad.w, height: l.pad.h)
-        if touchView.frame != r { touchView.frame = r }
+        if touchView.superview === self, touchView.frame != r { touchView.frame = r } // a new host may have it now
         keys.apply(l)
         surface.geometry = l
         if wasUp != keyboardUp { updateAccessibility() }
@@ -318,10 +320,13 @@ struct PadView: UIViewRepresentable {
     var forced = PadAccessibility()
     var value = "Linux is on the external display"
     var hapticLevel: PadHaptics.Level = .all
+    var corner: Double?
     var made: ((PadHostView) -> Void)?
 
     func makeUIView(context: Context) -> PadHostView {
         let v = PadHostView(touchView: touchView, buttons: buttons, tuning: tuning)
+        v.haptics.level = hapticLevel // before the window: the motion haptic prepares there
+        v.corner = corner
         made?(v)
         return v
     }
@@ -330,6 +335,7 @@ struct PadView: UIViewRepresentable {
         if v.tuning != tuning { v.tuning = tuning }
         v.forced = forced
         v.padValue = value
+        v.corner = corner
         if v.haptics.level != hapticLevel {
             v.haptics.level = hapticLevel
             v.motion.cancel()

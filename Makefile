@@ -321,8 +321,10 @@ $(B)/test_devices: tests/test_devices.c tests/devices_programs.S tests/harness.S
 $(B)/test_%: tests/test_%.c tests/%_programs.S tests/harness.S tests/harness.h $(ENGINE)
 	$(CC) $(CFLAGS) -Itests tests/test_$*.c tests/$*_programs.S tests/harness.S $(ENGINE) -o $@
 
-test: all
-	@ulimit -s 65520; for t in $(TESTS); do echo "== $$t"; $$t || exit 1; done # a test keeps a whole HvCpu (2 MB of TLB and more) on its stack
+PAD_TESTS = $(B)/test_pad_field $(B)/test_pad_layout $(B)/test_pointer_buttons $(B)/test_pad_motion
+
+test: all $(PAD_TESTS)
+	@ulimit -s 65520; for t in $(TESTS) $(PAD_TESTS); do echo "== $$t"; $$t || exit 1; done # a test keeps a whole HvCpu (2 MB of TLB and more) on its stack
 
 $(B):
 	mkdir -p $(B)
@@ -437,6 +439,33 @@ $(B)/test_edge_push: ios/Henge/EdgePush.swift tests/test_edge_push.swift | $(B)
 test-edge-push: $(B)/test_edge_push
 	$<
 .PHONY: test-edge-push
+
+# The trackpad's surface (ios/Pad, shared with Trackpad Lab): pure Swift, no UIKit.
+# -O: it times a frame of the field.
+$(B)/test_pad_field: ios/Pad/PadTuning.swift ios/Pad/PadField.swift tests/test_pad_field.swift | $(B)
+	xcrun --sdk macosx swiftc -O -parse-as-library $^ -o $@
+
+test-pad-field: $(B)/test_pad_field
+	$<
+
+$(B)/test_pad_layout: ios/Pad/PadTuning.swift ios/Pad/PadLayout.swift tests/test_pad_layout.swift | $(B)
+	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
+
+test-pad-layout: $(B)/test_pad_layout
+	$<
+
+$(B)/test_pointer_buttons: ios/Pad/PointerButtons.swift tests/test_pointer_buttons.swift | $(B)
+	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
+
+test-pointer-buttons: $(B)/test_pointer_buttons
+	$<
+
+$(B)/test_pad_motion: ios/Pad/PadTuning.swift ios/Pad/PadMotionFeel.swift tests/test_pad_motion.swift | $(B)
+	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
+
+test-pad-motion: $(B)/test_pad_motion
+	$<
+.PHONY: test-pad-field test-pad-layout test-pointer-buttons test-pad-motion
 
 $(B)/test_physical_mouse_buttons: ios/Henge/PhysicalMouseButtons.swift tests/test_physical_mouse_buttons.swift | $(B)
 	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
