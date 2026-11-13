@@ -70,8 +70,10 @@ static uint64_t dir_len(const Req *r, int writable) {
     return n;
 }
 
-/* Host views of len bytes of one direction, after off. -1 if any of it is not guest RAM. */
-static int map(HvVirtioHvcodec *d, const Req *r, int writable, uint64_t off, uint64_t len, struct iovec *iov, int *n) {
+/* Host views of len bytes of one direction, after off, in at most max entries. -1 if any of it is not guest RAM,
+   is ROM to be written, or needs more entries. */
+static int map(HvVirtioHvcodec *d, const Req *r, int writable, uint64_t off, uint64_t len, struct iovec *iov, int max,
+               int *n) {
     *n = 0;
     for (int s = 0; s < r->nseg && len; s++) {
         const HvVirtqSeg *g = &r->seg[s];
@@ -83,7 +85,8 @@ static int map(HvVirtioHvcodec *d, const Req *r, int writable, uint64_t off, uin
         uint64_t k = g->len - off;
         if (k > len) k = len;
         void *p = hv_phys_ptr(d->vio.m, g->addr + off, k);
-        if (!p) return -1;
+        if (!p || *n >= max) return -1;
+        if (writable && hv_ram_lookup(d->vio.m, g->addr + off)->readonly) return -1; /* flash: the CPU path ignores writes */
         iov[(*n)++] = (struct iovec){p, (size_t)k};
         len -= k, off = 0;
     }
@@ -180,24 +183,25 @@ static void serve(HvVirtioHvcodec *d, Req *r) {
              h->reply_cap <= HVCD_MAX_REPLY && rd == sizeof *h + (uint64_t)h->msg_len + h->in_len &&
              wr == sizeof resp + (uint64_t)h->reply_cap + h->out_len;
     if (ok && h->op != HVCD_OP_MSG) ok = !h->msg_len && !h->in_len && !h->out_len;
-    iov = ok ? malloc(sizeof *iov * ((size_t)r->nseg + 5)) : NULL;
+    int cap = r->nseg + 5; /* each segment once, plus one more at each boundary between parts */
+    iov = ok ? malloc(sizeof *iov * (size_t)cap) : NULL;
     struct iovec *resp_iov = iov, *msg = NULL, *in = NULL, *reply = NULL, *out = NULL;
     int nresp = 0, nmsg = 0, nin = 0, nreply = 0, nout = 0;
     if (!iov) goto respond;
     /* 16 bytes can span two segments: map them as up to 2 entries */
     struct iovec resp_v[2];
-    if (map(d, r, 1, 0, sizeof resp, resp_v, &nresp) || nresp > 2) {
+    if (map(d, r, 1, 0, sizeof resp, resp_v, 2, &nresp)) {
         resp.status = HVCD_S_FAULT;
         goto done;
     }
     msg = iov;
-    if (map(d, r, 0, sizeof *h, h->msg_len, msg, &nmsg)) goto fault;
+    if (map(d, r, 0, sizeof *h, h->msg_len, msg, cap, &nmsg)) goto fault;
     in = msg + nmsg;
-    if (map(d, r, 0, sizeof *h + (uint64_t)h->msg_len, h->in_len, in, &nin)) goto fault;
+    if (map(d, r, 0, sizeof *h + (uint64_t)h->msg_len, h->in_len, in, cap - nmsg, &nin)) goto fault;
     reply = in + nin;
-    if (map(d, r, 1, sizeof resp, h->reply_cap, reply, &nreply)) goto fault;
+    if (map(d, r, 1, sizeof resp, h->reply_cap, reply, cap - nmsg - nin, &nreply)) goto fault;
     out = reply + nreply;
-    if (map(d, r, 1, sizeof resp + (uint64_t)h->reply_cap, h->out_len, out, &nout)) goto fault;
+    if (map(d, r, 1, sizeof resp + (uint64_t)h->reply_cap, h->out_len, out, cap - nmsg - nin - nreply, &nout)) goto fault;
     resp_iov = resp_v;
 
     Slot *s = r->slot >= 0 ? &d->slot[r->slot] : NULL;
@@ -277,7 +281,7 @@ respond:
     if (!iov || resp_iov == iov) {
         /* not mapped yet: map just the response */
         struct iovec rv[2];
-        if (map(d, r, 1, 0, sizeof resp, rv, &nresp) || nresp > 2) goto done;
+        if (map(d, r, 1, 0, sizeof resp, rv, 2, &nresp)) goto done;
         HvIovCursor c;
         hv_iov_cursor(&c, rv, nresp);
         hv_iov_copy(&c, 0, &resp, sizeof resp, 1);
@@ -384,7 +388,7 @@ static void notify(HvVirtio *v, int q) {
         HvIovCursor c;
         struct iovec hv[2];
         int nh = 0;
-        r->bad = map(d, r, 0, 0, sizeof r->h, hv, &nh) != 0 || nh > 2;
+        r->bad = map(d, r, 0, 0, sizeof r->h, hv, 2, &nh) != 0;
         if (!r->bad) {
             hv_iov_cursor(&c, hv, nh);
             hv_iov_copy(&c, 0, &r->h, sizeof r->h, 0);

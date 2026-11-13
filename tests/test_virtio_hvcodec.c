@@ -416,6 +416,43 @@ static void test_refusals(uint32_t ctx) {
     hv_virtio_hvcodec_drain(b.codec);
     check("no room for a response: back, empty", used_idx() == (uint16_t)(before + 1) && used_len_of(before) == 0, 1);
     check("and no context was made", opens, 1);
+    /* a header or a response in 1-byte segments: more host views than the device keeps for them */
+    before = used_idx();
+    ch.nd = 0;
+    h = (HvcdReq){.op = HVCD_OP_OPEN};
+    memcpy(ram(HDR), &h, sizeof h);
+    add(HDR, sizeof h, 1, 0);
+    memset(ram(RESP), 0xee, sizeof(HvcdResp));
+    add(RESP, sizeof(HvcdResp), 4096, 1);
+    submit(1);
+    hv_virtio_hvcodec_drain(b.codec);
+    check("a header in 32 segments: refused", used_idx() == (uint16_t)(before + 1) && resp().status == HVCD_S_INVAL, 1);
+    ch.nd = 0;
+    add(HDR, sizeof h, 4096, 0);
+    memset(ram(RESP), 0xee, sizeof(HvcdResp));
+    add(RESP, sizeof(HvcdResp), 1, 1);
+    submit(1);
+    hv_virtio_hvcodec_drain(b.codec);
+    check("a response in 16 segments: back, empty", used_idx() == (uint16_t)(before + 2) && used_len_of((uint16_t)(before + 1)) == 0, 1);
+    check("with the response not written", rd8(RESP) == 0xee && rd8(RESP + 15) == 0xee, 1);
+    check("and still no context", opens, 1);
+    /* writable segments on the read-only flash */
+    uint8_t flash[64];
+    memcpy(flash, ram(VIRT_FLASH1), sizeof flash);
+    before = used_idx();
+    build((HvcdReq){.op = HVCD_OP_OPEN}, 4096);
+    ch.addr[1] = VIRT_FLASH1; /* the response */
+    submit(1);
+    hv_virtio_hvcodec_drain(b.codec);
+    check("a response on flash: back, empty", used_idx() == (uint16_t)(before + 1) && used_len_of(before) == 0, 1);
+    memcpy(ram(MSG), "Ex", 2);
+    build((HvcdReq){.op = HVCD_OP_MSG, .ctx = ctx, .msg_len = 2, .reply_cap = 64}, 4096);
+    ch.addr[3] = VIRT_FLASH1; /* the reply */
+    submit(1);
+    hv_virtio_hvcodec_drain(b.codec);
+    check("a reply on flash", (uint32_t)resp().status, HVCD_S_FAULT);
+    check("the flash is not changed", memcmp(ram(VIRT_FLASH1), flash, sizeof flash), 0);
+    check("still no context", opens, 1);
     msg(ctx, "Estill", 6, 64);
     check("the context still works after all that", memcmp(ram(REPLY), "Estill", 6), 0);
 }
@@ -503,6 +540,8 @@ int main(void) {
     check("no device unless asked for", present, 0);
     check("add the device", hv_virt_add_hvcodec(&b, &be_ops, NULL), 0);
     check("only one", hv_virt_add_hvcodec(&b, &be_ops, NULL), (uint64_t)-1);
+    hv_virt_load_firmware(&b, "/nonexistent"); /* maps the read-only flash, then finds no file */
+    check("the flash is mapped", ram(VIRT_FLASH1) != NULL, 1);
     setup();
     uint32_t ctx = open_ctx();
     check("a context id has a generation", ctx >> 8 != 0, 1);

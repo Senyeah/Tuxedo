@@ -127,7 +127,8 @@ static int hvc_pin(struct hvc_pin *p, u64 addr, u64 len, bool write)
 	p->pages = kvmalloc_array(n, sizeof(*p->pages), GFP_KERNEL);
 	if (!p->pages)
 		return -ENOMEM;
-	got = pin_user_pages_fast(addr & PAGE_MASK, n, write ? FOLL_WRITE : 0, p->pages);
+	/* the pin can outlive the call: move pages out of CMA and movable zones first */
+	got = pin_user_pages_fast(addr & PAGE_MASK, n, FOLL_LONGTERM | (write ? FOLL_WRITE : 0), p->pages);
 	if (got != (long)n) {
 		if (got > 0)
 			unpin_user_pages(p->pages, got);
