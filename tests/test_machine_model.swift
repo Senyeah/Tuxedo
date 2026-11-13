@@ -166,6 +166,16 @@ struct MachineModelTests {
         touchLinux.touchInput = false
         precondition(!touchLinux.usesTouch)
 
+        // The whole-screen and console choices are per machine; old JSON has neither (safe area, the screen).
+        precondition(old[0].wholeScreen == nil && old[0].showsConsole == nil)
+        precondition(!String(decoding: data, as: UTF8.self).contains("wholeScreen"))
+        precondition(!String(decoding: data, as: UTF8.self).contains("showsConsole"))
+        var chosenView = linux
+        chosenView.wholeScreen = true
+        chosenView.showsConsole = true
+        let viewBack = MachineList.decode(try JSONEncoder().encode([chosenView]), diskExists: { _ in true })!
+        precondition(viewBack[0].wholeScreen == true && viewBack[0].showsConsole == true)
+
         // A9: the Home thumbnail follows the saved picture, not the machine's 16:9 screen.
         precondition(PreviewShape.aspect(width: 640, height: 1386, fallback: 16.0 / 9) == 640.0 / 1386)
         precondition(PreviewShape.aspect(width: 0, height: 0, fallback: 16.0 / 9) == 16.0 / 9)

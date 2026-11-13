@@ -1898,6 +1898,7 @@ static void test_touch(void) {
     hv_virtio_input_touch_cancel(b.mouse);
     hv_virtio_input_touch_frame(NULL);
     check("touch: the mouse ignores touch calls", b.mouse->head == mhead && b.mouse->tail == mtail, 1);
+    check("touch: its INTx raised", b.gic->level[32 + VIRT_IRQ_PCIE + TOUCH_SLOT % 4], 1);
     rd8(TOUCH_BAR + 0x1000); /* INTx line 1 is the disk's too */
     check("touch: its INTx drops", b.gic->level[32 + VIRT_IRQ_PCIE + TOUCH_SLOT % 4], 0);
     wr16(touch_dev.cfg + 0x04, 0);

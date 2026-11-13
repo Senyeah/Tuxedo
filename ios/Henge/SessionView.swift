@@ -63,12 +63,12 @@ struct SessionView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var console = ConsoleModel()
     // Linux starts on the console: U-Boot draws on the GPU at once, so "until the GPU draws" would never show it.
-    @State private var consoleChoice = ConsoleChoice.console
+    @State private var consoleChoice = ConsoleChoice.screen
 
     /// What in the saved machine decides a Linux guest's size.
     private struct ScreenChoiceKey: Equatable {
-        var width: Int?, height: Int?, external: Bool?
-        init(_ m: VirtualMac) { (width, height, external) = (m.screenWidth, m.screenHeight, m.screenFollowsExternal) }
+        var width: Int?, height: Int?, external: Bool?, whole: Bool?
+        init(_ m: VirtualMac) { (width, height, external, whole) = (m.screenWidth, m.screenHeight, m.screenFollowsExternal, m.wholeScreen) }
     }
 
     private enum ConsoleChoice { case screen, console }
@@ -90,6 +90,10 @@ struct SessionView: View {
 
     private var consoleShown: Bool { mac.guest == .linux && consoleChoice == .console }
     /// LINUX-PLAN-12: the picture takes direct touches. Only while the phone shows the picture; the saved choice stays.
+    /// Upright on the phone: the picture under the status bar and the home bar, into the corners.
+    private func wholeScreen(landscape: Bool) -> Bool {
+        current.wholeScreen == true && current.followsPhoneScreen && !landscape && !display.isExternal
+    }
     private var touchActive: Bool { mac.guest == .linux && current.usesTouch && !consoleShown && !display.isExternal }
     /// Zoom is off in touch mode, and comes back with the pointer.
     private var zoomShown: Bool { zoomed && !touchActive }
@@ -114,7 +118,7 @@ struct SessionView: View {
             let landscape = full.width > full.height
             let window = WindowKey(size: full, insets: DisplayInsets(top: insets.top, left: insets.leading, bottom: insets.bottom, right: insets.trailing))
             let layout = Layout(full: full, insets: insets, landscape: landscape, zoomed: zoomShown && !consoleShown, typing: typing,
-                                centre: zoomCentre, aspect: layoutAspect, console: consoleShown,
+                                centre: zoomCentre, aspect: layoutAspect, console: consoleShown, whole: wholeScreen(landscape: landscape),
                                 native: current.followsPhoneScreen ? windowMode.map { DisplayModePolicy.framePoints($0, contentsScale: Device.nativeScale) } : nil)
             ZStack(alignment: .topLeading) {
                 (landscape || zoomShown || layout.native != nil ? Color.black : Desk.page)
@@ -239,10 +243,10 @@ struct SessionView: View {
             .onChange(of: ScreenChoiceKey(current)) { _ in screenChoiceChanged() }
             .onChange(of: display.isExternal) { henge_vm_set_pointer_scale($0 ? 1 : 0) } // 1:1 on a big screen
         }
-        .statusBarHidden(zoomed || Device.isPad || display.isExternal)
+        .statusBarHidden(zoomShown || Device.isPad || display.isExternal || wholeScreen(landscape: false))
         .persistentSystemOverlays(.hidden)
         // With the guest on a monitor the phone is a pad: a pointer at its top must not open the system's panels
-        .defersSystemGestures(on: display.isExternal ? .all : [])
+        .defersSystemGestures(on: display.isExternal || touchActive ? .all : [])
         .sheet(isPresented: $showDetails) { details }
         .confirmationDialog("Shut down \(mac.name)?", isPresented: $confirmStop, titleVisibility: .visible) {
             Button("Shut Down", role: .destructive) { finish() }
@@ -330,7 +334,7 @@ struct SessionView: View {
         }
 
         init(full: CGSize, insets: EdgeInsets, landscape: Bool, zoomed: Bool, typing: Bool, centre: CGPoint, aspect: CGFloat,
-             console: Bool, native: CGSize?) {
+             console: Bool, whole: Bool, native: CGSize?) {
             self.insets = insets
             self.native = native
             let big = full.height >= 600 // an iPad on its side, or a window on one
@@ -365,11 +369,13 @@ struct SessionView: View {
                 pad = .zero
             } else if let native {
                 // Whole pixels, so a guest pixel is a layer pixel. The home bar keeps its room; a keyboard's inset does not.
+                // The whole screen: the picture's room ignores the insets; the controls still keep them.
                 let px = Device.nativeScale
-                let safeW = full.width - insets.leading - insets.trailing
-                let safeH = full.height - insets.top - min(insets.bottom, 40)
-                screen = CGRect(x: ((insets.leading + (safeW - native.width) / 2) * px).rounded() / px,
-                                y: ((insets.top + (safeH - native.height) / 2) * px).rounded() / px,
+                let room = whole ? EdgeInsets() : insets
+                let safeW = full.width - room.leading - room.trailing
+                let safeH = full.height - room.top - min(room.bottom, 40)
+                screen = CGRect(x: ((room.leading + (safeW - native.width) / 2) * px).rounded() / px,
+                                y: ((room.top + (safeH - native.height) / 2) * px).rounded() / px,
                                 width: native.width, height: native.height)
                 touch = CGRect(origin: .zero, size: full)
                 fillsPhone = true
@@ -559,6 +565,9 @@ struct SessionView: View {
             zoomed = false
             controlsHidden = false
             consoleChoice = consoleShown ? .screen : .console
+            var m = current
+            m.showsConsole = consoleChoice == .console ? true : nil
+            Machines.shared.update(m)
         }
     }
 
@@ -686,9 +695,9 @@ struct SessionView: View {
         guard current.followsPhoneScreen, full.width > 0 else { return }
         // The keyboard raises SwiftUI's bottom inset; the window's own inset does not hold it.
         let bottom = typing ? (UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.safeAreaInsets.bottom ?? insets.bottom) : insets.bottom
-        let mode = DisplayModePolicy.phoneMode(window: full,
-                                               insets: DisplayInsets(top: insets.top, left: insets.left, bottom: bottom, right: insets.right),
-                                               nativeScale: Device.nativeScale)
+        let room = wholeScreen(landscape: full.width > full.height) ? .zero
+            : DisplayInsets(top: insets.top, left: insets.left, bottom: bottom, right: insets.right)
+        let mode = DisplayModePolicy.phoneMode(window: full, insets: room, nativeScale: Device.nativeScale)
         guard mode != windowMode else { return }
         HengeLog.log("display", "window \(Int(full.width))x\(Int(full.height)) pt, safe insets t\(insets.top) l\(insets.left) b\(insets.bottom) (used \(bottom)) r\(insets.right), typing \(typing), "
                    + "scale \(Device.nativeScale) -> \(mode.w)x\(mode.h)")
@@ -958,7 +967,7 @@ struct SessionView: View {
         showWallpaperTip = false
         shutdownAsked = nil
         shutdownOverdue = false
-        consoleChoice = .console
+        consoleChoice = current.showsConsole == true ? .console : .screen
         if mac.guest == .linux {
             console.reset()
             console.start()

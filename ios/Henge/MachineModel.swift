@@ -58,6 +58,10 @@ struct VirtualMac: Identifiable, Codable, Hashable {
     var touchInput: Bool?
     /// Never for a Mac: its board has no touchscreen.
     var usesTouch: Bool { guest == .linux && touchInput == true }
+    /// Linux on the phone, upright: the picture takes the whole screen, under the status bar and the home bar. Missing: off.
+    var wholeScreen: Bool?
+    /// Linux: the session opens on the serial console, as it was left. Missing: the screen.
+    var showsConsole: Bool?
 
     var directory: URL { MachinePaths.directory(for: id) }
     var rom: URL { directory.appendingPathComponent("AVPBooter.vmapple2.bin") }

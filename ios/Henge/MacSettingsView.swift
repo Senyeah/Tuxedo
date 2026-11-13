@@ -149,6 +149,17 @@ struct MacSettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 17)
             .padding(.top, 8)
+        if linuxChoice == .phone {
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Use the whole screen", isOn: Binding(get: { mac.wholeScreen ?? false }, set: { mac.wholeScreen = $0 ? true : nil; save() }))
+                    .font(.system(size: 16))
+                Text("Upright, the status bar hides and the desktop goes under it and the home bar. The rounded corners and the camera cut-out hide parts of it. Applies at once.")
+                    .font(.system(size: 13)).foregroundStyle(Desk.dim)
+            }
+            .padding(17)
+            .deskCard()
+            .padding(.top, 10)
+        }
     }
 
     private var linuxScreenNote: String {
