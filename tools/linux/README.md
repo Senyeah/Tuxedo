@@ -132,7 +132,7 @@ Wayland has one event for "this program wants text": a client enables its `text-
 
 - It speaks the Wayland wire protocol itself, as `wlprobe.py` does, and binds `zwp_input_method_manager_v2`. It sends no text and takes no keyboard grab, so typing is not changed. If the seat has an input method already (`unavailable`), it stops and exit status 0 keeps systemd from a restart.
 - On KWin it runs `busctl --user monitor` for `activeChanged` and reads `active` with `busctl get-property`.
-- It sends `PUT /.henge/keyboard` with the body `show` or `hide` to `host/share.c`. A `hide` waits 0.3 s, because focus that moves between two fields is `deactivate` then `activate`. A send that fails is tried again after 2 s. It sends `hide` when it stops.
+- It sends `PUT /.henge/keyboard` with the body `show` or `hide` to `host/share.c`. A `hide` waits 0.3 s, because focus that moves between two fields is `deactivate` then `activate`. A send with no answer or a 5xx status is tried again after 2 s. A 4xx status (an app with no such endpoint) is not tried again until the state changes, and is logged once. It sends `hide` when it stops.
 - labwc's `autostart` starts the unit; in Plasma `/etc/xdg/autostart/henge-keyboard.desktop` (KDE only) does.
 
 The host keeps the last request and a count (`hv_share_keyboard_wanted`). The app looks five times a second (`SessionView.followGuestKeyboard`, policy in `KeyboardFollow.swift`): `show` opens the keyboard; `hide` closes it only if the guest opened it; a keyboard that the person closes stays closed until the guest asks again. It does nothing while the console shows, with a hardware keyboard, or when Settings, "Show the keyboard when Linux wants text" is off.

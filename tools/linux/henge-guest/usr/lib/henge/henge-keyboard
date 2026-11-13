@@ -27,23 +27,24 @@ def log(*a):
 
 
 def put(show):
+    """The HTTP status, or None when the host does not answer."""
     c = http.client.HTTPConnection(HOST, timeout=5)
     try:
         c.request("PUT", "/.henge/keyboard", b"show" if show else b"hide")
         r = c.getresponse()
         r.read()
-        return r.status == 204
+        return r.status
     except (OSError, http.client.HTTPException):
-        return False
+        return None
     finally:
         c.close()
 
 
 class Sender:
-    """Sends the newest state; a hide waits HIDE_DELAY, and a failed send is tried again."""
+    """Sends the newest state; a hide waits HIDE_DELAY. No answer or a 5xx is tried again; a 4xx is not."""
 
     def __init__(self):
-        self.want, self.sent, self.due = False, None, 0.0
+        self.want, self.sent, self.due, self.refused = False, None, 0.0, False
 
     def set(self, show):
         if show != self.want:
@@ -57,11 +58,17 @@ class Sender:
         now = time.monotonic()
         if now < self.due:
             return self.due - now
-        if put(self.want):
-            self.sent = self.want
-            return None
-        self.due = now + RETRY
-        return RETRY
+        status = put(self.want)
+        if status is not None and 400 <= status < 500:
+            # An app with no such endpoint: this state is done, and the next change asks again
+            if not self.refused:
+                log(f"the host answered {status}; no retry until the state changes")
+            self.refused = True
+        elif status != 204:
+            self.due = now + RETRY
+            return RETRY
+        self.sent = self.want
+        return None
 
 
 # ---- Wayland: the wire protocol, as tools/linux/wlprobe.py does ----
@@ -184,7 +191,7 @@ def main():
     sender = Sender()
 
     def stop(*_):
-        if sender.sent:
+        if sender.sent and not sender.refused:
             put(False)
         sys.exit(0)
 
@@ -204,7 +211,7 @@ def main():
             return follow_kwin(sender)
     except ConnectionError as e:
         log(e)
-        if sender.sent:
+        if sender.sent and not sender.refused:
             put(False)
         return 1
     log("no compositor with input-method-v2, and no KWin; nothing to do")
