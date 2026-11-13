@@ -11,17 +11,16 @@
 
    Locks are accepted but not enforced: macOS only writes to a server that offers them, and there is one client. */
 #include "share.h"
+#include "safe_path.h"
 #include "secrets.h"
 #include "status.h"
 #include "vm.h"
 
-#include <copyfile.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <pthread.h>
-#include <removefile.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,7 +38,7 @@
 #define SMALL_BODY_MAX (16 * 1024 * 1024) /* a clipboard, or a request's XML */
 #define TEMP_PREFIX ".henge-put-"
 
-static char root[PATH_MAX];
+static int rootfd = -1; /* the folder: every path opens below it (safe_path.h) */
 static char agent_path[PATH_MAX];
 
 /* ---- the clipboard ---- */
@@ -333,14 +332,15 @@ static int decode_path(const char *in, char *out, size_t cap) {
     return 0;
 }
 
-static int local_path(const char *path, char *out, size_t cap) {
-    int n = snprintf(out, cap, "%s%s", root, path);
-    if (n < 0 || (size_t)n >= cap) return -1;
-    while (n > 1 && out[n - 1] == '/') out[--n] = 0;
-    return 0;
-}
-
 /* ---- the folder ---- */
+
+/* Only files and directories: a link is not followed, so the guest never sees it. */
+static int visible(const struct stat *st) { return S_ISREG(st->st_mode) || S_ISDIR(st->st_mode); }
+
+static int visible_stat(const char *path, struct stat *st) { return safe_stat(rootfd, path, st) == 0 && visible(st); }
+
+/* The directory that holds path's last part, and that part. */
+static int parent_of(const char *path, char leaf[NAME_MAX + 1]) { return safe_parent(rootfd, path, leaf, NAME_MAX + 1); }
 
 static void add_entry(Text *t, const char *url_path, const char *name, const struct stat *st, int is_root) {
     int dir = S_ISDIR(st->st_mode);
@@ -367,7 +367,7 @@ static void add_entry(Text *t, const char *url_path, const char *name, const str
             "<D:lockdiscovery/>");
     if (is_root) {
         struct statfs fs;
-        if (statfs(root, &fs) == 0) {
+        if (fstatfs(rootfd, &fs) == 0) {
             addf(t, "<D:quota-available-bytes>%llu</D:quota-available-bytes><D:quota-used-bytes>%llu</D:quota-used-bytes>",
                  (unsigned long long)fs.f_bavail * fs.f_bsize, (unsigned long long)(fs.f_blocks - fs.f_bfree) * fs.f_bsize);
         }
@@ -377,24 +377,24 @@ static void add_entry(Text *t, const char *url_path, const char *name, const str
 
 static int do_propfind(Conn *c, Request *r) {
     if (body_discard(c, r) != 0) return -1;
-    char local[PATH_MAX];
     struct stat st;
-    if (local_path(r->path, local, sizeof local) != 0 || stat(local, &st) != 0) return respond_empty(c, r, 404, "Not Found");
+    if (!visible_stat(r->path, &st)) return respond_empty(c, r, 404, "Not Found");
     Text t = {0};
     adds(&t, "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\">");
     const char *slash = strrchr(r->path, '/');
-    int is_root = strcmp(r->path, "/") == 0;
+    int is_root = safe_is_root(r->path);
     add_entry(&t, r->path, is_root ? "Henge" : (slash && slash[1] ? slash + 1 : r->path), &st, is_root);
     if (S_ISDIR(st.st_mode) && r->depth != 0) {
-        DIR *d = opendir(local);
+        int fd = safe_open(rootfd, r->path, O_RDONLY | O_DIRECTORY, 0);
+        DIR *d = fd >= 0 ? fdopendir(fd) : NULL;
+        if (!d && fd >= 0) close(fd);
         struct dirent *e;
         while (d && (e = readdir(d))) {
             if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..") || !strncmp(e->d_name, TEMP_PREFIX, strlen(TEMP_PREFIX))) continue;
-            char child[PATH_MAX], url[PATH_MAX];
+            char url[PATH_MAX];
             struct stat cs;
-            if (snprintf(child, sizeof child, "%s/%s", local, e->d_name) >= (int)sizeof child) continue;
             if (snprintf(url, sizeof url, "%s%s%s", r->path, r->path[strlen(r->path) - 1] == '/' ? "" : "/", e->d_name) >= (int)sizeof url) continue;
-            if (lstat(child, &cs) != 0 || !(S_ISREG(cs.st_mode) || S_ISDIR(cs.st_mode))) continue; /* no links out of the folder */
+            if (fstatat(dirfd(d), e->d_name, &cs, AT_SYMLINK_NOFOLLOW) != 0 || !visible(&cs)) continue;
             add_entry(&t, url, e->d_name, &cs, 0);
         }
         if (d) closedir(d);
@@ -418,11 +418,9 @@ static int do_proppatch(Conn *c, Request *r) {
 
 static int do_get(Conn *c, Request *r) {
     if (body_discard(c, r) != 0) return -1;
-    char local[PATH_MAX];
     struct stat st;
-    if (local_path(r->path, local, sizeof local) != 0) return respond_empty(c, r, 404, "Not Found");
-    int fd = open(local, O_RDONLY | O_NOFOLLOW);
-    if (fd < 0 || fstat(fd, &st) != 0) {
+    int fd = safe_open(rootfd, r->path, O_RDONLY | O_NONBLOCK, 0); /* a FIFO does not block the open */
+    if (fd < 0 || fstat(fd, &st) != 0 || !visible(&st)) {
         if (fd >= 0) close(fd);
         return respond_empty(c, r, 404, "Not Found");
     }
@@ -479,30 +477,24 @@ static int do_get(Conn *c, Request *r) {
     return rc;
 }
 
+static int gone(int e) { return e == ENOENT || e == ENOTDIR; }
+
 /* Into a temporary file beside it, then renamed, so a transfer cut short leaves the old file alone. */
 static int do_put(Conn *c, Request *r) {
-    char local[PATH_MAX], temp[PATH_MAX];
+    char leaf[NAME_MAX + 1], temp[] = TEMP_PREFIX "XXXXXX";
     struct stat st;
-    if (local_path(r->path, local, sizeof local) != 0) {
-        body_discard(c, r);
-        return respond_empty(c, r, 403, "Forbidden");
-    }
-    int existed = stat(local, &st) == 0;
-    if (existed && S_ISDIR(st.st_mode)) {
-        if (body_discard(c, r) != 0) return -1;
-        return respond_empty(c, r, 405, "Method Not Allowed");
-    }
-    char *slash = strrchr(local, '/');
-    size_t dir_len = (size_t)(slash - local);
-    if (snprintf(temp, sizeof temp, "%.*s/" TEMP_PREFIX "XXXXXX", (int)dir_len, local) >= (int)sizeof temp) {
-        body_discard(c, r);
-        return respond_empty(c, r, 414, "URI Too Long");
-    }
-    int fd = mkstemp(temp);
+    int dir = safe_is_root(r->path) ? -1 : parent_of(r->path, leaf);
+    int existed = dir >= 0 && fstatat(dir, leaf, &st, AT_SYMLINK_NOFOLLOW) == 0;
+    int fd = dir >= 0 && (!existed || S_ISREG(st.st_mode)) ? mkostempsat_np(dir, temp, 0, O_CLOEXEC) : -1;
     if (fd < 0) {
-        int gone = errno == ENOENT;
+        int e = errno;
+        if (dir >= 0) close(dir);
         if (body_discard(c, r) != 0) return -1;
-        return gone ? respond_empty(c, r, 409, "Conflict") : respond_empty(c, r, 507, "Insufficient Storage");
+        if (safe_is_root(r->path) || (existed && S_ISDIR(st.st_mode))) return respond_empty(c, r, 405, "Method Not Allowed");
+        if (existed && !S_ISREG(st.st_mode)) return respond_empty(c, r, 403, "Forbidden"); /* a link stays as it is */
+        if (dir < 0)
+            return gone(e) ? respond_empty(c, r, 409, "Conflict") : e == ENAMETOOLONG ? respond_empty(c, r, 414, "URI Too Long") : respond_empty(c, r, 403, "Forbidden");
+        return respond_empty(c, r, 507, "Insufficient Storage");
     }
     fchmod(fd, 0644);
     body_ready(c, r);
@@ -513,7 +505,8 @@ static int do_put(Conn *c, Request *r) {
         ssize_t got = body_read(c, r, buf, piece);
         if (got < 0) { /* the client went away: no response to give */
             close(fd);
-            unlink(temp);
+            unlinkat(dir, temp, 0);
+            close(dir);
             free(buf);
             return -1;
         }
@@ -532,52 +525,77 @@ static int do_put(Conn *c, Request *r) {
     }
     free(buf);
     close(fd);
-    if (full || rename(temp, local) != 0) {
-        unlink(temp);
-        return respond_empty(c, r, 507, "Insufficient Storage");
-    }
+    int failed = full || renameat(dir, temp, dir, leaf) != 0;
+    if (failed) unlinkat(dir, temp, 0);
+    close(dir);
+    if (failed) return respond_empty(c, r, 507, "Insufficient Storage");
     return existed ? respond_empty(c, r, 204, "No Content") : respond_empty(c, r, 201, "Created");
-}
-
-static int remove_path(const char *local) {
-    struct stat st;
-    if (lstat(local, &st) != 0) return -1;
-    if (S_ISDIR(st.st_mode)) return removefile(local, NULL, REMOVEFILE_RECURSIVE);
-    return unlink(local);
 }
 
 static int do_delete(Conn *c, Request *r) {
     if (body_discard(c, r) != 0) return -1;
-    char local[PATH_MAX];
-    if (strcmp(r->path, "/") == 0 || local_path(r->path, local, sizeof local) != 0) return respond_empty(c, r, 403, "Forbidden");
-    if (remove_path(local) != 0) return errno == ENOENT ? respond_empty(c, r, 404, "Not Found") : respond_empty(c, r, 403, "Forbidden");
-    return respond_empty(c, r, 204, "No Content");
+    char leaf[NAME_MAX + 1];
+    struct stat st;
+    if (safe_is_root(r->path)) return respond_empty(c, r, 403, "Forbidden");
+    int dir = parent_of(r->path, leaf);
+    if (dir < 0) return gone(errno) ? respond_empty(c, r, 404, "Not Found") : respond_empty(c, r, 403, "Forbidden");
+    int status = fstatat(dir, leaf, &st, AT_SYMLINK_NOFOLLOW) != 0 || !visible(&st) ? 404 : safe_remove(dir, leaf) == 0 ? 204 : errno == ENOENT ? 404 : 403;
+    close(dir);
+    return status == 204 ? respond_empty(c, r, 204, "No Content") : status == 404 ? respond_empty(c, r, 404, "Not Found") : respond_empty(c, r, 403, "Forbidden");
 }
 
 static int do_mkcol(Conn *c, Request *r) {
     if (body_discard(c, r) != 0) return -1;
-    char local[PATH_MAX];
-    if (local_path(r->path, local, sizeof local) != 0) return respond_empty(c, r, 403, "Forbidden");
-    if (mkdir(local, 0755) == 0) return respond_empty(c, r, 201, "Created");
-    if (errno == EEXIST) return respond_empty(c, r, 405, "Method Not Allowed");
-    if (errno == ENOENT) return respond_empty(c, r, 409, "Conflict");
+    char leaf[NAME_MAX + 1];
+    if (safe_is_root(r->path)) return respond_empty(c, r, 405, "Method Not Allowed");
+    int dir = parent_of(r->path, leaf);
+    if (dir < 0) return gone(errno) ? respond_empty(c, r, 409, "Conflict") : respond_empty(c, r, 403, "Forbidden");
+    int rc = mkdirat(dir, leaf, 0755), e = errno;
+    close(dir);
+    if (rc == 0) return respond_empty(c, r, 201, "Created");
+    if (e == EEXIST) return respond_empty(c, r, 405, "Method Not Allowed");
+    if (e == ENOENT) return respond_empty(c, r, 409, "Conflict");
     return respond_empty(c, r, 403, "Forbidden");
+}
+
+static int move_copy(Request *r, int move) {
+    char from[NAME_MAX + 1], to[NAME_MAX + 1];
+    struct stat st, dst;
+    if (!r->destination[0] || safe_is_root(r->path)) return 400;
+    if (safe_is_root(r->destination)) return 403;
+    int fdir = parent_of(r->path, from);
+    if (fdir < 0) return errno == EINVAL || errno == ENAMETOOLONG ? 400 : 404;
+    int tdir = -1, status;
+    if (fstatat(fdir, from, &st, AT_SYMLINK_NOFOLLOW) != 0 || !visible(&st)) status = 404;
+    else if ((tdir = parent_of(r->destination, to)) < 0) status = gone(errno) ? 409 : errno == EINVAL ? 400 : 403;
+    else {
+        int existed = fstatat(tdir, to, &dst, AT_SYMLINK_NOFOLLOW) == 0;
+        int same = existed && dst.st_dev == st.st_dev && dst.st_ino == st.st_ino; /* one file, by another name (a change of case) */
+        if (existed && !r->overwrite) status = 412;
+        else if (existed && !visible(&dst)) status = 403;
+        /* Into itself, or over a directory that holds it: refused before anything is removed. */
+        else if ((S_ISDIR(st.st_mode) && safe_below(rootfd, tdir, &st)) || (existed && !same && S_ISDIR(dst.st_mode) && safe_below(rootfd, fdir, &dst)))
+            status = 403;
+        else if (existed && !same && safe_remove(tdir, to) != 0) status = 403;
+        else if ((move ? renameat(fdir, from, tdir, to) : safe_copy(fdir, from, tdir, to)) != 0) status = errno == ENOENT ? 409 : 403;
+        else status = existed ? 204 : 201;
+    }
+    close(fdir);
+    if (tdir >= 0) close(tdir);
+    return status;
 }
 
 static int do_move_copy(Conn *c, Request *r, int move) {
     if (body_discard(c, r) != 0) return -1;
-    char from[PATH_MAX], to[PATH_MAX];
-    struct stat st;
-    if (!r->destination[0] || strcmp(r->path, "/") == 0 || local_path(r->path, from, sizeof from) != 0 ||
-        local_path(r->destination, to, sizeof to) != 0)
-        return respond_empty(c, r, 400, "Bad Request");
-    if (stat(from, &st) != 0) return respond_empty(c, r, 404, "Not Found");
-    int existed = stat(to, &st) == 0;
-    if (existed && !r->overwrite) return respond_empty(c, r, 412, "Precondition Failed");
-    if (existed && strcmp(from, to) != 0 && remove_path(to) != 0) return respond_empty(c, r, 403, "Forbidden");
-    int rc = move ? rename(from, to) : copyfile(from, to, NULL, COPYFILE_ALL | COPYFILE_RECURSIVE);
-    if (rc != 0) return errno == ENOENT ? respond_empty(c, r, 409, "Conflict") : respond_empty(c, r, 403, "Forbidden");
-    return existed ? respond_empty(c, r, 204, "No Content") : respond_empty(c, r, 201, "Created");
+    switch (move_copy(r, move)) {
+    case 201: return respond_empty(c, r, 201, "Created");
+    case 204: return respond_empty(c, r, 204, "No Content");
+    case 400: return respond_empty(c, r, 400, "Bad Request");
+    case 404: return respond_empty(c, r, 404, "Not Found");
+    case 409: return respond_empty(c, r, 409, "Conflict");
+    case 412: return respond_empty(c, r, 412, "Precondition Failed");
+    default: return respond_empty(c, r, 403, "Forbidden");
+    }
 }
 
 static int do_lock(Conn *c, Request *r) {
@@ -591,11 +609,12 @@ static int do_lock(Conn *c, Request *r) {
         snprintf(token, sizeof token, "opaquelocktoken:henge-%lx-%lx", (unsigned long)time(NULL), __atomic_add_fetch(&counter, 1, __ATOMIC_RELAXED));
     }
     int status = 200;
-    char local[PATH_MAX];
     struct stat st;
-    if (local_path(r->path, local, sizeof local) != 0) return respond_empty(c, r, 403, "Forbidden");
-    if (stat(local, &st) != 0) { /* locking a name that isn't there makes an empty file */
-        int fd = open(local, O_CREAT | O_WRONLY, 0644);
+    if (safe_stat(rootfd, r->path, &st) != 0) { /* locking a name that isn't there makes an empty file */
+        char leaf[NAME_MAX + 1];
+        int dir = errno == ENOENT ? parent_of(r->path, leaf) : -1;
+        int fd = dir >= 0 ? openat(dir, leaf, O_CREAT | O_WRONLY | O_NOFOLLOW | O_CLOEXEC, 0644) : -1;
+        if (dir >= 0) close(dir);
         if (fd < 0) return respond_empty(c, r, 409, "Conflict");
         close(fd);
         status = 201;
@@ -1035,7 +1054,10 @@ static int listen_on(const char *socket_path, int wallet) {
 int hv_share_start(const char *folder, const char *socket_path, const char *agent) {
     static int started;
     if (started) return 0;
-    if (!realpath(folder, root)) return -1;
+    int fd = safe_root_open(folder);
+    if (fd < 0) return -1;
+    if (rootfd >= 0) close(rootfd);
+    rootfd = fd;
     if (agent) snprintf(agent_path, sizeof agent_path, "%s", agent);
     char wallet[PATH_MAX];
     if (listen_on(socket_path, 0) != 0) return -1;
