@@ -3,23 +3,24 @@
 # requires-python = ">=3.9"
 # dependencies = ["pexpect"]
 # ///
-"""Guest video decode spike (docs/guest-video-decode-research.md, "First spike"): VA-API in the guest on VideoToolbox.
+"""Guest video decode (docs/guest-video-decode-research.md): VA-API in the guest on VideoToolbox, for H.264, VP9 and AV1.
 
 Boots a clone of the desktop image with `hengevm --gpu-accel --gpu-video` (built with GFX=1 against a virglrenderer that has
 tools/gfx/virglrenderer-videotoolbox.patch) and checks, over the serial console:
   1. packages: mesa-va-drivers, vainfo, ffmpeg and mpv (apt install when missing; --image names an image that has them).
-  2. vainfo lists VAProfileH264Main and VAProfileH264High with VAEntrypointVLD.
-  3. correctness: each test clip decoded by `ffmpeg -hwaccel vaapi -f framemd5` and by `-hwaccel none`. Every frame must
-     match. The clips are made on the Mac with libx264 (1080p30 High, B-frames; one with 4 slices per picture) and
-     reach the guest through hengevm's --share folder.
-  4. speed: `ffmpeg -benchmark -hwaccel vaapi -hwaccel_output_format vaapi -f null -` against `-hwaccel none`: frames
-     per second and the guest CPU time (user + system). The hardware path must beat the clip's frame rate.
-  5. mpv --hwdec=vaapi --vo=gpu on the desktop: dropped frames (printed; not a gate).
+  2. vainfo lists each codec's profiles (PROFILES) with VAEntrypointVLD.
+  3. correctness, the frame checksum test: each test clip (CLIPS) decoded by `ffmpeg -hwaccel vaapi -f framemd5` and by
+     `-hwaccel none`. Every frame must match. The clips are made on the Mac with FFmpeg (libx264, libvpx-vp9, libsvtav1;
+     1080p30, 8 and 10 bits) and reach the guest through hengevm's --share folder.
+  4. speed, for each codec's first clip: `ffmpeg -benchmark -hwaccel vaapi -hwaccel_output_format vaapi -f null -`
+     against `-hwaccel none`: frames per second and the guest CPU time. The hardware path must beat the clip's frame rate.
+  5. mpv --hwdec=vaapi --vo=gpu on the desktop, with the first clip: dropped frames (printed; not a gate).
   6. hengevm's log: VideoToolbox sessions on the hardware decoder, no decode error, and one codec per VA-API run that
      decoded every frame of the clip on VideoToolbox (the back end logs its totals when the guest destroys it).
   7. hengevm's log: every frame's planes went to the guest's textures on the GPU (IOSurface pbuffers). With
      VREND_VIDEO_CPU_COPY=1 in the environment hengevm copies them on the CPU instead, to measure against.
---bench N repeats step 4's VA-API run N times and reports the median.
+--codecs picks the codecs (default all), --bench N repeats step 4's VA-API run N times and reports the median, and
+--clips DIR keeps the clips between runs.
 With --no-video, hengevm runs without --gpu-video: vainfo must list no decode profile and the back end must not start.
 The shared image never changes: the guest runs on an APFS clone. Exit 1 on a failed check.
 """
@@ -47,6 +48,7 @@ FPS = 30
 PROFILES = {
     "h264": ["VAProfileH264Main", "VAProfileH264High"],
     "vp9": ["VAProfileVP9Profile0", "VAProfileVP9Profile2"],
+    "av1": ["VAProfileAV1Profile0"],
 }
 # name: codec, the guest's pixel format for framemd5, the encoder arguments on the Mac
 CLIPS = {
@@ -61,8 +63,15 @@ CLIPS = {
     "vp9-profile2": ("vp9", "yuv420p10le", ["-c:v", "libvpx-vp9", "-profile:v", "2", "-b:v", "6M", "-g", "60",
                                             "-deadline", "good", "-cpu-used", "4", "-row-mt", "1", "-auto-alt-ref", "1",
                                             "-lag-in-frames", "25", "PASSES"]),
+    # SVT-AV1's random access structure: hidden frames shown later with show_existing_frame, all 8 slots in use
+    "av1-main": ("av1", "yuv420p", ["-c:v", "libsvtav1", "-preset", "8", "-b:v", "6M", "-g", "60"]),
+    "av1-10bit-tiles": ("av1", "yuv420p10le", ["-c:v", "libsvtav1", "-preset", "8", "-b:v", "6M", "-g", "60",
+                                               "-svtav1-params", "tile-columns=1:tile-rows=1"]),
+    # superres, quantizer matrices and loop restoration
+    "av1-tools": ("av1", "yuv420p", ["-c:v", "libsvtav1", "-preset", "4", "-b:v", "6M", "-g", "60", "-svtav1-params",
+                                     "enable-qm=1:enable-restoration=1:superres-mode=1:superres-denom=12"]),
 }
-EXT = {"h264": "mp4", "vp9": "webm"}
+EXT = {"h264": "mp4", "vp9": "webm", "av1": "mp4"}
 
 
 class Fail(Exception):
@@ -302,6 +311,7 @@ def main():
     ap.add_argument("--keep-image", help="save the guest disk here after the run (has the packages)")
     ap.add_argument("--keep-log", help="copy hengevm's stderr (HV_VIRGL_VERBOSE=1) here")
     ap.add_argument("--seconds", type=int, default=15, help="clip length")
+    ap.add_argument("--clips", help="keep the clips in this directory and use the ones already there")
     ap.add_argument("--cpus", type=int, default=4)
     ap.add_argument("--ram", type=int, default=3072)
     ap.add_argument("--no-mpv", action="store_true")
@@ -321,8 +331,8 @@ def main():
             raise Fail(f"missing {f}")
     results = {}
     with tempfile.TemporaryDirectory(prefix="vdec-", dir=args.work_dir) as tmp:
-        share = os.path.join(tmp, "share")
-        os.mkdir(share)
+        share = args.clips or os.path.join(tmp, "share")
+        os.makedirs(share, exist_ok=True)
         make_clips(share, args.seconds, names)
         disk, err_log = os.path.join(tmp, "disk.img"), os.path.join(tmp, "hengevm.stderr")
         r = subprocess.run(["/bin/cp", "-c", image, disk], capture_output=True, text=True)
@@ -415,7 +425,7 @@ def main():
                 print("FAIL not every VideoToolbox session used the hardware decoder")
                 ok = False
             # each framemd5 run, each benchmark, mpv: each run's codec decodes the whole clip on VideoToolbox
-            want = {"h264": "H.264", "vp9": "VP9"}
+            want = {"h264": "H.264", "vp9": "VP9", "av1": "AV1"}
             lines = []
             for codec in codecs:
                 runs = sum(CLIPS[n][0] == codec for n in names) + args.bench + (1 if codec == CLIPS[names[0]][0] and not args.no_mpv else 0)

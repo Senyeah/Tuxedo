@@ -102,7 +102,7 @@ The host must give VideoToolbox the stream headers. What VA-API and virgl carry 
 | H.264 | Slice NAL units with start codes. SPS and PPS fields in `virgl_h264_pps` (`src/virgl_video_hw.h:60` to `:121`). No `profile_idc` (it comes from the codec profile), no size (it comes from `CREATE_VIDEO_CODEC`), no PPS id (it is in each slice header). | SPS and PPS NAL units | Practical. Write an SPS and a PPS from the fields. Read the PPS id from each slice header (two Exp-Golomb values after the NAL header). Replace the format description when the fields change. |
 | HEVC | Slice NAL units. SPS fields with only a count of short-term reference picture sets (`virgl_video_hw.h:303`) and a bit count for the slice's own set (`:359`). | VPS, SPS and PPS NAL units, with the SPS's reference picture set table | Blocked. When a slice refers to an SPS reference set by index, the host does not know its contents. A fix would rewrite every slice header. |
 | VP9 | The whole frame, with its uncompressed header (not verified on this tree) | Whole frames and a `vpcC` atom | Practical. Build `vpcC` from the profile and bit depth. |
-| AV1 | Tile group data. The sequence and frame headers come only as parsed fields (not verified on this tree). | Whole temporal units with OBU headers, and an `av1C` atom | Hard. The host must write a sequence header OBU and a frame header OBU from the fields. |
+| AV1 | Tile group data. The sequence and frame headers come only as parsed fields, without `refresh_frame_flags`. | Whole temporal units with OBU headers, and an `av1C` atom | Hard, but done in stage 5: the host writes the OBUs and keeps its own reference slot map ([Stage 5 results](#stage-5-results)). |
 | MPEG-2, VC-1, JPEG | Supported by the guest driver | No hardware decoder on these Apple chips | Leave out. Software decode in the guest is fine for these. |
 
 Vulkan Video does not have the HEVC problem. Its session parameters carry the full SPS, including the short-term reference sets. MoltenVK pull request 2836 writes them back out as NAL units. That is a reason to keep the Vulkan path in mind for HEVC later.
@@ -382,4 +382,41 @@ Clips: made on the Mac with libvpx (FFmpeg 9.0.2), 1920x1080, 30 fps, 15 s, two 
 | `hengevm`'s log | 4 VA-API runs, each 480 frames on the hardware VP9 decoder, 0 failed, 0 skipped, 1 session; all 1920 frames copied on the GPU |
 
 Not shown: VP9 on the phone, VP9 profile 1 and 3 (4:4:4; the guest driver does not offer them), resolution changes inside a stream, and `show_existing_frame` (FFmpeg shows the reference itself and sends nothing).
+
+## Stage 5 results
+
+Run on 14/11/2026 on the same Mac. This is stage 5 of [Stages](#stages): AV1. It is practical, with one change to the plan below.
+
+What virgl carries: Mesa's VA frontend passes the tile group data that FFmpeg gives (`raw_tile_group->tile_data`, without the tile group header), and the tile offsets and sizes in `slice_parameter`, relative to all the data of the picture (`picture_av1.c:435` to `:437` in Mesa 25.0.7). The second item of [Not verified](#not-verified) is now true for AV1. The sequence and frame headers come only as parsed fields. Two things are not there:
+
+- `refresh_frame_flags`. VA-API does not carry it, and Mesa sets it to 1 for every frame (`picture_av1.c:224`). Without it the host cannot know which reference slots a frame replaces. The guest's `ref[]` (VA-API's `ref_frame_map`) shows which surface is in each slot before each frame. So a frame's refresh is known only when the next frame arrives.
+- Some sequence header fields: `enable_warped_motion`, `enable_superres`, `enable_restoration`, `color_range`, `separate_uv_delta_q`, the level and the frame ID lengths.
+
+What the back end does:
+
+- It writes a sequence header OBU. The missing switches are on (warped motion, superres, restoration, `separate_uv_delta_q`), and each frame then codes its own value, which gives the same decode. There are no frame IDs, no timing information and one operating point. The level is 4.0, 5.0 or 6.0 from the maximum size. The same OBU goes into the `av1C` atom of a `kCMVideoCodecType_AV1` format description, and into each sample with a shown key frame.
+- It writes a frame header OBU from the fields: the size always coded (`frame_size_override_flag` 1, no `found_ref`), explicit `ref_frame_idx` (no short signalling), the tile layout (uniform when the guest's layout is one), the loop filter deltas in effect (each one written), CDEF, loop restoration, the skip mode test, global motion coded against the primary reference's saved parameters, and film grain with `update_grain`. The tile group OBU holds every tile, with 4-byte tile sizes.
+- It keeps its own map of VideoToolbox's 8 reference slots by guest surface. `ref_frame_idx` is rewritten to the slot that holds the guest's surface. A new frame goes into a slot that no later frame can need: empty, a surface that the guest no longer holds, or a second copy of a surface. When all 8 slots hold different surfaces that the guest still holds, the frame is decoded with `refresh_frame_flags` 0 (for its output only). When the next frame arrives, the guest's slots show whether it is a reference and which slot became free; the back end then decodes it again into that slot, without output. VideoToolbox's state is the same as the guest's, one frame late.
+- A hidden frame (not a key frame) is written with `show_frame` 1. Its pixels do not depend on `show_frame`, and the guest's surface then has them. FFmpeg shows such frames later with `show_existing_frame`, which never reaches the host.
+- After a failed frame, or when a reference is not in a slot, the back end skips to the next shown key frame.
+- Refused: film grain (VA-API puts the grain into `film_grain_target`, which the back end does not write), switch frames, large-scale tiles, and profiles 1 and 2.
+
+Clips: made on the Mac with SVT-AV1 4.2.0 (FFmpeg 9.0.2), 1920x1080, 30 fps, 15 s, 6 Mbit/s, random access with mini-GOPs of 16. In each, 217 of the 667 frame headers are `show_existing_frame`.
+
+| Clip | What it adds | framemd5 against `-hwaccel none` | Decoded again |
+|---|---|---|---|
+| `av1-main` | preset 8, 8 bits, 1 tile | 450 of 450 | 85 of 450 frames |
+| `av1-10bit-tiles` | 10 bits (P010, 16-bit pbuffers), 2x2 tiles | 450 of 450 | 85 of 450 |
+| `av1-tools` | preset 4, superres (442 frames), quantizer matrices, loop restoration (217 planes) | 450 of 450 | 290 of 450 |
+
+| Check | Result |
+|---|---|
+| `vainfo` | `VAProfileAV1Profile0` with `VAEntrypointVLD` |
+| `-hwaccel vaapi -hwaccel_output_format vaapi -f null -`, `av1-main` | 562.5 fps, guest CPU 0.31 s, `hengevm` CPU 0.52 s |
+| `-hwaccel none -f null -` (libdav1d), `av1-main` | 228.7 fps, guest CPU 3.61 s, `hengevm` CPU 3.84 s |
+| `hengevm`'s log | 4 VA-API runs, each 450 frames on the hardware AV1 decoder, 0 failed, 0 skipped, 1 session; all 1800 frames copied on the GPU |
+
+The second decode costs decoder time, not CPU time: 19% of the frames for preset 8, 64% for preset 4, where SVT-AV1 keeps 8 different references more often. The hardware path is still more than twice as fast as software decode.
+
+Not shown: global motion and segmentation (the clips have none, so that code ran only with identity parameters and no segments), error-resilient frames, intra block copy, lossless frames, a key frame shown with `show_existing_frame` (its refresh of every slot never reaches the host; the map by surface still holds, but this was not tested), streams from libaom, and AV1 on the phone.
 
