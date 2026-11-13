@@ -9,6 +9,7 @@
    virtio-net device on the CPU thread (hv_net_poll), which may only take them
    when the guest has posted receive buffers. */
 #include "net_slirp.h"
+#include "vcodec_proto.h"
 #include "dns_proxy.h"
 #include "share.h"
 
@@ -60,10 +61,14 @@ static struct pollfd pfds[MAX_POLL];
 static int npfd;
 uint64_t hv_net_tx_frames, hv_net_rx_frames;
 
-static char share_socket[256];
+static char share_socket[256], vcodec_socket[256];
 
 void hv_net_set_share_socket(const char *path) {
     snprintf(share_socket, sizeof share_socket, "%s", path ? path : "");
+}
+
+void hv_net_set_vcodec_socket(const char *path) {
+    snprintf(vcodec_socket, sizeof vcodec_socket, "%s", path ? path : "");
 }
 
 static int push(Queue *q, const uint8_t *data, uint32_t len) {
@@ -321,6 +326,11 @@ int hv_net_attach(HvMachine *m, HvVirtioNet *n) {
         char wallet[sizeof share_socket + 8];
         if (hv_share_secrets_socket(share_socket, wallet, sizeof wallet) != 0 || slirp_add_unix(slirp, wallet, &addr, HV_SHARE_SECRETS_PORT) != 0)
             fprintf(stderr, "hengevm: net: no route to the wallet\n");
+    }
+    if (vcodec_socket[0]) { /* 10.0.2.4:8470 is hvcodec: see vcodec.m */
+        struct in_addr addr;
+        inet_pton(AF_INET, HV_SHARE_ADDR, &addr);
+        if (slirp_add_unix(slirp, vcodec_socket, &addr, HV_VC_PORT) != 0) fprintf(stderr, "hengevm: net: no route to the video codecs\n");
     }
     net = n;
     n->transmit = transmit;

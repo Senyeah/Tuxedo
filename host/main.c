@@ -1,6 +1,7 @@
 #include "share.h"
 #include "secrets.h"
 #include "net_slirp.h"
+#include "vcodec.h"
 #include <time.h>
 /* hengevm: boots the virtual Mac on the macOS host.
    hengevm --rom AVPBooter.vmapple2.bin --disk disk.img --aux auxiliary.bin --ecid N [--seed N] [--ram MB] [--log N] */
@@ -1353,7 +1354,7 @@ static void *cpu_thread(void *unused) {
 }
 
 static void usage(void) {
-    fprintf(stderr, "usage: hengevm --board virt (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N] [--display WxH] [--gpu-accel [--gpu-video]] [--screenshot PNG] [--window [--touch]]\n"
+    fprintf(stderr, "usage: hengevm --board virt (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N] [--display WxH] [--gpu-accel [--gpu-video]] [--vcodec] [--screenshot PNG] [--window [--touch]]\n"
                     "       (virt: Ctrl-A x quits, Ctrl-A p and SIGTERM press the power key, Ctrl-A s pauses and resumes, Ctrl-A b is the app's background, SIGTSTP pauses and stops until SIGCONT; exit status 0 shutdown, 3 restart with --no-reboot, 4 panic or engine error)\n");
     fprintf(stderr, "usage: hengevm [--board vmapple] --rom FILE --disk FILE --aux FILE --ecid N [--seed N] [--ram MB] [--log N] [--trace 1] [--screenshot PNG] [--watch VA] [--stats SECONDS [--profile 1]] [--cpus N] [--window] [--no-pvg] [--no-chain] [--break PC [--break-hits N]] [--dump PA LEN FILE] [--aux-offset BYTES] [--install IPSW]\n");
     exit(2);
@@ -1382,7 +1383,7 @@ int main(int argc, char **argv) {
     const char *install_ipsw = NULL;
     const char *share_folder = NULL;
     const char *secrets_dir = NULL, *machine_id = "hengevm";
-    int log = 1, trace = 0, use_pvg = 1, no_chain = 0, gpu_accel = 0, gpu_video = 0;
+    int log = 1, trace = 0, use_pvg = 1, no_chain = 0, gpu_accel = 0, gpu_video = 0, vcodec = 0;
     const char *screenshot = NULL;
     uint64_t watch = 0, watch_pa = 0;
     int stats = 0, profile = 0, window = 0;
@@ -1424,6 +1425,10 @@ int main(int argc, char **argv) {
         }
         if (!strcmp(argv[i], "--gpu-video")) {
             gpu_video = 1;
+            continue;
+        }
+        if (!strcmp(argv[i], "--vcodec")) { /* the guest's video codecs at 10.0.2.4:8470 (vcodec.m); VideoToolbox then parses guest bitstreams */
+            vcodec = 1;
             continue;
         }
         if (i + 1 >= argc) usage();
@@ -1513,6 +1518,17 @@ int main(int argc, char **argv) {
         char sock[256];
         snprintf(sock, sizeof sock, "%s.sock", share_folder);
         if (hv_share_start(share_folder, sock, getenv("HV_AGENT")) == 0) hv_net_set_share_socket(sock);
+    }
+    if (vcodec) {
+        static char sock[104];
+        const char *tmp = getenv("TMPDIR");
+        snprintf(sock, sizeof sock, "%s/hengevm-vcodec-%d.sock", tmp && *tmp ? tmp : "/tmp", (int)getpid());
+        if (hv_vcodec_start(sock) == 0) {
+            hv_net_set_vcodec_socket(sock);
+            atexit(hv_vcodec_stop);
+        } else {
+            fprintf(stderr, "hengevm: vcodec: cannot listen on %s\n", sock);
+        }
     }
     if (secrets_dir) {
         HvSecretStore store;
