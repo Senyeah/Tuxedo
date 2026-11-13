@@ -7,10 +7,14 @@ if [ "$1" = remove ]; then
         mkdir -p /var/lib/henge && touch /var/lib/henge/secrets-removed
     fi
     systemctl --global disable henge-secrets.service >/dev/null 2>&1 || true
+    systemctl --global disable henge-files-places.service >/dev/null 2>&1 || true
 fi
 if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
-    deb-systemd-invoke stop henge-status.service home-henge-Henge.automount home-henge-Henge.mount henge-grow.service henge-firstboot.service henge-secrets-firewall.service >/dev/null || true
+    deb-systemd-invoke stop henge-status.service home-henge-Henge.automount home-henge-Henge.mount henge-grow.service henge-firstboot.service henge-secrets-firewall.service henge-files.service >/dev/null || true
 fi
 if [ "$1" = remove ]; then
     /usr/lib/henge/henge-secrets-firewall remove # stopping the unit keeps the rule
+    # The Copy-on-write layers stay in /var/lib/henge/files
+    /usr/lib/henge/henge-files unmount || true
+    if [ -d /run/systemd/system ]; then deb-systemd-invoke stop run-henge-files.mount >/dev/null || true; fi
 fi

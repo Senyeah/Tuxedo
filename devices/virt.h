@@ -14,6 +14,7 @@
 #include "pl061.h"
 #include "virtio_balloon.h"
 #include "virtio_blk.h"
+#include "virtio_fs.h"
 #include "virtio_gpu.h"
 #include "virtio_input.h"
 #include "virtio_net.h"
@@ -73,14 +74,16 @@ typedef struct HvVirt {
     HvVirtioSnd *snd;
     HvVirtioInput *touch;     /* before the balloon, so HV_BALLOON does not move it */
     HvVirtioBalloon *balloon; /* HV_BALLOON=MB, as on vmapple */
+    HvVirtioFs *fs;           /* the Files folders; last, so a machine with folders keeps every other slot */
     uint8_t *flash0, *flash1;
     HvGuestRam mem;
     void (*poll)(void);       /* host device work on CPU 0 each tick */
 } HvVirt;
 
-/* Builds the machine around m and ncpus CPUs (cpus is an array). root and mac may be NULL (no device then). */
+/* Builds the machine around m and ncpus CPUs (cpus is an array). root and mac may be NULL (no device then).
+   folders: add the virtio-fs device for the Files folders (fs_server.h); without it the board is as before. */
 int hv_virt_create(HvVirt *b, HvMachine *m, HvCpu *cpus, int ncpus, uint64_t ram_size, HvDisk *root,
-                   const uint8_t mac[6]);
+                   const uint8_t mac[6], int folders);
 /* Maps both flash regions and copies a firmware file of at most 64 MB into flash 0. */
 int hv_virt_load_firmware(HvVirt *b, const char *path);
 /* Every CPU: EL1, MMU off, interrupts masked, at 0; all but CPU 0 off until PSCI CPU_ON. */

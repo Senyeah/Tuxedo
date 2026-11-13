@@ -17,9 +17,11 @@
 #include "net_slirp.h"
 #include "dns_proxy.h"
 #include "vm.h"
+#include "fs_server.h"
 #include "pvg_lite.h"
 #include "install.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -132,6 +134,70 @@ static void console_out(void *opaque, uint8_t c) {
     pthread_mutex_unlock(&console_mutex);
 }
 
+/* The folders for the next boot, by index; the running machine's table is fs_server's. */
+static pthread_mutex_t folders_mu = PTHREAD_MUTEX_INITIALIZER;
+static struct {
+    int used, mode, kind, online;
+    char id[HV_FS_NAME_MAX + 1], name[HV_FS_NAME_MAX + 1], path[1024];
+} folder_slots[HV_FS_MAX_FOLDERS];
+
+int henge_vm_folder_set(int index, const char *id, const char *name, const char *path, int mode, int kind) {
+    if (index < 0 || index >= HV_FS_MAX_FOLDERS || !path || strlen(path) >= sizeof folder_slots[0].path) {
+        errno = EINVAL;
+        return -1;
+    }
+    pthread_mutex_lock(&folders_mu);
+    int rc = hv_fs_folder_set(index, id, name, path, mode); /* it checks the name, the mode and the path */
+    if (rc == 0) {
+        hv_fs_folder_kind(index, kind == 1 ? HV_FS_PROVIDER : HV_FS_LOCAL);
+        int online = folder_slots[index].used ? folder_slots[index].online : 1; /* only henge_vm_folder_online changes it */
+        folder_slots[index].used = 1;
+        folder_slots[index].mode = mode;
+        folder_slots[index].kind = kind;
+        folder_slots[index].online = online;
+        snprintf(folder_slots[index].id, sizeof folder_slots[index].id, "%s", id ? id : name);
+        snprintf(folder_slots[index].name, sizeof folder_slots[index].name, "%s", name);
+        snprintf(folder_slots[index].path, sizeof folder_slots[index].path, "%s", path);
+        hv_fs_folder_online(index, online);
+    }
+    pthread_mutex_unlock(&folders_mu);
+    return rc;
+}
+
+void henge_vm_folder_clear(int index) {
+    if (index < 0 || index >= HV_FS_MAX_FOLDERS) return;
+    pthread_mutex_lock(&folders_mu);
+    folder_slots[index].used = 0;
+    hv_fs_folder_clear(index);
+    pthread_mutex_unlock(&folders_mu);
+}
+
+void henge_vm_folders_clear(void) {
+    for (int i = 0; i < HV_FS_MAX_FOLDERS; i++) henge_vm_folder_clear(i);
+}
+
+int henge_vm_folder_online(int index, int online) {
+    if (index < 0 || index >= HV_FS_MAX_FOLDERS) return -1;
+    pthread_mutex_lock(&folders_mu);
+    int rc = hv_fs_folder_online(index, online);
+    if (rc == 0) folder_slots[index].online = !!online;
+    pthread_mutex_unlock(&folders_mu);
+    return rc;
+}
+
+int henge_vm_folder_touch(int index) { return hv_fs_folder_touch(index); }
+long henge_vm_folder_ask(int index, int what) { return hv_fs_folder_ask(index, what); }
+int henge_vm_folder_answered(int index, long ask, int *ok, char **text) { return hv_fs_folder_answered(index, ask, ok, text); }
+void henge_vm_folders_hook(HengeFolderHook hook, void *user) { hv_fs_set_hook(hook, user); }
+
+int henge_vm_folders_device(void) {
+    pthread_rwlock_rdlock(&api_lock);
+    HvVirt *v = state == 1 ? hv_vm_virt() : NULL;
+    int on = v && v->fs;
+    pthread_rwlock_unlock(&api_lock);
+    return on;
+}
+
 int henge_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb, int cpus, int accel, int video, char *err,
                         size_t errlen) {
     { extern void hv_prof_ios_start(void); hv_prof_ios_start(); }
@@ -145,13 +211,33 @@ int henge_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb,
         snprintf(err, errlen, "Henge has no JIT region. Turn on JIT first.");
         return failed_start();
     }
+    HvVmFolder folders[HV_FS_MAX_FOLDERS] = {{0}};
+    int nfolders = 0, used = 0;
+    pthread_mutex_lock(&folders_mu); /* held to the end of the boot: the table it makes is this one */
+    for (int i = 0; i < HV_FS_MAX_FOLDERS; i++) {
+        if (!folder_slots[i].used) continue; /* a hole: indexes stay the app's */
+        folders[i] = (HvVmFolder){folder_slots[i].id, folder_slots[i].name, folder_slots[i].path, folder_slots[i].mode};
+        nfolders = i + 1;
+        used++;
+    }
     HvVmConfig c = {.board = HV_BOARD_VIRT, .rom = firmware, .disk = disk, .ram_mb = ram_mb, .ncpus = cpus, .log = 1, .accel = accel,
-                    .video = accel && video, .jit_rx = jit->rx_addr, .jit_rw = jit->rw_addr, .jit_bytes = jit->size};
+                    .video = accel && video, .folders = folders, .nfolders = nfolders,
+                    .jit_rx = jit->rx_addr, .jit_rw = jit->rw_addr, .jit_bytes = jit->size};
     fprintf(stderr, "henge: booting Linux with %d CPUs, %llu MB RAM, a %zu MB JIT region%s%s\n", cpus,
             (unsigned long long)ram_mb, jit->size >> 20, accel ? ", graphics acceleration" : "", accel && video ? ", video decode" : "");
     console_clear();
     hv_vm_console_set_output(console_out, NULL); /* destroy clears it, so every boot sets it */
-    if (hv_vm_create(&c, err, errlen) != 0) return failed_start();
+    if (hv_vm_create(&c, err, errlen) != 0) {
+        pthread_mutex_unlock(&folders_mu);
+        return failed_start();
+    }
+    for (int i = 0; i < nfolders; i++) { /* the board made the table from the list: what the list does not carry */
+        if (!folder_slots[i].used) continue;
+        hv_fs_folder_kind(i, folder_slots[i].kind == 1 ? HV_FS_PROVIDER : HV_FS_LOCAL);
+        if (!folder_slots[i].online) hv_fs_folder_online(i, 0);
+    }
+    pthread_mutex_unlock(&folders_mu);
+    if (used) fprintf(stderr, "henge: %d folder%s from Files\n", used, used == 1 ? "" : "s");
     return started(err, errlen);
 }
 

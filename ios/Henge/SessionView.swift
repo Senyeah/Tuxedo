@@ -19,6 +19,8 @@ struct SessionView: View {
     }
 
     @ObservedObject private var machines = Machines.shared
+    @ObservedObject private var folders = FolderSession.shared
+    @State private var folderNotice: String?
     @StateObject private var display = DisplayRouter()
     @State private var error: String?
     @State private var gate: SessionGate // Face ID before a Linux machine runs or comes back
@@ -229,6 +231,18 @@ struct SessionView: View {
                             .transition(.opacity)
                             .allowsHitTesting(false)
                     }
+                    if let folderNotice, !showRevealHint, !hidesGuest {
+                        Label(folderNotice, systemImage: "folder")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(.white)
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: min(full.width - 40, 520))
+                            .padding(.horizontal, 18).padding(.vertical, 12)
+                            .deskGlass(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                            .position(x: full.width / 2, y: insets.top + 56)
+                            .transition(.opacity)
+                            .allowsHitTesting(false)
+                    }
                 }
                 if state == 2 {
                     StoppedMachineView(kind: mac.guest, outcome: henge_vm_exit_outcome(), reason: String(cString: henge_vm_exit_reason()),
@@ -255,6 +269,14 @@ struct SessionView: View {
             .animation(.easeInOut(duration: 0.25), value: controlsHidden)
             .animation(.easeInOut(duration: 0.25), value: showRevealHint)
             .animation(.easeInOut(duration: 0.25), value: showWallpaperTip)
+            .animation(.easeInOut(duration: 0.25), value: folderNotice)
+            .onChange(of: folders.notice) { text in
+                folderNotice = text
+                guard let text else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 6) { // a download notice stays until it is done
+                    if folderNotice == text && !text.hasPrefix("Downloading ") { folderNotice = nil; folders.notice = nil }
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: UIPointerLockState.didChangeNotification)) { _ in
                 pointerRefused = PointerLock.refused
             }
@@ -361,6 +383,7 @@ struct SessionView: View {
             DeviceStatus.shared.stop()
             gate.end()
             KeychainStore.shared.setUnlocked(false)
+            FolderSession.shared.end()
         }
         .modifier(ExternalMacDisplayModifier(presentation: MacPresentation(display: display, aspect: layoutAspect, isLinux: mac.guest == .linux)))
         .task(id: bootAttempt) { await run() }
@@ -988,6 +1011,17 @@ struct SessionView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                     }
                 }
+                if mac.guest == .linux {
+                    Section("Folders") {
+                        NavigationLink {
+                            FoldersPage(machine: mac.id)
+                        } label: {
+                            LabeledContent("Folders from Files", value: "\(current.folders?.count ?? 0)")
+                        }
+                        Text("Add, pick again, change the mode, or export and discard a Copy-on-write folder's changes. Changes apply at once.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
                 if mac.guest == .mac {
                 Section("Lighter macOS") {
                     Button("Type the Lighter macOS Command") {
@@ -1077,6 +1111,8 @@ struct SessionView: View {
         var buffer = [CChar](repeating: 0, count: 256)
         JITBootstrap.releaseLingeringDebugger()
         Sharing.prepare()
+        // After the Face ID check: the folders are private. They stay open while the wallet is locked (decision 6).
+        if mac.guest == .linux { FolderSession.shared.start(current) } else { FolderSession.shared.end() }
         KeychainStore.shared.attach(mac)
         KeychainStore.shared.setUnlocked(gate.secretsUnlocked)
         if mac.guest == .linux { DeviceStatus.shared.start { [display] in !display.isExternal } }
@@ -1138,6 +1174,7 @@ struct SessionView: View {
         }
         if rc != 0 {
             error = String(cString: buffer)
+            FolderSession.shared.end()
             return
         }
         started = Date()
@@ -1181,6 +1218,7 @@ struct SessionView: View {
                 UIApplication.shared.isIdleTimerDisabled = false
                 gate.end() // no machine runs: the wallet locks
                 KeychainStore.shared.setUnlocked(false)
+                FolderSession.shared.end()
                 let outcome = henge_vm_exit_outcome()
                 if shutdownAsked != nil && outcome == Int32(HENGE_VM_OUTCOME_SHUTDOWN.rawValue) {
                     close() // the person asked for it: no stopped card

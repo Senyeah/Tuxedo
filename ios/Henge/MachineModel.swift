@@ -65,6 +65,8 @@ struct VirtualMac: Identifiable, Codable, Hashable {
     var wholeScreen: Bool?
     /// Linux: the session opens on the serial console, as it was left. Missing: the screen.
     var showsConsole: Bool?
+    /// Linux: folders from the Files app, at /media/henge/<name> in the guest. Missing: none.
+    var folders: [SharedFolder]?
 
     var directory: URL { MachinePaths.directory(for: id) }
     var rom: URL { directory.appendingPathComponent("AVPBooter.vmapple2.bin") }
@@ -84,6 +86,26 @@ struct VirtualMac: Identifiable, Codable, Hashable {
     /// Writes the file that says the install finished; the list is rebuilt from it after a crash.
     func markInstalled() {
         try? (osName ?? "").write(to: directory.appendingPathComponent(MachinePaths.installedMarker), atomically: true, encoding: .utf8)
+    }
+}
+
+/// A folder from the Files app that a Linux machine sees at /media/henge/<name> (docs/files-mount-plan.md).
+struct SharedFolder: Codable, Hashable, Identifiable {
+    var id = UUID()
+    /// The guest's name for it (FolderPolicy.safeName).
+    var name: String
+    /// Only this app on this device can resolve it, so an export of the machine leaves it out.
+    var bookmark: Data
+    var mode: Mode = .readWrite
+    /// Where it is, for settings only, e.g. "iCloud Drive › Projects".
+    var displayPath: String?
+    /// The last session could not resolve the bookmark: it must be picked again. Missing: no.
+    var lost: Bool?
+
+    /// Read-write is the default (the owner's decision 1). The host serves Copy-on-write read-only; the guest's overlay
+    /// keeps the changes on the machine's disk.
+    enum Mode: String, Codable, CaseIterable {
+        case readWrite, copyOnWrite, readOnly
     }
 }
 

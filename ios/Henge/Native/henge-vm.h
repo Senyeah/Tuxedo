@@ -85,6 +85,32 @@ int henge_share_keyboard_wanted(unsigned long *seq);
 /* The part of the guest's picture that the keyboard covers, from the bottom: 0 (down) to 1. */
 void henge_share_set_keyboard_height(double fraction);
 
+/* A Linux machine's folders from Files (host/fs_server.h). The table is kept for the next henge_vm_boot_linux and
+   changes a running machine at once; a machine that booted with none has no device for them, so one added then
+   shows after a restart (henge_vm_folders_device). index 0 to 7; id the app's, for the guest's Copy-on-write
+   changes; mode 0 Read-only, 1 Copy-on-write, 2 Read-write; kind 0 local, 1 a File Provider (iCloud Drive or
+   another app's), which the hook sees. Any thread. 0, or -1 with errno (EINVAL: a bad index, name or mode, or a
+   name another index has; else what the open of path gave). */
+int henge_vm_folder_set(int index, const char *id, const char *name, const char *path, int mode, int kind);
+void henge_vm_folder_clear(int index);
+void henge_vm_folders_clear(void);
+/* Offline: everything inside gives EIO in the guest, as a dropped network share does. */
+int henge_vm_folder_online(int index, int online);
+/* The original changed under a Copy-on-write folder: the guest remounts it when nothing has it open. */
+int henge_vm_folder_touch(int index);
+/* 1 when the running machine has the folders' device. */
+int henge_vm_folders_device(void);
+/* Export Changes (1) and Discard Changes (2) of a Copy-on-write folder, done by the guest's helper; 0 takes the
+   ask back. The ask's number, or -1 with errno (EINVAL: not a Copy-on-write folder). */
+long henge_vm_folder_ask(int index, int what);
+/* 1 with the answer (*text malloc'd: for an export, its folder below the Shared folder, a newline, and what it
+   has; else why not), 0 while it waits, -1 when the ask is gone. */
+int henge_vm_folder_answered(int index, long ask, int *ok, char **text);
+/* event 0: a file in a File Provider folder is about to open (the result: 0 or a Darwin errno); 1: a written file
+   closed. On a device worker thread; it may wait. */
+typedef int (*HengeFolderHook)(void *user, int index, const char *path, int event);
+void henge_vm_folders_hook(HengeFolderHook hook, void *user);
+
 /* The phone's status for a Linux guest (host/status.h). Any time, before boot too; kept for the next machine.
    state: UIDeviceBatteryState (0 unknown, 1 unplugged, 2 charging, 3 full); level 0-100, or -1. */
 void henge_vm_set_battery(int level, int state);

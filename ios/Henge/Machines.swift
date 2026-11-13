@@ -247,9 +247,21 @@ final class Machines: ObservableObject {
         save()
     }
 
+    /// Every field but the folders: settings and the session change those with updateFolders, so an older copy of
+    /// the record cannot put back a stale bookmark.
     func update(_ mac: VirtualMac) {
         guard let i = all.firstIndex(where: { $0.id == mac.id }) else { return }
+        var mac = mac
+        mac.folders = all[i].folders
         all[i] = mac
+        save()
+    }
+
+    func updateFolders(of id: UUID, _ change: (inout [SharedFolder]) -> Void) {
+        guard let i = all.firstIndex(where: { $0.id == id }) else { return }
+        var list = all[i].folders ?? []
+        change(&list)
+        all[i].folders = list.isEmpty ? nil : list
         save()
     }
 

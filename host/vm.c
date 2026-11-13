@@ -10,6 +10,7 @@
 #include <TargetConditionals.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <dispatch/dispatch.h>
+#include <errno.h>
 #include <math.h>
 #include <os/lock.h>
 #include <stdatomic.h>
@@ -461,9 +462,21 @@ static int create_vmapple(const HvVmConfig *c, uint64_t ram_size, char *err, siz
     return 0;
 }
 
+/* A folder that cannot be opened is left out and logged: the machine still boots. */
+static void set_folders(const HvVmConfig *c) {
+    hv_fs_folders_clear();
+    for (int i = 0; i < c->nfolders && i < HV_FS_MAX_FOLDERS; i++) {
+        const HvVmFolder *f = &c->folders[i];
+        if (!f->name) continue; /* a hole: indexes stay the folders' own */
+        if (hv_fs_folder_set(i, f->id, f->name, f->path, f->mode) != 0)
+            fprintf(stderr, "hengevm: folder %s: %s\n", f->name ? f->name : "?", strerror(errno));
+    }
+}
+
 static int create_virt(const HvVmConfig *c, uint64_t ram_size, char *err, size_t errlen) {
     static const uint8_t mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56}; /* QEMU's default */
-    if (hv_virt_create(&virt, &m, cpus, ncpus, ram_size, c->disk ? &disk : NULL, mac) != 0)
+    set_folders(c);
+    if (hv_virt_create(&virt, &m, cpus, ncpus, ram_size, c->disk ? &disk : NULL, mac, c->nfolders > 0) != 0)
         return fail(err, errlen, "Cannot build the machine (not enough memory for the guest's RAM?).");
     /* Before the tree: it holds the backlight's level at boot. */
     HvStatusView st;
@@ -833,6 +846,7 @@ static void *cpu0_thread(void *unused) {
     /* A DMA worker can still be writing after the guest CPUs have exited. */
     hv_virtio_blk_stop(devs.blk[0]);
     hv_virtio_blk_stop(devs.blk[1]);
+    if (board_kind == HV_BOARD_VIRT) hv_virtio_fs_stop(virt.fs);
     hv_audio_detach();
     hv_vm_flush_disks();
     if (exit_cb) exit_cb(r);

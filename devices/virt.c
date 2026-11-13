@@ -24,6 +24,7 @@ static uint64_t tick_locked(HvMachine *m, HvCpu *cpu) {
     hv_pl031_tick(b->rtc);
     if (b->poll) b->poll();
     hv_virtio_blk_poll(b->blk);
+    hv_virtio_fs_poll(b->fs);
     hv_xhci_poll(b->usb);
     hv_virtio_input_poll(b->keyboard);
     hv_virtio_input_poll(b->mouse);
@@ -43,7 +44,7 @@ static uint64_t tick(HvMachine *m, HvCpu *cpu) {
 }
 
 int hv_virt_create(HvVirt *b, HvMachine *m, HvCpu *cpus, int ncpus, uint64_t ram_size, HvDisk *root,
-                   const uint8_t mac[6]) {
+                   const uint8_t mac[6], int folders) {
     memset(b, 0, sizeof *b);
     b->mem.fd = -1;
     b->m = m;
@@ -82,6 +83,7 @@ int hv_virt_create(HvVirt *b, HvMachine *m, HvCpu *cpus, int ncpus, uint64_t ram
         b->balloon->vio.features |= HV_VIRTIO_BALLOON_F_DEFLATE_ON_OOM; /* Linux only: the Mac's driver is not offered it */
         hv_virtio_balloon_set_target(b->balloon, (uint64_t)atoll(getenv("HV_BALLOON")) << 20);
     }
+    if (folders && !(b->fs = hv_virtio_fs_create(m, b->pcie))) return -1;
 
     m->tick = tick;
     m->tick_opaque = b;
@@ -164,6 +166,7 @@ void hv_virt_set_backlight(HvVirt *b, uint8_t level) { b->backlight.reg[0] = lev
 void hv_virt_destroy(HvVirt *b) {
     /* Device workers can still touch RAM and the GIC. */
     hv_virtio_blk_destroy(b->blk);
+    if (!hv_virtio_fs_destroy(b->fs)) hv_guest_ram_leak(&b->mem); /* a stuck worker's host read can still land */
     if (b->snd) { free(b->snd->ring); free(b->snd); }
     free(b->balloon);
     if (b->keyboard) { pthread_mutex_destroy(&b->keyboard->mu); free(b->keyboard); }

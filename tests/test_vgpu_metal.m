@@ -191,7 +191,7 @@ static int right_white(void) { return white_where(in_right); }
 static int three_white(void) { return white_where(in_three); }
 
 static int make_board(void) {
-    return hv_machine_init(&m, 4 << 20) || hv_virt_create(&b, &m, cpus, 1, 64ull << 20, NULL, NULL);
+    return hv_machine_init(&m, 4 << 20) || hv_virt_create(&b, &m, cpus, 1, 64ull << 20, NULL, NULL, 0);
 }
 
 static void test_pixels(void) {

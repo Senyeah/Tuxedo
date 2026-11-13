@@ -333,7 +333,7 @@ static void test_fdt(int ncpus, uint64_t ram_mb) {
     static HvMachine mm;
     static HvCpu cc[4];
     static HvVirt vb;
-    if (hv_machine_init(&mm, 1 << 20) != 0 || hv_virt_create(&vb, &mm, cc, ncpus, ram_mb << 20, NULL, NULL) != 0) {
+    if (hv_machine_init(&mm, 1 << 20) != 0 || hv_virt_create(&vb, &mm, cc, ncpus, ram_mb << 20, NULL, NULL, 0) != 0) {
         check("board for the tree", 1, 0);
         return;
     }
@@ -378,7 +378,7 @@ static void test_fdt_variants(void) {
     static HvMachine mm;
     static HvCpu cc[1];
     static HvVirt vb;
-    if (hv_machine_init(&mm, 1 << 20) != 0 || hv_virt_create(&vb, &mm, cc, 1, 256ull << 20, NULL, NULL) != 0) {
+    if (hv_machine_init(&mm, 1 << 20) != 0 || hv_virt_create(&vb, &mm, cc, 1, 256ull << 20, NULL, NULL, 0) != 0) {
         check("board for the variants", 1, 0);
         return;
     }
@@ -445,7 +445,7 @@ static void test_linux_boot(void) {
     static HvMachine mm;
     static HvCpu cc[2];
     static HvVirt vb;
-    if (hv_machine_init(&mm, 1 << 20) != 0 || hv_virt_create(&vb, &mm, cc, 2, 256ull << 20, NULL, NULL) != 0) {
+    if (hv_machine_init(&mm, 1 << 20) != 0 || hv_virt_create(&vb, &mm, cc, 2, 256ull << 20, NULL, NULL, 0) != 0) {
         check("board for the kernel", 1, 0);
         return;
     }
@@ -2311,7 +2311,7 @@ static void test_create_limits(void) {
     static HvCpu cc[HV_MAX_CPUS + 2];
     static HvVirt vb;
     check("create: machine", hv_machine_init(&mm, 1 << 20), 0);
-    check("create: 0 CPUs becomes 1", hv_virt_create(&vb, &mm, cc, 0, 64ull << 20, NULL, NULL), 0);
+    check("create: 0 CPUs becomes 1", hv_virt_create(&vb, &mm, cc, 0, 64ull << 20, NULL, NULL, 0), 0);
     check("create: 1 CPU", vb.ncpus, 1);
     check("create: no disk, no net", (uint64_t)(vb.blk != NULL) + (vb.net != NULL), 0);
     check("create: the other devices are there", vb.rng && vb.usb && vb.keyboard && vb.mouse && vb.gpu && vb.touch, 1);
@@ -2320,14 +2320,31 @@ static void test_create_limits(void) {
     check("create: E0PD in ID_AA64MMFR2 (no forced KPTI under KASLR)", mm.id.mmfr2 >> 60 & 15, 1);
     check("create: PAuth stays advertised (P3: clearing it was no faster)", mm.id.isar1, hv_id_regs_vmapple().isar1);
     check("create: no balloon without HV_BALLOON", vb.balloon == NULL, 1);
+    check("create: no virtio-fs without folders", vb.fs == NULL, 1);
+    int touch_slot = vb.touch->vio.pci.slot;
     check("create: tree needs room", hv_virt_place_fdt(&vb, (const uint8_t *)"x", 100u << 20), -1);
     check("create: no tree", hv_virt_place_fdt(&vb, NULL, 4), -1);
     check("create: a missing firmware file", hv_virt_load_firmware(&vb, "/nonexistent/firmware") != 0, 1);
     hv_virt_destroy(&vb);
     hv_machine_free(&mm);
 
+    if (hv_machine_init(&mm, 1 << 20) == 0 && hv_virt_create(&vb, &mm, cc, 1, 64ull << 20, NULL, NULL, 1) == 0) {
+        check("folders: the virtio-fs device", vb.fs != NULL, 1);
+        check("folders: every other device keeps its slot",
+              vb.rng->vio.pci.slot == 1 && vb.usb->pci.slot == 2 && vb.touch->vio.pci.slot == touch_slot, 1);
+        check("folders: virtio-fs after the touchscreen", vb.fs && vb.fs->vio.pci.slot == touch_slot + 1, 1);
+        check("folders: 0x1af4:0x105a", vb.fs ? rd32(&mm, VIRT_PCIE_ECAM + ((uint64_t)vb.fs->vio.pci.slot << 15)) : 0, 0x105a1af4);
+        hv_virt_destroy(&vb);
+        hv_machine_free(&mm);
+    }
+
     setenv("HV_BALLOON", "0", 1);
-    if (hv_machine_init(&mm, 1 << 20) == 0 && hv_virt_create(&vb, &mm, cc, 1, 64ull << 20, NULL, NULL) == 0) {
+    if (hv_machine_init(&mm, 1 << 20) == 0 && hv_virt_create(&vb, &mm, cc, 1, 64ull << 20, NULL, NULL, 1) == 0) {
+        check("balloon: with folders, virtio-fs after it", vb.fs && vb.fs->vio.pci.slot == vb.balloon->vio.pci.slot + 1, 1);
+        hv_virt_destroy(&vb);
+        hv_machine_free(&mm);
+    }
+    if (hv_machine_init(&mm, 1 << 20) == 0 && hv_virt_create(&vb, &mm, cc, 1, 64ull << 20, NULL, NULL, 0) == 0) {
         check("balloon: HV_BALLOON adds it", vb.balloon != NULL, 1);
         check("balloon: Linux may deflate it on OOM", vb.balloon && (vb.balloon->vio.features & HV_VIRTIO_BALLOON_F_DEFLATE_ON_OOM) != 0, 1);
         check("balloon: after the touchscreen, which keeps its slot", vb.balloon && vb.balloon->vio.pci.slot == vb.touch->vio.pci.slot + 1, 1);
@@ -2337,7 +2354,7 @@ static void test_create_limits(void) {
     unsetenv("HV_BALLOON");
 
     if (hv_machine_init(&mm, 1 << 20) == 0) {
-        check("create: too many CPUs are capped", hv_virt_create(&vb, &mm, cc, HV_MAX_CPUS + 2, 64ull << 20, NULL, NULL), 0);
+        check("create: too many CPUs are capped", hv_virt_create(&vb, &mm, cc, HV_MAX_CPUS + 2, 64ull << 20, NULL, NULL, 0), 0);
         check("create: at HV_MAX_CPUS", vb.ncpus, HV_MAX_CPUS);
         hv_virt_destroy(&vb);
         hv_machine_free(&mm);
@@ -3503,7 +3520,7 @@ static void test_gpu3d_off(HvVirtioGpu *g) {
 static HvDisk *board_root; /* the board's slots depend on its disk */
 static HvVirtioGpu *gpu3d_board(void) {
     static const uint8_t mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
-    if (hv_machine_init(&m, 4 << 20) != 0 || hv_virt_create(&b, &m, cpus, 1, 64ull << 20, board_root, mac) != 0) {
+    if (hv_machine_init(&m, 4 << 20) != 0 || hv_virt_create(&b, &m, cpus, 1, 64ull << 20, board_root, mac, 0) != 0) {
         check("board for the destroy cases", 1, 0);
         return NULL;
     }
@@ -3803,7 +3820,7 @@ int main(void) {
     static HvDisk root = {.fd = -1, .wfd = -1};
     static const uint8_t mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
     if (hv_disk_open(&root, disk_path, 0, 0) != 0 || hv_machine_init(&m, 4 << 20) != 0 ||
-        hv_virt_create(&b, &m, cpus, 4, 64ull << 20, &root, mac) != 0) {
+        hv_virt_create(&b, &m, cpus, 4, 64ull << 20, &root, mac, 0) != 0) {
         printf("cannot build the board\n");
         return 1;
     }

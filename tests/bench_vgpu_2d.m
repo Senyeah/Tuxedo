@@ -120,7 +120,7 @@ static uint32_t flush(uint32_t id, uint32_t x, uint32_t y, uint32_t w, uint32_t 
 static double now(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e9; }
 
 static int make_board(void) {
-    return hv_machine_init(&m, 4 << 20) || hv_virt_create(&b, &m, cpus, 1, 128ull << 20, NULL, NULL);
+    return hv_machine_init(&m, 4 << 20) || hv_virt_create(&b, &m, cpus, 1, 128ull << 20, NULL, NULL, 0);
 }
 
 static int cmp_u64(const void *a, const void *b) { uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b; return x < y ? -1 : x > y; }

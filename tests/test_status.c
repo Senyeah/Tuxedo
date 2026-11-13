@@ -1,4 +1,5 @@
 #include "devstatus.h"
+#include "fs_server.h"
 #include "share.h"
 #include "status.h"
 
@@ -224,7 +225,7 @@ static void test_wait(void) {
 
 /* GET over the share socket; returns the whole response, or "" */
 static char sock_path[128];
-static void http_get(const char *target, char *out, size_t cap) {
+static void http_req(const char *method, const char *target, const char *body, char *out, size_t cap) {
     out[0] = 0;
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     struct sockaddr_un a = {.sun_family = AF_UNIX};
@@ -233,8 +234,9 @@ static void http_get(const char *target, char *out, size_t cap) {
         close(fd);
         return;
     }
-    char req[256];
-    int n = snprintf(req, sizeof req, "GET %s HTTP/1.1\r\nHost: 10.0.2.4\r\nConnection: close\r\n\r\n", target);
+    char req[512];
+    int n = snprintf(req, sizeof req, "%s %s HTTP/1.1\r\nHost: 10.0.2.4\r\nConnection: close\r\nContent-Length: %zu\r\n\r\n%s",
+                     method, target, strlen(body), body);
     write(fd, req, (size_t)n);
     size_t got = 0;
     ssize_t k;
@@ -243,10 +245,18 @@ static void http_get(const char *target, char *out, size_t cap) {
     close(fd);
 }
 
+static void http_get(const char *target, char *out, size_t cap) { http_req("GET", target, "", out, cap); }
+
 static void *later_tz(void *arg) {
     (void)arg;
     usleep(200000);
     hv_status_set_timezone("Asia/Tokyo");
+    return NULL;
+}
+
+static void *later_folder(void *dir) {
+    usleep(200000);
+    hv_fs_folder_set(0, "id-docs", "docs", dir, HV_FS_COW);
     return NULL;
 }
 
@@ -284,6 +294,39 @@ static void test_endpoint(void) {
     check("endpoint: soon after it", since_ms(t0) > 150 && since_ms(t0) < 2000, 1);
     check("endpoint: with the new seq", strstr(resp, "X-Henge-Seq: 4\r\n") != NULL, 1);
     pthread_join(th, NULL);
+    /* The Files folders' table and its long poll (fs_server.h). */
+    hv_fs_folders_clear();
+    http_get("/.henge/folders", resp, sizeof resp);
+    check("folders: 200", strncmp(resp, "HTTP/1.1 200", 12) == 0, 1);
+    check("folders: JSON", strstr(resp, "Content-Type: application/json\r\n") != NULL, 1);
+    check("folders: none", strstr(resp, "\"folders\":[]") != NULL, 1);
+    const char *sq = strstr(resp, "X-Henge-Seq: ");
+    unsigned long fseq = sq ? strtoul(sq + 13, NULL, 10) : 0;
+    char q[64];
+    snprintf(q, sizeof q, "/.henge/folders?since=%lu", fseq);
+    pthread_create(&th, NULL, later_folder, dir);
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    http_get(q, resp, sizeof resp);
+    check("folders: a long poll answers on news", strstr(resp, "\"name\":\"docs\",\"mode\":\"cow\",\"state\":\"ready\"") != NULL, 1);
+    check("folders: soon after it", since_ms(t0) > 150 && since_ms(t0) < 2000, 1);
+    pthread_join(th, NULL);
+    long ask = hv_fs_folder_ask(0, HV_FS_ASK_EXPORT);
+    http_get("/.henge/folders", resp, sizeof resp);
+    check("folders: the app's ask", strstr(resp, "\"do\":\"export\"") != NULL, 1);
+    snprintf(q, sizeof q, "/.henge/folders/done?index=0&ask=%ld&ok=1", ask + 1);
+    http_req("POST", q, "x", resp, sizeof resp);
+    check("folders/done: another ask is 409", strncmp(resp, "HTTP/1.1 409", 12) == 0, 1);
+    snprintf(q, sizeof q, "/.henge/folders/done?index=0&ask=%ld&ok=1", ask);
+    http_req("POST", q, "Exports/docs-1\n2 files", resp, sizeof resp);
+    check("folders/done: 200", strncmp(resp, "HTTP/1.1 200", 12) == 0, 1);
+    int ok = 0;
+    char *text = NULL;
+    check("folders/done: answered", hv_fs_folder_answered(0, ask, &ok, &text) * 10 + ok, 11);
+    check("folders/done: the text", text && !strcmp(text, "Exports/docs-1\n2 files"), 1);
+    free(text);
+    http_req("GET", "/.henge/folders/done", "", resp, sizeof resp);
+    check("folders/done: only POST", strncmp(resp, "HTTP/1.1 404", 12) == 0, 1);
+    hv_fs_folders_clear();
     http_get("/.henge/nothing", resp, sizeof resp);
     check("endpoint: other names are 404", strncmp(resp, "HTTP/1.1 404", 12) == 0, 1);
     unlink(sock_path);

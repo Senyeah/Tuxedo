@@ -1,5 +1,5 @@
 Package: henge-guest
-Version: 1.6.1
+Version: 1.8.0
 Architecture: all
 Maintainer: Henge <henge@localhost>
 Section: admin
@@ -12,5 +12,6 @@ Description: Henge guest tools
  shares the clipboard with the device on the desktop, follows the device's
  clock, time zone and screen brightness, tells the device when the
  focused program wants text, keeps windows above the device keyboard
- in Plasma, and keeps the wallet (Secret Service and
- KWallet) in the device's Keychain.
+ in Plasma, keeps the wallet (Secret Service and
+ KWallet) in the device's Keychain, and mounts the folders from the
+ device's Files app at /media/henge.

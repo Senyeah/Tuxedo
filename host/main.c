@@ -9,6 +9,7 @@
 #include <mach/mach.h>
 #include <pthread.h>
 #include <signal.h>
+#include <errno.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -543,9 +544,133 @@ static void hid_locked(uint8_t usage, int down) {
     hv_virt_machine_unlock();
 }
 
+/* The Files folders (fs_server.h): --folder, then the input file's folder lines. boot_cfg points here, so a
+   restart boots with the list as it is then. Indexes are the folder table's; a removed one is a hole (no name). */
+static HvVmConfig boot_cfg;
+static HvVmFolder folder_list[HV_FS_MAX_FOLDERS];
+static char folder_names[HV_FS_MAX_FOLDERS][HV_FS_NAME_MAX + 1], folder_paths[HV_FS_MAX_FOLDERS][1024];
+static int nfolders;
+
+/* Adds or replaces NAME; 0, or -1 with a message. */
+static int folder_put(const char *name, const char *path, int mode, int live) {
+    int i = 0, hole = -1;
+    for (; i < nfolders && !(folder_list[i].name && !strcmp(folder_names[i], name)); i++)
+        if (!folder_list[i].name && hole < 0) hole = i;
+    if (i == nfolders && hole >= 0) i = hole;
+    if (i == HV_FS_MAX_FOLDERS) {
+        fprintf(stderr, "hengevm: at most %d folders\n", HV_FS_MAX_FOLDERS);
+        return -1;
+    }
+    if (strlen(name) > HV_FS_NAME_MAX || strlen(path) >= sizeof folder_paths[0]) {
+        fprintf(stderr, "hengevm: folder %s: name or path too long\n", name);
+        return -1;
+    }
+    if (live && hv_fs_folder_set(i, NULL, name, path, mode) != 0) {
+        fprintf(stderr, "hengevm: folder %s: %s\n", name, strerror(errno));
+        return -1;
+    }
+    snprintf(folder_names[i], sizeof folder_names[i], "%s", name);
+    snprintf(folder_paths[i], sizeof folder_paths[i], "%s", path);
+    folder_list[i] = (HvVmFolder){NULL, folder_names[i], folder_paths[i], mode};
+    if (i == nfolders) nfolders++;
+    boot_cfg.nfolders = nfolders;
+    return 0;
+}
+
+/* --folder NAME=DIR[:ro|cow|rw]; the mode is Read-write when the last ':' is not followed by one. */
+static int folder_arg(const char *arg) {
+    const char *eq = strchr(arg, '=');
+    char name[HV_FS_NAME_MAX + 2], path[1024];
+    if (!eq || eq == arg || (size_t)(eq - arg) > HV_FS_NAME_MAX || strlen(eq + 1) >= sizeof path) {
+        fprintf(stderr, "hengevm: --folder %s: want NAME=DIR[:ro|cow|rw]\n", arg);
+        return -1;
+    }
+    snprintf(name, sizeof name, "%.*s", (int)(eq - arg), arg);
+    snprintf(path, sizeof path, "%s", eq + 1);
+    char *colon = strrchr(path, ':');
+    int mode = colon ? hv_fs_mode_parse(colon + 1) : -1;
+    if (mode >= 0) *colon = 0;
+    else mode = HV_FS_RW;
+    return folder_put(name, path, mode, 0);
+}
+
+typedef struct FolderAsk {
+    int index;
+    long ask;
+    char name[HV_FS_NAME_MAX + 1];
+} FolderAsk;
+
+/* Prints the helper's answer as "hengevm: folder NAME answer: ok|failed: TEXT" (files-check waits for it). */
+static void *folder_answer_wait(void *arg) {
+    FolderAsk *a = arg;
+    int ok = 0, rc = 0;
+    char *text = NULL;
+    for (int t = 0; t < 1800 && (rc = hv_fs_folder_answered(a->index, a->ask, &ok, &text)) == 0; t++) usleep(100000);
+    if (rc == 1) fprintf(stderr, "hengevm: folder %s answer: %s: %s\n", a->name, ok ? "ok" : "failed", text ? text : "");
+    else fprintf(stderr, "hengevm: folder %s: no answer\n", a->name);
+    free(text);
+    free(a);
+    return NULL;
+}
+
+/* folder add NAME PATH ro|cow|rw (PATH may have spaces), folder remove|offline|online|touch|export|discard NAME,
+   folders (prints them). */
+static void folder_line(const char *line) {
+    char name[HV_FS_NAME_MAX + 2] = "";
+    if (!strcmp(line, "folders")) {
+        char *j = hv_fs_folders_json(NULL);
+        fprintf(stderr, "hengevm: folders: %s", j ? j : "?\n");
+        free(j);
+        return;
+    }
+    if (!strncmp(line, "folder add ", 11)) {
+        const char *p = line + 11, *sp = strchr(p, ' '), *last = strrchr(p, ' ');
+        int mode = last && last > sp ? hv_fs_mode_parse(last + 1) : -1;
+        if (!sp || mode < 0 || sp - p > HV_FS_NAME_MAX) {
+            fprintf(stderr, "hengevm: input: %s: want folder add NAME PATH ro|cow|rw\n", line);
+            return;
+        }
+        char path[1024];
+        snprintf(name, sizeof name, "%.*s", (int)(sp - p), p);
+        snprintf(path, sizeof path, "%.*s", (int)(last - sp - 1), sp + 1);
+        if (folder_put(name, path, mode, 1) == 0 && (!hv_vm_virt() || !hv_vm_virt()->fs))
+            fprintf(stderr, "hengevm: folder %s is in the table, but this machine has no virtio-fs device (boot with --folder)\n", name);
+        return;
+    }
+    static const char *const verbs[] = {"folder remove ", "folder offline ", "folder online ", "folder touch ",
+                                        "folder export ", "folder discard "};
+    for (int k = 0; k < 6; k++) {
+        if (strncmp(line, verbs[k], strlen(verbs[k]))) continue;
+        snprintf(name, sizeof name, "%s", line + strlen(verbs[k]));
+        int i = hv_fs_folder_find(name);
+        if (i < 0) fprintf(stderr, "hengevm: input: no folder %s\n", name);
+        else if (k == 0) {
+            hv_fs_folder_clear(i);
+            folder_list[i].name = NULL; /* a hole: the others keep their indexes, so the guest's nodes stay good */
+        } else if (k < 3) hv_fs_folder_online(i, k == 2);
+        else if (k == 3) hv_fs_folder_touch(i);
+        else {
+            long ask = hv_fs_folder_ask(i, k == 4 ? HV_FS_ASK_EXPORT : HV_FS_ASK_DISCARD);
+            FolderAsk *a = ask > 0 ? malloc(sizeof *a) : NULL;
+            pthread_t t;
+            if (ask < 0) fprintf(stderr, "hengevm: folder %s: %s\n", name, strerror(errno));
+            else if (a) {
+                *a = (FolderAsk){i, ask, ""};
+                snprintf(a->name, sizeof a->name, "%s", name);
+                if (pthread_create(&t, NULL, folder_answer_wait, a) == 0) pthread_detach(t);
+                else free(a);
+            }
+        }
+        return;
+    }
+    fprintf(stderr, "hengevm: input: %s: want folder add|remove|offline|online|touch|export|discard\n", line);
+}
+
 /* HV_INPUT_FILE lines for the virt board: rel DX DY, rclick, msleep MS, tpframe (ends a touch batch), mode WxH [SCALE] (live display mode), and btn, tp, tpclick as on vmapple.
    Device status: battery LEVEL unplugged|charging|full|unknown, brightness F, volume F, tz NAME, and status (prints it). HV_STATUS_LOG=1 logs the guest's requests.
    Touchscreen: ts SLOT PHASE X Y, tsframe, tscancel, tsmode 0|1.
+   Files folders: folder add NAME PATH ro|cow|rw, folder remove NAME, folder offline NAME, folder online NAME, folders;
+   folder touch NAME (the original changed), folder export NAME and folder discard NAME (asks to the guest's helper).
    --screenshot still writes the --display size, so read the size from the guest after a mode line. */
 static int virt_input(const char *line) {
     int a, b;
@@ -578,6 +703,8 @@ static int virt_input(const char *line) {
         hv_vm_set_volume(atof(line + 7));
     } else if (!strncmp(line, "tz ", 3)) {
         if (hv_vm_set_timezone(line + 3) != 0) fprintf(stderr, "hengevm: input: %s: not a time zone name\n", line);
+    } else if (!strncmp(line, "folder ", 7) || !strcmp(line, "folders")) {
+        folder_line(line);
     } else if (!strcmp(line, "status")) {
         HvStatusView v;
         hv_status_get(&v);
@@ -1354,7 +1481,7 @@ static void *cpu_thread(void *unused) {
 }
 
 static void usage(void) {
-    fprintf(stderr, "usage: hengevm --board virt (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N] [--display WxH] [--gpu-accel [--gpu-video]] [--vcodec] [--screenshot PNG] [--window [--touch]]\n"
+    fprintf(stderr, "usage: hengevm --board virt (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N] [--display WxH] [--gpu-accel [--gpu-video]] [--vcodec] [--screenshot PNG] [--window [--touch]] [--folder NAME=DIR[:ro|cow|rw]]...\n"
                     "       (virt: Ctrl-A x quits, Ctrl-A p and SIGTERM press the power key, Ctrl-A s pauses and resumes, Ctrl-A b is the app's background, SIGTSTP pauses and stops until SIGCONT; exit status 0 shutdown, 3 restart with --no-reboot, 4 panic or engine error)\n");
     fprintf(stderr, "usage: hengevm [--board vmapple] --rom FILE --disk FILE --aux FILE --ecid N [--seed N] [--ram MB] [--log N] [--trace 1] [--screenshot PNG] [--watch VA] [--stats SECONDS [--profile 1]] [--cpus N] [--window] [--no-pvg] [--no-chain] [--break PC [--break-hits N]] [--dump PA LEN FILE] [--aux-offset BYTES] [--install IPSW]\n");
     exit(2);
@@ -1448,6 +1575,9 @@ int main(int argc, char **argv) {
             share_folder = argv[++i];
         }
         else if (!strcmp(argv[i], "--secrets")) secrets_dir = argv[++i]; /* DIR: the wallet's items, with --share */
+        else if (!strcmp(argv[i], "--folder")) { /* NAME=DIR[:ro|cow|rw], as a folder from the Files app (rw if no mode) */
+            if (folder_arg(argv[++i]) != 0) usage();
+        }
         else if (!strcmp(argv[i], "--machine-id")) machine_id = argv[++i];
         else if (!strcmp(argv[i], "--display")) { /* WxH: virt, or vmapple in --phone mode */
             unsigned w = 0, h = 0;
@@ -1496,8 +1626,8 @@ int main(int argc, char **argv) {
         virt_shot_path = screenshot;
     } else {
         if (!rom || !disk_path || !aux_path) usage();
-        if (firmware || kernel || initrd || append || dump_dtb || no_reboot || gpu_accel) {
-            fprintf(stderr, "hengevm: --firmware, --kernel, --initrd, --append, --dump-dtb, --no-reboot and --gpu-accel need --board virt\n");
+        if (firmware || kernel || initrd || append || dump_dtb || no_reboot || gpu_accel || nfolders) {
+            fprintf(stderr, "hengevm: --firmware, --kernel, --initrd, --append, --dump-dtb, --no-reboot, --gpu-accel and --folder need --board virt\n");
             usage();
         }
     }
@@ -1509,7 +1639,7 @@ int main(int argc, char **argv) {
                      .aux_offset = aux_offset, .ecid = ecid, .seed = seed,
                      .ram_mb = ram_mb, .ncpus = ncpus, .log = log, .no_net = dump_dtb || getenv("HV_NO_NET") != NULL,
                      .no_sound = dump_dtb != NULL, .installer = install_ipsw != NULL, .accel = gpu_accel,
-                     .video = gpu_video};
+                     .video = gpu_video, .folders = folder_list, .nfolders = nfolders};
     set_board_kind(&vc, board_kind);
     if (getenv("HV_JIT_MB")) vc.jit_bytes = (size_t)atoi(getenv("HV_JIT_MB")) << 20; /* debugging: a small region flushes often */
     hv_prof_register = hv_prof_register_thread;

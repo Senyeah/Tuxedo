@@ -26,7 +26,8 @@ CORE = $(B)/classify.o $(B)/operands.o $(B)/translate.o $(B)/dispatch.o $(B)/mmu
        $(B)/exception.o $(B)/sysreg.o $(B)/machine.o
 HOST = $(B)/jit_region.o $(B)/enter.o $(B)/disk.o
 DEV = $(B)/pvg_lite.o $(B)/pvg_metal.o $(B)/vgpu_metal.o $(B)/gicv3.o $(B)/timer.o $(B)/pl011.o $(B)/pl031.o $(B)/cfg.o $(B)/bdif.o $(B)/pcie.o \
-      $(B)/virtio.o $(B)/virtio_blk.o $(B)/virtio_net.o $(B)/virtio_rng.o $(B)/virtio_input.o $(B)/virtio_gpu.o $(B)/virtio_snd.o $(B)/virtio_usb.o $(B)/virtio_balloon.o $(B)/xhci.o $(B)/vmapple.o $(B)/aes.o $(B)/pl061.o $(B)/metallib.o $(B)/fdt.o $(B)/guest_ram.o $(B)/virt.o $(B)/virt_fdt.o $(B)/ocores_i2c.o $(B)/devstatus.o $(GFX_OBJ)
+      $(B)/virtio.o $(B)/virtio_blk.o $(B)/virtio_net.o $(B)/virtio_rng.o $(B)/virtio_input.o $(B)/virtio_gpu.o $(B)/virtio_snd.o $(B)/virtio_usb.o $(B)/virtio_balloon.o $(B)/xhci.o $(B)/vmapple.o $(B)/aes.o $(B)/pl061.o $(B)/metallib.o $(B)/fdt.o $(B)/guest_ram.o $(B)/virt.o $(B)/virt_fdt.o $(B)/ocores_i2c.o $(B)/devstatus.o \
+      $(B)/virtio_fs.o $(B)/fs_server.o $(B)/safe_path.o $(GFX_OBJ)
 ENGINE = $(CORE) $(HOST)
 VM = $(B)/vm.o $(B)/linux_boot.o $(B)/status.o
 # hvcodec, the guest's video codecs (host/vcodec.m, hengevm --vcodec), on VideoToolbox.
@@ -37,7 +38,7 @@ METAL_LIBS = -framework Foundation -framework QuartzCore -framework Metal -frame
 
 TESTS = $(B)/test_classify $(B)/test_jit_region $(B)/test_operands $(B)/test_jit $(B)/test_mem $(B)/test_share_keyboard \
         $(B)/test_mmu $(B)/test_exc $(B)/test_devices $(B)/test_shutdown $(B)/test_pause $(B)/test_big_lock $(B)/test_machine_rebuild $(B)/test_fdt $(B)/test_console $(B)/test_virt \
-        $(B)/test_status $(B)/test_secrets $(B)/test_vgpu_metal $(B)/test_vcodec $(if $(GFX),$(B)/test_vgpu_virgl)
+        $(B)/test_status $(B)/test_secrets $(B)/test_share_paths $(B)/test_fs_server $(B)/test_virtio_fs $(B)/test_vgpu_metal $(B)/test_vcodec $(if $(GFX),$(B)/test_vgpu_virgl)
 
 all: $(TESTS) $(B)/hengevm $(B)/hengevm-ref $(B)/hvsparse
 
@@ -140,7 +141,7 @@ $(B)/test_machine_rebuild: tests/test_machine_rebuild.c $(ENGINE)
 $(B)/test_fdt: tests/test_fdt.c $(B)/fdt.o
 	$(CC) $(CFLAGS) $^ -o $@
 
-$(B)/test_status: tests/test_status.c $(B)/status.o $(B)/share.o $(B)/secrets.o
+$(B)/test_status: tests/test_status.c $(B)/status.o $(B)/share.o $(B)/safe_path.o $(B)/fs_server.o $(B)/secrets.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 # Native app lifecycle with real devices and networking; no restore assets.
@@ -157,10 +158,22 @@ $(B)/test_virt: tests/test_virt.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(B)/n
 	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -o $@
 
 # PUT /.henge/keyboard: what henge-keyboard in a Linux desktop asks of the device.
-$(B)/test_share_keyboard: tests/test_share_keyboard.c $(B)/share.o $(B)/secrets.o $(B)/status.o
+$(B)/test_share_keyboard: tests/test_share_keyboard.c $(B)/share.o $(B)/safe_path.o $(B)/fs_server.o $(B)/secrets.o $(B)/status.o
 	$(CC) $(CFLAGS) $^ -o $@
 
-$(B)/test_secrets: tests/test_secrets.c $(B)/share.o $(B)/secrets.o $(B)/status.o
+# The folder's paths: no link or ".." leaves it (host/safe_path.c), through the server and directly.
+$(B)/test_share_paths: tests/test_share_paths.c $(B)/share.o $(B)/safe_path.o $(B)/fs_server.o $(B)/secrets.o $(B)/status.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+# The Files folder server through FUSE requests: confinement, modes, case and Unicode, folders that move or go.
+$(B)/test_fs_server: tests/test_fs_server.c $(B)/fs_server.o $(B)/safe_path.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+# The virtio-fs device on a fake ring: a 1 MB READ in 64 segments, 129 segments refused, FORGET, the workers, FIFOs, stuck requests.
+$(B)/test_virtio_fs: tests/test_virtio_fs.c $(B)/virtio_fs.o $(B)/virtio.o $(B)/pcie.o $(B)/gicv3.o $(B)/timer.o $(B)/fs_server.o $(B)/safe_path.o $(ENGINE)
+	$(CC) $(CFLAGS) $^ -o $@
+
+$(B)/test_secrets: tests/test_secrets.c $(B)/share.o $(B)/safe_path.o $(B)/fs_server.o $(B)/secrets.o $(B)/status.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 # Henge's virt device tree against QEMU's (needs qemu-system-aarch64, dtc and uv).
@@ -272,6 +285,17 @@ test-linux-share: $(B)/hengevm
 	uv run tools/linux/share-check.py $(SHARE_ARGS)
 .PHONY: test-linux-share
 
+# FM6: the folders from the Files app (virtio-fs, henge-files) at /media/henge against --folder. Installs henge-guest from
+# tools/linux/henge-guest in the clone (needs Docker); FILES_ARGS="--image FILE --no-install" for a disk saved with --save-image.
+test-linux-files: $(B)/hengevm
+	uv run tools/linux/files-check.py $(FILES_ARGS)
+.PHONY: test-linux-files
+
+# FM7: pjdfstest's rename, unlink, link, symlink, chmod, open and mkdir groups on the Read-write folder, failures by cause.
+test-linux-files-posix: $(B)/hengevm
+	uv run tools/linux/files-check.py --pjdfstest $(FILES_ARGS)
+.PHONY: test-linux-files-posix
+
 # P7: the clipboard helper in the desktop image against the host's clipboard. CLIP_ARGS="--image FILE" for an image that has henge-guest 1.2.
 test-linux-clipboard: $(B)/hengevm
 	uv run tools/linux/clipboard-check.py $(CLIP_ARGS)
@@ -368,7 +392,7 @@ IOS_DEPS ?= $(if $(wildcard ios/deps/include/slirp/libslirp.h),$(CURDIR)/ios/dep
 IOS_CFLAGS = -std=c11 -Wall -Wextra -O2 -g -Icore -Ihost -Idevices -I$(IOS_DEPS)/include/slirp $(if $(GFX),-DHV_GFX=1)
 IB = build/ios
 IOS_GFX_DIR ?= $(GFX_ROOT)/ios
-IOS_SRC = $(wildcard core/*.c) host/prof_ios.c host/jit_region.c host/disk.c host/vm.c host/linux_boot.c host/status.c $(IOS_NET) host/dns_proxy.c host/share.c host/secrets.c host/audio_mac.c host/hvsparse.c host/usb_host.c \
+IOS_SRC = $(wildcard core/*.c) host/prof_ios.c host/jit_region.c host/disk.c host/vm.c host/linux_boot.c host/status.c $(IOS_NET) host/dns_proxy.c host/share.c host/safe_path.c host/fs_server.c host/secrets.c host/audio_mac.c host/hvsparse.c host/usb_host.c \
           $(filter-out devices/pvg_mac.m,$(wildcard devices/*.c))
 IOS_OBJ = $(patsubst %.c,$(IB)/%.o,$(IOS_SRC)) $(IB)/host/enter.o $(IB)/devices/pvg_metal.o $(IB)/devices/vgpu_metal.o $(if $(GFX),$(IB)/devices/vgpu_virgl.o)
 
@@ -636,6 +660,14 @@ $(B)/test_session_gate: ios/Henge/SessionGate.swift ios/Henge/WalletScope.swift 
 test-session-gate: $(B)/test_session_gate
 	$(B)/test_session_gate
 .PHONY: test-session-gate
+
+# FM8: a Linux machine's folders from Files: names, slots, bookmarks, states, modes, exports. Pure policy.
+$(B)/test_folder_policy: ios/Henge/MachineModel.swift ios/Henge/FolderPolicy.swift tests/test_folder_policy.swift | $(B)
+	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
+
+test-folder-policy: $(B)/test_folder_policy
+	$(B)/test_folder_policy
+.PHONY: test-folder-policy
 
 test-linux-catalogue: $(B)/test_linux_catalogue
 	$(B)/test_linux_catalogue
