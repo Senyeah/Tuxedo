@@ -163,7 +163,13 @@ Security:
 - Limits: ids of 64 characters, 16 KB of metadata, 64 KB of secret, 1024 items for each machine.
 - `hengevm` (no Face ID): `--secrets DIR` keeps each item in `DIR/MACHINE/ID` (mode 0600), `--machine-id ID` (default `hengevm`) is the scope. It starts unlocked; `HV_SECRETS_LOCKED=1` starts it locked, and the `HV_INPUT_FILE` lines `secrets lock`, `secrets unlock` and `secrets` change and print the state.
 
-An existing KWallet (`~/.local/share/kwalletd/*.kwl`) stays as it is and is not imported: its entries are encrypted with the wallet's password, and only kwalletd6 can open it. To use it again, `systemctl --user disable --now henge-secrets`.
+An existing KWallet (`~/.local/share/kwalletd/*.kwl`) stays as it is. To copy it into the device's wallet once, run `/usr/lib/henge/henge-secrets --import` (`--wallet NAME`, default `kdewallet`) while the machine is unlocked:
+
+- It starts the real kwalletd6 (kwallet6 must be installed) on a private bus of its own, with a `kwalletrc` that has no prompts, so it does not touch the session's names.
+- kwalletd6 opens the wallet. In a desktop session kwalletd6 asks for the wallet's password in its own window. Without a display, or with `--password-stdin` (the password on the first line of stdin), the command takes the password and opens the wallet as `pam_kwallet` does (PBKDF2-SHA512 with the wallet's `.salt`; a GPG wallet needs the window).
+- It copies every folder and entry (passwords, maps, binary data) through the KWallet API into `henge-secrets`, prints the counts, and writes `~/.local/share/henge/kwallet-imported-NAME`. A second run needs `--force`. The `.kwl` and `.salt` files stay.
+
+To use the old wallet again instead, `systemctl --user disable --now henge-secrets`.
 
 Not tested: a full Plasma session in the guest (the KWallet API was tested with `kwallet-query` from kwallet6 6.13 in a Debian trixie container), and the Keychain on a device.
 

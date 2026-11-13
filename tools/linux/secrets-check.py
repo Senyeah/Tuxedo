@@ -43,7 +43,8 @@ def stored_words(value):
     secrets_ = [value, "dh-" + value, "kw-" + value, "q-" + value, "other-" + value, FIRST, "v-w-one", "v-w-two", "v-x/y", "sig-value"]
     labels = [f"Henge probe {x}" for x in (A, B, C)] + ["Henge probe"]
     attrs = [ATTR, A, B, C, K1, M1, QKEY, "Passwords", "Maps", "Wild", "SigFolder", "sig-key", "w-one", "w-two", "x/y", "w-map",
-             "sam", "https://example.test/", "ünïcode"]
+             "sam", "https://example.test/", "ünïcode", "Import", "imp-pw-key", "imp-p2", "imp-map", "imp-bin",
+             f"imp-pw-{TAG}", f"imp-p2-{TAG}", f"imp-site-{TAG}", f"pass-{TAG}"]
     return secrets_ + labels + attrs
 
 
@@ -171,6 +172,7 @@ def inner():
             raise Fail(f"deleted items are still in the store: {left}")
         print("ok: deleted items leave the host's store", flush=True)
         log.flush()
+        import_check(env, daemon_bin, dump)
         found = leaks(open("/tmp/daemon.log").read(), stored_words(value))
         if found:
             raise Fail(f"the daemon's log has stored words: {found}")
@@ -190,6 +192,97 @@ def inner():
         raise Fail("no fallback to kwalletd6")
     r.terminate()
     print("ok: without the device's wallet, D-Bus activation gets kwalletd6", flush=True)
+
+
+IMPORTED = {("Import", "imp-pw-key"): f"imp-pw-{TAG}", ("Passwords", "imp-p2"): f"imp-p2-{TAG}"}
+
+
+def qmap(m):
+    import struct
+    out = [struct.pack(">I", len(m))]
+    for k, v in m.items():
+        for s in (k, v):
+            b = s.encode("utf-16-be")
+            out.append(struct.pack(">I", len(b)) + b)
+    return b"".join(out)
+
+
+def make_kwallet(env, password):
+    """A kwalletd6 wallet as a PAM login makes it: a salt file, then pamOpen with PBKDF2-SHA512 of the password."""
+    import hashlib
+    from jeepney import DBusAddress, new_method_call
+    from jeepney.io.blocking import open_dbus_connection
+    tmp = tempfile.mkdtemp()
+    data = os.path.expanduser("~/.local/share/kwalletd")
+    os.makedirs(data, exist_ok=True)
+    salt = os.urandom(56)
+    open(os.path.join(data, "kdewallet.salt"), "wb").write(salt)
+    open(f"{tmp}/bus.conf", "w").write(f'<busconfig><type>session</type><listen>unix:dir={tmp}</listen><auth>EXTERNAL</auth>'
+                                       '<policy context="default"><allow send_destination="*" eavesdrop="true"/><allow eavesdrop="true"/><allow own="*"/><allow receive_sender="*"/></policy></busconfig>')
+    bus = subprocess.Popen(["dbus-daemon", "--config-file", f"{tmp}/bus.conf", "--nofork", "--print-address=1"], stdout=subprocess.PIPE, text=True)
+    address = bus.stdout.readline().strip()
+    kwd = subprocess.Popen(["/usr/bin/kwalletd6"], env=dict(env, DBUS_SESSION_BUS_ADDRESS=address), stderr=subprocess.DEVNULL)
+    try:
+        conn = open_dbus_connection(bus=address)
+        addr = DBusAddress("/modules/kwalletd6", bus_name="org.kde.kwalletd6", interface="org.kde.KWallet")
+
+        def kw(method, sig, *a):
+            r = conn.send_and_get_reply(new_method_call(addr, method, sig, a), timeout=30)
+            if r.header.message_type.name == "error":
+                raise Fail(f"kwalletd6 {method}: {r.body}")
+            return r.body
+        for _ in range(100):
+            try:
+                kw("isEnabled", "")
+                break
+            except Fail:
+                time.sleep(0.1)
+        kw("pamOpen", "sayi", "kdewallet", hashlib.pbkdf2_hmac("sha512", password.encode(), salt, 50000, 56), 0)
+        (h,) = kw("open", "sxs", "kdewallet", 0, "maker")
+        for (folder, key), v in IMPORTED.items():
+            kw("createFolder", "iss", h, folder, "maker")
+            kw("writePassword", "issss", h, folder, key, v, "maker")
+        kw("writeMap", "issays", h, "Import", "imp-map", qmap({"site": f"imp-site-{TAG}"}), "maker")
+        kw("writeEntry", "issays", h, "Import", "imp-bin", b"\0\1\xff" + TAG.encode(), "maker")
+        kw("close", "ibs", h, True, "maker")
+    finally:
+        kwd.terminate()
+        kwd.wait(timeout=10)
+        bus.terminate()
+    if not os.path.getsize(os.path.join(data, "kdewallet.kwl")):
+        raise Fail("no wallet file")
+
+
+def import_check(env, daemon_bin, dump):
+    import base64
+    make_kwallet(env, f"pass-{TAG}")
+    print("ok: a kwalletd6 wallet with 2 passwords, a map and binary data", flush=True)
+    run = lambda pw, *a: subprocess.run(["python3", daemon_bin, "--import", "--password-stdin", *a], input=pw + "\n",  # noqa: E731
+                                        capture_output=True, text=True, env=env, timeout=120)
+    r = run("wrong")
+    if r.returncode == 0 or "does not open" not in r.stderr:
+        raise Fail(f"import with a wrong password: {r.returncode} {r.stderr[-300:]}")
+    print("ok: import: a wrong password is refused", flush=True)
+    r = run(f"pass-{TAG}")
+    if r.returncode or "imported 4 entries in 2 folders" not in r.stdout or "2 passwords, 1 maps, 1 binary" not in r.stdout:
+        raise Fail(f"import: {r.returncode} {r.stdout[-300:]} {r.stderr[-300:]}")
+    print("ok: import:", r.stdout.strip().split(". ")[0], flush=True)
+    items = {(v["meta"]["attributes"].get("server"), v["meta"]["attributes"].get("user")): (v["meta"]["attributes"].get("type"), base64.b64decode(v["secret"]))
+             for v in dump().values() if "server" in v["meta"].get("attributes", {})}
+    for (folder, key), value in IMPORTED.items():
+        if items.get((folder, key)) != ("plaintext", value.encode()):
+            raise Fail(f"import: {folder}/{key} is {items.get((folder, key))}")
+    if items.get(("Import", "imp-map")) != ("map", json.dumps({"site": f"imp-site-{TAG}"}, separators=(",", ":")).encode()):
+        raise Fail(f"import: the map is {items.get(('Import', 'imp-map'))}")
+    if items.get(("Import", "imp-bin"), ("", b""))[0] != "base64" or base64.b64decode(items[("Import", "imp-bin")][1]) != b"\0\1\xff" + TAG.encode():
+        raise Fail(f"import: the binary entry is {items.get(('Import', 'imp-bin'))}")
+    print("ok: import: every entry is in the device's wallet, with its type", flush=True)
+    if not os.path.getsize(os.path.expanduser("~/.local/share/kwalletd/kdewallet.kwl")):
+        raise Fail("import: the .kwl file went")
+    r = run(f"pass-{TAG}")
+    if r.returncode == 0 or "imported before" not in r.stderr:
+        raise Fail(f"import a second time: {r.returncode} {r.stderr[-300:]}")
+    print("ok: import: the .kwl file stays, and a second import needs --force", flush=True)
 
 
 def package():
