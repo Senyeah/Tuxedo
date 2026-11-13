@@ -79,14 +79,16 @@ final class KeychainStore {
         return q
     }
 
-    private static func code(_ status: OSStatus) -> Int32 {
+    private static func code(_ status: OSStatus, _ op: String) -> Int32 {
         switch status {
         case errSecSuccess: return Int32(HV_SECRET_OK)
         case errSecItemNotFound: return Int32(HV_SECRET_NOT_FOUND)
-        case errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled: return Int32(HV_SECRET_LOCKED)
         default:
-            HengeLog.log("wallet", "keychain status \(status)") // a status code only, never an item
-            return Int32(HV_SECRET_FAILED)
+            HengeLog.log("wallet", "\(op): keychain status \(status)") // a status code only, never an item
+            switch status {
+            case errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled: return Int32(HV_SECRET_LOCKED)
+            default: return Int32(HV_SECRET_FAILED)
+            }
         }
     }
 
@@ -97,7 +99,7 @@ final class KeychainStore {
         q[kSecUseAuthenticationContext] = Self.quietContext() // metadata needs no check
         var result: CFTypeRef?
         let status = SecItemCopyMatching(q as CFDictionary, &result)
-        guard status == errSecSuccess else { return Self.code(status) }
+        guard status == errSecSuccess else { return Self.code(status, "list") }
         for item in result as? [[CFString: Any]] ?? [] {
             guard let id = item[kSecAttrAccount] as? String else { continue }
             each(id, item[kSecAttrGeneric] as? Data ?? Data())
@@ -114,27 +116,27 @@ final class KeychainStore {
         if let context = auth.context { q[kSecUseAuthenticationContext] = context }
         var result: CFTypeRef?
         let status = SecItemCopyMatching(q as CFDictionary, &result)
-        return (Self.code(status), result as? Data)
+        return (Self.code(status, "read"), result as? Data)
     }
 
+    /// Add and delete need no Face ID; an update does, and the session's context does not satisfy it. So: replace.
     fileprivate func write(_ scope: String, _ id: String, meta: Data, secret: Data) -> Int32 {
-        let auth = authContext()
-        guard !auth.locked else { return Int32(HV_SECRET_LOCKED) }
-        var q = base(scope, id)
-        if let context = auth.context { q[kSecUseAuthenticationContext] = context }
-        let status = SecItemUpdate(q as CFDictionary, [kSecAttrGeneric: meta, kSecValueData: secret] as CFDictionary)
-        guard status == errSecItemNotFound else { return Self.code(status) }
+        guard !authContext().locked else { return Int32(HV_SECRET_LOCKED) }
         var add = base(scope, id)
         add[kSecAttrGeneric] = meta
         add[kSecValueData] = secret
         if let access = accessControl { add[kSecAttrAccessControl] = access } else { add[kSecAttrAccessible] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly }
-        if let context = auth.context { add[kSecUseAuthenticationContext] = context }
-        return Self.code(SecItemAdd(add as CFDictionary, nil))
+        var status = SecItemAdd(add as CFDictionary, nil)
+        if status == errSecDuplicateItem {
+            status = SecItemDelete(base(scope, id) as CFDictionary)
+            if status == errSecSuccess || status == errSecItemNotFound { status = SecItemAdd(add as CFDictionary, nil) }
+        }
+        return Self.code(status, "write")
     }
 
     fileprivate func remove(_ scope: String, _ id: String) -> Int32 {
         guard !authContext().locked else { return Int32(HV_SECRET_LOCKED) }
-        return Self.code(SecItemDelete(base(scope, id) as CFDictionary))
+        return Self.code(SecItemDelete(base(scope, id) as CFDictionary), "remove")
     }
 }
 
