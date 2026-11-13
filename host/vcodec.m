@@ -623,6 +623,8 @@ static int do_enc_frame(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
         return st == noErr ? ok(c, req, &r, sizeof r) : vt_fail(c, req, "flush", st);
     }
     if (full) return fail(c, req, HV_VC_E_LIMIT, "too many packets waiting: read them with ENC_PACKET");
+    if (f.pts > (1ll << 60) || f.pts < -(1ll << 60) || f.duration > (1ll << 60) || f.duration < 0)
+        return fail(c, req, HV_VC_E_INVAL, "bad time"); /* the decode time shift subtracts them */
     Frame *fr = frame_get(c, f.handle);
     if (!fr) return fail(c, req, HV_VC_E_HANDLE, "no such frame");
     if (fr->w != s->w || fr->h != s->h) return fail(c, req, HV_VC_E_INVAL, "the frame is %ux%u, the encoder %ux%u", fr->w, fr->h, s->w, s->h);
