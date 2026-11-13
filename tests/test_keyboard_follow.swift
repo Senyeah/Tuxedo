@@ -33,6 +33,29 @@ struct KeyboardFollowTests {
         precondition(f(CGRect(x: 0, y: 538, width: 402, height: 336), CGRect(x: -200, y: -300, width: 804, height: 1748)) == 0)
     }
 
+    /// KeyboardFrameMemory: a probe made later reports from the frame that was kept.
+    static func memory() {
+        let screen = CGRect(x: 0, y: 0, width: 402, height: 874)
+        func part(_ m: KeyboardFrameMemory) -> Double { KeyboardPanel.fraction(keyboard: m.frame, picture: screen) }
+        var m = KeyboardFrameMemory()
+        precondition(m.frame.isNull && part(m) == 0) // nothing heard yet
+        // The keyboard comes up while no probe is there (the console shows). A new probe reads the memory.
+        m.willChange(to: CGRect(x: 0, y: 538, width: 402, height: 336))
+        precondition(part(m) == 0.384)
+        // It changes its height (another keyboard, the emoji keys).
+        m.willChange(to: CGRect(x: 0, y: 500, width: 402, height: 374))
+        precondition(part(m) == 0.428)
+        // It goes down: first to below the screen, then it is hidden.
+        m.willChange(to: CGRect(x: 0, y: 874, width: 402, height: 374))
+        precondition(part(m) == 0)
+        m.didHide()
+        precondition(m.frame.isNull && part(m) == 0)
+        // A notification with no frame is "down".
+        m.willChange(to: CGRect(x: 0, y: 538, width: 402, height: 336))
+        m.willChange(to: nil)
+        precondition(m.frame.isNull)
+    }
+
     static func main() {
         // The guest asks: the keyboard comes up, then goes down.
         var f = KeyboardFollow(seq: 7)
@@ -91,6 +114,7 @@ struct KeyboardFollowTests {
         precondition(f.poll(wanted: true, seq: 1, typing: false, allowed: true) == true)
 
         panel()
+        memory()
         print("test_keyboard_follow: ok")
     }
 }

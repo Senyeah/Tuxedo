@@ -1,6 +1,29 @@
 import SwiftUI
 import UIKit
 
+/// The keyboard's frame, heard from when a Linux session starts. Main thread only.
+enum KeyboardFrame {
+    private(set) static var memory = KeyboardFrameMemory()
+    private static var observers: [NSObjectProtocol] = []
+
+    /// Call before a keyboard can come up; more calls do nothing.
+    static func start() {
+        guard observers.isEmpty else { return }
+        let centre = NotificationCenter.default
+        observers = [
+            centre.addObserver(forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main) { willChange($0) },
+            centre.addObserver(forName: UIResponder.keyboardDidHideNotification, object: nil, queue: .main) { _ in didHide() },
+        ]
+    }
+
+    // A probe calls these from its own observers too: the order of two observers is not fixed.
+    static func willChange(_ note: Notification) {
+        memory.willChange(to: note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect)
+    }
+
+    static func didHide() { memory.didHide() }
+}
+
 /// Lies over the box that holds the Linux picture and reports the keyboard's part of it (KeyboardPanel.fraction).
 /// It takes no touches.
 struct KeyboardPanelProbe: UIViewRepresentable {
@@ -20,21 +43,21 @@ struct KeyboardPanelProbe: UIViewRepresentable {
 
     final class Probe: UIView {
         var guest = CGSize.zero
-        private var keyboard = CGRect.null // the screen's coordinates: where the keyboard goes to
         private var observers: [NSObjectProtocol] = []
         private var stopped = false
 
         override init(frame: CGRect) {
             super.init(frame: frame)
             isUserInteractionEnabled = false
+            KeyboardFrame.start()
             let centre = NotificationCenter.default
             observers = [
                 centre.addObserver(forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main) { [weak self] note in
-                    self?.keyboard = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect) ?? .null
+                    KeyboardFrame.willChange(note)
                     self?.report()
                 },
                 centre.addObserver(forName: UIResponder.keyboardDidHideNotification, object: nil, queue: .main) { [weak self] _ in
-                    self?.keyboard = .null
+                    KeyboardFrame.didHide()
                     self?.report()
                 },
             ]
@@ -60,6 +83,7 @@ struct KeyboardPanelProbe: UIViewRepresentable {
                 return
             }
             let picture = TouchMapping.pictureRect(guest: guest, in: bounds)
+            let keyboard = KeyboardFrame.memory.frame // not this view's own: the keyboard can be up before the view is
             let covered = keyboard.isNull ? CGRect.null : convert(keyboard, from: window.screen.coordinateSpace)
             henge_share_set_keyboard_height(KeyboardPanel.fraction(keyboard: covered, picture: picture))
         }

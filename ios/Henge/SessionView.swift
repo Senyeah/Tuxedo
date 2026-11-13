@@ -573,6 +573,7 @@ struct SessionView: View {
     /// A Linux desktop says when the focused program wants text (henge-keyboard): the keyboard comes and goes with it.
     private func followGuestKeyboard() async {
         guard mac.guest == .linux else { return }
+        KeyboardFrame.start() // before the console can hide the probe
         var seq: UInt = 0
         _ = henge_share_keyboard_wanted(&seq)
         keyboardFollow = KeyboardFollow(seq: seq)

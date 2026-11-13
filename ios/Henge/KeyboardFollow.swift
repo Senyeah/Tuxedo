@@ -41,6 +41,17 @@ struct KeyboardFollow {
     mutating func closed() { raised = false }
 }
 
+/// Where the keyboard is, kept for the whole session. A probe that is made while the keyboard is up
+/// (back from the console, an external screen gone) then reports its part at once.
+struct KeyboardFrameMemory {
+    /// The screen's coordinates; null while the keyboard is down.
+    private(set) var frame = CGRect.null
+
+    /// The keyboard goes to `end`; nil is a notification with no frame.
+    mutating func willChange(to end: CGRect?) { frame = end ?? .null }
+    mutating func didHide() { frame = .null }
+}
+
 /// How much of a Linux guest's picture the keyboard covers. In Plasma, henge-keyboard is KWin's input method and
 /// makes its panel that high, so KWin keeps the active window above the keyboard (host/share.c, GET /.henge/keyboard).
 enum KeyboardPanel {
