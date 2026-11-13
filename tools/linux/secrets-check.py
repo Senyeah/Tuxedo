@@ -31,6 +31,25 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROBE = os.path.join(HERE, "secrets-probe.py")
 
+# Names the check stores, made distinct so that a log check can look for each of them.
+TAG = secrets.token_hex(3)
+ATTR = "henge-probe-attr"  # secrets-probe.py's attribute
+A, B, C = (f"attr-{x}-{TAG}" for x in "abc")
+K1, M1, QKEY, FIRST = f"kw-key-{TAG}", f"kw-map-{TAG}", f"q-key-{TAG}", f"first-{TAG}"
+
+
+def stored_words(value):
+    """Every secret, label and attribute that the check and secrets-probe.py store."""
+    secrets_ = [value, "dh-" + value, "kw-" + value, "q-" + value, "other-" + value, FIRST, "v-w-one", "v-w-two", "v-x/y", "sig-value"]
+    labels = [f"Henge probe {x}" for x in (A, B, C)] + ["Henge probe"]
+    attrs = [ATTR, A, B, C, K1, M1, QKEY, "Passwords", "Maps", "Wild", "SigFolder", "sig-key", "w-one", "w-two", "x/y", "w-map",
+             "sam", "https://example.test/", "ünïcode"]
+    return secrets_ + labels + attrs
+
+
+def leaks(text, words):
+    return [w for w in words if w in text]
+
 
 class Fail(Exception):
     pass
@@ -81,21 +100,21 @@ def inner():
 
         control("unlock")
         value = "pw-" + secrets.token_hex(8)
-        probe("store", "a", stdin=value.encode())
-        probe("lookup", "a", value)
-        probe("search", "a")
-        probe("dh", "b", "dh-" + secrets.token_hex(8))
-        probe("kw-write", "Passwords", "k1", "kw-" + value)
-        probe("kw-read", "Passwords", "k1", "kw-" + value)
-        probe("kw-list", "Passwords", "k1")
-        probe("kw-map", "Maps", "m1")
-        probe("kw-cross", "Passwords", "k1", "kw-" + value)
+        probe("store", A, stdin=value.encode())
+        probe("lookup", A, value)
+        probe("search", A)
+        probe("dh", B, "dh-" + value)
+        probe("kw-write", "Passwords", K1, "kw-" + value)
+        probe("kw-read", "Passwords", K1, "kw-" + value)
+        probe("kw-list", "Passwords", K1)
+        probe("kw-map", "Maps", M1)
+        probe("kw-cross", "Passwords", K1, "kw-" + value)
         probe("kw-wildcard")
         probe("kw-signal")
         probe("clients")
         d = dump()
         attrs = [v["meta"].get("attributes") for v in d.values()]
-        if {"test": "a"} not in attrs or {"server": "Passwords", "user": "k1", "type": "plaintext"} not in attrs:
+        if {ATTR: A} not in attrs or {"server": "Passwords", "user": K1, "type": "plaintext"} not in attrs:
             raise Fail(f"the host's store: {attrs}")
         m = next(v for v in d.values() if v["meta"].get("attributes", {}).get("type") == "map")
         import base64
@@ -104,16 +123,16 @@ def inner():
         print(f"ok: the host's store has {len(d)} items, KWallet entries as KF 6.14 keeps them", flush=True)
 
         # libkf6wallet's own client. kwallet-query only replaces an entry that exists.
-        probe("kw-write", "Passwords", "qkey", "first")
-        r0 = kwq("-f", "Passwords", "-r", "qkey")
-        r = kwq("-f", "Passwords", "-w", "qkey", stdin=b"q-" + value.encode())
-        r2 = kwq("-f", "Passwords", "-r", "qkey")
-        if r0.stdout.decode().strip() != "first" or r.returncode or r2.stdout.decode().strip() != "q-" + value:
+        probe("kw-write", "Passwords", QKEY, FIRST)
+        r0 = kwq("-f", "Passwords", "-r", QKEY)
+        r = kwq("-f", "Passwords", "-w", QKEY, stdin=b"q-" + value.encode())
+        r2 = kwq("-f", "Passwords", "-r", QKEY)
+        if r0.stdout.decode().strip() != FIRST or r.returncode or r2.stdout.decode().strip() != "q-" + value:
             raise Fail(f"kwallet-query: {r0.stdout.decode()[-100:]!r} {r.returncode} {r2.returncode} {r2.stderr.decode()[-300:]}")
-        probe("kw-read", "Passwords", "qkey", "q-" + value)
+        probe("kw-read", "Passwords", QKEY, "q-" + value)
         r3 = kwq("-l", "-f", "Passwords")
-        r4 = kwq("-f", "Maps", "-r", "m1")
-        if "qkey" not in r3.stdout.decode() or "k1" not in r3.stdout.decode() or '"sam"' not in r4.stdout.decode():
+        r4 = kwq("-f", "Maps", "-r", M1)
+        if QKEY not in r3.stdout.decode() or K1 not in r3.stdout.decode() or '"sam"' not in r4.stdout.decode():
             raise Fail(f"kwallet-query -l, or a map: {r3.stdout.decode()[-300:]} {r4.stdout.decode()[-300:]}")
         print("ok: kwallet-query (libkf6wallet 6.13) reads, replaces, lists and reads a map through henge-secrets", flush=True)
 
@@ -126,14 +145,14 @@ def inner():
 
         control("lock")
         time.sleep(1)
-        probe("locked", "a")
+        probe("locked", A)
         probe("kw-locked")
-        r = kwq("-f", "Passwords", "-r", "qkey")
+        r = kwq("-f", "Passwords", "-r", QKEY)
         if ("q-" + value) in r.stdout.decode():
             raise Fail("kwallet-query read a secret while locked")
         print(f"ok: kwallet-query reads nothing while locked (exit {r.returncode})", flush=True)
 
-        p = subprocess.Popen(["python3", "/t/secrets-probe.py", "unlock-prompt", "a"], stdout=subprocess.PIPE, env=env, text=True)
+        p = subprocess.Popen(["python3", "/t/secrets-probe.py", "unlock-prompt", A], stdout=subprocess.PIPE, env=env, text=True)
         line = p.stdout.readline()
         if "PROMPT" not in line:
             raise Fail(f"unlock-prompt: {line}")
@@ -143,19 +162,19 @@ def inner():
         if p.wait(timeout=60) or "OK" not in out:
             raise Fail(f"unlock-prompt: {out}")
         print("ok: an Unlock prompt completes when the device unlocks", flush=True)
-        probe("lookup", "a", value)
-        probe("kw-remove", "Passwords", "k1")
-        probe("clear", "a")
-        probe("absent", "a")
+        probe("lookup", A, value)
+        probe("kw-remove", "Passwords", K1)
+        probe("clear", A)
+        probe("absent", A)
         left = [v["meta"].get("attributes") for v in dump().values()]
-        if {"test": "a"} in left or any(a.get("user") == "k1" for a in left):
+        if {ATTR: A} in left or any(a.get("user") == K1 for a in left):
             raise Fail(f"deleted items are still in the store: {left}")
         print("ok: deleted items leave the host's store", flush=True)
         log.flush()
-        text = open("/tmp/daemon.log").read()
-        if value in text or "Passwords" in text or "sam" in text:
-            raise Fail("the daemon's log has a secret, a folder or an attribute")
-        print("ok: the daemon's log has no secret, label or attribute", flush=True)
+        found = leaks(open("/tmp/daemon.log").read(), stored_words(value))
+        if found:
+            raise Fail(f"the daemon's log has stored words: {found}")
+        print(f"ok: the daemon's log has none of the {len(stored_words(value))} stored secrets, labels and attributes", flush=True)
     finally:
         for p in procs:
             p.terminate()
@@ -331,20 +350,20 @@ def vm(args):
         def first(host, need, probe, err):
             if host.state() != "unlocked":
                 raise Fail("hengevm did not start unlocked")
-            probe("store", "a", stdin=value)
+            probe("store", A, stdin=value)
             have = files(store, "check-a")
-            mine = [v for v in have.values() if v[0].get("attributes") == {"test": "a"}]
+            mine = [v for v in have.values() if v[0].get("attributes") == {ATTR: A}]
             if len(mine) != 1 or mine[0][1] != value.encode() or mine[0][2] != 0o600:
                 raise Fail(f"the item is not in the host's store as it should be: {[(m[0], m[2]) for m in mine]}")
             print("ok: the item is in the host's store, under the machine, mode 0600", flush=True)
-            probe("lookup", "a", value)
-            probe("search", "a")
-            probe("dh", "b", "dh-" + value)
-            probe("kw-write", "Passwords", "k1", "kw-" + value)
-            probe("kw-read", "Passwords", "k1", "kw-" + value)
-            probe("kw-list", "Passwords", "k1")
-            probe("kw-map", "Maps", "m1")
-            probe("kw-cross", "Passwords", "k1", "kw-" + value)
+            probe("lookup", A, value)
+            probe("search", A)
+            probe("dh", B, "dh-" + value)
+            probe("kw-write", "Passwords", K1, "kw-" + value)
+            probe("kw-read", "Passwords", K1, "kw-" + value)
+            probe("kw-list", "Passwords", K1)
+            probe("kw-map", "Maps", M1)
+            probe("kw-cross", "Passwords", K1, "kw-" + value)
             probe("kw-wildcard")
             probe("kw-signal")
             probe("clients")
@@ -367,7 +386,7 @@ def vm(args):
             host.line("secrets lock")
             end = time.monotonic() + 60
             while True:  # the guest hears of it through its long poll
-                out, rc = sh_probe(need, "locked a")
+                out, rc = sh_probe(need, f"locked {A}")
                 if rc == 0:
                     break
                 if time.monotonic() > end:
@@ -375,30 +394,33 @@ def vm(args):
                 time.sleep(1)
             print("ok: locked: the item shows as locked, GetSecret(s) give nothing", flush=True)
             probe("kw-locked")
-            iid = next(k for k, v in files(store, "check-a").items() if v[0].get("attributes") == {"test": "a"})
+            iid = next(k for k, v in files(store, "check-a").items() if v[0].get("attributes") == {ATTR: A})
             code = need(f"python3 -c \"import http.client as h; c=h.HTTPConnection('10.0.2.4', 81); c.request('GET','/.henge/secrets/items/{iid}'); print(c.getresponse().status)\"")
             if code.splitlines()[-1] != "423":
                 raise Fail(f"the host gave {code} for a read while locked")
             print("ok: the host answers 423 to a read while locked", flush=True)
             need("rm -f /tmp/prompt.out; (env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
-                 "python3 /tmp/probe.py unlock-prompt a > /tmp/prompt.out 2>&1 &) ; for i in $(seq 60); do grep -q PROMPT /tmp/prompt.out && break; sleep 0.5; done; grep -q PROMPT /tmp/prompt.out",
+                 f"python3 /tmp/probe.py unlock-prompt {A} > /tmp/prompt.out 2>&1 &) ; for i in $(seq 60); do grep -q PROMPT /tmp/prompt.out && break; sleep 0.5; done; grep -q PROMPT /tmp/prompt.out",
                  "a prompt while locked")
             host.line("secrets unlock")
             need("for i in $(seq 120); do grep -q '^OK' /tmp/prompt.out && break; sleep 0.5; done; cat /tmp/prompt.out; grep -q '^OK' /tmp/prompt.out",
                  "the prompt completes")
             print("ok: an Unlock prompt completes when the device unlocks", flush=True)
-            probe("lookup", "a", value)
-            probe("kw-remove", "Passwords", "k1")
-            probe("clear", "a")
-            probe("absent", "a")
+            probe("lookup", A, value)
+            probe("kw-remove", "Passwords", K1)
+            probe("clear", A)
+            probe("absent", A)
             left = [v[0].get("attributes") for v in files(store, "check-a").values()]
-            if {"test": "a"} in left or any(a.get("user") == "k1" for a in left):
+            if {ATTR: A} in left or any(a.get("user") == K1 for a in left):
                 raise Fail(f"deleted items are still in the host's store: {left}")
             print("ok: deleted items leave the host's store", flush=True)
-            leaks = need(f"journalctl --user -u henge-secrets --no-pager | grep -c -e '{value}' -e Passwords || true")
-            if leaks.splitlines()[-1] != "0" or value in open(err, errors="replace").read():
-                raise Fail("a secret or a folder name is in the journal or hengevm's log")
-            print("ok: no secret in the journal or hengevm's log", flush=True)
+            # Every log this check reads: the guest's whole journal (system and user) and hengevm's stderr
+            journal = need("sudo journalctl -b --no-pager -o cat | base64 -w0", limit=120).splitlines()[-1]
+            import base64
+            found = leaks(base64.b64decode(journal).decode(errors="replace") + open(err, errors="replace").read(), stored_words(value))
+            if found:
+                raise Fail(f"in the journal or hengevm's log: {found}")
+            print(f"ok: none of the {len(stored_words(value))} stored secrets, labels and attributes is in the journal or hengevm's log", flush=True)
 
         def sh_probe(need, step):
             try:
@@ -411,8 +433,8 @@ def vm(args):
         before = files(store, "check-a")
 
         def second(host, need, probe, err):
-            probe("absent", "b")  # the first machine's item (dh) is there, but not for this machine
-            probe("store", "c", stdin="other-" + value)
+            probe("absent", B)  # the first machine's item (dh) is there, but not for this machine
+            probe("store", C, stdin="other-" + value)
             mine = files(store, "check-b")
             if len(mine) != 1 or files(store, "check-a") != before:
                 raise Fail(f"machine b: {len(mine)} items; machine a changed: {files(store, 'check-a') != before}")

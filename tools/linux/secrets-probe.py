@@ -2,7 +2,7 @@
 """Runs in the guest (or a Debian container) for secrets-check.py: one step of the wallet through its D-Bus
 clients. Prints "OK ..." and exits 0, or prints "FAIL ..." and exits 1.
 
-  store ATTR              secret-tool store (attribute test=ATTR), the value on stdin
+  store ATTR              secret-tool store (attribute henge-probe-attr=ATTR), the value on stdin
   lookup ATTR [VALUE]     secret-tool lookup; with VALUE, it must match
   absent ATTR             secret-tool lookup finds nothing
   search ATTR             secret-tool search --all lists the item with its label
@@ -26,6 +26,7 @@ from jeepney.io.blocking import open_dbus_connection
 SS = DBusAddress("/org/freedesktop/secrets", bus_name="org.freedesktop.secrets", interface="org.freedesktop.Secret.Service")
 KWD = DBusAddress("/modules/kwalletd6", bus_name="org.kde.kwalletd6", interface="org.kde.KWallet")
 APP = "henge-secrets-probe"
+ATTR = "henge-probe-attr"
 
 
 def ok(*a):
@@ -63,10 +64,10 @@ def qmap(m):
 def main():
     step, args = sys.argv[1], sys.argv[2:]
     if step == "store":
-        r = tool("store", "--label", f"Henge probe {args[0]}", "test", args[0], stdin=sys.stdin.buffer.read())
+        r = tool("store", "--label", f"Henge probe {args[0]}", ATTR, args[0], stdin=sys.stdin.buffer.read())
         ok("stored") if r.returncode == 0 else fail("store", r.returncode, r.stderr.decode()[:200])
     if step == "lookup":
-        r = tool("lookup", "test", args[0], timeout=180)
+        r = tool("lookup", ATTR, args[0], timeout=180)
         got = r.stdout.decode()
         if r.returncode != 0:
             fail("lookup", r.returncode, r.stderr.decode()[:200])
@@ -74,14 +75,14 @@ def main():
             fail("lookup: another value")
         ok("lookup")
     if step == "absent":
-        r = tool("lookup", "test", args[0])
+        r = tool("lookup", ATTR, args[0])
         ok("absent") if r.returncode != 0 and not r.stdout else fail("absent: found", r.returncode)
     if step == "search":
-        r = tool("search", "--all", "test", args[0])
+        r = tool("search", "--all", ATTR, args[0])
         out = r.stdout.decode() + r.stderr.decode()
         ok("search") if f"Henge probe {args[0]}" in out else fail("search", out[:300])
     if step == "clear":
-        r = tool("clear", "test", args[0])
+        r = tool("clear", ATTR, args[0])
         ok("clear") if r.returncode == 0 else fail("clear", r.returncode)
 
     conn = open_dbus_connection(bus="SESSION")
@@ -102,7 +103,7 @@ def main():
         sealed = e.update(p.update(args[1].encode()) + p.finalize()) + e.finalize()
         (coll,) = call(conn, SS, "ReadAlias", "s", ("default",))
         props = {"org.freedesktop.Secret.Item.Label": ("s", f"Henge probe {args[0]}"),
-                 "org.freedesktop.Secret.Item.Attributes": ("a{ss}", {"test": args[0]})}
+                 "org.freedesktop.Secret.Item.Attributes": ("a{ss}", {ATTR: args[0]})}
         (item, prompt) = call(conn, SS, "CreateItem", "a{sv}(oayays)b", (props, (session, iv, sealed, "text/plain"), True),
                               path=coll, iface="org.freedesktop.Secret.Collection")
         ((sess, params, value, ctype),) = call(conn, SS, "GetSecret", "o", (session,), path=item, iface="org.freedesktop.Secret.Item")
@@ -113,7 +114,7 @@ def main():
             fail("dh: the value did not round-trip encrypted")
         ok("dh session: encrypted both ways")
     if step in ("locked", "unlock-prompt"):
-        unlocked, locked = call(conn, SS, "SearchItems", "a{ss}", ({"test": args[0]},))
+        unlocked, locked = call(conn, SS, "SearchItems", "a{ss}", ({ATTR: args[0]},))
         if unlocked or not locked:
             fail("search while locked", len(unlocked), len(locked))
         if step == "unlock-prompt":
@@ -201,7 +202,7 @@ def main():
         call(conn, DBusAddress("/org/freedesktop/DBus", bus_name="org.freedesktop.DBus", interface="org.freedesktop.DBus"),
              "AddMatch", "s", (rule.serialise(),))
         with conn.filter(rule, bufsize=20) as q:
-            call(conn, KWD, "writePassword", "issss", (h, "SigFolder", "k", "v", APP))
+            call(conn, KWD, "writePassword", "issss", (h, "SigFolder", "sig-key", "sig-value", APP))
             seen = []
             try:
                 while True:
