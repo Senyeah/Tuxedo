@@ -20,7 +20,9 @@ import AVKit
 ///    (heat + the green indicator). A session with no output did not deliver events.
 ///
 /// When the input mode is "Touchscreen" none of this runs — the trackpad surface itself
-/// tap-clicks, hold-drags and two-finger-right-clicks (see Trackpad).
+/// tap-clicks and hold-drags (see Trackpad). In both modes a two-finger tap is a right click,
+/// and with the on-screen keyboard up a tap is a left click (PadClickRule).
+/// The presses go through PointerButtons, as the pad's, so neither drops the other's.
 final class VolumeClicks: NSObject {
     /// Where clicks come from: the touchscreen surface, or the volume buttons.
     enum InputMode: String, CaseIterable {
@@ -35,23 +37,29 @@ final class VolumeClicks: NSObject {
     static let shared = VolumeClicks()
 
     static var inputMode: InputMode { InputMode(rawValue: UserDefaults.standard.string(forKey: inputModeKey) ?? "") ?? .touchscreen }
+    static var padMode: PadInputMode { inputMode == .volumeButtons ? .volumeButtons : .touchscreen }
+    /// A one-finger tap and a hold click on the pad: in the Touchscreen mode, or with the keyboard up.
+    static func tapsClick(keyboardUp: Bool) -> Bool { PadClickRule.tapsClick(padMode, keyboardUp: keyboardUp) }
     private var mode: Mode { Mode(rawValue: UserDefaults.standard.string(forKey: Self.modeKey) ?? "") ?? .delayHold }
     private var swapButtons: Bool { UserDefaults.standard.object(forKey: Self.swapKey) as? Bool ?? false }
 
     private var active = false
-    private let buzz = UIImpactFeedbackGenerator(style: .light)
-    private var leftDown = false
-    private var rightDown = false
+    private let haptic = UIImpactFeedbackGenerator(style: .light)
+    private var buttons: PointerButtons { .guest }
+    private var leftDown: Bool { buttons.holds(0, .volume) }
+    private var rightDown: Bool { buttons.holds(1, .volume) }
+
+    private func buzz() {
+        guard TrackpadFeel.level != .off else { return }
+        haptic.impactOccurred()
+    }
 
     // MARK: Shared button plumbing
 
-    /// Send a button edge only when it actually changes state.
+    /// The volume button's own press; the guest hears it only if no other owner holds the button.
     private func setDown(_ down: Bool, left: Bool) {
-        let button: Int32 = left ? 0 : 1
-        let currently = left ? leftDown : rightDown
-        guard currently != down else { return }
-        henge_vm_mouse_button(button, down ? 1 : 0)
-        if left { leftDown = down } else { rightDown = down }
+        let button = left ? 0 : 1
+        if down { buttons.press(button, by: .volume) } else { buttons.release(button, by: .volume) }
     }
 
     // MARK: Lifecycle
@@ -63,7 +71,7 @@ final class VolumeClicks: NSObject {
             return
         }
         active = true
-        buzz.prepare()
+        haptic.prepare()
         HengeLog.log("input", "volume buttons: mode \(mode.rawValue), swap \(swapButtons)")
         switch mode {
         case .delayHold, .tapThenDrag: startVolumeKVO()
@@ -156,7 +164,7 @@ final class VolumeClicks: NSObject {
     private func pressDelayHold(left: Bool) {
         if !(left ? leftDown : rightDown) {
             setDown(true, left: left)
-            buzz.impactOccurred()
+            buzz()
             HengeLog.log("input", "volume: \(left ? "left" : "right") down (delay hold)")
         }
         let timer = Timer(timeInterval: releaseAfter, repeats: false) { [weak self] _ in
@@ -184,14 +192,13 @@ final class VolumeClicks: NSObject {
         case .pending:
             setTapState(.holding, left: left)
             setDown(true, left: left)
-            buzz.impactOccurred()
+            buzz()
             HengeLog.log("input", "volume: \(left ? "left" : "right") drag (tap then drag)")
             armTapTimer(left: left, interval: releaseAfter) { [weak self] in self?.finishTapDrag(left: left) }
         case .idle:
-            let button: Int32 = left ? 0 : 1
-            henge_vm_mouse_button(button, 1)
-            henge_vm_mouse_button(button, 0)
-            buzz.impactOccurred()
+            setDown(true, left: left)
+            setDown(false, left: left)
+            buzz()
             HengeLog.log("input", "volume: \(left ? "left" : "right") tap (tap then drag)")
             setTapState(.pending, left: left)
             armTapTimer(left: left, interval: pendingWindow) { [weak self] in self?.setTapState(.idle, left: left) }
@@ -280,7 +287,7 @@ final class VolumeClicks: NSObject {
             let wasDown = left ? self.leftDown : self.rightDown
             self.setDown(down, left: left)
             if down && !wasDown {
-                self.buzz.impactOccurred()
+                self.buzz()
                 HengeLog.log("input", "volume intercept: \(left ? "left" : "right") down")
             }
         }

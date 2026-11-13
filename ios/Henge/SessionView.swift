@@ -52,6 +52,11 @@ struct SessionView: View {
     @AppStorage("henge.controls.hintsShown") private var revealHintsShown = 0
     @AppStorage(VolumeClicks.inputModeKey) private var inputMode = VolumeClicks.InputMode.touchscreen
     @AppStorage(VolumeClicks.modeKey) private var volumeMode = VolumeClicks.Mode.delayHold
+    @AppStorage(TrackpadFeel.hapticsKey) private var hapticLevel = PadHaptics.Level.all
+    @AppStorage(TrackpadFeel.motionKey) private var motionFeel = PadTuning.Motion().style
+    // Not observed here: only the pill follows the pad's layout.
+    @State private var externalPad = PadSession(ghostKey: "henge.trackpad.ghostShown")
+    @State private var panelPad = PadSession()
     /// Once per install: macOS's moving wallpapers and aerial screen saver are video, decoded by the emulated
     /// CPUs (a phone ran about 30% faster with a still one).
     @AppStorage("henge.tips.stillWallpaperShown") private var stillWallpaperTipShown = false
@@ -117,6 +122,8 @@ struct SessionView: View {
     private var touchActive: Bool { mac.guest == .linux && current.usesTouch && !consoleShown && !display.isExternal }
     /// Zoom is off in touch mode, and comes back with the pointer.
     private var zoomShown: Bool { zoomed && !touchActive }
+    /// The guest is on a monitor: the phone is all pad, with its keys and the tools at the top.
+    private var padShown: Bool { display.isExternal && !consoleShown && state != 2 }
 
     /// The guest's shape now: the phone's own screen for phone Linux, else the machine's fixed size.
     private var layoutAspect: CGFloat {
@@ -137,7 +144,8 @@ struct SessionView: View {
                               height: geo.size.height + insets.top + insets.bottom)
             let landscape = full.width > full.height
             let window = WindowKey(size: full, insets: DisplayInsets(top: insets.top, left: insets.leading, bottom: insets.bottom, right: insets.trailing))
-            let layout = Layout(full: full, insets: insets, landscape: landscape, zoomed: zoomShown && !consoleShown, typing: typing,
+            let layout = Layout(full: full, insets: insets, homeBar: windowBottom ?? insets.bottom, landscape: landscape,
+                                zoomed: zoomShown && !consoleShown, typing: typing,
                                 centre: zoomCentre, aspect: layoutAspect, console: consoleShown,
                                 room: DisplayModePolicy.phoneRoom(safe: window.insets, windowBottom: windowBottom ?? insets.bottom,
                                                                   landscape: landscape, whole: wholeScreen(landscape: landscape)),
@@ -148,20 +156,6 @@ struct SessionView: View {
                 BootDisplay(display: display, role: .device, guest: mac.guest, console: console,
                             showConsole: consoleShown, typing: $typing)
                     .opacity(display.isExternal ? 0 : 1)
-                    .overlay {
-                        if display.isExternal && state != 2 {
-                            VStack(spacing: 8) {
-                                Image(systemName: "display").font(.largeTitle)
-                                Text("\(mac.guest == .linux ? "Linux" : "Mac") on external display").font(.headline)
-                                Text("Use the trackpad, keyboard or a connected mouse.")
-                                    .font(.subheadline)
-                            }
-                            .foregroundStyle(.white)
-                            .multilineTextAlignment(.center)
-                            .padding()
-                            .accessibilityElement(children: .combine)
-                        }
-                    }
                     .frame(width: layout.screen.width, height: layout.screen.height)
                     .clipShape(RoundedRectangle(cornerRadius: layout.fillsPhone ? 0 : 15, style: .continuous))
                     .overlay {
@@ -172,13 +166,19 @@ struct SessionView: View {
                     .position(x: layout.screen.midX, y: layout.screen.midY)
                 if state != 2 {
                     if !consoleShown { // the console takes touches itself
-                        if touchActive {
+                        if padShown {
+                            PadView(touchView: externalPad.surface, buttons: .guest, tuning: TrackpadFeel.tuning(motion: motionFeel),
+                                    value: "\(mac.guest == .linux ? "Linux" : "Mac") is on the external display",
+                                    hapticLevel: hapticLevel, made: externalPad.attach)
+                                .frame(width: full.width, height: full.height)
+                                .position(x: full.width / 2, y: full.height / 2)
+                        } else if touchActive {
                             TouchScreen(guestRect: touchPicture(layout))
                                 .defersSystemGestures(on: .all) // the first edge swipe is the guest's
                                 .frame(width: layout.touch.width, height: layout.touch.height)
                                 .position(x: layout.touch.midX, y: layout.touch.midY)
                         } else {
-                            Trackpad()
+                            Trackpad(keyboardUp: typing)
                                 .frame(width: layout.touch.width, height: layout.touch.height)
                                 .position(x: layout.touch.midX, y: layout.touch.midY)
                         }
@@ -190,8 +190,10 @@ struct SessionView: View {
                                 .allowsHitTesting(false)
                         }
                     }
-                    if !layout.fillsPhone {
-                        uprightControls(layout)
+                    if padShown {
+                        padControls(full)
+                    } else if !layout.fillsPhone {
+                        uprightControls(layout, full: full)
                     } else {
                         floatingControls(layout)
                     }
@@ -266,12 +268,17 @@ struct SessionView: View {
             .onAppear {
                 shown = layout.shown
                 windowChanged(window)
+                externalPad.visible = padShown && !hidesGuest
             }
+            .onChange(of: padShown && !hidesGuest) { externalPad.visible = $0 }
             .onChange(of: layout.shown) { shown = $0 }
             .onChange(of: window) { windowChanged($0) } // the new value: the closure's captures are from the old body
             .onChange(of: display.externalPixels) { externalChanged($0) }
             .onChange(of: ScreenChoiceKey(current)) { _ in screenChoiceChanged() }
-            .onChange(of: display.isExternal) { henge_vm_set_pointer_scale($0 ? 1 : 0) } // 1:1 on a big screen
+            .onChange(of: display.isExternal) {
+                henge_vm_set_pointer_scale($0 ? 1 : 0) // 1:1 on a big screen
+                liftEverything() // the pad's views change: no finger or button stays down
+            }
         }
         .statusBarHidden(zoomShown || Device.isPad || display.isExternal || wholeScreen(landscape: false))
         .persistentSystemOverlays(.hidden)
@@ -304,6 +311,7 @@ struct SessionView: View {
             HardwareKeys.releaseAll()
             HardwareMouse.shared.releaseButtons()
             VolumeClicks.shared.releaseButtons()
+            PointerButtons.guest.releaseAll()
             DeviceStatus.shared.leaveForeground()
             // An external screen's scene may still be up; then the app is not in the background: the machine runs on,
             // but the wallet locks and the return asks again.
@@ -349,6 +357,7 @@ struct SessionView: View {
             HardwareKeys.releaseAll()
             HardwareMouse.shared.stop()
             VolumeClicks.shared.stop()
+            PointerButtons.guest.releaseAll()
             DeviceStatus.shared.stop()
             gate.end()
             KeychainStore.shared.setUnlocked(false)
@@ -380,7 +389,8 @@ struct SessionView: View {
             CGSize(width: min(touch.width / max(screen.width, 1), 1), height: min(touch.height / max(screen.height, 1), 1))
         }
 
-        init(full: CGSize, insets: EdgeInsets, landscape: Bool, zoomed: Bool, typing: Bool, centre: CGPoint, aspect: CGFloat,
+        /// homeBar: the window's own bottom inset, without the keyboard.
+        init(full: CGSize, insets: EdgeInsets, homeBar: CGFloat, landscape: Bool, zoomed: Bool, typing: Bool, centre: CGPoint, aspect: CGFloat,
              console: Bool, room: DisplayInsets, native: CGSize?) {
             self.insets = insets
             self.native = native
@@ -459,17 +469,17 @@ struct SessionView: View {
                 touch = screen
                 fillsPhone = false
                 toolsY = screen.maxY + 10
-                let top = typing ? screen.maxY + 8 : toolsY + 54 + 10
-                let bottom = full.height - insets.bottom - (typing ? 8 : 0)
-                pad = CGRect(x: 8, y: top, width: width, height: max(bottom - top, 60))
+                // The keyboard covers the pad's lower part (PadLayout); a pad that kept its size keeps the pointer's speed.
+                let top = toolsY + 54 + 10
+                pad = CGRect(x: 8, y: top, width: width, height: max(full.height - homeBar - top, 60))
             }
         }
     }
 
     // MARK: Upright
 
-    @ViewBuilder private func uprightControls(_ layout: Layout) -> some View {
-        if (!typing || consoleShown) && !controlsHidden {
+    @ViewBuilder private func uprightControls(_ layout: Layout, full: CGSize) -> some View {
+        if !controlsHidden { // the pad keeps its place with the keyboard, so the bar can stay
             HStack {
                 if consoleShown {
                     viewSwitch()
@@ -508,44 +518,43 @@ struct SessionView: View {
             .position(x: layout.pad.midX, y: layout.toolsY + 27)
             .transition(.opacity)
         }
-        if !consoleShown { trackpadPanel(layout) }
+        if !consoleShown { trackpadPanel(layout, full: full) }
     }
 
-    private func trackpadPanel(_ layout: Layout) -> some View {
-        let compact = layout.pad.height < 260
-        return VStack(spacing: 0) {
-            ZStack {
-                Trackpad()
-                if compact {
-                    Text("Trackpad").font(.system(size: 14)).foregroundStyle(Desk.faint).allowsHitTesting(false)
-                } else {
-                    VStack(spacing: 6) {
-                        hint("Drag", "to move")
-                        hint("Tap", "to click")
-                        hint("Hold, then drag", "to grab")
-                        hint("Two fingers", "to scroll")
-                    }
-                    .allowsHitTesting(false)
-                }
+    /// The pad below the picture. Its view reaches the screen's bottom, so the pad sits on the home bar's
+    /// safe edge as it does on its own (PadLayout); the corner is the old panel's.
+    private func trackpadPanel(_ layout: Layout, full: CGSize) -> some View {
+        let tuning = TrackpadFeel.tuning(motion: motionFeel, page: "#0B0C10") // Desk.page, dark
+        let top = layout.pad.minY - tuning.layout.margin
+        return PadView(touchView: panelPad.surface, buttons: .guest, tuning: tuning, value: "", hapticLevel: hapticLevel,
+                       corner: 30 + tuning.layout.margin, made: panelPad.attach)
+            .frame(width: full.width, height: max(full.height - top, 0))
+            .position(x: full.width / 2, y: (top + full.height) / 2)
+    }
+
+    // MARK: On a monitor
+
+    /// The session's tools in the pad's pill, at the top. The zoom and the touch switch have no picture to act on.
+    @ViewBuilder private func padControls(_ full: CGSize) -> some View {
+        if !controlsHidden {
+            PadToolPill(pad: externalPad, tuning: TrackpadFeel.tuning(motion: motionFeel)) {
+                padTool("eye.slash", "Hide controls") { hideControls() }
+                if mac.guest == .linux { padTool("terminal", "Show the console") { switchView() } }
+                padTool("keyboard", "Keyboard") { typing.toggle() }
+                pasteTool(keysMenu: Self.roomForKeysMenu(full.width))
+                padTool("info.circle", "Details") { showDetails = true }
+                padTool("power", "Shut down", tint: Desk.bad) { stopTapped() }
             }
-            Rectangle().fill(Desk.hairline).frame(height: 0.5)
-            HStack(spacing: 0) {
-                MouseButton(title: "Click", button: 0)
-                Rectangle().fill(Desk.hairline).frame(width: 0.5)
-                MouseButton(title: "Right-click", button: 1)
-            }
-            .frame(height: compact ? 50 : 70)
+            .transition(.opacity)
         }
-        .background(Desk.card)
-        .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 30, style: .continuous).stroke(Desk.hairline, lineWidth: 0.5))
-        .frame(width: layout.pad.width, height: layout.pad.height)
-        .position(x: layout.pad.midX, y: layout.pad.midY)
     }
 
-    private func hint(_ strong: String, _ rest: String) -> some View {
-        (Text(strong).foregroundColor(Desk.dim).fontWeight(.semibold) + Text(" \(rest)").foregroundColor(Desk.faint))
-            .font(.system(size: 15))
+    /// A tool in the pad's pill: PadPillButtonStyle gives it its size and alpha.
+    private func padTool(_ symbol: String, _ label: String, tint: Color? = nil, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            if let tint { Image(systemName: symbol).foregroundStyle(tint) } else { Image(systemName: symbol) }
+        }
+        .accessibilityLabel(label)
     }
 
     /// The system's paste button: iOS asks no permission for it, as it would if the app read the clipboard itself.
@@ -586,13 +595,21 @@ struct SessionView: View {
         HengeLog.log("input", "touch input \(on ? "on" : "off")")
         henge_vm_set_touch_mode(on ? 1 : 0)
         if on {
-            let ms = UInt32(truncatingIfNeeded: Int(ProcessInfo.processInfo.systemUptime * 1000))
-            for id in Int32(1)...5 { henge_vm_touch(id, 2, 0, 0, ms) }
-            henge_vm_touch_frame(ms)
-            henge_vm_mouse_button(0, 0) // a drag in progress ends
+            liftEverything()
         } else {
             henge_vm_screen_touch_cancel()
         }
+    }
+
+    /// Every pad finger up and every button let go, as a surface goes away.
+    private func liftEverything() {
+        let ms = UInt32(truncatingIfNeeded: Int(ProcessInfo.processInfo.systemUptime * 1000))
+        for id in Int32(1)...5 { henge_vm_touch(id, 2, 0, 0, ms) }
+        henge_vm_touch_frame(ms)
+        externalPad.surface.reset()
+        panelPad.surface.reset()
+        PointerButtons.guest.releaseAll()
+        henge_vm_mouse_button(0, 0) // a drag in progress ends
     }
 
     /// Hides the session's controls; four fingers on the screen bring them back. The first few times say so.
@@ -616,21 +633,25 @@ struct SessionView: View {
             let wanted = henge_share_keyboard_wanted(&seq) != 0
             // The console has the keys while it shows. A hardware keyboard needs no keyboard on the screen.
             let allowed = keyboardFollows && state == 1 && !consoleShown && GCKeyboard.coalesced == nil
-            if let show = keyboardFollow.poll(wanted: wanted, seq: seq, typing: typing, allowed: allowed) { typing = show }
+            // Nor during a drag: the keyboard would cover the pad's keys under the finger. It moves when the drag ends.
+            let held = PointerButtons.guest.anyDown
+            if let show = keyboardFollow.poll(wanted: wanted, seq: seq, typing: typing, allowed: allowed, held: held) { typing = show }
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
     }
 
     /// Linux: the screen and the serial console are both always there; this shows the other one.
     private func viewSwitch(tint: Color = Desk.text) -> some View {
-        tool(consoleShown ? "display" : "terminal", consoleShown ? "Show the screen" : "Show the console", tint: tint) {
-            zoomed = false
-            controlsHidden = false
-            consoleChoice = consoleShown ? .screen : .console
-            var m = current
-            m.showsConsole = consoleChoice == .console ? true : nil
-            Machines.shared.update(m)
-        }
+        tool(consoleShown ? "display" : "terminal", consoleShown ? "Show the screen" : "Show the console", tint: tint) { switchView() }
+    }
+
+    private func switchView() {
+        zoomed = false
+        controlsHidden = false
+        consoleChoice = consoleShown ? .screen : .console
+        var m = current
+        m.showsConsole = consoleChoice == .console ? true : nil
+        Machines.shared.update(m)
     }
 
     /// Tells the guest the console's size, on request only.
