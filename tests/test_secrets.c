@@ -85,10 +85,38 @@ static void *lock_later(void *arg) {
 int main(void) {
     char dir[] = "/tmp/henge-secrets-XXXXXX";
     if (!mkdtemp(dir)) return 1;
-    char store_dir[128];
-    snprintf(sock_path, sizeof sock_path, "%s/s", dir);
+    char store_dir[128], share_path[64];
+    snprintf(share_path, sizeof share_path, "%s/s", dir);
     snprintf(store_dir, sizeof store_dir, "%s/store", dir);
-    check("the share server starts", hv_share_start(dir, sock_path, NULL), 0);
+    check("the share server starts", hv_share_start(dir, share_path, NULL), 0);
+
+    /* The wallet has its own socket (port HV_SHARE_SECRETS_PORT in the guest), so the guest can keep that port
+       to one user; port 80's socket does not serve it, and the wallet's serves nothing else. */
+    check("the wallet's socket name", hv_share_secrets_socket(share_path, sock_path, sizeof sock_path), 0);
+    check("the wallet's socket is not port 80's", strcmp(share_path, sock_path) != 0, 1);
+    hv_secrets_set_locked(0);
+    {
+        HvSecretStore early;
+        char early_dir[128];
+        snprintf(early_dir, sizeof early_dir, "%s/early", dir);
+        hv_secrets_file_store(early_dir, &early);
+        hv_secrets_set_store(&early);
+        hv_secrets_set_scope("machine-a");
+        check("the wallet's socket: state", req("GET", "/.henge/secrets/state", NULL), 200);
+        check("the wallet's socket: no clipboard", req("PUT", "/.henge/clipboard", "x"), 404);
+        check("the wallet's socket: no folder", req("GET", "/", NULL), 404);
+        check("the wallet's socket: no other /.henge/", req("GET", "/.henge/status", NULL), 404);
+        snprintf(sock_path, sizeof sock_path, "%s", share_path);
+        check("port 80: no wallet state", req("GET", "/.henge/secrets/state", NULL), 404);
+        check("port 80: no wallet items", req("GET", "/.henge/secrets/items", NULL), 404);
+        check("port 80: no wallet write", put("login.0", "", "x", 1), 404);
+        check("port 80: the clipboard", req("PUT", "/.henge/clipboard", "x"), 204);
+        free(hv_share_take_clipboard());
+        hv_share_secrets_socket(share_path, sock_path, sizeof sock_path);
+        hv_secrets_set_store(NULL);
+        hv_secrets_set_scope(NULL);
+        hv_secrets_set_locked(1);
+    }
 
     check("no store: no endpoint", req("GET", "/.henge/secrets/state", NULL), 404);
     HvSecretStore store;
@@ -178,8 +206,6 @@ int main(void) {
     check("PUT on the list", req("PUT", "/.henge/secrets/items", ""), 405);
     check("PUT on the state", req("PUT", "/.henge/secrets/state", ""), 405);
     check("an unknown path", req("GET", "/.henge/secrets/other", NULL), 404);
-    check("the clipboard still answers", req("PUT", "/.henge/clipboard", "text"), 204);
-    free(hv_share_take_clipboard());
 
     /* Delete. */
     check("delete", req("DELETE", "/.henge/secrets/items/login.2", NULL), 204);
@@ -236,6 +262,7 @@ int main(void) {
     check("no machine: no endpoint", req("GET", "/.henge/secrets/items", NULL), 404);
 
     unlink(sock_path);
+    unlink(share_path);
     char cmd[256];
     snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir);
     if (system(cmd) != 0) fprintf(stderr, "could not remove %s\n", dir);

@@ -4,7 +4,7 @@ Architecture: all
 Maintainer: Henge <henge@localhost>
 Section: admin
 Priority: optional
-Depends: systemd, util-linux, cloud-guest-utils, gdisk, e2fsprogs, davfs2, python3, tzdata, python3-jeepney
+Depends: systemd, util-linux, cloud-guest-utils, gdisk, e2fsprogs, davfs2, python3, tzdata, python3-jeepney, nftables
 Recommends: wl-clipboard, xclip, python3-cryptography
 Description: Henge guest tools
  Grows the root partition and file system to the disk on every boot,

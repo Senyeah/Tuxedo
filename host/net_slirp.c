@@ -318,6 +318,9 @@ int hv_net_attach(HvMachine *m, HvVirtioNet *n) {
         struct in_addr addr;
         inet_pton(AF_INET, HV_SHARE_ADDR, &addr);
         if (slirp_add_unix(slirp, share_socket, &addr, 80) != 0) fprintf(stderr, "hengevm: net: no route to the shared folder\n");
+        char wallet[sizeof share_socket + 8];
+        if (hv_share_secrets_socket(share_socket, wallet, sizeof wallet) != 0 || slirp_add_unix(slirp, wallet, &addr, HV_SHARE_SECRETS_PORT) != 0)
+            fprintf(stderr, "hengevm: net: no route to the wallet\n");
     }
     net = n;
     n->transmit = transmit;

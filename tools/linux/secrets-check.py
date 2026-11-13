@@ -306,6 +306,18 @@ def vm(args):
                 raise Fail("the KWallet entry is not in the host's store")
             print("ok: the KWallet entry is in the host's store", flush=True)
 
+            # Only the session user (and root) reach the wallet's port; port 80 has no wallet
+            get = ("python3 -c \"import http.client as h, sys; c=h.HTTPConnection('10.0.2.4', {port}, timeout=5); "
+                   "c.request('GET','/.henge/secrets/state'); print('status', c.getresponse().status)\" 2>&1 | tail -n 1")
+            need("systemctl is-active henge-secrets-firewall", "the firewall unit")
+            mine = need(get.format(port=81))
+            other = need("sudo -u nobody " + get.format(port=81))
+            root = need("sudo " + get.format(port=81))
+            port80 = need(get.format(port=80))
+            if mine != "status 200" or root != "status 200" or "status" in other or port80 != "status 404":
+                raise Fail(f"port rule: henge {mine!r}, nobody {other!r}, root {root!r}, port 80 {port80!r}")
+            print(f"ok: henge and root reach the wallet's port, nobody is refused ({other.split(':')[0]}), port 80 has no wallet", flush=True)
+
             host.line("secrets lock")
             end = time.monotonic() + 60
             while True:  # the guest hears of it through its long poll
@@ -318,7 +330,7 @@ def vm(args):
             print("ok: locked: the item shows as locked, GetSecret(s) give nothing", flush=True)
             probe("kw-locked")
             iid = next(k for k, v in files(store, "check-a").items() if v[0].get("attributes") == {"test": "a"})
-            code = need(f"python3 -c \"import http.client as h; c=h.HTTPConnection('10.0.2.4'); c.request('GET','/.henge/secrets/items/{iid}'); print(c.getresponse().status)\"")
+            code = need(f"python3 -c \"import http.client as h; c=h.HTTPConnection('10.0.2.4', 81); c.request('GET','/.henge/secrets/items/{iid}'); print(c.getresponse().status)\"")
             if code.splitlines()[-1] != "423":
                 raise Fail(f"the host gave {code} for a read while locked")
             print("ok: the host answers 423 to a read while locked", flush=True)
