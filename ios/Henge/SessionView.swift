@@ -217,6 +217,13 @@ struct SessionView: View {
                 if let error { errorCard(error, layout) }
                 if shutdownAsked != nil && state != 2 { shutdownCard(layout) }
                 KeyboardCatcher(active: $typing, suspended: consoleShown, linux: mac.guest == .linux).frame(width: 0, height: 0)
+                if mac.guest == .linux && state == 1 && !consoleShown && !display.isExternal {
+                    // Plasma keeps the active window above the keyboard (KeyboardPanel)
+                    KeyboardPanelProbe(guest: CGSize(width: guestScreen.width, height: guestScreen.height), frame: layout.screen)
+                        .frame(width: layout.screen.width, height: layout.screen.height)
+                        .position(x: layout.screen.midX, y: layout.screen.midY)
+                        .allowsHitTesting(false)
+                }
             }
             .frame(width: full.width, height: full.height)
             .ignoresSafeArea()

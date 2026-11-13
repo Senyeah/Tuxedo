@@ -79,6 +79,8 @@ char *henge_share_take_clipboard(void);
 long henge_share_agent_seen(void);
 /* 1 when the focused program in a Linux desktop wants text; *seq changes with each request from the guest. */
 int henge_share_keyboard_wanted(unsigned long *seq);
+/* The part of the guest's picture that the keyboard covers, from the bottom: 0 (down) to 1. */
+void henge_share_set_keyboard_height(double fraction);
 
 /* The phone's status for a Linux guest (host/status.h). Any time, before boot too; kept for the next machine.
    state: UIDeviceBatteryState (0 unknown, 1 unplugged, 2 charging, 3 full); level 0-100, or -1. */

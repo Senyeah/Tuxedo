@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// The on-screen keyboard follows a Linux desktop: henge-keyboard in the guest says when the focused program
@@ -38,4 +39,18 @@ struct KeyboardFollow {
     /// The keyboard went away by other means (its button, the system's hide key, the console).
     /// It stays down until the guest asks again.
     mutating func closed() { raised = false }
+}
+
+/// How much of a Linux guest's picture the keyboard covers. In Plasma, henge-keyboard is KWin's input method and
+/// makes its panel that high, so KWin keeps the active window above the keyboard (host/share.c, GET /.henge/keyboard).
+enum KeyboardPanel {
+    /// The part of the picture's height under the keyboard, 0...1. Both rectangles are in the same coordinates.
+    /// A keyboard that does not reach the picture's bottom edge (a floating one) covers nothing a window can leave.
+    static func fraction(keyboard: CGRect, picture: CGRect) -> Double {
+        guard !keyboard.isNull, keyboard.height > 0, picture.width > 0, picture.height > 0 else { return 0 }
+        guard keyboard.minX < picture.maxX, keyboard.maxX > picture.minX else { return 0 }
+        guard keyboard.maxY >= picture.maxY - 1, keyboard.minY < picture.maxY else { return 0 }
+        let covered = picture.maxY - max(keyboard.minY, picture.minY)
+        return Double((covered / picture.height * 1000).rounded() / 1000)
+    }
 }
