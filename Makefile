@@ -258,6 +258,11 @@ test-linux-keyboard: $(B)/hengevm
 	uv run tools/linux/keyboard-check.py $(KBD_ARGS)
 .PHONY: test-linux-keyboard
 
+# henge-keyboard as KWin's input method: its panel keeps a window above the device keyboard. KWin runs in a container (needs Docker).
+test-linux-keyboard-panel:
+	sh tools/linux/keyboard-panel-check.sh
+.PHONY: test-linux-keyboard-panel
+
 # P10: the guest's virtio_balloon binds, inflate returns host memory, deflate restores it. BALLOON_ARGS="--load --overshoot --cpus 4" adds the package build and OOM runs.
 test-linux-balloon: $(B)/hengevm
 	uv run tools/linux/balloon-check.py $(BALLOON_ARGS)

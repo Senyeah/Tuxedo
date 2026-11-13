@@ -3,8 +3,14 @@
 
 wlroots compositors (labwc): this is the seat's input method (input-method-unstable-v2). It sends no text and takes
 no keys: it only hears activate and deactivate, which follow the focused text-input-v3 field.
-KWin: org.kde.kwin.VirtualKeyboard on the session bus has the same state as the property "active".
+KWin, as its input method (kwinrc [Wayland] InputMethod names henge-keyboard.desktop; KWin starts this with
+WAYLAND_SOCKET): input-method-unstable-v1 gives activate and deactivate, and this also has KWin's input panel.
+The panel is an empty, clear surface as high as the device's keyboard (GET /.henge/keyboard, "height F", a
+fraction of the screen), so KWin keeps the active window above it.
+KWin, not as its input method: org.kde.kwin.VirtualKeyboard on the session bus has the same state as "active".
 PUT /.henge/keyboard has the body "show" or "hide"."""
+import array
+import fcntl
 import http.client
 import json
 import os
@@ -14,12 +20,14 @@ import socket
 import struct
 import subprocess
 import sys
+import threading
 import time
 
 HOST = os.environ.get("HENGE_HOST", "10.0.2.4")
 HIDE_DELAY = 0.3  # focus that moves between two fields is deactivate, then activate
 RETRY = 2.0
 KWIN = ["org.kde.KWin", "/VirtualKeyboard", "org.kde.kwin.VirtualKeyboard"]
+MIN_ROOM = 180  # the least height KWin's panel leaves a window, in the compositor's units
 
 
 def log(*a):
@@ -82,14 +90,18 @@ class Wayland:
             name = os.environ.get("WAYLAND_DISPLAY", "wayland-0")
             self.s = socket.socket(socket.AF_UNIX)
             self.s.connect(name if name.startswith("/") else os.path.join(os.environ["XDG_RUNTIME_DIR"], name))
-        self.buf, self.next_id = b"", 1
+        self.buf, self.next_id, self.versions = b"", 1, {}
 
     def new(self):
         self.next_id += 1
         return self.next_id
 
-    def send(self, obj, op, args=b""):
-        self.s.sendall(struct.pack("<II", obj, ((8 + len(args)) << 16) | op) + args)
+    def send(self, obj, op, args=b"", fd=None):
+        msg = struct.pack("<II", obj, ((8 + len(args)) << 16) | op) + args
+        if fd is None:
+            self.s.sendall(msg)
+        else:
+            self.s.sendmsg([msg], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", [fd]))])
 
     def events(self):
         d = self.s.recv(65536)
@@ -117,11 +129,13 @@ class Wayland:
             for obj, op, a in self.events():
                 if obj == reg and op == 0:
                     name, n = struct.unpack_from("<II", a)
-                    found[a[8:8 + n - 1].decode()] = name
+                    self.versions[a[8:8 + n - 1].decode()] = struct.unpack_from("<I", a, 8 + ((n + 3) & ~3))[0]
+                    found.setdefault(a[8:8 + n - 1].decode(), name)
                 elif obj == cb:
                     return reg, found
 
     def bind(self, reg, name, iface, version=1):
+        version = min(version, self.versions.get(iface, version))
         b = iface.encode() + b"\0"
         new = self.new()
         self.send(reg, 0, struct.pack("<II", name, len(b)) + b + b"\0" * (-len(b) % 4) + struct.pack("<II", version, new))
@@ -159,32 +173,304 @@ def follow_input_method(wl, reg, found, sender):
 
 def busctl(*args):
     return subprocess.run(["busctl", "--user", "--json=short", *args], stdout=subprocess.PIPE,
-                          stderr=subprocess.DEVNULL, timeout=10)
+                          stderr=subprocess.DEVNULL, timeout=5)
 
 
-def kwin_active():
+def kwin_property(name):
     """True, False, or None when KWin does not answer."""
     try:
-        r = busctl("get-property", *KWIN, "active")
+        r = busctl("get-property", *KWIN, name)
         return bool(json.loads(r.stdout)["data"]) if r.returncode == 0 else None
     except (OSError, ValueError, KeyError, subprocess.SubprocessError):
         return None
 
 
+def kwin_call(*args):
+    try:
+        return busctl(*args).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def lock_path():
+    return os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "henge-keyboard.im")
+
+
+def input_method_runs():
+    """True while a henge-keyboard that is KWin's input method holds the lock."""
+    try:
+        with open(lock_path(), "a") as f:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return False
+    except BlockingIOError:
+        return True
+    except OSError:
+        return False
+
+
+def wait_for_no_input_method():
+    """Blocks while a henge-keyboard that is KWin's input method holds the lock."""
+    try:
+        with open(lock_path(), "a") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+    except OSError:
+        pass
+
+
 def follow_kwin(sender):
     match = f"type='signal',path='{KWIN[1]}',interface='{KWIN[2]}',member='activeChanged'"
-    p = subprocess.Popen(["busctl", "--user", "--json=short", "monitor", "--match=" + match],
-                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    sender.set(bool(kwin_active()))
     while True:
-        wait = sender.step()
-        if not select.select([p.stdout], [], [], wait)[0]:
-            continue
-        if not os.read(p.stdout.fileno(), 65536):
-            raise ConnectionError("busctl monitor stopped")
-        active = kwin_active()
-        if active is not None:
-            sender.set(active)
+        # The input method sends the requests while it runs. This waits, and takes over when it stops
+        # (the person chose Maliit or Fcitx): an exit would leave no helper, as systemd restarts failures only.
+        if input_method_runs():
+            log("henge-keyboard is KWin's input method; this one waits")
+            wait_for_no_input_method()
+            log("the input method stopped; this one follows KWin on the bus")
+        p = subprocess.Popen(["busctl", "--user", "--json=short", "monitor", "--match=" + match],
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        sender.sent = None  # the host has the input method's last word: say the state again
+        sender.set(bool(kwin_property("active")))
+        while True:
+            wait = sender.step()
+            if not select.select([p.stdout], [], [], wait)[0]:
+                continue
+            if not os.read(p.stdout.fileno(), 65536):
+                raise ConnectionError("busctl monitor stopped")
+            if input_method_runs():  # the input method started later
+                p.terminate()
+                p.wait()
+                break
+            active = kwin_property("active")
+            if active is not None:
+                sender.set(active)
+
+
+# ---- KWin's input method, with the panel ----
+
+class Height:
+    """The device keyboard's height as a fraction of the screen, from GET /.henge/keyboard. The read end wakes the loop."""
+
+    def __init__(self):
+        self.value = 0.0
+        self.r, self.w = os.pipe()
+        threading.Thread(target=self.follow, daemon=True).start()
+
+    def follow(self):
+        seq = None
+        while True:
+            c = http.client.HTTPConnection(HOST, timeout=40)
+            try:
+                c.request("GET", "/.henge/keyboard" + ("" if seq is None else f"?since={seq}"))
+                r = c.getresponse()
+                body, status, now = r.read().decode(errors="replace"), r.status, r.getheader("X-Henge-Seq")
+            except (OSError, http.client.HTTPException):
+                time.sleep(5)
+                continue
+            finally:
+                c.close()
+            if 400 <= status < 500:
+                log(f"the host answered {status} for the keyboard's height; there is no panel")
+                return
+            words = body.split()
+            try:
+                if status != 200 or len(words) != 2 or words[0] != "height":
+                    raise ValueError
+                value, seq = min(max(float(words[1]), 0.0), 1.0), int(now)
+            except (TypeError, ValueError):
+                time.sleep(5)
+                continue
+            if value != self.value:
+                self.value = value
+                os.write(self.w, b"h")
+
+
+class Area:
+    """The room that panels (Plasma's) take at the top and bottom of the screen, from kwin-keyboard.js in KWin.
+    The script calls a method that nothing has; "busctl monitor" shows the call."""
+
+    NAME = "henge-keyboard"
+
+    def __init__(self):
+        self.top, self.bottom, self.buf = 0, 0, b""
+        match = "type='method_call',interface='dev.henge.Keyboard',member='area'"
+        self.p = subprocess.Popen(["busctl", "--user", "--json=short", "monitor", "--match=" + match],
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self.fd = self.p.stdout.fileno()
+        script = os.path.join(os.path.dirname(os.path.realpath(__file__)), "kwin-keyboard.js")
+        scripting = ["org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting"]
+        kwin_call("call", *scripting, "unloadScript", "s", self.NAME)  # one from a helper that ran before
+        if not (kwin_call("call", *scripting, "loadScript", "ss", script, self.NAME) and kwin_call("call", *scripting, "start")):
+            log("KWin did not load kwin-keyboard.js; a panel at the bottom edge leaves a gap under the window")
+
+    def read(self):
+        """Takes what the monitor has. True when the room changed."""
+        data = os.read(self.fd, 65536)
+        if not data:
+            self.fd = None  # the monitor stopped: the last numbers stay
+            return False
+        self.buf += data
+        *lines, self.buf = self.buf.split(b"\n")
+        was = (self.top, self.bottom)
+        for line in lines:
+            try:
+                top, bottom = json.loads(line)["payload"]["data"][:2]
+                self.top, self.bottom = max(0, int(top)), max(0, int(bottom))
+            except (ValueError, KeyError, TypeError):
+                pass
+        return was != (self.top, self.bottom)
+
+
+class Panel:
+    """KWin's input panel: one clear pixel, stretched. KWin takes the input region as the keyboard's place."""
+
+    def __init__(self, wl, reg, found):
+        self.wl = wl
+        self.out = wl.bind(reg, found["wl_output"], "wl_output", 2)
+        self.xdg = None
+        if "zxdg_output_manager_v1" in found:
+            manager = wl.bind(reg, found["zxdg_output_manager_v1"], "zxdg_output_manager_v1", 2)
+            self.xdg = wl.new()
+            wl.send(manager, 1, struct.pack("<II", self.xdg, self.out))  # get_xdg_output
+        self.comp = wl.bind(reg, found["wl_compositor"], "wl_compositor", 4)
+        shm = wl.bind(reg, found["wl_shm"], "wl_shm")
+        fd = os.memfd_create("henge-keyboard")
+        os.ftruncate(fd, 4)  # zeros: a clear ARGB pixel
+        pool, self.buffer = wl.new(), wl.new()
+        wl.send(shm, 0, struct.pack("<II", pool, 4), fd)  # create_pool
+        os.close(fd)
+        wl.send(pool, 0, struct.pack("<IiiiiI", self.buffer, 0, 1, 1, 4, 0))  # create_buffer, ARGB8888
+        self.surface = wl.new()
+        wl.send(self.comp, 0, struct.pack("<I", self.surface))  # create_surface
+        panel = wl.bind(reg, found["zwp_input_panel_v1"], "zwp_input_panel_v1")
+        role = wl.new()  # after the bind: new ids go to the compositor in order
+        wl.send(panel, 0, struct.pack("<II", role, self.surface))  # get_input_panel_surface
+        wl.send(role, 0, struct.pack("<II", self.out, 0))  # set_toplevel, centre bottom
+        viewporter = wl.bind(reg, found["wp_viewporter"], "wp_viewporter")
+        self.viewport = wl.new()
+        wl.send(viewporter, 1, struct.pack("<II", self.viewport, self.surface))  # get_viewport
+        self.mode, self.scale, self.logical = None, 1, None
+        self.shown = None  # (width, height) of the input region; None before the surface has a buffer
+
+    def event(self, obj, op, a):
+        if obj == self.out and op == 1 and struct.unpack_from("<I", a)[0] & 1:  # mode, current
+            self.mode = struct.unpack_from("<ii", a, 4)
+        elif obj == self.out and op == 3:
+            self.scale = max(1, struct.unpack_from("<i", a)[0])
+        elif obj == self.xdg and op == 1:
+            self.logical = struct.unpack_from("<ii", a)
+
+    def size(self):
+        """The output in the compositor's units. Without xdg-output a turned screen is not known."""
+        if self.logical:
+            return self.logical
+        return (self.mode[0] // self.scale, self.mode[1] // self.scale) if self.mode else None
+
+    def apply(self, fraction, area):
+        size = self.size()
+        if not size or size[0] <= 0 or size[1] <= 0:
+            return
+        want = (size[0], panel_height(fraction, size[1], area.top, area.bottom))
+        if want == self.shown or (self.shown is None and want[1] == 0):
+            return
+        wl = self.wl
+        if self.shown is None:
+            wl.send(self.surface, 1, struct.pack("<Iii", self.buffer, 0, 0))  # attach
+            wl.send(self.surface, 2, struct.pack("<iiii", 0, 0, 1, 1))  # damage
+        region = wl.new()
+        wl.send(self.comp, 1, struct.pack("<I", region))  # create_region
+        if want[1] > 0:
+            wl.send(self.viewport, 2, struct.pack("<ii", *want))  # set_destination
+            wl.send(region, 1, struct.pack("<iiii", 0, 0, *want))  # add
+        else:
+            wl.send(self.viewport, 2, struct.pack("<ii", 1, 1))  # no keyboard: nothing of its size stays
+        wl.send(self.surface, 5, struct.pack("<I", region))  # set_input_region: empty is no keyboard
+        wl.send(region, 0)  # destroy
+        wl.send(self.surface, 6)  # commit
+        self.shown = want
+
+
+def panel_height(fraction, height, top, bottom):
+    """The panel's height for a keyboard that covers `fraction` of a screen `height` high.
+    KWin puts the panel's bottom edge `bottom` above the screen's (a Plasma panel is there), so that much less
+    brings the panel's top edge to the keyboard's. A window keeps MIN_ROOM when the keyboard is very high."""
+    keyboard = round(fraction * height)
+    if keyboard <= 0:
+        return 0
+    # The numbers come over the bus, where any program can send them: never more than the screen
+    top, bottom = min(max(top, 0), height), min(max(bottom, 0), height)
+    if top + bottom >= height:
+        top = bottom = 0
+    return max(0, min(keyboard - bottom, height - top - bottom - MIN_ROOM))
+
+
+def follow_kwin_input_method(wl, reg, found, sender):
+    lock = open(lock_path(), "a")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)  # held for life: a second helper on the bus stops
+    except OSError:
+        pass
+    im = wl.bind(reg, found["zwp_input_method_v1"], "zwp_input_method_v1")
+    panel = None
+    if all(k in found for k in ("zwp_input_panel_v1", "wl_compositor", "wl_shm", "wp_viewporter", "wl_output")):
+        panel = Panel(wl, reg, found)
+    height = Height() if panel else None
+    area = Area() if panel else None
+    context = None  # the active context's id
+    real = False  # it has a text field. KWin sends surrounding_text only then
+    forced = 0.0  # until when the next activate is this program's own forceActivate
+    check = None  # when to look if KWin shows the panel
+    tries = 0
+    while True:
+        waits = [w for w in (sender.step(), None if check is None else max(0.0, check - time.monotonic())) if w is not None]
+        fds = [wl.s] + ([height.r] if height else []) + ([area.fd] if area and area.fd is not None else [])
+        ready = select.select(fds, [], [], min(waits) if waits else None)[0]
+        if area and area.fd in ready and area.read():
+            panel.apply(height.value, area)
+        if height and height.r in ready:
+            os.read(height.r, 4096)
+            was = panel.shown and panel.shown[1] > 0
+            panel.apply(height.value, area)
+            if height.value > 0 and not was:
+                check, tries = time.monotonic(), 0
+            elif height.value == 0:
+                check = None
+                if context and not real:  # this program's own context: a later text field must be news
+                    kwin_call("set-property", *KWIN, "active", "b", "false")
+        if wl.s in ready:
+            for obj, op, a in wl.events():
+                if obj == 1 and op == 0:  # wl_display.error
+                    n = struct.unpack_from("<I", a, 8)[0]
+                    raise ConnectionError("protocol error: " + a[12:12 + n - 1].decode(errors="replace"))
+                if obj == im and op == 0:  # activate: a new context
+                    context = struct.unpack_from("<I", a)[0]
+                    real = time.monotonic() > forced
+                    forced = 0.0
+                    if real:
+                        sender.set(True)
+                elif obj == im and op == 1:  # deactivate
+                    wl.send(struct.unpack_from("<I", a)[0], 0)  # zwp_input_method_context_v1.destroy
+                    context, real = None, False
+                    sender.set(False)
+                elif obj == context and op == 0 and not real:  # surrounding_text: a text field took it over
+                    real = True
+                    sender.set(True)
+                elif panel:
+                    panel.event(obj, op, a)
+            if panel and height:
+                panel.apply(height.value, area)
+        # The device's keyboard is up: KWin must show the panel, with a text field or not.
+        # forceActivate does that; it needs KWIN_IM_SHOW_ALWAYS=1 when the last input was not a touch.
+        if check is not None and time.monotonic() >= check:
+            if kwin_property("visible"):
+                check, tries = time.monotonic() + 5, 0
+            else:
+                if context is None:
+                    forced = time.monotonic() + 1
+                kwin_call("call", *KWIN, "forceActivate")
+                tries += 1
+                if tries == 5:
+                    log("KWin does not show the panel (is KWIN_IM_SHOW_ALWAYS=1 set for KWin?)")
+                check = time.monotonic() + (0.3 if tries < 5 else 10)
 
 
 def main():
@@ -203,11 +489,13 @@ def main():
     except (OSError, KeyError, ValueError, ConnectionError):
         wl, found = None, {}
     try:
+        if "zwp_input_method_v1" in found:
+            return follow_kwin_input_method(wl, reg, found, sender)
         if "zwp_input_method_manager_v2" in found and "wl_seat" in found:
             return follow_input_method(wl, reg, found, sender)
         if wl:
             wl.s.close()
-        if kwin_active() is not None:
+        if kwin_property("active") is not None:
             return follow_kwin(sender)
     except ConnectionError as e:
         log(e)

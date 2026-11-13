@@ -19,5 +19,8 @@ long hv_share_agent_seen(void);
 /* 1 when the focused program in a Linux desktop wants text (henge-keyboard), else 0. *seq counts the
    guest's requests, so a change in it is news; the value stays from one machine to the next. */
 int hv_share_keyboard_wanted(unsigned long *seq);
+/* The part of the guest's screen that the device's keyboard covers, from the bottom: 0 (down) to 1.
+   The guest's helper reads it (GET /.henge/keyboard) and has KWin keep the active window above it. */
+void hv_share_set_keyboard_height(double fraction);
 
 #endif
