@@ -220,7 +220,7 @@ typedef struct {
     uint32_t reserved;
 } HvVcEncPacketReq;
 
-enum { HV_VC_PACKET_KEY = 1 };
+enum { HV_VC_PACKET_KEY = 1, HV_VC_PACKET_HDR10 = 2 /* first packet: the encoder took the mastering display data */ };
 typedef struct {
     uint32_t flags;
     uint32_t extradata_len; /* the first packet carries avcC or hvcC (MP4 form); the data is length-prefixed */
@@ -243,6 +243,8 @@ typedef struct {
     uint32_t width, height;
     uint32_t format;
     uint32_t range;
+    uint32_t primaries, transfer, matrix; /* H.273 code points of the pixels the guest will upload, 0 for none */
+    uint32_t reserved;
 } HvVcFrameAlloc;
 
 /* FRAME_UPLOAD: HvVcHandle + the planes (exactly hv_vc_frame_bytes). Reply: no payload.
@@ -264,6 +266,8 @@ typedef char hv_vc_check_enc_open[sizeof(HvVcEncOpen) == 176 ? 1 : -1];
 typedef char hv_vc_check_enc_info[sizeof(HvVcEncoderInfo) == 4320 ? 1 : -1];
 typedef char hv_vc_check_frame_reply[sizeof(HvVcFrameReply) == 32 ? 1 : -1];
 typedef char hv_vc_check_query[sizeof(HvVcQueryHead) == 48 ? 1 : -1];
+typedef char hv_vc_check_alloc[sizeof(HvVcFrameAlloc) == 32 ? 1 : -1];
+typedef char hv_vc_check_xfer[sizeof(HvVcXfer) == 40 ? 1 : -1];
 
 /* Plane layout of a format. Returns the plane count, 0 for a bad format or size. */
 static inline int hv_vc_planes(uint32_t fmt, uint32_t w, uint32_t h, uint32_t row[2], uint32_t rows[2]) {

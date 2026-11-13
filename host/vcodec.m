@@ -62,6 +62,7 @@ typedef struct Session {
     /* encoder; mu guards the rest, which the encoder's callback writes */
     VTCompressionSessionRef enc;
     int32_t timescale;
+    CFDataRef mastering, light;
     pthread_mutex_t mu;
     pthread_cond_t cv;
     Packet *head, *tail;
@@ -81,6 +82,7 @@ typedef struct {
     uint32_t next_gen;
     uint64_t bytes_in, bytes_out, decoded, packets;
     struct timespec started;
+    VTPixelTransferSessionRef xfer;
 } Ctx;
 
 static _Atomic int open_contexts;
@@ -163,7 +165,31 @@ __attribute__((format(printf, 4, 5))) static int fail(Ctx *c, const HvVcHeader *
 }
 
 static int vt_fail(Ctx *c, const HvVcHeader *req, const char *what, OSStatus st) {
-    return fail(c, req, hv_vtd_session_lost(st) ? HV_VC_E_LOST : HV_VC_E_CODEC, "%s: %s (%d)", what, hv_vtd_error(st), (int)st);
+    if (hv_vtd_session_lost(st))
+        return fail(c, req, HV_VC_E_LOST, "%s: the system stopped the video session (%d); on iOS, Henge left the screen. Open a new session", what, (int)st);
+    return fail(c, req, HV_VC_E_CODEC, "%s: %s (%d)", what, hv_vtd_error(st), (int)st);
+}
+
+/* H.273 code points to CoreVideo's strings: 0 and 2 are "none"; *bad is set for a code CoreVideo does not know. */
+static CFStringRef colour_string(int which, uint32_t code, int *bad) {
+    if (!code || code == 2) return NULL;
+    CFStringRef s = code > 255 ? NULL : which == 0 ? CVColorPrimariesGetStringForIntegerCodePoint((int)code)
+                                      : which == 1 ? CVTransferFunctionGetStringForIntegerCodePoint((int)code)
+                                                   : CVYCbCrMatrixGetStringForIntegerCodePoint((int)code);
+    if (!s) *bad = 1;
+    return s;
+}
+
+static int colour_tags(uint32_t prim, uint32_t trc, uint32_t mat, CFStringRef out[3]) {
+    int bad = 0;
+    out[0] = colour_string(0, prim, &bad), out[1] = colour_string(1, trc, &bad), out[2] = colour_string(2, mat, &bad);
+    return bad ? -1 : 0;
+}
+
+static void tag_buffer(CVPixelBufferRef pb, CFStringRef tags[3]) {
+    const CFStringRef keys[3] = {kCVImageBufferColorPrimariesKey, kCVImageBufferTransferFunctionKey, kCVImageBufferYCbCrMatrixKey};
+    for (int i = 0; i < 3; i++)
+        if (tags[i]) CVBufferSetAttachment(pb, keys[i], tags[i], kCVAttachmentMode_ShouldPropagate);
 }
 
 /* ---- handles ---- */
@@ -183,7 +209,7 @@ static Frame *frame_get(Ctx *c, uint32_t handle) {
 static uint32_t frame_put(Ctx *c, CVPixelBufferRef pb, uint32_t fmt, uint32_t range) {
     uint32_t w = (uint32_t)CVPixelBufferGetWidth(pb), h = (uint32_t)CVPixelBufferGetHeight(pb);
     uint64_t bytes = hv_vc_frame_bytes(fmt, w, h);
-    if (!bytes || c->nframes >= HV_VC_MAX_FRAMES || c->frame_bytes + bytes > MAX_FRAME_BYTES) {
+    if (!bytes || bytes > HV_VC_MAX_PAYLOAD - sizeof(HvVcFrameReply) || c->nframes >= HV_VC_MAX_FRAMES || c->frame_bytes + bytes > MAX_FRAME_BYTES) {
         CVPixelBufferRelease(pb);
         return 0;
     }
@@ -239,6 +265,8 @@ static void session_free(Session *s) {
         VTCompressionSessionInvalidate(s->enc);
         CFRelease(s->enc);
     }
+    if (s->mastering) CFRelease(s->mastering);
+    if (s->light) CFRelease(s->light);
     for (Packet *p = s->head, *n; p; p = n) {
         n = p->next;
         free(p->extra), free(p->data), free(p);
@@ -395,6 +423,8 @@ static void enc_output(void *ref, void *frame_ref, OSStatus st, VTEncodeInfoFlag
                         CFRelease(k);
                     }
                 }
+                /* the M4 Pro's encoder writes no HDR10 SEI (13/11/2026): the metadata is only here, for the muxer */
+                if (fd && CMFormatDescriptionGetExtension(fd, kCMFormatDescriptionExtension_MasteringDisplayColorVolume)) p->h.flags |= HV_VC_PACKET_HDR10;
                 if (ex && CFGetTypeID(ex) == CFDataGetTypeID() && CFDataGetLength(ex) <= (CFIndex)HV_VC_MAX_EXTRADATA &&
                     (p->extra = malloc((size_t)CFDataGetLength(ex)))) {
                     memcpy(p->extra, CFDataGetBytePtr(ex), (size_t)CFDataGetLength(ex));
@@ -429,19 +459,41 @@ static void set_num(VTCompressionSessionRef s, CFStringRef k, double v, OSStatus
     if (st && r != noErr && *st == noErr) *st = r;
 }
 
+static int profile_known(const HvVtEncoder *e, const char *name) {
+    for (uint32_t i = 0; i < e->info.n_profiles; i++)
+        if (!strcmp(e->info.profiles[i].name, name)) return 1;
+    return 0;
+}
+
+static CFDataRef data_of(const uint8_t *p, size_t n) { return CFDataCreate(NULL, p, (CFIndex)n); }
+
+/* Sets a property the guest asked for; a refusal fails the open with the property's name. */
+static OSStatus set_prop(VTCompressionSessionRef s, CFStringRef k, CFTypeRef v, const char **what, const char *name) {
+    OSStatus st = VTSessionSetProperty(s, k, v);
+    if (st != noErr && !*what) *what = name;
+    return st;
+}
+
 static int do_enc_open(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     HvVcEncOpen o;
     if (req->len != sizeof o) return fail(c, req, HV_VC_E_INVAL, "ENC_OPEN has the wrong length");
     memcpy(&o, p, sizeof o);
     const uint32_t known = HV_VC_ENC_F_BFRAMES | HV_VC_ENC_F_REALTIME | HV_VC_ENC_F_CBR | HV_VC_ENC_F_SOFTWARE_OK | HV_VC_ENC_F_SPEED;
-    if (o.flags & ~known) return fail(c, req, HV_VC_E_INVAL, "unknown flags");
+    if (o.flags & ~known || o.hdr_flags & ~3u) return fail(c, req, HV_VC_E_INVAL, "unknown flags");
     if (!dims_ok(o.width, o.height)) return fail(c, req, HV_VC_E_INVAL, "bad size %ux%u", o.width, o.height);
-    if (!hv_vt_pixfmt(o.format ? o.format : HV_VC_FMT_NV12, o.range) || o.range > HV_VC_RANGE_FULL) return fail(c, req, HV_VC_E_INVAL, "bad input format");
+    if (!o.format) o.format = HV_VC_FMT_NV12;
+    if (!hv_vt_pixfmt(o.format, o.range) || o.range > HV_VC_RANGE_FULL) return fail(c, req, HV_VC_E_INVAL, "bad input format");
     if (!o.timescale || o.timescale > 1000000000u) return fail(c, req, HV_VC_E_INVAL, "bad timescale");
     if ((o.fps_num && !o.fps_den) || (o.fps_den && (double)o.fps_num / o.fps_den > 1000)) return fail(c, req, HV_VC_E_INVAL, "bad frame rate");
-    if (o.bitrate > 2000000000ull || o.keyint > 100000) return fail(c, req, HV_VC_E_INVAL, "bad rate control");
+    if (o.bitrate > 2000000000ull || o.quality > 100 || o.keyint > 100000 || o.keyint_ms > 3600000) return fail(c, req, HV_VC_E_INVAL, "bad rate control");
+    if (o.max_bytes && (!o.max_window_ms || o.max_window_ms > 60000 || o.max_bytes > (1ull << 32))) return fail(c, req, HV_VC_E_INVAL, "bad data rate limit");
+    if ((o.flags & HV_VC_ENC_F_CBR) && (!o.bitrate || o.quality || o.max_bytes)) return fail(c, req, HV_VC_E_INVAL, "constant bitrate needs a bitrate, and no quality or limit");
+    if (memchr(o.profile, 0, sizeof o.profile) == NULL) return fail(c, req, HV_VC_E_INVAL, "the profile name has no end");
+    CFStringRef tags[3];
+    if (colour_tags(o.primaries, o.transfer, o.matrix, tags)) return fail(c, req, HV_VC_E_NOSUP, "unknown colour code point");
     const HvVtEncoder *e = find_encoder(o.codec);
     if (!e) return fail(c, req, HV_VC_E_NOSUP, "no hardware encoder for this codec on this device");
+    if (o.profile[0] && !profile_known(e, o.profile)) return fail(c, req, HV_VC_E_NOSUP, "the encoder has no profile %s", o.profile);
     uint32_t id;
     Session *s = session_new(c, KIND_ENC, &id);
     if (!s) return fail(c, req, HV_VC_E_LIMIT, "%d sessions open already", HV_VC_MAX_SESSIONS);
@@ -453,27 +505,76 @@ static int do_enc_open(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     if (!(o.flags & HV_VC_ENC_F_SOFTWARE_OK)) {
         if (@available(macOS 10.9, iOS 17.4, *)) CFDictionarySetValue(spec, kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder, kCFBooleanTrue);
     }
-    OSStatus st = VTCompressionSessionCreate(NULL, (int32_t)o.width, (int32_t)o.height, o.codec, spec, NULL, NULL, enc_output, s, &s->enc);
+    CFDictionaryRef src_attrs = hv_vtd_buffer_attrs(hv_vt_pixfmt(o.format, o.range));
+    OSStatus st = VTCompressionSessionCreate(NULL, (int32_t)o.width, (int32_t)o.height, o.codec, spec, src_attrs, NULL, enc_output, s, &s->enc);
+    CFRelease(src_attrs);
     CFRelease(spec);
     if (st != noErr) {
         s->enc = NULL;
         session_free(s);
         return vt_fail(c, req, "encoder", st);
     }
+    const char *what = NULL;
+    VTCompressionSessionRef v = s->enc;
+    set_prop(v, kVTCompressionPropertyKey_AllowFrameReordering, o.flags & HV_VC_ENC_F_BFRAMES ? kCFBooleanTrue : kCFBooleanFalse, &what, "B-frames");
+    set_prop(v, kVTCompressionPropertyKey_RealTime, o.flags & HV_VC_ENC_F_REALTIME ? kCFBooleanTrue : kCFBooleanFalse, &what, "real time");
+    if (o.profile[0]) {
+        CFStringRef pn = CFStringCreateWithCString(NULL, o.profile, kCFStringEncodingUTF8);
+        set_prop(v, kVTCompressionPropertyKey_ProfileLevel, pn, &what, "profile");
+        CFRelease(pn);
+    }
+    if (o.fps_num) set_num(v, kVTCompressionPropertyKey_ExpectedFrameRate, (double)o.fps_num / o.fps_den, NULL);
     OSStatus bad = noErr;
-    VTSessionSetProperty(s->enc, kVTCompressionPropertyKey_AllowFrameReordering, o.flags & HV_VC_ENC_F_BFRAMES ? kCFBooleanTrue : kCFBooleanFalse);
-    VTSessionSetProperty(s->enc, kVTCompressionPropertyKey_RealTime, o.flags & HV_VC_ENC_F_REALTIME ? kCFBooleanTrue : kCFBooleanFalse);
-    if (o.bitrate) set_num(s->enc, kVTCompressionPropertyKey_AverageBitRate, (double)o.bitrate, &bad);
-    if (o.fps_num) set_num(s->enc, kVTCompressionPropertyKey_ExpectedFrameRate, (double)o.fps_num / o.fps_den, NULL);
-    if (o.keyint) set_num(s->enc, kVTCompressionPropertyKey_MaxKeyFrameInterval, o.keyint, &bad);
-    if (bad == noErr) bad = VTCompressionSessionPrepareToEncodeFrames(s->enc);
-    if (bad != noErr) {
+    if (o.bitrate && (o.flags & HV_VC_ENC_F_CBR)) {
+        if (@available(macOS 13.0, iOS 16.0, *)) set_num(v, kVTCompressionPropertyKey_ConstantBitRate, (double)o.bitrate, &bad);
+        else bad = kVTPropertyNotSupportedErr;
+        if (bad && !what) what = "constant bitrate";
+    } else if (o.bitrate) {
+        set_num(v, kVTCompressionPropertyKey_AverageBitRate, (double)o.bitrate, &bad);
+        if (bad && !what) what = "bitrate";
+    }
+    if (o.quality) {
+        bad = noErr;
+        set_num(v, kVTCompressionPropertyKey_Quality, o.quality / 100.0, &bad);
+        if (bad && !what) what = "quality";
+    }
+    if (o.max_bytes) {
+        double lim[2] = {(double)o.max_bytes, o.max_window_ms / 1000.0};
+        CFNumberRef n[2] = {CFNumberCreate(NULL, kCFNumberDoubleType, &lim[0]), CFNumberCreate(NULL, kCFNumberDoubleType, &lim[1])};
+        CFArrayRef a = CFArrayCreate(NULL, (const void **)n, 2, &kCFTypeArrayCallBacks);
+        set_prop(v, kVTCompressionPropertyKey_DataRateLimits, a, &what, "data rate limit");
+        CFRelease(a), CFRelease(n[0]), CFRelease(n[1]);
+    }
+    bad = noErr;
+    if (o.keyint) set_num(v, kVTCompressionPropertyKey_MaxKeyFrameInterval, o.keyint, &bad);
+    if (o.keyint_ms) set_num(v, kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, o.keyint_ms / 1000.0, &bad);
+    if (bad && !what) what = "key frame interval";
+    if (o.flags & HV_VC_ENC_F_SPEED) {
+        if (@available(macOS 11.0, iOS 14.0, *)) VTSessionSetProperty(v, kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, kCFBooleanTrue);
+    }
+    if (tags[0]) set_prop(v, kVTCompressionPropertyKey_ColorPrimaries, tags[0], &what, "colour primaries");
+    if (tags[1]) set_prop(v, kVTCompressionPropertyKey_TransferFunction, tags[1], &what, "transfer function");
+    if (tags[2]) set_prop(v, kVTCompressionPropertyKey_YCbCrMatrix, tags[2], &what, "matrix");
+    if (o.hdr_flags & 1) {
+        s->mastering = data_of(o.mastering, sizeof o.mastering);
+        set_prop(v, kVTCompressionPropertyKey_MasteringDisplayColorVolume, s->mastering, &what, "mastering display");
+    }
+    if (o.hdr_flags & 2) {
+        s->light = data_of(o.light, sizeof o.light);
+        set_prop(v, kVTCompressionPropertyKey_ContentLightLevelInfo, s->light, &what, "content light level");
+    }
+    if (what) {
         session_free(s);
-        return vt_fail(c, req, "encoder settings", bad);
+        return fail(c, req, HV_VC_E_NOSUP, "the encoder refused the %s setting", what);
+    }
+    st = VTCompressionSessionPrepareToEncodeFrames(v);
+    if (st != noErr) {
+        session_free(s);
+        return vt_fail(c, req, "encoder settings", st);
     }
     if (@available(macOS 10.9, iOS 17.4, *)) {
         CFBooleanRef using = NULL;
-        if (VTSessionCopyProperty(s->enc, kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder, NULL, &using) == noErr && using) {
+        if (VTSessionCopyProperty(v, kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder, NULL, &using) == noErr && using) {
             s->hw = using == kCFBooleanTrue;
             CFRelease(using);
         }
@@ -582,9 +683,134 @@ static int do_frame_free(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     return ok(c, req, NULL, 0);
 }
 
+/* ---- raw frames: FRAME_ALLOC, FRAME_UPLOAD, FRAME_DOWNLOAD, XFER ---- */
+
+static CVPixelBufferRef new_buffer(uint32_t fmt, uint32_t range, uint32_t w, uint32_t h) {
+    OSType pixfmt = hv_vt_pixfmt(fmt, range);
+    CVPixelBufferRef pb = NULL;
+    if (!pixfmt) return NULL;
+    CFDictionaryRef attrs = hv_vtd_buffer_attrs(pixfmt);
+    CVReturn r = CVPixelBufferCreate(NULL, w, h, pixfmt, attrs, &pb);
+    CFRelease(attrs);
+    return r == kCVReturnSuccess ? pb : NULL;
+}
+
+/* Copies tightly packed planes between wire and the frame, in the direction given. The plane sizes come from the
+   format; CoreVideo's own plane sizes must hold them. */
+static int planes_copy(const Frame *f, uint8_t *wire, int to_wire) {
+    uint32_t row[2], rows[2];
+    int n = hv_vc_planes(f->fmt, f->w, f->h, row, rows);
+    if (!n || CVPixelBufferLockBaseAddress(f->pb, to_wire ? kCVPixelBufferLock_ReadOnly : 0) != kCVReturnSuccess) return -1;
+    size_t planes = CVPixelBufferGetPlaneCount(f->pb);
+    int bad = (n == 1) != (planes == 0) || (n == 2 && planes != 2);
+    for (int i = 0; i < n && !bad; i++) {
+        uint8_t *base = n == 1 ? CVPixelBufferGetBaseAddress(f->pb) : CVPixelBufferGetBaseAddressOfPlane(f->pb, (size_t)i);
+        size_t stride = n == 1 ? CVPixelBufferGetBytesPerRow(f->pb) : CVPixelBufferGetBytesPerRowOfPlane(f->pb, (size_t)i);
+        size_t height = n == 1 ? CVPixelBufferGetHeight(f->pb) : CVPixelBufferGetHeightOfPlane(f->pb, (size_t)i);
+        if (!base || stride < row[i] || height < rows[i]) {
+            bad = 1;
+            break;
+        }
+        for (uint32_t y = 0; y < rows[i]; y++, wire += row[i]) {
+            if (to_wire) memcpy(wire, base + y * stride, row[i]);
+            else memcpy(base + y * stride, wire, row[i]);
+        }
+    }
+    CVPixelBufferUnlockBaseAddress(f->pb, to_wire ? kCVPixelBufferLock_ReadOnly : 0);
+    return bad ? -1 : 0;
+}
+
+static HvVcFrameReply frame_reply(const Frame *f, uint32_t handle) {
+    HvVcFrameReply r = {handle, 0, f->w, f->h, f->fmt, f->range, 0};
+    return r;
+}
+
+static int do_frame_alloc(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
+    HvVcFrameAlloc a;
+    if (req->len != sizeof a) return fail(c, req, HV_VC_E_INVAL, "FRAME_ALLOC has the wrong length");
+    memcpy(&a, p, sizeof a);
+    if (!hv_vc_frame_bytes(a.format, a.width, a.height) || a.range > HV_VC_RANGE_FULL) return fail(c, req, HV_VC_E_INVAL, "bad format or size");
+    CFStringRef tags[3];
+    if (colour_tags(a.primaries, a.transfer, a.matrix, tags)) return fail(c, req, HV_VC_E_NOSUP, "unknown colour code point");
+    if (c->nframes >= HV_VC_MAX_FRAMES) return fail(c, req, HV_VC_E_LIMIT, "%d frames live: free some", HV_VC_MAX_FRAMES);
+    CVPixelBufferRef pb = new_buffer(a.format, a.range, a.width, a.height);
+    if (!pb) return fail(c, req, HV_VC_E_NOMEM, "no pixel buffer");
+    tag_buffer(pb, tags);
+    uint32_t h = frame_put(c, pb, a.format, a.range == HV_VC_RANGE_FULL ? HV_VC_RANGE_FULL : HV_VC_RANGE_VIDEO);
+    if (!h) return fail(c, req, HV_VC_E_LIMIT, "frame memory at the limit: free some");
+    HvVcFrameReply r = frame_reply(frame_get(c, h), h);
+    return ok(c, req, &r, sizeof r);
+}
+
+static int do_frame_upload(Ctx *c, const HvVcHeader *req, uint8_t *p) {
+    HvVcHandle m;
+    if (req->len < sizeof m) return fail(c, req, HV_VC_E_INVAL, "FRAME_UPLOAD is too short");
+    memcpy(&m, p, sizeof m);
+    Frame *f = frame_get(c, m.handle);
+    if (!f) return fail(c, req, HV_VC_E_HANDLE, "no such frame");
+    if (req->len - sizeof m != f->bytes) return fail(c, req, HV_VC_E_INVAL, "the frame needs %llu bytes", (unsigned long long)f->bytes);
+    /* an encoder can still hold this buffer: the guest damages its own picture, nothing more */
+    if (planes_copy(f, p + sizeof m, 0)) return fail(c, req, HV_VC_E_CODEC, "the frame's planes do not match its format");
+    return ok(c, req, NULL, 0);
+}
+
+static int do_frame_download(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
+    HvVcHandle m;
+    if (req->len != sizeof m) return fail(c, req, HV_VC_E_INVAL, "FRAME_DOWNLOAD has the wrong length");
+    memcpy(&m, p, sizeof m);
+    Frame *f = frame_get(c, m.handle);
+    if (!f) return fail(c, req, HV_VC_E_HANDLE, "no such frame");
+    uint8_t *out = malloc(f->bytes);
+    if (!out) return fail(c, req, HV_VC_E_NOMEM, "no memory");
+    if (planes_copy(f, out, 1)) {
+        free(out);
+        return fail(c, req, HV_VC_E_CODEC, "the frame's planes do not match its format");
+    }
+    HvVcFrameReply r = frame_reply(f, m.handle);
+    int rc = reply(c, req, HV_VC_OK, &r, sizeof r, out, f->bytes, NULL, 0);
+    free(out);
+    return rc;
+}
+
+static int do_xfer(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
+    HvVcXfer x;
+    if (req->len != sizeof x) return fail(c, req, HV_VC_E_INVAL, "XFER has the wrong length");
+    memcpy(&x, p, sizeof x);
+    if (x.flags & ~1u || x.range > HV_VC_RANGE_FULL) return fail(c, req, HV_VC_E_INVAL, "bad flags or range");
+    if (!hv_vc_frame_bytes(x.format, x.width, x.height)) return fail(c, req, HV_VC_E_INVAL, "bad format or size");
+    Frame *src = frame_get(c, x.src);
+    if (!src) return fail(c, req, HV_VC_E_HANDLE, "no such frame");
+    CFStringRef tags[3];
+    if (colour_tags(x.primaries, x.transfer, x.matrix, tags)) return fail(c, req, HV_VC_E_NOSUP, "unknown colour code point");
+    if (c->nframes >= HV_VC_MAX_FRAMES) return fail(c, req, HV_VC_E_LIMIT, "%d frames live: free some", HV_VC_MAX_FRAMES);
+    if (!c->xfer) {
+        OSStatus st = VTPixelTransferSessionCreate(NULL, &c->xfer);
+        if (st != noErr) {
+            c->xfer = NULL;
+            return vt_fail(c, req, "transfer", st);
+        }
+    }
+    VTSessionSetProperty(c->xfer, kVTPixelTransferPropertyKey_ScalingMode, x.flags & 1 ? kVTScalingMode_Letterbox : kVTScalingMode_Normal);
+    VTSessionSetProperty(c->xfer, kVTPixelTransferPropertyKey_DestinationColorPrimaries, tags[0]);
+    VTSessionSetProperty(c->xfer, kVTPixelTransferPropertyKey_DestinationTransferFunction, tags[1]);
+    VTSessionSetProperty(c->xfer, kVTPixelTransferPropertyKey_DestinationYCbCrMatrix, tags[2]);
+    CVPixelBufferRef dst = new_buffer(x.format, x.range, x.width, x.height);
+    if (!dst) return fail(c, req, HV_VC_E_NOMEM, "no pixel buffer");
+    tag_buffer(dst, tags);
+    OSStatus st = VTPixelTransferSessionTransferImage(c->xfer, src->pb, dst);
+    if (st != noErr) {
+        CVPixelBufferRelease(dst);
+        return vt_fail(c, req, "transfer", st);
+    }
+    uint32_t h = frame_put(c, dst, x.format, x.range == HV_VC_RANGE_FULL ? HV_VC_RANGE_FULL : HV_VC_RANGE_VIDEO);
+    if (!h) return fail(c, req, HV_VC_E_LIMIT, "frame memory at the limit: free some");
+    HvVcFrameReply r = frame_reply(frame_get(c, h), h);
+    return ok(c, req, &r, sizeof r);
+}
+
 /* ---- the connection ---- */
 
-static int dispatch(Ctx *c, const HvVcHeader *h, const uint8_t *p) {
+static int dispatch(Ctx *c, const HvVcHeader *h, uint8_t *p) {
     switch (h->type) {
     case HV_VC_QUERY: return do_query(c, h);
     case HV_VC_DEC_OPEN: return do_dec_open(c, h, p);
@@ -595,6 +821,10 @@ static int dispatch(Ctx *c, const HvVcHeader *h, const uint8_t *p) {
     case HV_VC_ENC_PACKET: return do_enc_packet(c, h, p);
     case HV_VC_ENC_CLOSE: return do_close(c, h, p, KIND_ENC);
     case HV_VC_FRAME_FREE: return do_frame_free(c, h, p);
+    case HV_VC_FRAME_ALLOC: return do_frame_alloc(c, h, p);
+    case HV_VC_FRAME_UPLOAD: return do_frame_upload(c, h, p);
+    case HV_VC_FRAME_DOWNLOAD: return do_frame_download(c, h, p);
+    case HV_VC_XFER: return do_xfer(c, h, p);
     default: return fail(c, h, HV_VC_E_NOSUP, "message %u is not supported", h->type);
     }
 }
@@ -642,6 +872,10 @@ void hv_vcodec_serve(int fd) {
     for (int i = 0; i < HV_VC_MAX_SESSIONS; i++) session_free(&c->sess[i]);
     for (int i = 0; i < HV_VC_MAX_FRAMES; i++)
         if (c->frames[i].pb) frame_drop(c, &c->frames[i]);
+    if (c->xfer) {
+        VTPixelTransferSessionInvalidate(c->xfer);
+        CFRelease(c->xfer);
+    }
     double secs = ms_since(&c->started) / 1e3;
     if (c->bytes_in > 4096 || getenv("HV_VCODEC_LOG"))
         fprintf(stderr, "hengevm: vcodec: context closed after %.1f s: in %.1f MB, out %.1f MB (%.2f MB/s), %llu frames decoded, %llu packets\n", secs,
