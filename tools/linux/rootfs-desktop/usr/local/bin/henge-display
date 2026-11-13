@@ -1,5 +1,6 @@
 #!/bin/sh
-# Follows the host display size and scale (R5). labwc ignores a mode change on a connected output.
+# Follows the host display size and scale (R5): wlr-randr under labwc, kscreen-doctor under Plasma.
+# labwc ignores a mode change on a connected output.
 out=Virtual-1
 last=
 
@@ -20,7 +21,14 @@ apply() {
     cur=$(want) || return 0
     [ "$cur" = "$last" ] && return 0
     set -- $cur
-    wlr-randr --output $out --custom-mode "$1x$2" --scale "$3" && last=$cur
+    if [ "$XDG_CURRENT_DESKTOP" = KDE ]; then
+        # 6.3 has no addCustomMode, and its exit code is 0 for an unknown mode: check the current one
+        kscreen-doctor "output.$out.mode.$1x$2@60" "output.$out.scale.$3" >/dev/null 2>&1
+        kscreen-doctor -o 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep -q "$1x$2@[0-9]*\*" || return 0
+    else
+        wlr-randr --output $out --custom-mode "$1x$2" --scale "$3" || return 0
+    fi
+    last=$cur
 }
 
 apply

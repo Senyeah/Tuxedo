@@ -145,3 +145,20 @@ The desktop image is variant A of G6: labwc on Wayland and one foot terminal. It
 - `$XDG_RUNTIME_DIR/henge-times` (`/run/user/1000/henge-times`) holds the guest uptime in seconds at login, when labwc is up and when the terminal's shell starts.
 - The touchpad has tap to click and natural scrolling (`/etc/xdg/labwc/rc.xml`).
 - The `labwc` package depends on `xwayland`, so it is installed. labwc starts it only when an X11 program asks, so a normal session has no Xwayland process.
+
+### Plasma (optional)
+
+The image does not include KDE Plasma, but it is ready for it. To install it in the guest (about 1,100 packages and 4 GB, so make the disk at least 12 GB):
+
+```sh
+sudo apt-get update
+sudo apt-get install -y plasma-desktop plasma-workspace kwin-wayland konsole systemsettings sddm-
+echo plasma | sudo tee /etc/henge/session
+sudo reboot
+```
+
+- `henge-session` runs `startplasma-wayland` when the first line of `/etc/henge/session` is `plasma`. Any other value, or no file, gives labwc.
+- Reboot after you change the session. `systemctl restart getty@tty1` leaves the old tty1 session in State=closing, and KWin then fails to get the seat.
+- `/etc/xdg/startkderc` sets `systemdBoot=false`. With the systemd start, KWin runs as a user unit outside the tty1 session. logind then gives it the user's display session, which can be the serial console session (no seat), and polkit refuses `Activate`. KWin prints "Failed to activate ... session. Maybe another compositor is running?" and cannot open `/dev/dri/card0`.
+- Start Plasma from tty1 (the screen), not from the serial console. The serial console session has no seat.
+- `/etc/xdg/autostart/henge-plasma.desktop` (KDE only) starts the clipboard helper and `henge-display`, which sets the size and scale with `kscreen-doctor`.

@@ -1,7 +1,14 @@
 #!/bin/sh
-# Start labwc. /etc/henge/renderer forces a renderer; else gles2 with virgl, else pixman.
+# Start labwc, or Plasma when /etc/henge/session says plasma.
+# /etc/henge/renderer forces labwc's renderer; else gles2 with virgl, else pixman.
 export LANG=C.UTF-8
 rt=${XDG_RUNTIME_DIR:-/tmp}
+echo "login $(cut -d' ' -f1 /proc/uptime)" > "$rt/henge-times"
+if [ "$(head -n 1 /etc/henge/session 2>/dev/null)" = plasma ] && command -v startplasma-wayland >/dev/null; then
+    echo "session=plasma" | tee "$rt/henge-session.log"
+    startplasma-wayland
+    exit
+fi
 renderer=
 if [ -r /etc/henge/renderer ]; then
     renderer=$(head -n 1 /etc/henge/renderer | tr -d ' \t\r')
@@ -14,6 +21,5 @@ if [ -z "$renderer" ]; then
     fi
 fi
 export WLR_RENDERER=$renderer
-echo "login $(cut -d' ' -f1 /proc/uptime)" > "$rt/henge-times"
 echo "renderer=$renderer" | tee "$rt/henge-session.log"
 labwc
