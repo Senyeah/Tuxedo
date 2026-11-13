@@ -9,15 +9,22 @@ Boots a clone of the desktop image with `hengevm --vcodec --share DIR` and, over
   1. installs the build tools and Debian's libavformat (apt; --image names an image that has them);
   2. builds tools/linux/hvcodec/henge-xcode.c and hvbench.c from the --share folder;
   3. `henge-xcode --query` must list an HEVC and an H.264 hardware encoder;
-  4. transcodes each test clip (3840x2160 and 1920x1080, 60 fps: H.264, HEVC 8 bit, HEVC 10 bit, AV1) to HEVC with
+  4. transcodes each test clip (3840x2160 and 1920x1080, 60 fps: H.264, HEVC 8 bit, HEVC 10 bit, AV1, VP9) to HEVC with
      the frames on the host, and copies the output back through the share. On the Mac, ffprobe must count the
      clip's frames, ffmpeg must decode it with no error (the VE0.4 exit), and ffmpeg's psnr filter against the clip
      must reach MIN_PSNR on Y, U and V and MIN_FRAME_PSNR on the worst frame;
   5. measures (VE0.5): henge-xcode's fps, its CPU time and the whole guest's, the MB/s on the socket, hengevm's CPU,
      Debian's software decode of the same clip to -f null, and the guest memcpy speed (hvbench).
+With --ffmpeg DIR (VE2, the patched ffmpeg from tools/linux/build-ffmpeg.sh), it also copies DIR's ffmpeg, ffprobe and
+henge-codec-info to the guest, checks `henge-codec-info --json`, and runs the plan's main command on each clip:
+  ffmpeg -hwaccel henge -hwaccel_output_format henge -i CLIP -c:v hevc_henge -b:v 20M -c:a copy out.mp4
+The output must have the clip's frames, decode with no error, reach MIN_PSNR, and keep the audio in sync: the same
+video times as the clip, and the same audio start, duration and packet count. Its fps is set against henge-xcode's
+on the same clip in the same run. Then a scale_henge, a software filter chain and an h264_henge output.
 The shared image never changes: the guest runs on an APFS clone, deleted at the end. Exit 1 on a failed check.
 """
 import argparse
+import json
 import os
 import re
 import shutil
@@ -33,7 +40,7 @@ MARK = "HENGE_RC_"
 SHELL = r"henge@henge:[^\n]*\$ "
 PACKAGES = ["ffmpeg", "gcc", "libc6-dev", "pkg-config", "libavformat-dev", "libavcodec-dev", "libavutil-dev"]
 SIZES = {"4k": "3840x2160", "1080p": "1920x1080"}
-CODECS = ["h264", "hevc8", "hevc10", "av1"]
+CODECS = ["h264", "hevc8", "hevc10", "av1", "vp9"]
 FPS = 60
 # The clips carry noise, so the transcode loses more than test_vcodec's clean frames; black or swapped planes give 10 to 20 dB.
 MIN_PSNR = 35.0
@@ -88,29 +95,107 @@ def make_clip(path, codec, size, seconds):
                    "log-level=error:bframes=4:colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:hdr10=1:"
                    "master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1):max-cll=1000,400"],
         "av1": ["-c:v", "libsvtav1", "-preset", "10", "-pix_fmt", "yuv420p", "-svtav1-params", "tune=0"],
+        "vp9": ["-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8", "-row-mt", "1", "-pix_fmt", "yuv420p"],
     }[codec]
     rate = "40M" if size.startswith("3840") else "10M"
-    r = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", src] + enc + ["-b:v", rate, path],
-                       capture_output=True, text=True)
+    # a beep each second: the audio that -c:a copy must keep in step
+    audio = ["-f", "lavfi", "-i", f"sine=frequency=440:sample_rate=48000:beep_factor=4:duration={seconds}"]
+    r = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", src] + audio + enc
+                       + ["-b:v", rate, "-c:a", "aac", "-b:a", "128k", "-shortest", path], capture_output=True, text=True)
     if r.returncode:
         raise Fail(f"cannot make {path} on the Mac: {r.stderr.strip()[-800:]}")
 
 
 def probe(path):
+    """codec,profile,width,height,pix_fmt,transfer,frames: the frame count last (stream side data would follow it in csv)."""
     r = subprocess.run(["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v", "-show_entries",
-                        "stream=codec_name,profile,pix_fmt,width,height,nb_read_frames,color_transfer", "-of", "csv=p=0", path],
+                        "stream=codec_name,profile,pix_fmt,width,height,nb_read_frames,color_transfer", "-of", "json", path],
                        capture_output=True, text=True)
-    return r.stdout.strip()
+    st = (json.loads(r.stdout or "{}").get("streams") or [{}])[0]
+    keys = ("codec_name", "profile", "width", "height", "pix_fmt", "color_transfer", "nb_read_frames")
+    return ",".join(str(st.get(k, "unknown")) for k in keys) if st else ""
 
 
 def psnr(out, src):
     """ffmpeg's psnr filter, the output against the clip: the average of each plane and of the worst frame."""
-    r = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-loglevel", "info", "-i", out, "-i", src, "-lavfi", "[0:v][1:v]psnr", "-f", "null", "-"],
+    # frame by frame: the two files' time bases differ, and a scaled output is compared at the clip's size
+    size = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v", "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", src],
+                          capture_output=True, text=True).stdout.strip()
+    graph = f"[0:v]settb=1/60,setpts=N,scale={size}:flags=bicubic[a];[1:v]settb=1/60,setpts=N[b];[a][b]psnr"
+    r = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-loglevel", "info", "-i", out, "-i", src, "-lavfi", graph, "-f", "null", "-"],
                        capture_output=True, text=True)
     m = re.search(r"PSNR y:([\d.inf]+) u:([\d.inf]+) v:([\d.inf]+) average:([\d.inf]+) min:([\d.inf]+)", r.stderr)
     if r.returncode or not m:
         return None
     return dict(zip(("y", "u", "v", "average", "min"), (float(x) for x in m.groups())))
+
+
+def streams(path):
+    """Each stream's type, start, duration and packet count, and the video packets' times in seconds."""
+    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=index,codec_type,start_time,duration,time_base", "-of", "json", path],
+                       capture_output=True, text=True)
+    info = {}
+    for st in json.loads(r.stdout or "{}").get("streams", []):
+        pk = subprocess.run(["ffprobe", "-v", "error", "-select_streams", str(st["index"]), "-show_entries", "packet=pts_time",
+                             "-of", "default=nw=1:nk=1", path], capture_output=True, text=True).stdout.split()
+        times = sorted(float(t) for t in pk if t not in ("", "N/A"))
+        info[st["codec_type"]] = dict(start=float(st.get("start_time", "nan")), duration=float(st.get("duration", "nan")), packets=len(pk), times=times)
+    return info
+
+
+def in_sync(out, src):
+    """The output's video has the clip's times, and its copied audio the clip's start, duration and packets."""
+    a, b = streams(out), streams(src)
+    if "video" not in a or "audio" not in a or "audio" not in b:
+        return False, "no video or audio stream"
+    v, sv = a["video"], b["video"]
+    worst = max((abs(x - y) for x, y in zip(v["times"], sv["times"])), default=1e9) if len(v["times"]) == len(sv["times"]) else 1e9
+    au, sa = a["audio"], b["audio"]
+    ok = worst <= 0.5 / FPS and abs(au["start"] - sa["start"]) < 1e-3 and abs(au["duration"] - sa["duration"]) < 0.03 and au["packets"] == sa["packets"]
+    return ok, (f"video times within {worst * 1000:.2f} ms of the clip's, audio start {au['start']:.3f} s (clip {sa['start']:.3f}), "
+                f"{au['packets']} of {sa['packets']} audio packets, video start {v['start']:.3f} s against audio {au['start']:.3f} s")
+
+
+def ffmpeg_case(p, share, tag, src, want, args, cmd_out="/tmp/ff-out.mp4", check_sync=True, min_psnr=None, startup=False):
+    """One patched-ffmpeg command in the guest, its output checked on the Mac. With startup, a 1-frame run first gives the
+    fixed cost (connect, QUERY, sessions, the global header's blank frame), and steady is the rate without it."""
+    rt1 = None
+    if startup:
+        one = need(p, f"./ffmpeg -hide_banner -nostats -benchmark -y {args.replace(' -c:v ', ' -frames:v 1 -c:v ', 1)} {cmd_out} 2>&1 | grep bench:",
+                   f"ffmpeg {tag} one frame", 300)
+        m1 = re.search(r"rtime=([\d.]+)s", one)
+        rt1 = float(m1.group(1)) if m1 else None
+    text = need(p, f"TIMEFORMAT='GUEST_TIME %R %U %S'; time ./ffmpeg -hide_banner -nostats -benchmark -y {args} {cmd_out} 2>&1 "
+                   "| grep -E 'bench:|rror|refused|frame=' | tail -4", f"ffmpeg {tag}", 900)
+    gt = re.search(r"GUEST_TIME ([\d.]+) ([\d.]+) ([\d.]+)", text)
+    rt = re.search(r"rtime=([\d.]+)s", text)
+    if not gt or not rt:
+        raise Fail(f"ffmpeg {tag}: no timing:\n{text.strip()[-1200:]}")
+    oname = f"ff-{tag}{os.path.splitext(cmd_out)[1]}"
+    put(p, cmd_out, oname)
+    path = os.path.join(share, oname)
+    got = probe(path)
+    frames = int(got.split(",")[-1]) if got and got.split(",")[-1].isdigit() else -1
+    dec = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-f", "null", "-"], capture_output=True, text=True)
+    q = psnr(path, os.path.join(share, src))
+    floor = MIN_PSNR if min_psnr is None else min_psnr
+    sharp = q is not None and min(q["y"], q["u"], q["v"]) >= floor and q["min"] >= floor - 5
+    sync, why = in_sync(path, os.path.join(share, src)) if check_sync else (True, "")
+    good = frames == want and not dec.stderr.strip() and dec.returncode == 0 and sharp and sync
+    secs = float(rt.group(1))
+    r = dict(frames=frames, secs=secs, fps=want / secs if secs else 0.0, wall=float(gt.group(1)), cpu=float(gt.group(2)) + float(gt.group(3)))
+    if rt1 is not None and secs > rt1:
+        r.update(startup=rt1, steady_fps=(want - 1) / (secs - rt1))
+    if q:
+        r.update(psnr_y=q["y"], psnr_u=q["u"], psnr_v=q["v"], psnr_min=q["min"])
+    pq = f"PSNR y {q['y']:.1f} u {q['u']:.1f} v {q['v']:.1f} dB, worst frame {q['min']:.1f} dB" if q else "no PSNR"
+    steady = f", {r['steady_fps']:.1f} fps without the {r['startup'] * 1000:.0f} ms start" if "steady_fps" in r else ""
+    print(f"{'ok  ' if good else 'FAIL'} ffmpeg {tag}: {r['fps']:.1f} fps{steady} ({secs:.2f} s, guest CPU {r['cpu']:.2f} s), output {got} "
+          f"({frames} of {want} frames, {len(dec.stderr.strip().splitlines())} decode errors), {pq}")
+    if check_sync:
+        print(f"     {'in sync' if sync else 'NOT IN SYNC'}: {why}")
+    os.remove(path)
+    return good, r
 
 
 def boot(args, disk, share, err_log):
@@ -129,10 +214,11 @@ def boot(args, disk, share, err_log):
     return p
 
 
-def install(p):
-    out, _ = sh(p, "dpkg-query -W -f '${Package} ${Status}\\n' " + " ".join(PACKAGES) + " 2>/dev/null")
+def install(p, extra=()):
+    want = PACKAGES + [x for x in extra if x not in PACKAGES]
+    out, _ = sh(p, "dpkg-query -W -f '${Package} ${Status}\\n' " + " ".join(want) + " 2>/dev/null")
     have = {l.split()[0] for l in out.splitlines() if l.strip().endswith("install ok installed")}
-    missing = [x for x in PACKAGES if x not in have]
+    missing = [x for x in want if x not in have]
     if missing:
         print(f"--   apt install {' '.join(missing)}")
         need(p, "sudo apt-get update -q >/dev/null", "apt-get update", 600)
@@ -205,6 +291,9 @@ def main():
     ap.add_argument("--speed", action="store_true", help="also transcode with speed over quality")
     ap.add_argument("--no-software", action="store_true", help="skip Debian's software decode")
     ap.add_argument("--keep-log", help="copy hengevm's stderr here")
+    ap.add_argument("--ffmpeg", help="VE2: a folder with the patched ffmpeg, ffprobe and henge-codec-info (build/linux/ffmpeg/bin)")
+    ap.add_argument("--keep-disk", help="keep the guest's disk (with the packages installed) at this path, for --image next time")
+    ap.add_argument("--no-xcode", action="store_true", help="with --ffmpeg: skip henge-xcode's transcodes")
     args = ap.parse_args()
     args.linux_dir = args.linux_dir or linux_dir()
     image = args.image or os.path.join(args.linux_dir, "debian-desktop.img")
@@ -220,6 +309,15 @@ def main():
         os.mkdir(share)
         for f in ("tools/linux/hvcodec/henge-xcode.c", "tools/linux/hvcodec/hvbench.c", "host/vcodec_proto.h"):
             shutil.copy(os.path.join(ROOT, f), share)
+        runtime = []
+        if args.ffmpeg:
+            for f in ("ffmpeg", "ffprobe", "henge-codec-info"):
+                shutil.copy(os.path.join(args.ffmpeg, f), share)
+            manifest = os.path.join(os.path.dirname(os.path.abspath(args.ffmpeg)), "ffmpeg.manifest")
+            for line in open(manifest):
+                if line.startswith("runtime="):
+                    runtime = line.split("=", 1)[1].split()
+            print(f"     patched ffmpeg from {args.ffmpeg}: {open(manifest).readline().strip()}, runtime {' '.join(runtime)}")
         clips = []
         for size in sizes:
             for codec in codecs:
@@ -236,7 +334,7 @@ def main():
             raise Fail(f"cannot clone {image}: {r.stderr.strip()}")
         p = boot(args, disk, share, err_log)
         try:
-            install(p)
+            install(p, runtime)
             need(p, "mkdir -p ~/hv && cd ~/hv", "work folder")
             for f in ("henge-xcode.c", "hvbench.c", "vcodec_proto.h"):
                 fetch(p, f, f)
@@ -249,13 +347,51 @@ def main():
             if "encoder hvc1" not in q or "encoder avc1" not in q:
                 raise Fail("QUERY lists no HEVC or no H.264 encoder")
             print("ok   QUERY from the guest lists the H.264 and HEVC encoders")
+            if args.ffmpeg:
+                for f in ("ffmpeg", "ffprobe", "henge-codec-info"):
+                    fetch(p, f, f)
+                need(p, "chmod +x ffmpeg ffprobe henge-codec-info", "chmod")
+                ver = need(p, "./ffmpeg -hide_banner -version | head -1; ./ffmpeg -hide_banner -hwaccels | tail -n +2; "
+                              "./ffmpeg -hide_banner -encoders | grep _henge", "patched ffmpeg")
+                print("     " + ver.strip().replace("\n", "\n     "))
+                if "hevc_henge" not in ver or not re.search(r"^henge$", ver, re.M):
+                    raise Fail("the patched ffmpeg has no henge hwaccel or no hevc_henge")
+                js = need(p, "./henge-codec-info --json", "henge-codec-info --json")
+                try:
+                    table = json.loads(js[js.index("{"):js.rindex("}") + 1])
+                except ValueError:
+                    raise Fail(f"henge-codec-info --json is not JSON:\n{js[-800:]}")
+                encs = {e["codec"]: e for e in table["encoders"]}
+                if not (encs.get("hvc1", {}).get("hardware") and encs.get("avc1", {}).get("hardware")):
+                    raise Fail("henge-codec-info lists no H.264 or no HEVC hardware encoder")
+                listed = ", ".join(f"{k} ({e['ffmpeg']})" for k, e in encs.items())
+                print(f"ok   henge-codec-info --json: encoders {listed}; decoders {', '.join(d['codec'] for d in table['decoders'])}")
             mem = need(p, "./hvbench", "hvbench")
             for line in re.findall(r"hvbench: [^\n]+", mem):
                 print(f"     {line}")
             for name, info in clips:
                 fetch(p, name, f"/tmp/{name}")
                 want = int(info.split(",")[-1]) if info.split(",")[-1].isdigit() else -1
-                for out_codec, speed in [("hevc", False)] + ([("hevc", True)] if args.speed else []):
+                if args.ffmpeg:
+                    good, r = ffmpeg_case(p, share, name[:-4], name, want,
+                                          f"-hwaccel henge -hwaccel_output_format henge -i /tmp/{name} -c:v hevc_henge -b:v 20M -c:a copy",
+                                          startup=True)
+                    ok &= good
+                    rows.append((f"{name} ffmpeg main", r))
+                    if name == "hevc8_4k.mp4":
+                        good, r = ffmpeg_case(p, share, "scale", name, want, f"-hwaccel henge -hwaccel_output_format henge -i /tmp/{name} "
+                                              "-vf scale_henge=1920:1080 -c:v hevc_henge -b:v 10M -c:a copy", min_psnr=30.0)
+                        ok &= good
+                        rows.append((f"{name} ffmpeg scale_henge", r))
+                    if name == "hevc8_1080p.mp4":
+                        for tag, a in [("swfilter", f"-init_hw_device henge -hwaccel henge -hwaccel_output_format henge -i /tmp/{name} "
+                                                    "-vf hwdownload,format=nv12,hflip,hflip,hwupload -c:v hevc_henge -b:v 20M -c:a copy"),
+                                       ("h264", f"-hwaccel henge -hwaccel_output_format henge -i /tmp/{name} -c:v h264_henge -b:v 20M -c:a copy"),
+                                       ("swdec", f"-i /tmp/{name} -c:v hevc_henge -b:v 20M -c:a copy")]:
+                            good, r = ffmpeg_case(p, share, tag, name, want, a)
+                            ok &= good
+                            rows.append((f"{name} ffmpeg {tag}", r))
+                for out_codec, speed in ([] if args.no_xcode else [("hevc", False)]) + ([("hevc", True)] if args.speed else []):
                     out, r = transcode(p, p.pid, name, out_codec, speed)
                     tag = f"{name} to {out_codec}{' speed' if speed else ''}"
                     oname = f"out-{name[:-4]}-{out_codec}{'-speed' if speed else ''}.mp4"
@@ -295,6 +431,8 @@ def main():
                 except pexpect.TIMEOUT:
                     p.terminate(force=True)
             p.close()
+            if args.keep_disk:
+                os.replace(disk, args.keep_disk)
             log = open(err_log, errors="replace").read() if os.path.exists(err_log) else ""
             for line in re.findall(r"hengevm: vcodec: [^\n]+", log)[-12:]:
                 print(f"     {line}")

@@ -267,6 +267,15 @@ test-linux-vcodec: $(B)/hengevm
 	uv run tools/linux/vcodec-check.py --hengevm $(B)/hengevm $(VCODEC_ARGS)
 .PHONY: test-linux-vcodec
 
+# VE2: the patched ffmpeg (tools/linux/build-ffmpeg.sh, in the arm64 container) and the plan's main command in the
+# guest, checked on the Mac against henge-xcode on the same clips.
+LINUX_OUT ?= $(dir $(shell git rev-parse --path-format=absolute --git-common-dir))build/linux
+linux-ffmpeg:
+	HENGE_LINUX_OUT=$(LINUX_OUT) tools/linux/build-ffmpeg.sh
+test-linux-ffmpeg: $(B)/hengevm
+	uv run tools/linux/vcodec-check.py --hengevm $(B)/hengevm --ffmpeg $(LINUX_OUT)/ffmpeg/bin --no-software $(VCODEC_ARGS)
+.PHONY: linux-ffmpeg test-linux-ffmpeg
+
 # P6: the shared folder (~/Henge, davfs2) against --share. SHARE_ARGS="--image FILE" for an image that has davfs2.
 test-linux-share: $(B)/hengevm
 	uv run tools/linux/share-check.py $(SHARE_ARGS)

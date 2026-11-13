@@ -619,8 +619,11 @@ static int do_enc_open(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
         return vt_fail(c, req, "encoder", st);
     }
     const char *what = NULL;
-    set_prop(v, kVTCompressionPropertyKey_AllowFrameReordering, o.flags & HV_VC_ENC_F_BFRAMES ? kCFBooleanTrue : kCFBooleanFalse, &what, "B-frames");
-    set_prop(v, kVTCompressionPropertyKey_RealTime, o.flags & HV_VC_ENC_F_REALTIME ? kCFBooleanTrue : kCFBooleanFalse, &what, "real time");
+    /* only a refusal of what the guest asked for fails: the JPEG encoder refuses "no B-frames" */
+    if (o.flags & HV_VC_ENC_F_BFRAMES) set_prop(v, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanTrue, &what, "B-frames");
+    else VTSessionSetProperty(v, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
+    if (o.flags & HV_VC_ENC_F_REALTIME) set_prop(v, kVTCompressionPropertyKey_RealTime, kCFBooleanTrue, &what, "real time");
+    else VTSessionSetProperty(v, kVTCompressionPropertyKey_RealTime, kCFBooleanFalse);
     if (o.profile[0]) {
         CFStringRef pn = CFStringCreateWithCString(NULL, o.profile, kCFStringEncodingUTF8);
         set_prop(v, kVTCompressionPropertyKey_ProfileLevel, pn, &what, "profile");
