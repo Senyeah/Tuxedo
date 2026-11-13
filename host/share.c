@@ -7,7 +7,6 @@
    /.henge/ is not part of the folder. It has the clipboard, where the helper inside macOS (tools/henge-agent.m)
    waits for the device's clipboard and sends the guest's, and what it takes to install that helper.
    It also serves the Linux display follower: GET /.henge/display is "W H SCALE".
-   PUT /.henge/keyboard is "show" or "hide" from a Linux desktop (henge-keyboard): the focused program wants text.
 
    Locks are accepted but not enforced: macOS only writes to a server that offers them, and there is one client. */
 #include "share.h"
@@ -73,7 +72,7 @@ long hv_share_agent_seen(void) {
     return ago;
 }
 
-/* ---- the keyboard ---- */
+/* ---- the keyboard: PUT /.henge/keyboard from a Linux desktop (henge-keyboard) ---- */
 
 static int kbd_wanted; /* the guest's last request */
 static unsigned long kbd_seq;
@@ -711,18 +710,6 @@ static int clipboard_get(Conn *c, Request *r) {
     return rc;
 }
 
-static int clipboard_put(Conn *c, Request *r) {
-    size_t len = 0;
-    char *text = body_small(c, r, &len);
-    if (!text) return -1;
-    pthread_mutex_lock(&clip_mu);
-    free(guest_clip);
-    guest_clip = text;
-    agent_seen = time(NULL);
-    pthread_mutex_unlock(&clip_mu);
-    return respond_empty(c, r, 204, "No Content");
-}
-
 /* PUT "show" or "hide": the focused program in the guest wants text, or no longer does. */
 static int keyboard_put(Conn *c, Request *r) {
     size_t len = 0;
@@ -734,6 +721,18 @@ static int keyboard_put(Conn *c, Request *r) {
     pthread_mutex_lock(&clip_mu);
     kbd_wanted = show;
     kbd_seq++;
+    pthread_mutex_unlock(&clip_mu);
+    return respond_empty(c, r, 204, "No Content");
+}
+
+static int clipboard_put(Conn *c, Request *r) {
+    size_t len = 0;
+    char *text = body_small(c, r, &len);
+    if (!text) return -1;
+    pthread_mutex_lock(&clip_mu);
+    free(guest_clip);
+    guest_clip = text;
+    agent_seen = time(NULL);
     pthread_mutex_unlock(&clip_mu);
     return respond_empty(c, r, 204, "No Content");
 }

@@ -30,9 +30,9 @@ ENGINE = $(CORE) $(HOST)
 VM = $(B)/vm.o $(B)/linux_boot.o
 METAL_LIBS = -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers $(GFX_LDLIBS)
 
-TESTS = $(B)/test_classify $(B)/test_jit_region $(B)/test_operands $(B)/test_jit $(B)/test_mem \
+TESTS = $(B)/test_classify $(B)/test_jit_region $(B)/test_operands $(B)/test_jit $(B)/test_mem $(B)/test_share_keyboard \
         $(B)/test_mmu $(B)/test_exc $(B)/test_devices $(B)/test_shutdown $(B)/test_pause $(B)/test_big_lock $(B)/test_machine_rebuild $(B)/test_fdt $(B)/test_console $(B)/test_virt \
-        $(B)/test_share_keyboard $(B)/test_vgpu_metal $(if $(GFX),$(B)/test_vgpu_virgl)
+        $(B)/test_vgpu_metal $(if $(GFX),$(B)/test_vgpu_virgl)
 
 all: $(TESTS) $(B)/hengevm $(B)/hengevm-ref $(B)/hvsparse
 
@@ -135,10 +135,6 @@ $(B)/test_machine_rebuild: tests/test_machine_rebuild.c $(ENGINE)
 $(B)/test_fdt: tests/test_fdt.c $(B)/fdt.o
 	$(CC) $(CFLAGS) $^ -o $@
 
-# PUT /.henge/keyboard: what henge-keyboard in a Linux desktop asks of the device.
-$(B)/test_share_keyboard: tests/test_share_keyboard.c $(B)/share.o
-	$(CC) $(CFLAGS) $^ -o $@
-
 # Native app lifecycle with real devices and networking; no restore assets.
 $(B)/test_dns_lifecycle: tests/test_dns_lifecycle.c $(B)/dns_proxy.o
 	$(CC) $(CFLAGS) $^ -o $@
@@ -151,6 +147,10 @@ $(B)/test_console: tests/test_console.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o 
 
 $(B)/test_virt: tests/test_virt.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/usb_host.o
 	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -o $@
+
+# PUT /.henge/keyboard: what henge-keyboard in a Linux desktop asks of the device.
+$(B)/test_share_keyboard: tests/test_share_keyboard.c $(B)/share.o
+	$(CC) $(CFLAGS) $^ -o $@
 
 # Henge's virt device tree against QEMU's (needs qemu-system-aarch64, dtc and uv).
 test-linux-dtb: $(B)/hengevm
@@ -408,14 +408,6 @@ test-display-mode-policy: $(B)/test_display_mode_policy
 	$(B)/test_display_mode_policy
 .PHONY: test-display-mode-policy
 
-# When the on-screen keyboard follows a Linux desktop (henge-keyboard): pure policy, no UIKit.
-$(B)/test_keyboard_follow: ios/Henge/KeyboardFollow.swift tests/test_keyboard_follow.swift | $(B)
-	xcrun --sdk macosx swiftc $^ -o $@
-
-test-keyboard-follow: $(B)/test_keyboard_follow
-	$(B)/test_keyboard_follow
-.PHONY: test-keyboard-follow
-
 test-display-routing: $(B)/test_display_targets $(B)/test_display_router $(B)/test_external_screen_plan $(B)/test_legacy_external_display $(B)/test_scene_manifest
 	$(B)/test_display_targets
 	$(B)/test_display_router
@@ -477,6 +469,14 @@ test-machine-model: $(B)/test_machine_model
 # I7: the Linux catalogue, hashes, space and build checks, and the download bookkeeping.
 $(B)/test_linux_catalogue: ios/Henge/LinuxCatalogue.swift ios/Henge/LinuxDownload.swift ios/Henge/RangedDownload.swift tests/test_linux_catalogue.swift | $(B)
 	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
+
+# When the on-screen keyboard follows a Linux desktop (henge-keyboard): pure policy, no UIKit.
+$(B)/test_keyboard_follow: ios/Henge/KeyboardFollow.swift tests/test_keyboard_follow.swift | $(B)
+	xcrun --sdk macosx swiftc $^ -o $@
+
+test-keyboard-follow: $(B)/test_keyboard_follow
+	$(B)/test_keyboard_follow
+.PHONY: test-keyboard-follow
 
 test-linux-catalogue: $(B)/test_linux_catalogue
 	$(B)/test_linux_catalogue

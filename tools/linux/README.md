@@ -9,7 +9,7 @@ Every script runs inside the builder container, so no cross compiler is needed.
 - `Dockerfile`: the builder image (`debian:trixie` with the build tools).
 - `build-uboot.sh`, `build-image.sh`, `customize.sh`, `rootfs/`: see Order.
 - `customize-desktop.sh`, `rootfs-desktop/`: extra files for the desktop image (`build-image.sh --desktop`).
-- `henge-guest/` (G9): the source of the `henge-guest` Debian package. It holds the grow and first-boot scripts (`/usr/lib/henge/`) and units (`/usr/lib/systemd/system/henge-*.service`, G8), and enables them in `postinst`. `build-guest-pkg.sh` builds the `.deb` on its own; `build-image.sh` builds it too and installs it in both images. P6 adds the shared-folder mount (`home-henge-Henge.mount` and `.automount`, `/etc/henge/davfs2.conf`); P7 adds the clipboard helper (`henge-clipboard` and a user unit), and 1.2.2 the keyboard helper (`henge-keyboard` and a user unit). `grow-check.py` tests the grow units, `share-check.py` the shared folder, `clipboard-check.py` the clipboard and `keyboard-check.py` the keyboard helper.
+- `henge-guest/` (G9): the source of the `henge-guest` Debian package. It holds the grow and first-boot scripts (`/usr/lib/henge/`) and units (`/usr/lib/systemd/system/henge-*.service`, G8), and enables them in `postinst`. `build-guest-pkg.sh` builds the `.deb` on its own; `build-image.sh` builds it too and installs it in both images. P6 adds the shared-folder mount (`home-henge-Henge.mount` and `.automount`, `/etc/henge/davfs2.conf`); P7 adds the clipboard helper (`henge-clipboard` and a user unit). `grow-check.py` tests the grow units, `share-check.py` the shared folder and `clipboard-check.py` the clipboard.
 - `run.sh`: runs a command in the builder image. `build/linux/` is mounted at `/out`, the repo's `tools/linux/` at `/tools` (read only), and a named volume at `/work` for source trees.
 
 `run.sh` builds the image on first use. `HENGE_LINUX_OUT` is the artefact directory. `run.sh`, `package-image.sh`, `serve.sh`, `qemu-ref.sh`, `qemu-check.py`, `balloon-check.py` and `sound-check.py` default to the author's `$HOME/Repos/Henge/build/linux`, so on any other Mac set it first (see From nothing). `smoke.py` and the Makefile targets default to `build/linux` of the main checkout, where all worktrees share the files.
@@ -113,6 +113,12 @@ Both units come from the `henge-guest` package. Raise `Version` in `henge-guest/
 - The desktop package list adds `wl-clipboard`, `xclip` and `python3`; the package only recommends them.
 - `clipboard-check.py` (`uv run`, `make test-linux-clipboard`) boots a clone of the desktop image with `--share` and `HV_INPUT_FILE` (`clip TEXT` and `getclip`), and checks each of the points above, plus the X11 mode through XWayland. `--image`, `--hengevm`, `--cpus` and `--work-dir` choose the run.
 
+## Packaging and catalogue (G7)
+
+- `package-image.sh --image FILE --kind console|desktop` packs the raw image with `build/hvsparse`, compresses it with `compression_tool -encode -a lzfse` to `debian-<kind>-<date>.hvsparse.lzfse`, then decodes and unpacks the result and checks the SHA-256 against the image (`--no-verify` skips this). It copies the firmware to `u-boot-<sha12>.bin` and adds or replaces the entry `debian-<kind>` in `linux-images.json`. Output goes to `build/linux/dist/`; `--out DIR` changes it. The manifest next to the image gives the kernel string and is checked against `image_sha256`. `--firmware`, `--date` and `--min-build` override the defaults (`build/linux/u-boot.bin`, today in GMT+12, the Info.plist build plus one).
+- `linux-images.json` is `{"images": [...]}`. Each entry has `id`, `name`, `version`, `kind`, `diskURL`, `diskBytes` (download), `diskSHA256`, `unpackedBytes` (the `.hvsparse` file, the data to write), `logicalBytes` (the disk), `firmwareURL`, `firmwareBytes`, `firmwareSHA256`, `kernel`, `minBuild`. The two URLs are relative to the catalogue's URL.
+- `serve.sh` serves `build/linux/dist/` on the LAN address (`--bind`, `--port`, `--dir`). It asks before it opens the port; `--yes` skips the question. It answers `Range` requests, which `http.server` does not, because the app resumes downloads with them. Stop it with Ctrl-C.
+
 ## Keyboard follows the focus
 
 The device shows its on-screen keyboard when the focused program in the desktop wants text, and hides it after. Keys still arrive through the virtio keyboard.
@@ -150,12 +156,6 @@ Limits:
 - Not tested: a full Plasma session in the guest (KWin was tested alone, with its virtual backend), and the app on a device.
 
 `keyboard-check.py` (`uv run`, `make test-linux-keyboard`) boots a clone of the desktop image with `--share` and `HV_INPUT_FILE` (`getkbd` prints the last request), and checks in the labwc session: the service runs; foot in focus gives `show`; a window with no text field gives `hide` and `show` comes back when it closes; no window gives `hide`; the helper sends `hide` when it stops and `show` when it starts with a text field in focus. `--gtk` installs zenity in the clone and checks a GTK entry. `tests/test_share_keyboard.c` (in `make test`) checks the endpoint and `make test-keyboard-follow` the app's policy.
-
-## Packaging and catalogue (G7)
-
-- `package-image.sh --image FILE --kind console|desktop` packs the raw image with `build/hvsparse`, compresses it with `compression_tool -encode -a lzfse` to `debian-<kind>-<date>.hvsparse.lzfse`, then decodes and unpacks the result and checks the SHA-256 against the image (`--no-verify` skips this). It copies the firmware to `u-boot-<sha12>.bin` and adds or replaces the entry `debian-<kind>` in `linux-images.json`. Output goes to `build/linux/dist/`; `--out DIR` changes it. The manifest next to the image gives the kernel string and is checked against `image_sha256`. `--firmware`, `--date` and `--min-build` override the defaults (`build/linux/u-boot.bin`, today in GMT+12, the Info.plist build plus one).
-- `linux-images.json` is `{"images": [...]}`. Each entry has `id`, `name`, `version`, `kind`, `diskURL`, `diskBytes` (download), `diskSHA256`, `unpackedBytes` (the `.hvsparse` file, the data to write), `logicalBytes` (the disk), `firmwareURL`, `firmwareBytes`, `firmwareSHA256`, `kernel`, `minBuild`. The two URLs are relative to the catalogue's URL.
-- `serve.sh` serves `build/linux/dist/` on the LAN address (`--bind`, `--port`, `--dir`). It asks before it opens the port; `--yes` skips the question. It answers `Range` requests, which `http.server` does not, because the app resumes downloads with them. Stop it with Ctrl-C.
 
 ## Checks on the Mac
 
