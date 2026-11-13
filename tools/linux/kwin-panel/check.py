@@ -60,6 +60,7 @@ def active():
 def install():
     """The files where the package and the image put them."""
     for src, dst in (("henge-guest/usr/lib/henge/henge-keyboard", "/usr/lib/henge/henge-keyboard"),
+                     ("henge-guest/usr/lib/henge/kwin-keyboard.js", "/usr/lib/henge/kwin-keyboard.js"),
                      ("henge-guest/usr/share/applications/henge-keyboard.desktop", "/usr/share/applications/henge-keyboard.desktop"),
                      ("henge-guest/etc/xdg/plasma-workspace/env/henge-keyboard.sh", "/etc/xdg/plasma-workspace/env/henge-keyboard.sh"),
                      ("rootfs-desktop/etc/xdg/kwinrc", "/etc/xdg/kwinrc")):
@@ -125,6 +126,40 @@ def main():
         stop(win)
         wait("the window closed: no hide at the host", lambda: lines(HOSTLOG)[-1:] == ["hide"])
         print("ok: the window closes: hide", flush=True)
+
+        # A panel at the bottom edge, as Plasma's: the window must end at the keyboard's top edge, not above it
+        win = start_window(env, "--text")
+        window_is(W, H, "a maximized window")
+        dock = subprocess.Popen(["python3", f"{TOOLS}/kwin-panel/dock.py", "bottom", "44"], env=dict(env, WAYLAND_DISPLAY="wayland-0"))
+        window_is(W, H - 44, "a 44 px panel at the bottom")
+        set_height(0.4)
+        window_is(W, H - 320, "the keyboard covers 0.4, with the panel under it")
+        set_height(0.02)
+        window_is(W, H - 44, "a keyboard lower than the panel")
+        set_height(0)
+        window_is(W, H - 44, "the keyboard goes down")
+        # The keyboard is up when the panel goes and comes back
+        set_height(0.4)
+        window_is(W, H - 320, "the keyboard covers 0.4")
+        stop(dock)
+        time.sleep(3)
+        window_is(W, H - 320, "the panel goes while the keyboard is up")
+        set_height(0)
+        window_is(W, H, "the keyboard goes down, no panel")
+        # A panel at the top takes nothing from the keyboard's side
+        dock = subprocess.Popen(["python3", f"{TOOLS}/kwin-panel/dock.py", "top", "44"], env=dict(env, WAYLAND_DISPLAY="wayland-0"))
+        window_is(W, H - 44, "a 44 px panel at the top")
+        set_height(0.4)
+        window_is(W, H - 320 - 44, "the keyboard covers 0.4, with the panel at the top")
+        # A very high keyboard (a phone on its side): the window keeps a least height, with its end under the keyboard
+        set_height(0.9)
+        window_is(W, 180, "the keyboard covers 0.9")
+        set_height(0)
+        window_is(W, H - 44, "the keyboard goes down")
+        stop(dock)
+        window_is(W, H, "no panel")
+        stop(win)
+        wait("the window closed: no hide at the host", lambda: lines(HOSTLOG)[-1:] == ["hide"])
 
         # No text field: the person opened the keyboard
         requests = lines(HOSTLOG)

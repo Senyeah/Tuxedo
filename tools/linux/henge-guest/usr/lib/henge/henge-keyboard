@@ -27,6 +27,7 @@ HOST = os.environ.get("HENGE_HOST", "10.0.2.4")
 HIDE_DELAY = 0.3  # focus that moves between two fields is deactivate, then activate
 RETRY = 2.0
 KWIN = ["org.kde.KWin", "/VirtualKeyboard", "org.kde.kwin.VirtualKeyboard"]
+MIN_ROOM = 180  # the least height KWin's panel leaves a window, in the compositor's units
 
 
 def log(*a):
@@ -283,6 +284,42 @@ class Height:
                 os.write(self.w, b"h")
 
 
+class Area:
+    """The room that panels (Plasma's) take at the top and bottom of the screen, from kwin-keyboard.js in KWin.
+    The script calls a method that nothing has; "busctl monitor" shows the call."""
+
+    NAME = "henge-keyboard"
+
+    def __init__(self):
+        self.top, self.bottom, self.buf = 0, 0, b""
+        match = "type='method_call',interface='dev.henge.Keyboard',member='area'"
+        self.p = subprocess.Popen(["busctl", "--user", "--json=short", "monitor", "--match=" + match],
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self.fd = self.p.stdout.fileno()
+        script = os.path.join(os.path.dirname(os.path.realpath(__file__)), "kwin-keyboard.js")
+        scripting = ["org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting"]
+        kwin_call("call", *scripting, "unloadScript", "s", self.NAME)  # one from a helper that ran before
+        if not (kwin_call("call", *scripting, "loadScript", "ss", script, self.NAME) and kwin_call("call", *scripting, "start")):
+            log("KWin did not load kwin-keyboard.js; a panel at the bottom edge leaves a gap under the window")
+
+    def read(self):
+        """Takes what the monitor has. True when the room changed."""
+        data = os.read(self.fd, 65536)
+        if not data:
+            self.fd = None  # the monitor stopped: the last numbers stay
+            return False
+        self.buf += data
+        *lines, self.buf = self.buf.split(b"\n")
+        was = (self.top, self.bottom)
+        for line in lines:
+            try:
+                top, bottom = json.loads(line)["payload"]["data"][:2]
+                self.top, self.bottom = max(0, int(top)), max(0, int(bottom))
+            except (ValueError, KeyError, TypeError):
+                pass
+        return was != (self.top, self.bottom)
+
+
 class Panel:
     """KWin's input panel: one clear pixel, stretched. KWin takes the input region as the keyboard's place."""
 
@@ -328,11 +365,11 @@ class Panel:
             return self.logical
         return (self.mode[0] // self.scale, self.mode[1] // self.scale) if self.mode else None
 
-    def apply(self, fraction):
+    def apply(self, fraction, area):
         size = self.size()
         if not size or size[0] <= 0 or size[1] <= 0:
             return
-        want = (size[0], round(fraction * size[1]))
+        want = (size[0], panel_height(fraction, size[1], area.top, area.bottom))
         if want == self.shown or (self.shown is None and want[1] == 0):
             return
         wl = self.wl
@@ -350,6 +387,16 @@ class Panel:
         self.shown = want
 
 
+def panel_height(fraction, height, top, bottom):
+    """The panel's height for a keyboard that covers `fraction` of a screen `height` high.
+    KWin puts the panel's bottom edge `bottom` above the screen's (a Plasma panel is there), so that much less
+    brings the panel's top edge to the keyboard's. A window keeps MIN_ROOM when the keyboard is very high."""
+    keyboard = round(fraction * height)
+    if keyboard <= 0:
+        return 0
+    return max(0, min(keyboard - bottom, height - top - bottom - MIN_ROOM))
+
+
 def follow_kwin_input_method(wl, reg, found, sender):
     lock = open(lock_path(), "a")
     try:
@@ -361,6 +408,7 @@ def follow_kwin_input_method(wl, reg, found, sender):
     if all(k in found for k in ("zwp_input_panel_v1", "wl_compositor", "wl_shm", "wp_viewporter", "wl_output")):
         panel = Panel(wl, reg, found)
     height = Height() if panel else None
+    area = Area() if panel else None
     context = None  # the active context's id
     real = False  # it has a text field. KWin sends surrounding_text only then
     forced = 0.0  # until when the next activate is this program's own forceActivate
@@ -368,11 +416,14 @@ def follow_kwin_input_method(wl, reg, found, sender):
     tries = 0
     while True:
         waits = [w for w in (sender.step(), None if check is None else max(0.0, check - time.monotonic())) if w is not None]
-        ready = select.select([wl.s] + ([height.r] if height else []), [], [], min(waits) if waits else None)[0]
+        fds = [wl.s] + ([height.r] if height else []) + ([area.fd] if area and area.fd is not None else [])
+        ready = select.select(fds, [], [], min(waits) if waits else None)[0]
+        if area and area.fd in ready and area.read():
+            panel.apply(height.value, area)
         if height and height.r in ready:
             os.read(height.r, 4096)
             was = panel.shown and panel.shown[1] > 0
-            panel.apply(height.value)
+            panel.apply(height.value, area)
             if height.value > 0 and not was:
                 check, tries = time.monotonic(), 0
             elif height.value == 0:
@@ -400,7 +451,7 @@ def follow_kwin_input_method(wl, reg, found, sender):
                 elif panel:
                     panel.event(obj, op, a)
             if panel and height:
-                panel.apply(height.value)
+                panel.apply(height.value, area)
         # The device's keyboard is up: KWin must show the panel, with a text field or not.
         # forceActivate does that; it needs KWIN_IM_SHOW_ALWAYS=1 when the last input was not a touch.
         if check is not None and time.monotonic() >= check:
