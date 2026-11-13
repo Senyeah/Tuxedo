@@ -71,7 +71,9 @@ typedef struct Session {
     pthread_mutex_t mu;
     pthread_cond_t cv;
     Packet *head, *tail;
-    int npk, pending, eos, extra_sent;
+    int npk, pending, eos, extra_sent, bframes;
+    int64_t in_pts[3]; /* the first input times: the decode time shift */
+    int nin;
     size_t pk_bytes;
     OSStatus async_err;
 } Session;
@@ -410,6 +412,7 @@ static void enc_output(void *ref, void *frame_ref, OSStatus st, VTEncodeInfoFlag
             CMTime pts = CMSampleBufferGetPresentationTimeStamp(sb), dts = CMSampleBufferGetDecodeTimeStamp(sb), dur = CMSampleBufferGetDuration(sb);
             p->h.pts = CMTimeConvertScale(pts, s->timescale, kCMTimeRoundingMethod_RoundHalfAwayFromZero).value;
             p->h.dts = CMTIME_IS_VALID(dts) ? CMTimeConvertScale(dts, s->timescale, kCMTimeRoundingMethod_RoundHalfAwayFromZero).value : p->h.pts;
+
             p->h.duration = CMTIME_IS_VALID(dur) ? CMTimeConvertScale(dur, s->timescale, kCMTimeRoundingMethod_RoundHalfAwayFromZero).value : 0;
             CFArrayRef at = CMSampleBufferGetSampleAttachmentsArray(sb, false);
             CFDictionaryRef a = at && CFArrayGetCount(at) ? CFArrayGetValueAtIndex(at, 0) : NULL;
@@ -504,7 +507,7 @@ static int do_enc_open(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     uint32_t id;
     Session *s = session_new(c, KIND_ENC, &id);
     if (!s) return fail(c, req, HV_VC_E_LIMIT, "%d sessions open already", HV_VC_MAX_SESSIONS);
-    s->codec = o.codec, s->w = o.width, s->h = o.height, s->timescale = (int32_t)o.timescale;
+    s->codec = o.codec, s->w = o.width, s->h = o.height, s->timescale = (int32_t)o.timescale, s->bframes = !!(o.flags & HV_VC_ENC_F_BFRAMES);
     CFMutableDictionaryRef spec = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     CFStringRef eid = CFStringCreateWithCString(NULL, e->info.encoder_id, kCFStringEncodingUTF8);
     CFDictionarySetValue(spec, kVTVideoEncoderSpecification_EncoderID, eid);
@@ -590,11 +593,18 @@ static int do_enc_open(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     return ok(c, req, &r, sizeof r);
 }
 
+/* VideoToolbox's decode times are the input times in decode order, so with B-frames dts > pts. As FFmpeg's
+   videotoolboxenc, shift them by two frames (the HEVC encoder reorders by up to 2), and give no packet out before
+   the third frame is in, when the shift is known. Called with mu held. */
+static int dts_known(const Session *s) { return !s->bframes || s->nin >= 3 || s->eos; }
+static int64_t dts_shift(const Session *s) { return !s->bframes || s->nin < 2 ? 0 : s->in_pts[s->nin >= 3 ? 2 : 1] - s->in_pts[0]; }
+static uint32_t ready_packets(const Session *s) { return dts_known(s) ? (uint32_t)s->npk : 0; }
+
 static int do_enc_frame(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     HvVcEncFrame f;
     if (req->len != sizeof f) return fail(c, req, HV_VC_E_INVAL, "ENC_FRAME has the wrong length");
     memcpy(&f, p, sizeof f);
-    if (f.flags & ~(uint32_t)(HV_VC_ENC_FRAME_KEY | HV_VC_ENC_FRAME_EOS)) return fail(c, req, HV_VC_E_INVAL, "unknown flags");
+    if (f.flags & ~(uint32_t)(HV_VC_ENC_FRAME_KEY | HV_VC_ENC_FRAME_EOS | HV_VC_ENC_FRAME_FREE)) return fail(c, req, HV_VC_E_INVAL, "unknown flags");
     Session *s = session_get(c, f.session, KIND_ENC);
     if (!s) return fail(c, req, HV_VC_E_HANDLE, "no such encoder");
     pthread_mutex_lock(&s->mu);
@@ -608,8 +618,9 @@ static int do_enc_frame(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
         pthread_mutex_lock(&s->mu);
         s->eos = 1;
         pthread_cond_broadcast(&s->cv);
+        HvVcEncFrameReply r = {ready_packets(s), s->pending};
         pthread_mutex_unlock(&s->mu);
-        return st == noErr ? ok(c, req, NULL, 0) : vt_fail(c, req, "flush", st);
+        return st == noErr ? ok(c, req, &r, sizeof r) : vt_fail(c, req, "flush", st);
     }
     if (full) return fail(c, req, HV_VC_E_LIMIT, "too many packets waiting: read them with ENC_PACKET");
     Frame *fr = frame_get(c, f.handle);
@@ -620,15 +631,20 @@ static int do_enc_frame(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
         const void *k = kVTEncodeFrameOptionKey_ForceKeyFrame, *v = kCFBooleanTrue;
         props = CFDictionaryCreate(NULL, &k, &v, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     }
+    pthread_mutex_lock(&s->mu);
+    if (s->nin < 3) s->in_pts[s->nin++] = f.pts;
+    pthread_mutex_unlock(&s->mu);
     OSStatus st = VTCompressionSessionEncodeFrame(s->enc, fr->pb, CMTimeMake(f.pts, s->timescale),
                                                   f.duration > 0 ? CMTimeMake(f.duration, s->timescale) : kCMTimeInvalid, props, NULL, NULL);
     if (props) CFRelease(props);
     if (st != noErr) return vt_fail(c, req, "encode", st);
+    if (f.flags & HV_VC_ENC_FRAME_FREE) frame_drop(c, fr);
     /* after the call: its callback can come first, and only this thread reads pending while it is below 0 */
     pthread_mutex_lock(&s->mu);
     s->pending++;
+    HvVcEncFrameReply r = {ready_packets(s), s->pending};
     pthread_mutex_unlock(&s->mu);
-    return ok(c, req, NULL, 0);
+    return ok(c, req, &r, sizeof r);
 }
 
 static int do_enc_packet(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
@@ -646,8 +662,9 @@ static int do_enc_packet(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     int timed_out = 0;
     while (!s->head && s->pending > 0 && !s->async_err && wait && !timed_out)
         timed_out = pthread_cond_timedwait(&s->cv, &s->mu, &until) == ETIMEDOUT;
-    Packet *pk = s->head;
+    Packet *pk = dts_known(s) ? s->head : NULL; /* unknown: only before three frames are in, so no wait helps */
     if (pk) {
+        pk->h.dts -= dts_shift(s);
         s->head = pk->next;
         if (!s->head) s->tail = NULL;
         s->npk--;

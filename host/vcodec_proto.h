@@ -200,8 +200,12 @@ typedef struct {
     uint32_t reserved;
 } HvVcEncOpen;
 
-/* ---- ENC_FRAME: HvVcEncFrame. Reply: no payload. The host keeps its own reference: free the handle at once if done. ---- */
-enum { HV_VC_ENC_FRAME_KEY = 1, HV_VC_ENC_FRAME_EOS = 2 /* no frame: finish the stream */ };
+/* ---- ENC_FRAME: HvVcEncFrame. Reply: HvVcEncFrameReply. The encoder keeps its own reference to the frame. ---- */
+enum {
+    HV_VC_ENC_FRAME_KEY = 1,
+    HV_VC_ENC_FRAME_EOS = 2, /* no frame: finish the stream */
+    HV_VC_ENC_FRAME_FREE = 4, /* free the handle once the frame is given to the encoder (saves a FRAME_FREE) */
+};
 typedef struct {
     uint32_t session;
     uint32_t handle;
@@ -210,6 +214,11 @@ typedef struct {
     uint32_t flags;
     uint32_t reserved;
 } HvVcEncFrame;
+
+typedef struct {
+    uint32_t ready; /* packets waiting for ENC_PACKET */
+    int32_t pending; /* frames in the encoder */
+} HvVcEncFrameReply;
 
 /* ---- ENC_PACKET: HvVcEncPacketReq. Reply: HvVcPacket + extradata + data, or E_AGAIN, or E_EOF. ---- */
 enum { HV_VC_PACKET_WAIT = 1 /* wait up to timeout_ms for a packet */ };

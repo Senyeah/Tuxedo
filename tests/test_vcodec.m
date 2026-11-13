@@ -141,7 +141,7 @@ static double psnr_y(CVPixelBufferRef a, CVPixelBufferRef b) {
 typedef struct {
     uint8_t *data[NFRAMES + 4];
     size_t len[NFRAMES + 4];
-    int64_t pts[NFRAMES + 4];
+    int64_t pts[NFRAMES + 4], dts[NFRAMES + 4];
     int key[NFRAMES + 4];
     int n, hdr10;
     uint8_t extra[1024];
@@ -276,7 +276,7 @@ static void drain(Conn *c, uint32_t sess, Stream *s, int wait) {
             size_t len = c->len - sizeof p - p.extradata_len;
             s->data[s->n] = malloc(len);
             memcpy(s->data[s->n], c->buf + sizeof p + p.extradata_len, len);
-            s->len[s->n] = len, s->pts[s->n] = p.pts, s->key[s->n] = p.flags & HV_VC_PACKET_KEY;
+            s->len[s->n] = len, s->pts[s->n] = p.pts, s->dts[s->n] = p.dts, s->key[s->n] = p.flags & HV_VC_PACKET_KEY;
             s->n++;
         }
     }
@@ -348,6 +348,9 @@ static int transcode(Conn *c, const Stream *in, const HvVcEncOpen *o, uint32_t d
     CHECK(call(c, HV_VC_ENC_FRAME, &eos, sizeof eos, NULL, 0) == 0, "EOS");
     drain(c, enc, out, 1);
     CHECK(sent == NFRAMES && out->n == NFRAMES && out->extra_len, "transcode: %d frames in, %d packets out", sent, out->n);
+    int bad_dts = 0;
+    for (int i = 0; i < out->n; i++) bad_dts += out->dts[i] > out->pts[i] || (i && out->dts[i] <= out->dts[i - 1]);
+    CHECK(!bad_dts, "decode times rise and are not after the presentation times (%d bad)", bad_dts);
     HvVcSession m = {dec, 0};
     CHECK(call(c, HV_VC_DEC_CLOSE, &m, sizeof m, NULL, 0) == 0, "DEC_CLOSE");
     CHECK(call(c, HV_VC_DEC_CLOSE, &m, sizeof m, NULL, 0) == HV_VC_E_HANDLE, "DEC_CLOSE twice");
@@ -913,8 +916,13 @@ static void test_fuzz(const Stream *in, int iterations) {
     CHECK(replies > iterations / 2, "most messages got a reply");
 }
 
-int main(void) {
+int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
+    if (argc == 3 && !strcmp(argv[1], "--serve")) { /* a host for henge-xcode --unix PATH, with no guest */
+        if (hv_vcodec_start(argv[2])) return 1;
+        printf("serving on %s\n", argv[2]);
+        for (;;) pause();
+    }
     CVPixelBufferRef src[NFRAMES];
     for (int i = 0; i < NFRAMES; i++) src[i] = make_frame(i);
     if (!getenv("VCODEC_NO_SKIP")) {
