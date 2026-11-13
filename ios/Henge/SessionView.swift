@@ -93,6 +93,10 @@ struct SessionView: View {
     private var consoleShown: Bool { mac.guest == .linux && consoleChoice == .console }
     /// LINUX-PLAN-12: the picture takes direct touches. Only while the phone shows the picture; the saved choice stays.
     /// Upright on the phone: the picture under the status bar and the home bar, into the corners.
+    /// The window's own bottom inset: the home bar, never the keyboard.
+    private var windowBottom: CGFloat? {
+        UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.safeAreaInsets.bottom
+    }
     private func wholeScreen(landscape: Bool) -> Bool {
         current.wholeScreen == true && current.followsPhoneScreen && !landscape && !display.isExternal
     }
@@ -120,7 +124,9 @@ struct SessionView: View {
             let landscape = full.width > full.height
             let window = WindowKey(size: full, insets: DisplayInsets(top: insets.top, left: insets.leading, bottom: insets.bottom, right: insets.trailing))
             let layout = Layout(full: full, insets: insets, landscape: landscape, zoomed: zoomShown && !consoleShown, typing: typing,
-                                centre: zoomCentre, aspect: layoutAspect, console: consoleShown, whole: wholeScreen(landscape: landscape),
+                                centre: zoomCentre, aspect: layoutAspect, console: consoleShown,
+                                room: DisplayModePolicy.phoneRoom(safe: window.insets, windowBottom: windowBottom ?? insets.bottom,
+                                                                  landscape: landscape, whole: wholeScreen(landscape: landscape)),
                                 native: current.followsPhoneScreen ? windowMode.map { DisplayModePolicy.framePoints($0, contentsScale: Device.nativeScale) } : nil)
             ZStack(alignment: .topLeading) {
                 (landscape || zoomShown || layout.native != nil ? Color.black : Desk.page)
@@ -338,7 +344,7 @@ struct SessionView: View {
         }
 
         init(full: CGSize, insets: EdgeInsets, landscape: Bool, zoomed: Bool, typing: Bool, centre: CGPoint, aspect: CGFloat,
-             console: Bool, whole: Bool, native: CGSize?) {
+             console: Bool, room: DisplayInsets, native: CGSize?) {
             self.insets = insets
             self.native = native
             let big = full.height >= 600 // an iPad on its side, or a window on one
@@ -372,13 +378,12 @@ struct SessionView: View {
                 toolsY = 0
                 pad = .zero
             } else if let native {
-                // Whole pixels, so a guest pixel is a layer pixel. The home bar keeps its room; a keyboard's inset does not.
-                // The whole screen: the picture's room ignores the insets; the controls still keep them.
+                // Whole pixels, so a guest pixel is a layer pixel. The room is phoneRoom's, as for the guest's size;
+                // the controls keep the real insets.
                 let px = Device.nativeScale
-                let room = whole ? EdgeInsets() : insets
-                let safeW = full.width - room.leading - room.trailing
-                let safeH = full.height - room.top - min(room.bottom, 40)
-                screen = CGRect(x: ((room.leading + (safeW - native.width) / 2) * px).rounded() / px,
+                let safeW = full.width - room.left - room.right
+                let safeH = full.height - room.top - room.bottom
+                screen = CGRect(x: ((room.left + (safeW - native.width) / 2) * px).rounded() / px,
                                 y: ((room.top + (safeH - native.height) / 2) * px).rounded() / px,
                                 width: native.width, height: native.height)
                 touch = CGRect(origin: .zero, size: full)
@@ -713,9 +718,9 @@ struct SessionView: View {
         lastWindow = window
         guard current.followsPhoneScreen, full.width > 0 else { return }
         // The keyboard raises SwiftUI's bottom inset; the window's own inset does not hold it.
-        let bottom = typing ? (UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.safeAreaInsets.bottom ?? insets.bottom) : insets.bottom
-        let room = wholeScreen(landscape: full.width > full.height) ? .zero
-            : DisplayInsets(top: insets.top, left: insets.left, bottom: bottom, right: insets.right)
+        let bottom = windowBottom ?? insets.bottom
+        let room = DisplayModePolicy.phoneRoom(safe: insets, windowBottom: bottom, landscape: full.width > full.height,
+                                               whole: wholeScreen(landscape: full.width > full.height))
         let mode = DisplayModePolicy.phoneMode(window: full, insets: room, nativeScale: Device.nativeScale)
         guard mode != windowMode else { return }
         HengeLog.log("display", "window \(Int(full.width))x\(Int(full.height)) pt, safe insets t\(insets.top) l\(insets.left) b\(insets.bottom) (used \(bottom)) r\(insets.right), typing \(typing), "

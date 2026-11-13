@@ -124,6 +124,32 @@ struct DisplayModePolicyTests {
         precondition(target(nil, nil, mem, true) == fhd && target(nil, nil, mem, false) == nil)
         precondition(target(nil, nil, nil, true) == nil)
 
+        // phoneRoom: the keyboard never changes the guest's size; upright the picture starts at the island's bottom.
+        let phone = CGSize(width: 402, height: 874)
+        func phoneSize(_ safe: DisplayInsets, windowBottom: CGFloat, landscape: Bool = false, whole: Bool = false) -> String {
+            let window = landscape ? CGSize(width: 874, height: 402) : phone
+            let m = DisplayModePolicy.phoneMode(window: window, insets: DisplayModePolicy.phoneRoom(safe: safe, windowBottom: windowBottom,
+                                                                                                    landscape: landscape, whole: whole),
+                                                nativeScale: 3)
+            return "\(m.w)x\(m.h)"
+        }
+        let upright = DisplayInsets(top: 62, left: 0, bottom: 34, right: 0)
+        let keyboardHiding = DisplayInsets(top: 62, left: 0, bottom: 56, right: 0)
+        let keyboardUp = DisplayInsets(top: 62, left: 0, bottom: 336, right: 0)
+        precondition(phoneSize(upright, windowBottom: 34) == "1200x2392") // 874 - 42 - 34 pt
+        precondition(phoneSize(keyboardHiding, windowBottom: 34) == "1200x2392")
+        precondition(phoneSize(keyboardUp, windowBottom: 34) == "1200x2392")
+        precondition(DisplayModePolicy.phoneRoom(safe: upright, windowBottom: 34, landscape: false, whole: false).top == 42)
+        let notch = DisplayInsets(top: 47, left: 0, bottom: 34, right: 0)
+        precondition(DisplayModePolicy.phoneRoom(safe: notch, windowBottom: 34, landscape: false, whole: false).top == 47)
+        precondition(phoneSize(upright, windowBottom: 34, whole: true) == "1200x2616")
+        let onSide = DisplayInsets(top: 0, left: 62, bottom: 20, right: 62)
+        // On its side: 38 pt at each side and none at the bottom, between the safe area (2248x1144) and the whole screen
+        precondition(phoneSize(onSide, windowBottom: 20, landscape: true) == "2392x1200")
+        precondition(phoneSize(onSide, windowBottom: 20, landscape: true, whole: true) == "2392x1200")
+        let notchSide = DisplayInsets(top: 0, left: 47, bottom: 21, right: 47)
+        precondition(DisplayModePolicy.phoneRoom(safe: notchSide, windowBottom: 21, landscape: true, whole: false).left == 47)
+
         print("test_display_mode_policy: ok")
     }
 }

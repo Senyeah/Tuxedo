@@ -28,6 +28,26 @@ enum DisplayModePolicy {
         return GuestMode(w: m.w, h: m.h)
     }
 
+    /// Upright under a Dynamic Island the picture starts at the island's bottom, this far above the safe area.
+    static let islandTrim: CGFloat = 20
+    /// On its side, between the safe area and the whole screen: the island and the corners take a little of the picture.
+    static let sideTrim: CGFloat = 24
+
+    /// The room the phone's own mode leaves around the picture. The bottom is the window's own inset (the home bar):
+    /// SwiftUI's also holds the keyboard and changes while it moves, which changed the guest's size at each show and hide.
+    static func phoneRoom(safe: DisplayInsets, windowBottom: CGFloat, landscape: Bool, whole: Bool) -> DisplayInsets {
+        if whole && !landscape { return .zero }
+        var room = safe
+        room.bottom = windowBottom
+        if !landscape && safe.top >= 54 { room.top = safe.top - islandTrim } // an island: 59 pt or more; a notch: 44-50
+        if landscape && max(safe.left, safe.right) >= 54 {
+            room.left = max(safe.left - sideTrim, 0)
+            room.right = max(safe.right - sideTrim, 0)
+            room.bottom = 0 // the home bar goes over the picture
+        }
+        return room
+    }
+
     /// The guest's size in points: one guest pixel per `contentsScale` layer pixel, so it is drawn 1:1.
     static func framePoints(_ mode: GuestMode, contentsScale: CGFloat) -> CGSize {
         CGSize(width: CGFloat(mode.w) / contentsScale, height: CGFloat(mode.h) / contentsScale)
