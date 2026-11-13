@@ -4,7 +4,8 @@
 #                henge-archive.asc
 #   $OUT/source  ffmpeg-<release>-henge<N>/: the FFmpeg tarball, the patch, build-ffmpeg.sh, ffmpeg.manifest, the Henge
 #                files of the build (henge-ffmpeg-src.tar.xz), README.txt, SHA256SUMS
-# It adds henge-ffmpeg (build-ffmpeg-pkg.sh) and henge-guest (built now) to the pool. A pool file is never replaced
+# It adds henge-ffmpeg (build-ffmpeg-pkg.sh), henge-codec-dkms (build-codec-dkms-pkg.sh) and henge-guest (built now)
+# to the pool. A pool file is never replaced
 # with other content: raise the version instead. Each henge-ffmpeg in the pool must have its source directory.
 # The private key is only in $HENGE_APT_GNUPGHOME (default ~/.henge-apt-key), never in the repository.
 #
@@ -51,7 +52,7 @@ if [ "${1:-}" = --inner ]; then
     [ "$(sed -n 's/^patch_sha256=//p' "$N/ffmpeg.manifest")" = "$(sha256sum "$N/ffmpeg-henge.patch" | cut -d' ' -f1)" ] ||
         die "ffmpeg.manifest is not from this patch; run make linux-ffmpeg linux-ffmpeg-pkg"
     (cd /src && tar --sort=name --mtime=@$SOURCE_DATE_EPOCH --owner=0 --group=0 --numeric-owner --mode=u+rwX,go+rX,go-w \
-        -cf - LICENSE host/vcodec_proto.h tools/linux/versions.env tools/linux/snapshot-apt.sh tools/linux/build-ffmpeg.sh \
+        -cf - LICENSE host/vcodec_proto.h host/vcodec_dev.h tools/linux/versions.env tools/linux/snapshot-apt.sh tools/linux/build-ffmpeg.sh \
         tools/linux/build-ffmpeg-pkg.sh tools/linux/henge-ffmpeg tools/linux/hvcodec/ffmpeg-henge.patch \
         tools/linux/hvcodec/ffmpeg-henge.7.md tools/linux/hvcodec/manpage-check.py tools/linux/hvcodec/henge-codec-info.c \
         tools/linux/hvcodec/libhvcodec) | xz -9 -T1 > "$N/henge-ffmpeg-src.tar.xz"
@@ -62,7 +63,7 @@ ffmpeg-$FFMPEG_VERSION.tar.xz   the unmodified FFmpeg release (https://ffmpeg.or
 ffmpeg-henge.patch          the Henge patch to it
 build-ffmpeg.sh             the build script
 henge-ffmpeg-src.tar.xz     the Henge files of the build, at their places in the Henge repository:
-                            libhvcodec, henge-codec-info, vcodec_proto.h, the man page, the package scripts
+                            libhvcodec, henge-codec-info, vcodec_proto.h, vcodec_dev.h, the man page, the package scripts
 ffmpeg.manifest             the hashes of each part, the configure line, and the Debian package versions
 SHA256SUMS                  the SHA-256 of each file here
 
@@ -130,6 +131,7 @@ URL=${HENGE_APT_URL:-https://walkies.site/henge-linux-catalogue}
 PUBKEY=$HERE/henge-archive.asc
 KEYRING=$HERE/henge-guest/usr/share/keyrings/henge-archive.gpg
 FFDEB=$OUT/ffmpeg/henge-ffmpeg_${VER}_arm64.deb
+CODECDEB=$OUT/codec/henge-codec-dkms_$(sed -n 's/^Version: //p' "$HERE/henge-codec-dkms/DEBIAN/control")_all.deb
 hgpg() { gpg --homedir "$GNUPGHOME" --batch "$@"; }
 fpr_of() { hgpg --with-colons --show-keys "$1" 2>/dev/null | awk -F: '$1 == "fpr" {print $10; exit}'; }
 
@@ -152,10 +154,11 @@ if [ $RSYNC = 0 ] && [ $CHECK = 1 ]; then
     :
 else
     [ -f "$FFDEB" ] || die "no $FFDEB; run make linux-ffmpeg-pkg"
+    [ -f "$CODECDEB" ] || die "no $CODECDEB; run make linux-codec-dkms"
     STAGE=$OUT/apt-stage
     rm -rf "$STAGE" && mkdir -p "$STAGE"
     HENGE_LINUX_OUT=$STAGE "$HERE/build-guest-pkg.sh" >/dev/null
-    cp "$FFDEB" "$STAGE/"
+    cp "$FFDEB" "$CODECDEB" "$STAGE/"
     docker run --rm -i --platform linux/arm64 -v "$OUT":/out -v "$STAGE":/stage -v "$ROOT":/src:ro \
         debian:trixie sh /src/tools/linux/publish-apt.sh --inner
     rm -rf "$STAGE"

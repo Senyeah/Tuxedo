@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "vcodec.h"
+#include "virtio_hvcodec.h"
 #include "vt_caps.h"
 #include "vt_decode.h"
 
@@ -1104,6 +1105,175 @@ static void test_fuzz(const Stream *in, int iterations) {
     CHECK(replies > iterations / 2, "most messages got a reply");
 }
 
+/* ---- the device's contexts (devices/virtio_hvcodec.c), with a stand-in for the device ---- */
+
+typedef struct {
+    HvHvcodecIo io;
+    const uint8_t *msg;
+    uint8_t *reply;
+    size_t reply_len;
+    int replies;
+} FakeIo;
+
+static uint32_t fio_read(HvHvcodecIo *io, uint32_t off, void *buf, uint32_t n) {
+    FakeIo *f = io->priv;
+    if (off > io->msg_len) return 0;
+    if (n > io->msg_len - off) n = io->msg_len - off;
+    memcpy(buf, f->msg + off, n);
+    return n;
+}
+
+static int fio_reply(HvHvcodecIo *io, const struct iovec *iov, int n) {
+    FakeIo *f = io->priv;
+    f->replies++;
+    size_t total = 0;
+    for (int i = 0; i < n; i++) total += iov[i].iov_len;
+    f->reply = realloc(f->reply, total + 1);
+    f->reply_len = 0;
+    for (int i = 0; i < n; i++) memcpy(f->reply + f->reply_len, iov[i].iov_base, iov[i].iov_len), f->reply_len += iov[i].iov_len;
+    return 0;
+}
+
+/* One message on a device context: the reply's status, or -1000 if the context must close. */
+static int dev_call(void *ctx, FakeIo *f, uint32_t type, const void *a, size_t alen, const struct iovec *in, int nin, const struct iovec *out, int nout) {
+    static uint32_t seq;
+    uint8_t *msg = malloc(sizeof(HvVcHeader) + alen);
+    HvVcHeader h = {type, (uint32_t)alen, ++seq, 0};
+    memcpy(msg, &h, sizeof h);
+    memcpy(msg + sizeof h, a, alen);
+    uint64_t in_len = 0, out_len = 0;
+    for (int i = 0; i < nin; i++) in_len += in[i].iov_len;
+    for (int i = 0; i < nout; i++) out_len += out[i].iov_len;
+    f->io = (HvHvcodecIo){(uint32_t)(sizeof h + alen), in, out, nin, nout, in_len, out_len, fio_read, fio_reply, f};
+    f->msg = msg, f->replies = 0;
+    int rc = hv_vcodec_device_ops()->message(NULL, ctx, &f->io);
+    free(msg);
+    if (rc) return -1000;
+    HvVcHeader r;
+    if (f->replies != 1 || f->reply_len < sizeof r) return -1001;
+    memcpy(&r, f->reply, sizeof r);
+    if (r.type != (type | HV_VC_REPLY) || r.seq != h.seq || r.len != f->reply_len - sizeof r) return -1002;
+    return r.status;
+}
+
+/* The guest's buffers for a frame: each plane at its own offset with a stride wider than its row, cut into pieces
+   of `piece` bytes that do not fall on row boundaries, as pinned pages are. */
+typedef struct {
+    uint8_t *mem;
+    uint64_t len;
+    struct iovec v[20000];
+    int n;
+    HvVcPlanesDma d;
+} GuestPlanes;
+
+static void guest_planes(GuestPlanes *g, uint32_t handle, uint32_t fmt, uint32_t w, uint32_t h, uint32_t pad, size_t piece) {
+    uint32_t row[2], rows[2];
+    int n = hv_vc_planes(fmt, w, h, row, rows);
+    memset(&g->d, 0, sizeof g->d);
+    g->d.handle = handle, g->d.format = fmt, g->d.width = w, g->d.height = h;
+    uint64_t at = 100; /* plane 0 does not start the data */
+    for (int i = 0; i < n; i++) {
+        g->d.offset[i] = at, g->d.stride[i] = row[i] + pad;
+        at += (uint64_t)rows[i] * g->d.stride[i] + 37;
+    }
+    g->len = at;
+    g->mem = calloc(1, g->len);
+    g->n = 0;
+    for (uint64_t off = 0; off < g->len; off += piece) g->v[g->n++] = (struct iovec){g->mem + off, off + piece <= g->len ? piece : g->len - off};
+}
+
+static uint8_t pattern(int plane, uint32_t y, uint32_t x) { return (uint8_t)(plane * 101 + y * 7 + x * 13); }
+
+static void test_dma(void) {
+    const HvHvcodecOps *ops = hv_vcodec_device_ops();
+    void *ctx = ops->open(NULL);
+    CHECK(ctx, "a device context");
+    if (!ctx) return;
+    static FakeIo f;
+    uint32_t fmts[2] = {HV_VC_FMT_NV12, HV_VC_FMT_P010};
+    for (int k = 0; k < 2; k++) {
+        uint32_t fmt = fmts[k], w = 1282, h = 722; /* odd chroma: (w + 1) / 2 */
+        HvVcFrameAlloc a = {w, h, fmt, 0, 0, 0, 0, 0};
+        int st = dev_call(ctx, &f, HV_VC_FRAME_ALLOC, &a, sizeof a, NULL, 0, NULL, 0);
+        CHECK(st == 0, "device FRAME_ALLOC: %d", st);
+        if (st) continue;
+        HvVcFrameReply fr;
+        memcpy(&fr, f.reply + sizeof(HvVcHeader), sizeof fr);
+        static GuestPlanes up, down;
+        guest_planes(&up, fr.handle, fmt, w, h, 64, 4096);
+        uint32_t row[2], rows[2];
+        int n = hv_vc_planes(fmt, w, h, row, rows);
+        for (int i = 0; i < n; i++)
+            for (uint32_t y = 0; y < rows[i]; y++)
+                for (uint32_t x = 0; x < row[i]; x++) up.mem[up.d.offset[i] + (uint64_t)y * up.d.stride[i] + x] = pattern(i, y, x);
+        st = dev_call(ctx, &f, HV_VC_FRAME_UPLOAD_DMA, &up.d, sizeof up.d, up.v, up.n, NULL, 0);
+        CHECK(st == 0, "FRAME_UPLOAD_DMA %u: %d", fmt, st);
+        guest_planes(&down, fr.handle, fmt, w, h, 3, 1000);
+        st = dev_call(ctx, &f, HV_VC_FRAME_DOWNLOAD_DMA, &down.d, sizeof down.d, NULL, 0, down.v, down.n);
+        CHECK(st == 0 && f.reply_len == sizeof(HvVcHeader) + sizeof fr, "FRAME_DOWNLOAD_DMA %u: %d", fmt, st);
+        int same = 1;
+        for (int i = 0; i < n; i++)
+            for (uint32_t y = 0; y < rows[i] && same; y++)
+                same = !memcmp(&down.mem[down.d.offset[i] + (uint64_t)y * down.d.stride[i]], &up.mem[up.d.offset[i] + (uint64_t)y * up.d.stride[i]], row[i]);
+        CHECK(same, "format %u: the frame comes back as it went up, through other strides and pieces", fmt);
+        int pad_kept = 1;
+        for (uint32_t y = 0; y + 1 < rows[0]; y++) pad_kept &= down.mem[down.d.offset[0] + (uint64_t)y * down.d.stride[0] + row[0]] == 0;
+        CHECK(pad_kept, "the host writes no byte of a row's padding");
+        /* the socket form on the same context: packed planes in the reply */
+        HvVcHandle m = {fr.handle, 0};
+        st = dev_call(ctx, &f, HV_VC_FRAME_DOWNLOAD, &m, sizeof m, NULL, 0, NULL, 0);
+        CHECK(st == 0 && f.reply_len == sizeof(HvVcHeader) + sizeof fr + hv_vc_frame_bytes(fmt, w, h), "FRAME_DOWNLOAD on the device: %d", st);
+        const uint8_t *p = f.reply + sizeof(HvVcHeader) + sizeof fr;
+        same = st == 0;
+        for (int i = 0; i < n && same; i++)
+            for (uint32_t y = 0; y < rows[i] && same; y++, p += row[i]) same = !memcmp(p, &up.mem[up.d.offset[i] + (uint64_t)y * up.d.stride[i]], row[i]);
+        CHECK(same, "and the same pixels packed");
+
+        /* what the host must refuse */
+        HvVcPlanesDma bad = up.d;
+        bad.format = fmt == HV_VC_FMT_NV12 ? HV_VC_FMT_P010 : HV_VC_FMT_NV12;
+        CHECK(dev_call(ctx, &f, HV_VC_FRAME_UPLOAD_DMA, &bad, sizeof bad, up.v, up.n, NULL, 0) == HV_VC_E_INVAL, "another format");
+        bad = up.d, bad.width = w - 2;
+        CHECK(dev_call(ctx, &f, HV_VC_FRAME_UPLOAD_DMA, &bad, sizeof bad, up.v, up.n, NULL, 0) == HV_VC_E_INVAL, "another width");
+        bad = up.d, bad.stride[1] = row[1] - 1;
+        CHECK(dev_call(ctx, &f, HV_VC_FRAME_UPLOAD_DMA, &bad, sizeof bad, up.v, up.n, NULL, 0) == HV_VC_E_INVAL, "a stride below the row");
+        bad = up.d, bad.offset[1] = up.len - row[1] * 2;
+        CHECK(dev_call(ctx, &f, HV_VC_FRAME_UPLOAD_DMA, &bad, sizeof bad, up.v, up.n, NULL, 0) == HV_VC_E_INVAL, "a plane past the data");
+        bad = up.d, bad.offset[0] = ~0ull - 10;
+        CHECK(dev_call(ctx, &f, HV_VC_FRAME_UPLOAD_DMA, &bad, sizeof bad, up.v, up.n, NULL, 0) == HV_VC_E_INVAL, "an offset that wraps");
+        bad = up.d, bad.stride[0] = 0xffffffffu;
+        CHECK(dev_call(ctx, &f, HV_VC_FRAME_DOWNLOAD_DMA, &bad, sizeof bad, NULL, 0, up.v, up.n) == HV_VC_E_INVAL, "a stride that runs past the data");
+        CHECK(dev_call(ctx, &f, HV_VC_FRAME_UPLOAD_DMA, &up.d, sizeof up.d, up.v, up.n - 1, NULL, 0) == HV_VC_E_INVAL, "less data than the layout");
+        CHECK(dev_call(ctx, &f, HV_VC_FRAME_UPLOAD_DMA, &up.d, sizeof up.d - 4, up.v, up.n, NULL, 0) == HV_VC_E_INVAL, "a short layout");
+        bad = up.d, bad.handle ^= 1u << 16;
+        CHECK(dev_call(ctx, &f, HV_VC_FRAME_UPLOAD_DMA, &bad, sizeof bad, up.v, up.n, NULL, 0) == HV_VC_E_HANDLE, "a handle of another generation");
+        CHECK(dev_call(ctx, &f, HV_VC_FRAME_DOWNLOAD_DMA, &up.d, sizeof up.d, NULL, 0, NULL, 0) == HV_VC_E_INVAL, "a download with nowhere to go");
+        CHECK(dev_call(ctx, &f, HV_VC_FRAME_FREE, &m, sizeof m, NULL, 0, NULL, 0) == 0, "FRAME_FREE");
+        free(up.mem);
+        free(down.mem);
+    }
+    /* a message the core cannot parse closes the context (the device then refuses it) */
+    uint8_t junk[16] = {0};
+    f.msg = junk;
+    f.io = (HvHvcodecIo){8, NULL, NULL, 0, 0, 0, 0, fio_read, fio_reply, &f};
+    CHECK(ops->message(NULL, ctx, &f.io) == -1, "a message shorter than a header");
+    HvVcHeader lie = {HV_VC_QUERY, 4, 1, 0};
+    memcpy(junk, &lie, sizeof lie);
+    f.io.msg_len = 16;
+    CHECK(ops->message(NULL, ctx, &f.io) == -1, "a header whose length is not the message's");
+    ops->close(NULL, ctx);
+    HvVcodecStats s;
+    hv_vcodec_stats(&s);
+    CHECK(s.live_frames == 0 && s.open == 0, "the device context freed all: %lld frames, %d open", (long long)s.live_frames, s.open);
+    /* a socket has no raw data */
+    Conn c;
+    conn_open(&c);
+    HvVcPlanesDma d = {1, HV_VC_FMT_NV12, 64, 64, {0, 4096}, {64, 64}};
+    CHECK(call(&c, HV_VC_FRAME_UPLOAD_DMA, &d, sizeof d, NULL, 0) == HV_VC_E_NOSUP, "FRAME_UPLOAD_DMA on a socket: %s", c.err);
+    CHECK(call(&c, HV_VC_FRAME_DOWNLOAD_DMA, &d, sizeof d, NULL, 0) == HV_VC_E_NOSUP, "FRAME_DOWNLOAD_DMA on a socket");
+    conn_close(&c);
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     /* a host for henge-xcode --unix PATH, with no guest; the budgets make the host's limits easy to reach */
@@ -1132,6 +1302,7 @@ int main(int argc, char **argv) {
     test_transcode(src, &in);
     test_rate_control(&in);
     test_raw();
+    test_dma();
     test_limits();
     test_lost_and_timeouts(&in);
     test_lose_race(&in);

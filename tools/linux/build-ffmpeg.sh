@@ -47,7 +47,7 @@ patch -d "$SRC" -p1 --quiet --forward < /src/tools/linux/hvcodec/ffmpeg-henge.pa
 
 # libhvcodec: the client, linked in statically (LGPL-2.1-or-later, as FFmpeg's own code here)
 HV=/src/tools/linux/hvcodec
-cp "$HV/libhvcodec/hvcodec.h" /src/host/vcodec_proto.h "$STAGE/include/"
+cp "$HV/libhvcodec/hvcodec.h" /src/host/vcodec_proto.h /src/host/vcodec_dev.h "$STAGE/include/"
 cc -O2 -g -Wall -Wextra -fPIC -I"$STAGE/include" -c "$HV/libhvcodec/hvcodec.c" -o "$STAGE/hvcodec.o"
 ar rcs "$STAGE/lib/libhvcodec.a" "$STAGE/hvcodec.o"
 
@@ -77,7 +77,7 @@ RUNTIME=$(for f in "$OUTDIR"/bin/*; do ldd "$f"; done | awk '/=>/ {print $3}' | 
     echo "tarball=$NAME.tar.xz"
     echo "tarball_sha256=$FFMPEG_SHA256"
     echo "patch_sha256=$(sha256sum /src/tools/linux/hvcodec/ffmpeg-henge.patch | cut -d' ' -f1)"
-    echo "libhvcodec_sha256=$(cat "$HV/libhvcodec/hvcodec.c" "$HV/libhvcodec/hvcodec.h" /src/host/vcodec_proto.h | sha256sum | cut -d' ' -f1)"
+    echo "libhvcodec_sha256=$(cat "$HV/libhvcodec/hvcodec.c" "$HV/libhvcodec/hvcodec.h" /src/host/vcodec_proto.h /src/host/vcodec_dev.h | sha256sum | cut -d' ' -f1)"
     echo "debian_snapshot=$DEBIAN_SNAPSHOT"
     echo "configure=$CONFIGURE"
     echo "build_deps=$(dpkg-query -W -f '${Package}=${Version} ' libx264-dev libx265-dev libdav1d-dev libopus-dev libmp3lame-dev libgnutls28-dev zlib1g-dev gcc)"

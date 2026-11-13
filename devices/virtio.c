@@ -173,7 +173,8 @@ void hv_virtio_config_changed(HvVirtio *v) {
     hv_pci_set_intx(&v->pci, 1);
 }
 
-int hv_virtq_pop(HvVirtio *v, int qi, HvVirtqElem *e) {
+/* Takes the next head the driver made available: 1, or 0 for none (or one not visible yet). */
+static int take_head(HvVirtio *v, int qi, uint16_t *headp) {
     HvVirtq *q = &v->q[qi];
     uint16_t *avail = hv_phys_ptr(v->m, q->avail, 4 + 2u * q->size);
     if (!avail) return 0; /* not set up: nothing taken (-1 means an element was taken but is broken) */
@@ -202,6 +203,21 @@ int hv_virtq_pop(HvVirtio *v, int qi, HvVirtqElem *e) {
                     v->pci.config[2] | v->pci.config[3] << 8, qi, head);
     }
     q->out[head] = 1;
+    *headp = head;
+    return 1;
+}
+
+static void read_desc(const uint8_t *d, uint64_t *addr, uint32_t *len, uint16_t *flags, uint16_t *next) {
+    memcpy(addr, d, 8);
+    memcpy(len, d + 8, 4);
+    memcpy(flags, d + 12, 2);
+    memcpy(next, d + 14, 2);
+}
+
+int hv_virtq_pop(HvVirtio *v, int qi, HvVirtqElem *e) {
+    HvVirtq *q = &v->q[qi];
+    uint16_t head;
+    if (!take_head(v, qi, &head)) return 0;
     e->head = head;
     e->nseg = 0;
     uint64_t table = q->desc;
@@ -214,10 +230,7 @@ int hv_virtq_pop(HvVirtio *v, int qi, HvVirtqElem *e) {
         uint64_t addr;
         uint32_t len;
         uint16_t flags, next;
-        memcpy(&addr, d, 8);
-        memcpy(&len, d + 8, 4);
-        memcpy(&flags, d + 12, 2);
-        memcpy(&next, d + 14, 2);
+        read_desc(d, &addr, &len, &flags, &next);
         if (flags & DESC_F_INDIRECT) { /* not offered, but harmless to follow */
             table = addr;
             count = len / 16;
@@ -232,23 +245,68 @@ int hv_virtq_pop(HvVirtio *v, int qi, HvVirtqElem *e) {
     return -1;
 }
 
-void hv_virtq_push(HvVirtio *v, int qi, const HvVirtqElem *e, uint32_t written) {
+int hv_virtq_pop_long(HvVirtio *v, int qi, uint16_t *headp, HvVirtqSeg **segp, int *capp, int max, int *nsegp) {
     HvVirtq *q = &v->q[qi];
-    if (e->head >= q->size || !q->out[e->head]) {
+    uint16_t head;
+    if (!take_head(v, qi, &head)) return 0;
+    *headp = head;
+    *nsegp = 0;
+    uint64_t table = q->desc;
+    uint32_t count = q->size, steps = 0;
+    int indirect = 0;
+    uint16_t i = head;
+    for (;;) {
+        /* each descriptor of a table at most once: a loop ends here */
+        if (i >= count || steps++ >= count) return -1;
+        uint8_t *d = hv_phys_ptr(v->m, table + 16u * i, 16);
+        if (!d) return -1;
+        uint64_t addr;
+        uint32_t len;
+        uint16_t flags, next;
+        read_desc(d, &addr, &len, &flags, &next);
+        if (flags & DESC_F_INDIRECT) {
+            /* one table, from the ring only (2.7.5.3.1), and never with NEXT */
+            if (indirect || (flags & DESC_F_NEXT) || !len || len % 16 || len / 16 > (uint32_t)max) return -1;
+            table = addr;
+            count = len / 16;
+            steps = 0;
+            indirect = 1;
+            i = 0;
+            continue;
+        }
+        if (*nsegp >= max) return -1;
+        if (*nsegp == *capp) {
+            int cap = *capp ? *capp * 2 : 64;
+            if (cap > max) cap = max;
+            HvVirtqSeg *n = realloc(*segp, (size_t)cap * sizeof *n);
+            if (!n) return -1;
+            *segp = n, *capp = cap;
+        }
+        (*segp)[(*nsegp)++] = (HvVirtqSeg){addr, len, (flags & DESC_F_WRITE) != 0};
+        if (!(flags & DESC_F_NEXT)) return 1;
+        i = next;
+    }
+}
+
+void hv_virtq_push(HvVirtio *v, int qi, const HvVirtqElem *e, uint32_t written) { hv_virtq_push_head(v, qi, e->head, written); }
+
+void hv_virtq_push_head(HvVirtio *v, int qi, uint16_t head, uint32_t written) {
+    HvVirtq *q = &v->q[qi];
+    if (head >= q->size || !q->out[head]) {
         /* Not something the driver gave us (or given back already): pushing it
            would corrupt its free list. */
         static int said;
         if (said++ < 10)
             fprintf(stderr, "virtio %04x q%d: completion of head %u that is not outstanding (dropped)\n",
-                    v->pci.config[2] | v->pci.config[3] << 8, qi, e->head);
+                    v->pci.config[2] | v->pci.config[3] << 8, qi, head);
         return;
     }
-    q->out[e->head] = 0;
+    q->out[head] = 0;
     uint8_t *used = hv_phys_ptr(v->m, q->used, 4 + 8u * q->size);
     if (!used) return;
     uint16_t idx;
     memcpy(&idx, used + 2, 2);
-    uint32_t id = e->head;
+    uint32_t id = head;
     memcpy(used + 4 + 8u * (idx % q->size), &id, 4);
     memcpy(used + 8 + 8u * (idx % q->size), &written, 4);
     __atomic_thread_fence(__ATOMIC_RELEASE);

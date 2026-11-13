@@ -26,6 +26,7 @@ typedef struct HvVmConfig {
     int no_net, no_sound;
     int accel;                /* virt: the virtio GPU draws with virgl (needs a GFX=1 build) */
     int video;                /* with accel: guest video decode through virgl on VideoToolbox (default 0) */
+    const struct HvHvcodecOps *codec_ops; /* virt: the hvcodec DMA device with this backend; NULL for none */
     int installer;            /* boot the ROM in DFU mode with the USB device port (installing macOS) */
     /* JIT memory the host already has (iOS: granted by a debugger), or NULL to map it here. */
     void *jit_rx, *jit_rw;

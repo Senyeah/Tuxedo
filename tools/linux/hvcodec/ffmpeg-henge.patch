@@ -2471,10 +2471,10 @@ index 29374cf0..cb1944a7 100644
  /**
 diff --git a/libavutil/hwcontext_henge.c b/libavutil/hwcontext_henge.c
 new file mode 100644
-index 00000000..a42da78b
+index 00000000..4ed0e8ea
 --- /dev/null
 +++ b/libavutil/hwcontext_henge.c
-@@ -0,0 +1,374 @@
+@@ -0,0 +1,405 @@
 +/*
 + * Henge: the video codecs of the device under a Henge virtual machine
 + *
@@ -2511,6 +2511,7 @@ index 00000000..a42da78b
 +typedef struct HengeDevicePriv {
 +    AVHengeDeviceContext p;
 +    HvQuery query;
++    int warned_tcp;
 +} HengeDevicePriv;
 +
 +static const struct {
@@ -2639,8 +2640,9 @@ index 00000000..a42da78b
 +        return AVERROR(EIO);
 +    }
 +    priv->p.query = &priv->query;
-+    av_log(ctx, AV_LOG_VERBOSE, "Henge codec service at %s: %u encoders, %u decoders\n",
-+           hv_client_addr(priv->p.client), priv->query.head.n_encoders, priv->query.head.n_decoders);
++    av_log(ctx, AV_LOG_VERBOSE, "Henge codec service at %s: %u encoders, %u decoders%s%s\n",
++           hv_client_addr(priv->p.client), priv->query.head.n_encoders, priv->query.head.n_decoders,
++           *hv_client_note(priv->p.client) ? "; " : "", hv_client_note(priv->p.client));
 +    return 0;
 +}
 +
@@ -2745,44 +2747,69 @@ index 00000000..a42da78b
 +    return plane && d ? AV_CEIL_RSHIFT(f->height, d->log2_chroma_h) : f->height;
 +}
 +
++/* Raw frames on TCP are packed into messages: say so once, as a 4K chain is then far slower. */
++static void warn_tcp(AVHWFramesContext *ctx)
++{
++    HengeDevicePriv *priv = ctx->device_ctx->hwctx;
++    const char *why = hv_client_note(priv->p.client);
++
++    if (hv_client_dma(priv->p.client) || priv->warned_tcp)
++        return;
++    priv->warned_tcp = 1;
++    av_log(ctx, AV_LOG_WARNING, "Raw frames cross to the Henge device over TCP (%s), which is slow at 4K. "
++           "For /dev/hvcodec: install henge-codec-dkms and run the machine with the codec device.\n",
++           *why ? why : hv_client_addr(priv->p.client));
++}
++
++/* The frame's planes reach every row and column of the host frame, so the host can copy them in place. */
++static int covers(const AVFrame *f, int n, const uint32_t row[2], const uint32_t rows[2])
++{
++    for (int i = 0; i < n; i++)
++        if (!f->data[i] || f->linesize[i] < 0 || (uint32_t)f->linesize[i] < row[i] || (uint32_t)plane_rows(f, i) < rows[i])
++            return 0;
++    return 1;
++}
++
 +static int henge_transfer_data_to(AVHWFramesContext *ctx, AVFrame *dst, const AVFrame *src)
 +{
 +    HvClient *client = client_of(ctx->device_ref);
 +    const AVHengeFrame *hf = henge_frame_of(dst);
 +    uint32_t fmt = av_henge_format_from_pix_fmt(ctx->sw_format), row[2], rows[2];
++    uint8_t *data[2] = { NULL, NULL }, *packed = NULL;
++    int linesize[2] = { 0, 0 };
 +    int n, st;
-+    uint64_t bytes;
-+    uint8_t *packed, *p;
-+    HvVcHandle m;
 +    HvReply r = { 0 };
 +
 +    if (!hf || !hf->handle || src->format != ctx->sw_format)
 +        return AVERROR(EINVAL);
 +    n = hv_vc_planes(fmt, hf->width, hf->height, row, rows);
-+    bytes = hv_vc_frame_bytes(fmt, hf->width, hf->height);
-+    if (!n || !bytes)
++    if (!n)
 +        return AVERROR(EINVAL);
-+    packed = av_malloc(bytes);
-+    if (!packed)
-+        return AVERROR(ENOMEM);
-+    p = packed;
-+    for (int i = 0; i < n; i++) {
-+        /* the source can be smaller than the host frame: pad with zeros */
-+        int src_rows = plane_rows(src, i);
-+        size_t copy = FFMIN((size_t)row[i], (size_t)FFABS(src->linesize[i]));
-+        for (uint32_t y = 0; y < rows[i]; y++, p += row[i]) {
-+            if ((int)y < src_rows && src->data[i]) {
-+                memcpy(p, src->data[i] + (ptrdiff_t)y * src->linesize[i], copy);
-+                if (copy < row[i])
-+                    memset(p + copy, 0, row[i] - copy);
-+            } else {
-+                memset(p, 0, row[i]);
++    warn_tcp(ctx);
++    if (covers(src, n, row, rows)) {
++        for (int i = 0; i < n; i++)
++            data[i] = src->data[i], linesize[i] = src->linesize[i];
++    } else {
++        /* the source is smaller than the host frame: pad with zeros */
++        uint8_t *p = packed = av_malloc(hv_vc_frame_bytes(fmt, hf->width, hf->height));
++        if (!packed)
++            return AVERROR(ENOMEM);
++        for (int i = 0; i < n; i++) {
++            int src_rows = plane_rows(src, i);
++            size_t copy = FFMIN((size_t)row[i], (size_t)FFABS(src->linesize[i]));
++            data[i] = p, linesize[i] = row[i];
++            for (uint32_t y = 0; y < rows[i]; y++, p += row[i]) {
++                if ((int)y < src_rows && src->data[i]) {
++                    memcpy(p, src->data[i] + (ptrdiff_t)y * src->linesize[i], copy);
++                    if (copy < row[i])
++                        memset(p + copy, 0, row[i] - copy);
++                } else {
++                    memset(p, 0, row[i]);
++                }
 +            }
 +        }
 +    }
-+    m.handle = hf->handle;
-+    m.reserved = 0;
-+    st = hv_call(client, HV_VC_FRAME_UPLOAD, &m, sizeof(m), packed, bytes, &r);
++    st = hv_frame_upload(client, hf->handle, fmt, hf->width, hf->height, data, linesize, &r);
 +    av_free(packed);
 +    if (st)
 +        av_log(ctx, st == HV_VC_E_LIMIT ? AV_LOG_VERBOSE : AV_LOG_ERROR, "FRAME_UPLOAD: %s\n", r.err);
@@ -2794,41 +2821,45 @@ index 00000000..a42da78b
 +{
 +    HvClient *client = client_of(ctx->device_ref);
 +    const AVHengeFrame *hf = henge_frame_of(src);
-+    HvVcHandle m;
-+    HvVcFrameReply fr;
++    uint32_t fmt = av_henge_format_from_pix_fmt(ctx->sw_format), row[2], rows[2];
++    uint8_t *data[2] = { NULL, NULL }, *packed = NULL;
++    int linesize[2] = { 0, 0 };
++    int n, st, direct;
 +    HvReply r = { 0 };
-+    uint32_t row[2], rows[2];
-+    const uint8_t *p;
-+    int n, st;
 +
-+    if (!hf || !hf->handle)
++    if (!hf || !hf->handle || dst->format != ctx->sw_format)
 +        return AVERROR(EINVAL);
-+    m.handle = hf->handle;
-+    m.reserved = 0;
-+    st = hv_call(client, HV_VC_FRAME_DOWNLOAD, &m, sizeof(m), NULL, 0, &r);
-+    if (st || r.len < sizeof(fr)) {
-+        av_log(ctx, AV_LOG_ERROR, "FRAME_DOWNLOAD: %s\n", st ? r.err : "short reply");
-+        hv_reply_free(&r);
-+        return AVERROR(EIO);
++    n = hv_vc_planes(fmt, hf->width, hf->height, row, rows);
++    if (!n)
++        return AVERROR(EINVAL);
++    warn_tcp(ctx);
++    direct = covers(dst, n, row, rows);
++    if (direct) {
++        for (int i = 0; i < n; i++)
++            data[i] = dst->data[i], linesize[i] = dst->linesize[i];
++    } else {
++        uint8_t *p = packed = av_malloc(hv_vc_frame_bytes(fmt, hf->width, hf->height));
++        if (!packed)
++            return AVERROR(ENOMEM);
++        for (int i = 0; i < n; i++)
++            data[i] = p, linesize[i] = row[i], p += (size_t)row[i] * rows[i];
 +    }
-+    memcpy(&fr, r.data, sizeof(fr));
-+    n = hv_vc_planes(fr.format, fr.width, fr.height, row, rows);
-+    if (!n || av_henge_format_to_pix_fmt(fr.format) != dst->format ||
-+        r.len - sizeof(fr) != hv_vc_frame_bytes(fr.format, fr.width, fr.height)) {
-+        av_log(ctx, AV_LOG_ERROR, "FRAME_DOWNLOAD: the reply does not agree with the frame\n");
-+        hv_reply_free(&r);
-+        return AVERROR(EIO);
++    st = hv_frame_download(client, hf->handle, fmt, hf->width, hf->height, data, linesize, &r);
++    if (st) {
++        av_log(ctx, AV_LOG_ERROR, "FRAME_DOWNLOAD: %s\n", r.err);
++    } else if (!direct) {
++        /* the destination is smaller than the host frame: clip */
++        for (int i = 0; i < n; i++) {
++            int dst_rows = plane_rows(dst, i);
++            size_t copy = FFMIN((size_t)row[i], (size_t)FFABS(dst->linesize[i]));
++            for (uint32_t y = 0; y < rows[i]; y++)
++                if ((int)y < dst_rows && dst->data[i])
++                    memcpy(dst->data[i] + (ptrdiff_t)y * dst->linesize[i], data[i] + (size_t)y * row[i], copy);
++        }
 +    }
-+    p = r.data + sizeof(fr);
-+    for (int i = 0; i < n; i++) {
-+        int dst_rows = plane_rows(dst, i);
-+        size_t copy = FFMIN((size_t)row[i], (size_t)FFABS(dst->linesize[i]));
-+        for (uint32_t y = 0; y < rows[i]; y++, p += row[i])
-+            if ((int)y < dst_rows && dst->data[i])
-+                memcpy(dst->data[i] + (ptrdiff_t)y * dst->linesize[i], p, copy);
-+    }
++    av_free(packed);
 +    hv_reply_free(&r);
-+    return 0;
++    return st ? AVERROR(EIO) : 0;
 +}
 +
 +const HWContextType ff_hwcontext_type_henge = {

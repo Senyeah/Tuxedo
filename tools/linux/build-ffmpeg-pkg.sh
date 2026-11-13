@@ -34,7 +34,7 @@ die() { echo "build-ffmpeg-pkg.sh: $*" >&2; exit 1; }
     die "the build is FFmpeg $(get release) henge$(get henge_rev), versions.env says $FFMPEG_VERSION henge$FFMPEG_HENGE_REV; run make linux-ffmpeg"
 [ "$(get patch_sha256)" = "$(sha256sum "$HV/ffmpeg-henge.patch" | cut -d' ' -f1)" ] ||
     die "ffmpeg-henge.patch changed since the build; run make linux-ffmpeg (and raise FFMPEG_HENGE_REV if it was published)"
-[ "$(get libhvcodec_sha256)" = "$(cat "$HV/libhvcodec/hvcodec.c" "$HV/libhvcodec/hvcodec.h" /src/host/vcodec_proto.h | sha256sum | cut -d' ' -f1)" ] ||
+[ "$(get libhvcodec_sha256)" = "$(cat "$HV/libhvcodec/hvcodec.c" "$HV/libhvcodec/hvcodec.h" /src/host/vcodec_proto.h /src/host/vcodec_dev.h | sha256sum | cut -d' ' -f1)" ] ||
     die "libhvcodec changed since the build; run make linux-ffmpeg"
 for f in ffmpeg ffprobe henge-codec-info; do
     [ "$(get "sha256_$f")" = "$(sha256sum "$BIN/$f" | cut -d' ' -f1)" ] || die "$BIN/$f is not the binary in the manifest"

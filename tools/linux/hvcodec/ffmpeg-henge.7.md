@@ -60,8 +60,15 @@ gives the true list for this device.
     same device.
 
     `-init_hw_device henge=NAME:ADDRESS` sets the address of the codec service:
-    `unix:PATH`, `HOST:PORT` or `HOST` (port 8470). The default is the
-    `HENGE_VCODEC` environment variable, then `10.0.2.4:8470`.
+    `/dev/hvcodec`, `unix:PATH`, `HOST:PORT` or `HOST` (port 8470). The default
+    is the `HENGE_VCODEC` environment variable, then `/dev/hvcodec` if it
+    opens, then `10.0.2.4:8470`. `-v verbose` shows the one in use.
+
+    On `/dev/hvcodec` (the **henge-codec-dkms** package), raw frames for
+    **hwupload**, **hwdownload** and the encoders' own uploads cross with no
+    copy in the guest. On TCP they are packed into messages, which is slow at
+    4K, and **ffmpeg** writes a warning at the first one. Compressed data and
+    frame handles are small on either channel.
 
 The decoder holds a limited number of frames on the device (see LIMITS). If a
 decoder stops at that limit, add `-threads 1` before `-i`.
@@ -287,6 +294,7 @@ Debian's own build, with no Henge codecs:
 
 `HENGE_VCODEC`
 :   The address of the codec service, when **-init_hw_device** gives none.
+    `HENGE_VCODEC=10.0.2.4:8470` keeps TCP when `/dev/hvcodec` is there.
 
 # FILES
 
@@ -301,8 +309,10 @@ Debian's own build, with no Henge codecs:
 :   Debian's **ffmpeg**, if it is installed.
 
 `/dev/hvcodec`
-:   The channel for raw frames, from the **henge-codec-dkms** package (a later
-    package). Without it, all data goes over TCP to `10.0.2.4:8470`.
+:   The DMA channel, from the **henge-codec-dkms** package, for the group
+    **video**. The machine must run with the codec device on. DKMS builds the
+    module again after each kernel update; if a build fails, the device node is
+    not there and all data goes over TCP to `10.0.2.4:8470`.
 
 `/usr/share/man/man7/ffmpeg-henge.7.gz`
 :   This page. **man** comes from Debian's **man-db** package, which

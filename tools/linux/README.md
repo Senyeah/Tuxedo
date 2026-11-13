@@ -336,6 +336,29 @@ The file is not a conffile. `postinst` copies it from `/usr/share/henge/henge.so
 
 `vcodec-check.py --apt build/linux/apt` (`make test-linux-ffmpeg-pkg`) boots a clone of the desktop image with `hengevm --vcodec` and serves the repository through `--share` at `http://10.0.2.4/apt`. It checks, in order: `apt update` with the local repository and its signature; `henge-guest` from it, with its key and `henge.sources` (`Enabled: no`); `apt update` with that file gives no new warning or error and does not contact walkies.site; the same file with `Enabled: yes` and the local URI works with the shipped key; `henge.sources` is not a conffile, and after the README's edit an upgrade to a test build with another default does not ask and keeps the edit; then `henge-ffmpeg`: `ffmpeg` and `ffprobe` resolve to the links, `ffmpeg -version` is the Henge build, `/usr/bin/ffmpeg` is Debian's and unchanged, `henge-codec-info --json`, `man ffmpeg-henge` opens and `manpage-check.py` passes on the installed page, `man ffmpeg` is still Debian's page, the main command with `ffmpeg` on each clip (frames, PSNR and audio sync, as with `--ffmpeg`), a reinstall keeps the links, `apt remove` gives Debian's `ffmpeg` back, and an admin's own `/usr/local/bin/ffprobe` stays through an install and a remove. Give `--linux-dir` and `--image` for an image that is not in `build/linux`, in `VCODEC_ARGS`.
 
+## The DMA channel (henge-codec-dkms)
+
+`henge-codec-dkms` gives the guest `/dev/hvcodec`, a channel to the codec service through Henge's hvcodec device (`docs/guest-video-encode-plan.md`, stage VE4). Raw frames for `hwupload`, `hwdownload` and the encoders' own uploads then cross from the caller's pages with no copy in the guest. Compressed data is small on either channel, so the main transcode does not need it; a chain with a software filter does. The machine must run with the device on: `hengevm --vcodec-dma` (it implies `--vcodec`). Without that flag the device does not exist. The iOS app does not offer it yet.
+
+What the package does:
+
+- The module source goes in `/usr/src/henge-codec-<version>/` with `dkms.conf`. `postinst` has DKMS build and install it for each kernel that has headers, then loads it, so `/dev/hvcodec` is there at once. DKMS builds it again for each new kernel whose headers are installed (its own kernel hooks).
+- `Depends: dkms, gcc, make, linux-headers-arm64-16k`. So the compiler and the headers come only with this package (decision 11), and the headers metapackage follows each kernel update. The metapackage gives the newest headers in the sources. If the running kernel is older, also install its headers: `sudo apt install linux-headers-$(uname -r) henge-codec-dkms`.
+- A udev rule (`/usr/lib/udev/rules.d/60-henge-codec.rules`) gives `/dev/hvcodec` to the group `video`, mode 0660. The desktop image's user `henge` is in `video`; `customize.sh` now adds it to the console image's user too.
+- `apt remove henge-codec-dkms` unloads the module and removes it from DKMS. `libhvcodec` then uses TCP, and `ffmpeg` writes a warning at the first raw frame.
+- The module has no signature. The kernel accepts it (`CONFIG_MODULE_SIG_FORCE` is off) and records a taint. If `openssl` is there, DKMS signs it with its own key, which the kernel does not know: the same result.
+
+`libhvcodec` takes `/dev/hvcodec` when it opens, and TCP when it does not. `HENGE_VCODEC=10.0.2.4:8470` keeps TCP; `ffmpeg -v verbose` names the channel.
+
+Build and check it:
+
+```sh
+make linux-codec-dkms      # build-codec-dkms-pkg.sh: -Werror against the pinned 16 KB kernel's headers, then DKMS in the container
+make test-linux-codec-dma  # codec-dma-check.py: a clone booted through U-Boot with --vcodec-dma
+```
+
+`codec-dma-check.py` installs the package with `apt`, checks `/dev/hvcodec`, measures 4K NV12 and P010 transfers on it and on TCP with `hvcodec/hvxfer.c`, runs the main command and a `hwdownload`, software filter, `hwupload` chain on both channels (each output checked on the Mac), unloads the module for the fallback, opens a ninth context, kills a process during transfers, and with `--kernel-update` installs the newest 16 KB kernel, powers off, boots again and uses the device on the new kernel. The image's sources are the pinned snapshot, which has no newer kernel, so the check then adds the same snapshot's `trixie-security`.
+
 ## Checks on the Mac
 
 - `dtb-compare.py` (T2, `make test-linux-dtb`) compares Henge's device tree with QEMU's.

@@ -11,6 +11,10 @@
 int hv_vcodec_start(const char *socket_path);
 void hv_vcodec_stop(void);
 
+/* The backend for the hvcodec DMA device (devices/virtio_hvcodec.h): its contexts share the limits with the socket's. */
+struct HvHvcodecOps;
+const struct HvHvcodecOps *hv_vcodec_device_ops(void);
+
 /* Serves one connection on fd until it closes, then frees all it made and closes fd. The tests call it on a socket pair. */
 void hv_vcodec_serve(int fd);
 

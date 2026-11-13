@@ -4,6 +4,7 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -18,6 +19,12 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#ifdef __linux__
+#include <sys/ioctl.h>
+#include "vcodec_dev.h"
+#define HAVE_DEV 1
+#endif
+
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0 /* macOS: SO_NOSIGPIPE instead */
 #endif
@@ -31,11 +38,17 @@ struct HvClient {
     pthread_mutex_t mu;
     pthread_cond_t turn_cv;
     uint64_t next_turn, serving; /* FIFO turns: a thread that loops on short calls cannot starve the others */
-    int fd, broken;
+    int fd, broken, dev;
     uint32_t seq, posted;
-    char addr[160];
+    char addr[160], note[200];
+    uint8_t scratch[4096]; /* the device's reply to a call that drops it */
     HvStats st;
 };
+
+/* The device's reply buffer for a call: what a reply needs at most is not known before it, so this much is pinned
+   and a longer reply comes by HVCODEC_IOC_REST. */
+#define DEV_REPLY_MIN (256u << 10)
+#define DEV_REPLY_MAX (4u << 20)
 
 static void set_err(char *err, size_t n, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
 static void set_err(char *err, size_t n, const char *fmt, ...) {
@@ -102,12 +115,49 @@ static int connect_tcp(const char *spec) {
 }
 
 HvClient *hv_client_open(const char *addr, char *err, size_t errlen) {
+    char note[200] = "";
+    int fd = -1, dev = 0;
     if (!addr || !*addr) addr = getenv("HENGE_VCODEC");
-    if (!addr || !*addr) addr = HV_CLIENT_DEFAULT;
-    int fd = !strncmp(addr, "unix:", 5) ? connect_unix(addr + 5) : connect_tcp(addr);
+    if (!addr || !*addr) {
+#ifdef HAVE_DEV
+        fd = open("/dev/hvcodec", O_RDWR | O_CLOEXEC);
+        if (fd >= 0) addr = "/dev/hvcodec", dev = 1;
+        else snprintf(note, sizeof note, "/dev/hvcodec: %s", strerror(errno));
+#else
+        snprintf(note, sizeof note, "no /dev/hvcodec on this system");
+#endif
+        if (!dev) addr = HV_CLIENT_DEFAULT;
+    } else if (!strncmp(addr, "/dev/", 5)) {
+#ifdef HAVE_DEV
+        fd = open(addr, O_RDWR | O_CLOEXEC);
+        if (fd < 0) {
+            set_err(err, errlen, "cannot open %s (%s): is henge-codec-dkms installed and the machine running with the codec device on?", addr,
+                    strerror(errno));
+            return NULL;
+        }
+        dev = 1;
+#else
+        set_err(err, errlen, "%s: no /dev/hvcodec on this system", addr);
+        return NULL;
+#endif
+    }
+    if (!dev) fd = !strncmp(addr, "unix:", 5) ? connect_unix(addr + 5) : connect_tcp(addr);
     if (fd < 0) {
         set_err(err, errlen, "cannot connect to the Henge codec service at %s (%s): is the machine running with the video codecs on?", addr, strerror(errno));
         return NULL;
+    }
+    if (dev) {
+        HvClient *c = calloc(1, sizeof *c);
+        if (!c) {
+            close(fd);
+            set_err(err, errlen, "no memory");
+            return NULL;
+        }
+        pthread_mutex_init(&c->mu, NULL);
+        pthread_cond_init(&c->turn_cv, NULL);
+        c->fd = fd, c->dev = 1;
+        snprintf(c->addr, sizeof c->addr, "%s", addr);
+        return c;
     }
 #ifdef SO_NOSIGPIPE
     int one = 1;
@@ -126,8 +176,12 @@ HvClient *hv_client_open(const char *addr, char *err, size_t errlen) {
     pthread_cond_init(&c->turn_cv, NULL);
     c->fd = fd;
     snprintf(c->addr, sizeof c->addr, "%s", addr);
+    snprintf(c->note, sizeof c->note, "%s", note);
     return c;
 }
+
+int hv_client_dma(const HvClient *c) { return c->dev; }
+const char *hv_client_note(const HvClient *c) { return c->note; }
 
 void hv_client_close(HvClient *c) {
     if (!c) return;
@@ -228,8 +282,117 @@ static int broken(HvClient *c, HvReply *r) {
     return HV_CLIENT_E_IO;
 }
 
+static void set_reply(HvReply *r, int status, const char *msg) {
+    if (!r) return;
+    r->status = status, r->len = 0;
+    snprintf(r->err, sizeof r->err, "%s", msg);
+}
+
+#ifdef HAVE_DEV
+/* The reply in buf (len bytes): checked, then given to r. */
+static int finish_reply(HvClient *c, uint32_t type, const uint8_t *buf, size_t len, HvReply *r) {
+    HvVcHeader h;
+    if (len < sizeof h) return broken(c, r);
+    memcpy(&h, buf, sizeof h);
+    if (h.type != (type | HV_VC_REPLY) || h.seq != c->seq || h.len != len - sizeof h) return broken(c, r);
+    if (!r) return h.status;
+    r->data = (uint8_t *)buf + sizeof h, r->len = h.len, r->status = h.status;
+    r->heap_[sizeof h + h.len] = 0; /* buf is r->heap_ when r is given */
+    if (h.status) {
+        size_t n = h.len < sizeof r->err - 1 ? h.len : sizeof r->err - 1;
+        for (size_t i = 0; i < n; i++) r->err[i] = r->data[i] >= 32 && r->data[i] < 127 ? (char)r->data[i] : '?';
+        r->err[n] = 0;
+        if (!n) snprintf(r->err, sizeof r->err, "%s", hv_status_name(h.status));
+    }
+    return h.status;
+}
+
+static int grow(HvReply *r, size_t n) {
+    if (n <= r->cap_) return 0;
+    uint8_t *p = realloc(r->heap_, n);
+    if (!p) return -1;
+    r->heap_ = p, r->cap_ = n;
+    return 0;
+}
+
+/* One message on /dev/hvcodec, in its turn. in and out are raw data (NULL for none). */
+static int dev_call(HvClient *c, uint32_t type, const void *a, size_t alen, const void *b, size_t blen, const struct hvcodec_buf *in,
+                    const struct hvcodec_buf *out, HvReply *r) {
+    if (alen + blen > HV_VC_MAX_PAYLOAD) {
+        set_reply(r, HV_VC_E_INVAL, "the request is too large");
+        return HV_VC_E_INVAL;
+    }
+    HvVcHeader h = {type, (uint32_t)(alen + blen), ++c->seq, 0};
+    struct hvcodec_call k;
+    memset(&k, 0, sizeof k);
+    k.msg[0] = (struct hvcodec_buf){(uintptr_t)&h, sizeof h};
+    k.msg[1] = (struct hvcodec_buf){(uintptr_t)a, alen};
+    k.msg[2] = (struct hvcodec_buf){(uintptr_t)b, blen};
+    for (int i = 0; i < 2; i++) {
+        if (in) k.in[i] = in[i], c->st.sent += in[i].len;
+        if (out) k.out[i] = out[i];
+    }
+    uint8_t *buf = c->scratch;
+    size_t cap = sizeof c->scratch;
+    if (r) {
+        if (grow(r, DEV_REPLY_MIN)) {
+            set_reply(r, HV_VC_E_NOMEM, "no memory for the reply");
+            return HV_VC_E_NOMEM;
+        }
+        buf = r->heap_, cap = r->cap_ - 1 < DEV_REPLY_MAX ? r->cap_ - 1 : DEV_REPLY_MAX;
+    }
+    k.reply = (struct hvcodec_buf){(uintptr_t)buf, cap};
+    int rc;
+    for (int tries = 0;; tries++) {
+        rc = ioctl(c->fd, HVCODEC_IOC_CALL, &k);
+        if (rc == 0 || errno != EAGAIN || tries >= 1000) break;
+        usleep(1000); /* the queue is full: requests of other processes */
+    }
+    c->st.calls++;
+    c->st.sent += sizeof h + alen + blen;
+    if (rc) {
+        if (errno == ENOBUFS) { /* the host had no memory to keep a long reply */
+            set_reply(r, HV_VC_E_LIMIT, "the host had no memory for the reply");
+            return HV_VC_E_LIMIT;
+        }
+        if (errno == E2BIG || errno == EINVAL) {
+            set_reply(r, HV_VC_E_INVAL, "/dev/hvcodec refused the request's size");
+            return HV_VC_E_INVAL;
+        }
+        int st = broken(c, r);
+        if (r) snprintf(r->err, sizeof r->err, "%s: %s", c->addr, strerror(errno));
+        return st;
+    }
+    size_t len = k.reply_len;
+    c->st.received += len;
+    if (out) c->st.received += out[0].len + out[1].len;
+    if (k.reply_total > k.reply_len) {
+        if (!r) return broken(c, NULL); /* a call that drops its reply has short replies */
+        if (grow(r, (size_t)k.reply_total + 1)) {
+            set_reply(r, HV_VC_E_NOMEM, "no memory for the reply");
+            return HV_VC_E_NOMEM; /* the device drops the rest at the next call */
+        }
+        while (len < k.reply_total) {
+            struct hvcodec_rest q = {{(uintptr_t)(r->heap_ + len), k.reply_total - len}, 0, 0};
+            if (ioctl(c->fd, HVCODEC_IOC_REST, &q) || !q.reply_len || q.reply_left != k.reply_total - len) return broken(c, r);
+            len += q.reply_len;
+            c->st.received += q.reply_len;
+        }
+    }
+    return finish_reply(c, type, r ? r->heap_ : buf, len, r);
+}
+#endif
+
 int hv_call(HvClient *c, uint32_t type, const void *a, size_t alen, const void *b, size_t blen, HvReply *r) {
     take_turn(c);
+#ifdef HAVE_DEV
+    if (c->dev) {
+        if (r) r->data = NULL, r->len = 0, r->err[0] = 0, r->status = 0;
+        int st = c->broken ? broken(c, r) : dev_call(c, type, a, alen, b, blen, NULL, NULL, r);
+        end_turn(c);
+        return st;
+    }
+#endif
     if (r) r->data = NULL, r->len = 0, r->err[0] = 0, r->status = 0;
     if (c->broken || read_posted(c)) {
         int st = broken(c, r);
@@ -284,6 +447,13 @@ int hv_call(HvClient *c, uint32_t type, const void *a, size_t alen, const void *
 }
 
 int hv_post(HvClient *c, uint32_t type, const void *a, size_t alen) {
+#ifdef HAVE_DEV
+    if (c->dev) { /* one ioctl: as quick as a send */
+        int st = hv_call(c, type, a, alen, NULL, 0, NULL);
+        if (!st) c->st.posts++;
+        return st == HV_CLIENT_E_IO ? st : 0;
+    }
+#endif
     take_turn(c);
     int st = c->broken ? HV_CLIENT_E_IO : 0;
     if (!st && c->posted >= MAX_POSTED) st = read_posted(c);
@@ -291,6 +461,97 @@ int hv_post(HvClient *c, uint32_t type, const void *a, size_t alen) {
     if (!st) c->posted++, c->st.posts++;
     else if (st == HV_CLIENT_E_IO) c->broken = 1;
     end_turn(c);
+    return st;
+}
+
+/* The plane layout of a transfer: 0, or an error in r. */
+static int layout(uint32_t fmt, uint32_t w, uint32_t h, const int linesize[2], uint32_t row[2], uint32_t rows[2], int *n, HvReply *r) {
+    *n = hv_vc_planes(fmt, w, h, row, rows);
+    if (!*n) {
+        set_reply(r, HV_VC_E_INVAL, "bad format or size");
+        return HV_VC_E_INVAL;
+    }
+    for (int i = 0; i < *n; i++)
+        if (linesize[i] < 0 || (uint32_t)linesize[i] < row[i]) {
+            set_reply(r, HV_VC_E_INVAL, "a linesize below the plane's row");
+            return HV_VC_E_INVAL;
+        }
+    return 0;
+}
+
+int hv_frame_upload(HvClient *c, uint32_t handle, uint32_t fmt, uint32_t w, uint32_t h, uint8_t *const data[2], const int linesize[2],
+                    HvReply *r) {
+    uint32_t row[2], rows[2];
+    int n, st = layout(fmt, w, h, linesize, row, rows, &n, r);
+    if (st) return st;
+#ifdef HAVE_DEV
+    if (c->dev) {
+        HvVcPlanesDma d = {handle, fmt, w, h, {0, 0}, {0, 0}};
+        struct hvcodec_buf in[2] = {{0, 0}, {0, 0}};
+        for (int i = 0; i < n; i++) {
+            in[i] = (struct hvcodec_buf){(uintptr_t)data[i], (uint64_t)(rows[i] - 1) * (uint32_t)linesize[i] + row[i]};
+            d.stride[i] = (uint32_t)linesize[i];
+        }
+        d.offset[1] = in[0].len;
+        take_turn(c);
+        if (r) r->data = NULL, r->len = 0, r->err[0] = 0, r->status = 0;
+        st = c->broken ? broken(c, r) : dev_call(c, HV_VC_FRAME_UPLOAD_DMA, &d, sizeof d, NULL, 0, in, NULL, r);
+        end_turn(c);
+        return st;
+    }
+#endif
+    uint64_t bytes = hv_vc_frame_bytes(fmt, w, h);
+    uint8_t *packed = malloc(bytes), *p = packed;
+    if (!packed) {
+        set_reply(r, HV_VC_E_NOMEM, "no memory");
+        return HV_VC_E_NOMEM;
+    }
+    for (int i = 0; i < n; i++)
+        for (uint32_t y = 0; y < rows[i]; y++, p += row[i]) memcpy(p, data[i] + (size_t)y * (uint32_t)linesize[i], row[i]);
+    HvVcHandle m = {handle, 0};
+    st = hv_call(c, HV_VC_FRAME_UPLOAD, &m, sizeof m, packed, bytes, r);
+    free(packed);
+    return st;
+}
+
+int hv_frame_download(HvClient *c, uint32_t handle, uint32_t fmt, uint32_t w, uint32_t h, uint8_t *const data[2], const int linesize[2],
+                      HvReply *r) {
+    uint32_t row[2], rows[2];
+    int n, st = layout(fmt, w, h, linesize, row, rows, &n, r);
+    if (st) return st;
+    HvReply own = {0};
+    HvReply *rr = r ? r : &own;
+#ifdef HAVE_DEV
+    if (c->dev) {
+        HvVcPlanesDma d = {handle, fmt, w, h, {0, 0}, {0, 0}};
+        struct hvcodec_buf out[2] = {{0, 0}, {0, 0}};
+        for (int i = 0; i < n; i++) {
+            out[i] = (struct hvcodec_buf){(uintptr_t)data[i], (uint64_t)(rows[i] - 1) * (uint32_t)linesize[i] + row[i]};
+            d.stride[i] = (uint32_t)linesize[i];
+        }
+        d.offset[1] = out[0].len;
+        take_turn(c);
+        rr->data = NULL, rr->len = 0, rr->err[0] = 0, rr->status = 0;
+        st = c->broken ? broken(c, rr) : dev_call(c, HV_VC_FRAME_DOWNLOAD_DMA, &d, sizeof d, NULL, 0, NULL, out, rr);
+        end_turn(c);
+        if (!r) hv_reply_free(&own);
+        return st;
+    }
+#endif
+    HvVcHandle m = {handle, 0};
+    HvVcFrameReply fr;
+    st = hv_call(c, HV_VC_FRAME_DOWNLOAD, &m, sizeof m, NULL, 0, rr);
+    if (!st && (rr->len < sizeof fr || rr->len - sizeof fr != hv_vc_frame_bytes(fmt, w, h) ||
+                (memcpy(&fr, rr->data, sizeof fr), fr.format != fmt || fr.width != w || fr.height != h))) {
+        set_reply(rr, HV_VC_E_INVAL, "the reply does not agree with the frame");
+        st = HV_VC_E_INVAL;
+    }
+    if (!st) {
+        const uint8_t *p = rr->data + sizeof fr;
+        for (int i = 0; i < n; i++)
+            for (uint32_t y = 0; y < rows[i]; y++, p += row[i]) memcpy(data[i] + (size_t)y * (uint32_t)linesize[i], p, row[i]);
+    }
+    if (!r) hv_reply_free(&own);
     return st;
 }
 
