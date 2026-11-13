@@ -737,10 +737,195 @@ static void test_limits(void) {
     for (int i = 0; i < NFRAMES; i++) CVPixelBufferRelease(src[i]);
 }
 
+
+/* VE1.4: a session that the system stops gives one clear error; timeouts; the context limit. */
+static void test_lost_and_timeouts(const Stream *in) {
+    Conn c;
+    conn_open(&c);
+    uint32_t dec = 0, enc = 0;
+    CHECK(dec_open(&c, HV_VC_H264, in->extra, in->extra_len, 0, &dec) == 0, "DEC_OPEN");
+    HvVcEncOpen o = enc_params(HV_VC_H264);
+    CHECK(enc_open(&c, &o, &enc) == 0, "ENC_OPEN");
+    HvVcFrameReply r;
+    CHECK(dec_frame(&c, dec, in->data[0], in->len[0], 0, &r) == 0 && r.handle, "a frame before");
+    hv_vcodec_lose_sessions();
+    HvVcFrameReply r2;
+    int st = dec_frame(&c, dec, in->data[1], in->len[1], 1, &r2);
+    CHECK(st == HV_VC_E_LOST && strstr(c.err, "stopped"), "decode after the system stops it: %d %s", st, c.err);
+    printf("lost session: %s\n", c.err);
+    CHECK(dec_frame(&c, dec, in->data[1], in->len[1], 1, &r2) == HV_VC_E_LOST, "and again");
+    HvVcEncFrame f = {enc, r.handle, 0, 1, 0, 0};
+    st = call(&c, HV_VC_ENC_FRAME, &f, sizeof f, NULL, 0);
+    CHECK(st == HV_VC_E_LOST, "encode after the system stops it: %d %s", st, c.err);
+    /* a new session works */
+    uint32_t dec2 = 0;
+    CHECK(dec_open(&c, HV_VC_H264, in->extra, in->extra_len, 0, &dec2) == 0, "a new decoder");
+    CHECK(dec_frame(&c, dec2, in->data[0], in->len[0], 0, &r2) == 0 && r2.handle, "decodes");
+    conn_close(&c);
+
+    /* a message that stops in the middle closes its context after the timeout */
+    hv_vcodec_set_timeouts(300, 200);
+    conn_open(&c);
+    HvVcHeader h = {HV_VC_QUERY, 0, 1, 0};
+    send_all(c.fd, &h, 8);
+    char b;
+    CHECK(read(c.fd, &b, 1) == 0, "a half header closes the context");
+    conn_close(&c);
+    /* ENC_PACKET waits no longer than the limit */
+    conn_open(&c);
+    CHECK(enc_open(&c, &o, &enc) == 0, "ENC_OPEN");
+    HvVcEncPacketReq q = {enc, HV_VC_PACKET_WAIT, 60000, 0};
+    CHECK(call(&c, HV_VC_ENC_PACKET, &q, sizeof q, NULL, 0) == HV_VC_E_AGAIN, "no frames: no wait");
+    conn_close(&c);
+    hv_vcodec_set_timeouts(30000, 10000);
+
+    /* at most 8 contexts */
+    Conn many[9];
+    for (int i = 0; i < 9; i++) conn_open(&many[i]);
+    int closed = 0;
+    for (int i = 0; i < 9; i++) closed += call(&many[i], HV_VC_QUERY, NULL, 0, NULL, 0) == -1000;
+    CHECK(closed == 1, "a ninth context is refused (%d refused)", closed);
+    for (int i = 0; i < 9; i++) conn_close(&many[i]);
+}
+
+/* VE1.5: random, mutated and truncated messages must not crash the host, and every context must be freed. */
+static uint64_t rng = 0x9e3779b97f4a7c15ull;
+static uint32_t rnd(void) {
+    rng ^= rng << 13, rng ^= rng >> 7, rng ^= rng << 17;
+    return (uint32_t)(rng >> 11);
+}
+
+typedef struct {
+    uint32_t type;
+    uint8_t *p;
+    size_t len;
+} Tmpl;
+
+static void test_fuzz(const Stream *in, int iterations) {
+    hv_vcodec_set_timeouts(200, 50);
+    Tmpl t[16];
+    int nt = 0;
+    uint8_t *buf;
+#define TMPL(ty, ptr, n) (t[nt].type = (ty), t[nt].p = malloc((n) ? (n) : 1), memcpy(t[nt].p, (ptr), (n)), t[nt].len = (n), nt++)
+    HvVcDecOpen d = {HV_VC_H264, W, H, 0, 0, (uint32_t)in->extra_len};
+    buf = malloc(sizeof d + in->extra_len);
+    memcpy(buf, &d, sizeof d), memcpy(buf + sizeof d, in->extra, in->extra_len);
+    TMPL(HV_VC_DEC_OPEN, buf, sizeof d + in->extra_len);
+    free(buf);
+    for (int k = 0; k < 3; k++) {
+        HvVcDecFrame f = {0, 0, k, 1};
+        buf = malloc(sizeof f + in->len[k]);
+        memcpy(buf, &f, sizeof f), memcpy(buf + sizeof f, in->data[k], in->len[k]);
+        TMPL(HV_VC_DEC_FRAME, buf, sizeof f + in->len[k]);
+        free(buf);
+    }
+    HvVcEncOpen eo = enc_params(HV_VC_H264);
+    TMPL(HV_VC_ENC_OPEN, &eo, sizeof eo);
+    eo = enc_params(HV_VC_HEVC);
+    TMPL(HV_VC_ENC_OPEN, &eo, sizeof eo);
+    HvVcEncFrame ef = {0, 0, 0, 1, 0, 0};
+    TMPL(HV_VC_ENC_FRAME, &ef, sizeof ef);
+    HvVcEncPacketReq pq = {0, 0, 0, 0};
+    TMPL(HV_VC_ENC_PACKET, &pq, sizeof pq);
+    HvVcHandle hd = {0, 0};
+    TMPL(HV_VC_FRAME_FREE, &hd, sizeof hd);
+    TMPL(HV_VC_FRAME_DOWNLOAD, &hd, sizeof hd);
+    HvVcFrameAlloc fa = {64, 64, HV_VC_FMT_NV12, 0, 1, 1, 1, 0};
+    TMPL(HV_VC_FRAME_ALLOC, &fa, sizeof fa);
+    uint8_t up[8 + 64 * 64 * 3 / 2] = {0};
+    TMPL(HV_VC_FRAME_UPLOAD, up, sizeof up);
+    HvVcXfer x = {0, 32, 32, HV_VC_FMT_P010, 0, 0, 0, 0, 0, 0};
+    TMPL(HV_VC_XFER, &x, sizeof x);
+    HvVcSession cs = {0, 0};
+    TMPL(HV_VC_DEC_CLOSE, &cs, sizeof cs);
+    TMPL(HV_VC_ENC_CLOSE, &cs, sizeof cs);
+    TMPL(HV_VC_QUERY, "", 0);
+
+    Conn c;
+    conn_open(&c);
+    uint32_t ids[16] = {0};
+    int reconnects = 0, replies = 0, oks = 0;
+    uint8_t *msg = malloc(1 << 16);
+    for (int it = 0; it < iterations; it++) {
+        uint32_t mode = rnd() % 10, type;
+        size_t len;
+        if (mode == 0) { /* random */
+            type = rnd() % 16, len = rnd() % 300;
+            for (size_t i = 0; i < len; i++) msg[i] = (uint8_t)rnd();
+        } else {
+            const Tmpl *tp = &t[rnd() % (uint32_t)nt];
+            type = tp->type, len = tp->len;
+            memcpy(msg, tp->p, len);
+            if (len >= 4 && rnd() % 4) { /* a live session or handle */
+                uint32_t id = ids[rnd() % 16];
+                memcpy(msg, &id, 4); /* every template starts with its session or handle */
+                if (type == HV_VC_ENC_FRAME && len >= 8) {
+                    uint32_t h2 = ids[rnd() % 16];
+                    memcpy(msg + 4, &h2, 4);
+                }
+            }
+            if (mode <= 5)
+                for (uint32_t k = rnd() % 6; k > 0 && len; k--) msg[rnd() % len] ^= (uint8_t)(1u << (rnd() % 8));
+            else if (mode == 6 && len) len = rnd() % len;
+            else if (mode == 7 && len + 64 < (1 << 16)) len += rnd() % 64;
+        }
+        HvVcHeader h = {type, (uint32_t)len, ++c.seq, 0};
+        if (mode == 8 && it % 7 == 0) { /* a message cut short, then the connection closes */
+            h.len = (uint32_t)len + 1 + rnd() % 1000;
+            send_all(c.fd, &h, sizeof h);
+            send_all(c.fd, msg, len);
+            conn_close(&c);
+            conn_open(&c);
+            reconnects++;
+            continue;
+        }
+        if (mode == 9 && it % 11 == 0) h.len = HV_VC_MAX_PAYLOAD + 1 + rnd() % 1000; /* too long: the host closes */
+        int dead = send_all(c.fd, &h, sizeof h) || (h.len == len && len && send_all(c.fd, msg, len));
+        HvVcHeader r;
+        if (!dead && h.len == len) dead = recv_all(c.fd, &r, sizeof r);
+        else dead = 1;
+        if (!dead) {
+            uint8_t *pl = malloc(r.len ? r.len : 1);
+            dead = r.len && recv_all(c.fd, pl, r.len);
+            replies++;
+            if (!dead && !r.status && r.len >= 4) {
+                oks++;
+                memcpy(&ids[rnd() % 16], pl, 4);
+            }
+            free(pl);
+        }
+        if (dead) {
+            conn_close(&c);
+            conn_open(&c);
+            reconnects++;
+        }
+    }
+    conn_close(&c);
+    free(msg);
+    for (int i = 0; i < nt; i++) free(t[i].p);
+    hv_vcodec_set_timeouts(30000, 10000);
+    HvVcodecStats s;
+    hv_vcodec_stats(&s);
+    printf("fuzz: %d messages, %d replies (%d with ids), %d reconnects, %llu protocol errors\n", iterations, replies, oks, reconnects,
+           (unsigned long long)s.protocol_errors);
+    CHECK(s.open == 0 && s.live_frames == 0 && s.live_sessions == 0, "fuzz: all freed: %d open, %lld frames, %lld sessions", s.open,
+          (long long)s.live_frames, (long long)s.live_sessions);
+    CHECK(replies > iterations / 2, "most messages got a reply");
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     CVPixelBufferRef src[NFRAMES];
     for (int i = 0; i < NFRAMES; i++) src[i] = make_frame(i);
+    if (!getenv("VCODEC_NO_SKIP")) {
+        const HvVtCaps *caps = hv_vt_caps();
+        int hw = 0;
+        for (int i = 0; i < caps->n_enc; i++) hw += !caps->enc[i].excluded && (caps->enc[i].info.codec == HV_VC_H264 || caps->enc[i].info.codec == HV_VC_HEVC);
+        if (hw < 2) { /* a virtual Mac has no media engine */
+            printf("test_vcodec: skipped: no H.264 and HEVC hardware encoders here\n");
+            return 0;
+        }
+    }
     Stream in;
     make_stream(&in, src);
     CHECK(in.n == NFRAMES && in.extra_len, "source stream: %d packets", in.n);
@@ -749,6 +934,8 @@ int main(void) {
     test_rate_control(&in);
     test_raw();
     test_limits();
+    test_lost_and_timeouts(&in);
+    test_fuzz(&in, getenv("VCODEC_FUZZ") ? atoi(getenv("VCODEC_FUZZ")) : 3000);
     stream_free(&in);
     for (int i = 0; i < NFRAMES; i++) CVPixelBufferRelease(src[i]);
     printf("test_vcodec: %d checks, %d failed\n", checks, failures);

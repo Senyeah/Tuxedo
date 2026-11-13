@@ -29,8 +29,13 @@
 #define MAX_FRAME_BYTES (1ull << 30) /* live frames in one context: 32 frames of 4K P010 is 800 MB */
 #define MAX_PACKETS 256 /* encoder output waiting for ENC_PACKET */
 #define MAX_PACKET_BYTES (64u << 20)
-#define MESSAGE_TIMEOUT_MS 30000 /* the rest of a message, once its first byte is here */
-#define MAX_WAIT_MS 10000
+static int message_timeout_ms = 30000; /* the rest of a message, once its first byte is here */
+static uint32_t max_wait_ms = 10000;
+
+void hv_vcodec_set_timeouts(int message_ms, uint32_t wait_ms) {
+    message_timeout_ms = message_ms;
+    max_wait_ms = wait_ms;
+}
 
 enum { KIND_NONE, KIND_DEC, KIND_ENC };
 
@@ -86,6 +91,8 @@ typedef struct {
 } Ctx;
 
 static _Atomic int open_contexts;
+static pthread_mutex_t registry_mu = PTHREAD_MUTEX_INITIALIZER;
+static void *registry[MAX_CONTEXTS];
 static _Atomic uint64_t total_contexts, total_messages, total_proto_errors;
 static _Atomic int64_t live_frames, live_sessions;
 
@@ -114,7 +121,7 @@ static int read_full(Ctx *c, void *p, size_t len, int idle) {
     while (len) {
         int timeout = -1;
         if (!idle) {
-            int64_t left = MESSAGE_TIMEOUT_MS - ms_since(&t0);
+            int64_t left = message_timeout_ms - ms_since(&t0);
             if (left <= 0) return -1;
             timeout = (int)left;
         }
@@ -346,7 +353,7 @@ static int do_dec_frame(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     memcpy(&d, p, sizeof d);
     Session *s = session_get(c, d.session, KIND_DEC);
     if (!s) return fail(c, req, HV_VC_E_HANDLE, "no such decoder");
-    if (!s->dec) return fail(c, req, HV_VC_E_LOST, "the decoder was stopped; open a new one");
+    if (!s->dec) return vt_fail(c, req, "decode", kVTInvalidSessionErr);
     const uint8_t *data = p + sizeof d;
     size_t len = req->len - sizeof d;
     if (!len || len > HV_VC_MAX_BITSTREAM) return fail(c, req, HV_VC_E_INVAL, "bad frame length");
@@ -630,7 +637,7 @@ static int do_enc_packet(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     memcpy(&q, p, sizeof q);
     Session *s = session_get(c, q.session, KIND_ENC);
     if (!s) return fail(c, req, HV_VC_E_HANDLE, "no such encoder");
-    uint32_t wait = q.flags & HV_VC_PACKET_WAIT ? (q.timeout_ms > MAX_WAIT_MS ? MAX_WAIT_MS : q.timeout_ms) : 0;
+    uint32_t wait = q.flags & HV_VC_PACKET_WAIT ? (q.timeout_ms > max_wait_ms ? max_wait_ms : q.timeout_ms) : 0;
     struct timespec until;
     clock_gettime(CLOCK_REALTIME, &until);
     until.tv_sec += wait / 1000, until.tv_nsec += (long)(wait % 1000) * 1000000;
@@ -838,7 +845,7 @@ void hv_vcodec_serve(int fd) {
     atomic_fetch_add(&total_contexts, 1);
     int one = 1;
     setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
-    struct timeval tv = {MESSAGE_TIMEOUT_MS / 1000, 0};
+    struct timeval tv = {message_timeout_ms / 1000, (message_timeout_ms % 1000) * 1000};
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv); /* a guest that stops reading closes its context */
     Ctx *c = calloc(1, sizeof *c);
     if (!c) {
@@ -848,6 +855,13 @@ void hv_vcodec_serve(int fd) {
     }
     c->fd = fd;
     clock_gettime(CLOCK_MONOTONIC, &c->started);
+    pthread_mutex_lock(&registry_mu);
+    for (int i = 0; i < MAX_CONTEXTS; i++)
+        if (!registry[i]) {
+            registry[i] = c;
+            break;
+        }
+    pthread_mutex_unlock(&registry_mu);
     for (;;) {
         HvVcHeader h;
         if (read_full(c, &h, sizeof h, 1)) break;
@@ -869,6 +883,10 @@ void hv_vcodec_serve(int fd) {
             c->buf = NULL, c->cap = 0;
         }
     }
+    pthread_mutex_lock(&registry_mu);
+    for (int i = 0; i < MAX_CONTEXTS; i++)
+        if (registry[i] == c) registry[i] = NULL;
+    pthread_mutex_unlock(&registry_mu);
     for (int i = 0; i < HV_VC_MAX_SESSIONS; i++) session_free(&c->sess[i]);
     for (int i = 0; i < HV_VC_MAX_FRAMES; i++)
         if (c->frames[i].pb) frame_drop(c, &c->frames[i]);
@@ -885,6 +903,18 @@ void hv_vcodec_serve(int fd) {
     close(fd);
     free(c);
     atomic_fetch_sub(&open_contexts, 1);
+}
+
+void hv_vcodec_lose_sessions(void) {
+    pthread_mutex_lock(&registry_mu);
+    for (int i = 0; i < MAX_CONTEXTS; i++) {
+        Ctx *c = registry[i];
+        for (int j = 0; c && j < HV_VC_MAX_SESSIONS; j++) {
+            if (c->sess[j].dec) VTDecompressionSessionInvalidate(c->sess[j].dec);
+            if (c->sess[j].enc) VTCompressionSessionInvalidate(c->sess[j].enc);
+        }
+    }
+    pthread_mutex_unlock(&registry_mu);
 }
 
 /* ---- the listener ---- */

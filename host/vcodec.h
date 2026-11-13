@@ -22,4 +22,9 @@ typedef struct {
 } HvVcodecStats;
 void hv_vcodec_stats(HvVcodecStats *s);
 
+/* Tests only. The time for the rest of a message, and the longest ENC_PACKET wait (defaults 30000 and 10000 ms). */
+void hv_vcodec_set_timeouts(int message_ms, uint32_t wait_ms);
+/* Tests only, with every connection idle: invalidate all VideoToolbox sessions, as iOS does in the background. */
+void hv_vcodec_lose_sessions(void);
+
 #endif

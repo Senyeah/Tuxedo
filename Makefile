@@ -37,7 +37,7 @@ METAL_LIBS = -framework Foundation -framework QuartzCore -framework Metal -frame
 
 TESTS = $(B)/test_classify $(B)/test_jit_region $(B)/test_operands $(B)/test_jit $(B)/test_mem $(B)/test_share_keyboard \
         $(B)/test_mmu $(B)/test_exc $(B)/test_devices $(B)/test_shutdown $(B)/test_pause $(B)/test_big_lock $(B)/test_machine_rebuild $(B)/test_fdt $(B)/test_console $(B)/test_virt \
-        $(B)/test_status $(B)/test_secrets $(B)/test_vgpu_metal $(if $(GFX),$(B)/test_vgpu_virgl)
+        $(B)/test_status $(B)/test_secrets $(B)/test_vgpu_metal $(B)/test_vcodec $(if $(GFX),$(B)/test_vgpu_virgl)
 
 all: $(TESTS) $(B)/hengevm $(B)/hengevm-ref $(B)/hvsparse
 
@@ -552,11 +552,13 @@ ios-vt-bench: | $(B)
 	  -framework AVFoundation $(VT_FRAMEWORKS) -o $(B)/vt_transcode_bench_ios
 .PHONY: vt-transcode-bench ios-vt-bench
 
-# hvcodec's core through a socket pair: decode, encode, transfers, limits and the parser fuzz. No guest; part of make test.
+# hvcodec's core through a socket pair: decode, encode, transfers, limits and the parser fuzz. No guest; part of make test
+# (about 5 s). test-vcodec runs it again with a longer fuzz under libgmalloc. Skipped where there is no media engine.
 $(B)/test_vcodec: tests/test_vcodec.m $(VCODEC_OBJ)
 	$(CC) $(CFLAGS) -fobjc-arc $^ $(VT_FRAMEWORKS) -o $@
 test-vcodec: $(B)/test_vcodec
 	$(B)/test_vcodec
+	DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib VCODEC_FUZZ=10000 $(B)/test_vcodec
 .PHONY: test-vcodec
 
 # A5: both iOS libraries with the renderer, linked with the static graphics libraries. The device binary is only linked.
