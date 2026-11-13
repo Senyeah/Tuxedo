@@ -337,7 +337,7 @@ Run on 14/11/2026 on the same Mac, branch `linux/VD-decode`. This is stage 2 of 
 What changed:
 
 - The back end gives `vrend_video.c` the decoded `CVPixelBuffer`'s IOSurface, not CPU pointers. `vrend_video.c` makes one ANGLE pbuffer for each IOSurface plane (`EGL_IOSURFACE_ANGLE`: `GL_RED` or `GL_RG`, 8 or 16 bits), binds it to a texture and copies it into the guest's plane texture with `glCopyTexSubImage2D`. The guest's plane resource must be a 2D texture of the plane's format. The copy stays inside the smaller of the two sizes.
-- The pbuffers are kept in a cache of 32 surfaces for each codec, keyed by IOSurface. VideoToolbox used 9 surfaces for `ffmpeg` and 12 for `mpv`.
+- The pbuffers are kept in a cache of 32 surfaces for each codec, keyed by IOSurface. VideoToolbox used 9 surfaces for `ffmpeg` and 12 for `mpv`. The cache is dropped when the pool may be new (see [Stage 6 review fixes](#stage-6-review-fixes)).
 - A fence follows each copy. Until it signals, the IOSurface's use count is raised. A test on the Mac showed that a `CVPixelBufferPool` does not give back a surface that is in use, and that a Metal texture on a surface does not raise the count. So the decoder cannot write a surface that the GPU still reads.
 - When ANGLE refuses a plane, that codec copies on the CPU from then on (`IOSurfaceLock`). `VREND_VIDEO_CPU_COPY=1` in `hengevm`'s environment forces the CPU copy. The script fails when a frame went to the CPU without that variable.
 - `vrend_video.c` logs, for each codec, the frames copied on the GPU and on the CPU, the surfaces and the thread CPU time of the copies.
@@ -364,7 +364,7 @@ Run on 14/11/2026 on the same Mac. This is stage 4 of [Stages](#stages): VP9. St
 What changed:
 
 - At init the back end calls `VTRegisterSupplementalVideoDecoderIfAvailable(kCMVideoCodecType_VP9)` (macOS 11, iOS 26.2). The capset lists `PIPE_VIDEO_PROFILE_VP9_PROFILE0` (NV12) and `PIPE_VIDEO_PROFILE_VP9_PROFILE2` (P010) only when `VTIsHardwareDecodeSupported` is then true. A phone without a VP9 decoder lists no VP9.
-- Mesa's VA frontend gives the whole frame to `decode_bitstream` (`picture.c:481` to `:483` in Mesa 25.0.7 only reads the header for itself). The first item of [Not verified](#not-verified) about VP9 is now true. The back end collects the frame, reads the uncompressed header up to the sync code (key frame, `show_frame`, `intra_only`), and decodes the frame as one sample. Nothing is rewritten.
+- Mesa's VA frontend gives the whole frame to `decode_bitstream` (`picture.c:481` to `:483` in Mesa 25.0.7 only reads the header for itself). The first item of [Not verified](#not-verified) about VP9 is now true. The back end collects the frame, reads the uncompressed header up to the frame size (key frame, `show_frame`, `intra_only`, the coded size), and decodes the frame as one sample. Nothing is rewritten.
 - The format description is `kCMVideoCodecType_VP9` with a `vpcC` atom (version 1) from the profile, the bit depth and the frame size: 4:2:0 co-located, video range, unspecified colour. A new description follows only a key frame with a new size.
 - A hidden frame (`show_frame` 0) may give no output. VideoToolbox gave one for each hidden frame on the Mac, so the guest's surface for an alt-ref frame has its pixels.
 - After a failed frame the back end skips to the next key frame. An intra-only frame keeps the other references, so it does not resume.
@@ -427,7 +427,7 @@ Run on 14/11/2026. This is stage 6 of [Stages](#stages): the machine setting, th
 - The iOS app has a "Video decode" switch for each Linux machine, under "Graphics acceleration" and shown only when that is on. It is off by default (`MachineModel.video`, missing means off). Its note says that the device's video decoder then parses data that the guest controls. `henge_vm_boot_linux` has a `video` argument; with acceleration it sets `HvVmConfig.video`, the flag that `hengevm --gpu-video` sets, which passes `VIRGL_RENDERER_USE_VIDEO`. `make test-machine-model` checks the default and that the switch has no effect without acceleration or on a Mac.
 - `tools/linux/README.md` ("Video decode (VA-API)") tells the guest what to install, how to check it with `vainfo`, the players' options, and what stays in software.
 - `make test-linux-video` is the frame checksum test for each codec: two H.264, two VP9 and three AV1 clips, each decoded with `-hwaccel vaapi` and with `-hwaccel none`, every frame equal. It also checks the speed, `mpv`, and `hengevm`'s log.
-- The patched virglrenderer is built for `ios` and `sim` into the shared `build/gfx` (the earlier libraries are in `build/gfx/ios.pre-video` and `build/gfx/sim.pre-video`). The Henge device build and `make ios-lib` succeed with it. The phone was not run. Video stays off until the switch is on, so the phone's behaviour does not change.
+- The patched virglrenderer is built for `ios` and `sim` into the shared `build/gfx` (the earlier libraries are in `build/gfx/ios.pre-video` and `build/gfx/sim.pre-video`). The Henge device build and `make ios-lib` succeed with it. The phone was not run. Video stays off until the switch is on, so the phone's behaviour does not change. That build needs VideoToolbox, CoreMedia and CoreVideo on every app's link line; see [Stage 6 review fixes](#stage-6-review-fixes).
 
 The final run on the Mac, with one patched library and one boot:
 
@@ -443,3 +443,24 @@ The final run on the Mac, with one patched library and one boot:
 
 A one-off fuzz run (not in the repository) linked the back end with AddressSanitizer and UndefinedBehaviorSanitizer and sent it 3,000 codecs of random descriptors and bitstreams, with H.264 start codes, VP9 frame markers and AV1 tile layouts that fit, so that 1,596 AV1 frames reached the header writers and VideoToolbox. Nothing faulted.
 
+### Stage 6 review fixes
+
+An independent review of stages 2 to 6 found these defects. The patch now handles them (run on 14/11/2026 on the same Mac):
+
+- AV1 tiles could overlap (major). Each tile had to lie inside the 16 MiB frame, but their sizes were not summed. 256 tiles (the cap) that each cover all 16 MiB made a 4 GiB sample, which stayed allocated until the codec was destroyed. Now the sizes must add up to at most the frame's size, so a sample is at most 16 MiB plus its headers. A sample buffer larger than 4 MiB is freed after its frame, as the access unit buffer already was.
+- The VP9 coded size was not checked (minor). Only the descriptor's size had the 4096 bound, but VideoToolbox sizes its output from the stream. The back end now reads the uncompressed header up to the frame size. A key frame, an intra-only frame, or an inter frame that codes its size (no `found_ref`) must code the descriptor's size. Other inter frames take a reference's size, which was checked when it was coded.
+- The pbuffer cache kept surfaces of an old pool (minor). Its 32 entries for each codec were freed only when the cache filled or the codec was destroyed, so after a resize each one kept an old IOSurface. The back end now gives `vrend_video.c` a pool number. The number changes with a new session or with a format of another size, and `vrend_video.c` then drops the whole cache.
+- The rebuilt shared libraries broke other branches' link lines (major, a rollout hazard). `vrend_renderer.c` always pulls in `virgl_video_vt.m`, so an app that did not name VideoToolbox, CoreMedia and CoreVideo failed to link. Now `virgl_video_vt.m` names its frameworks in the object (`.linker_option`), and the linker adds them to every app that links the library. A device build with the three frameworks removed from `ios/project.yml` succeeds with the new `ios` library, and the app links all three. The shared `build/gfx` still has the earlier stage 6 build (see below).
+
+| Check | Result |
+|---|---|
+| `make test-vt-crafted` (new) | 9 checks pass. 256 overlapping AV1 tiles are refused, with a peak footprint of 36 MB. With the stage 6 library the same input took the footprint to 4,135 MB and kept it. VP9 key frames that code 8192x8192 or 128x64 with a 64x64 descriptor are refused; one that codes 64x64 is taken. The test is linked without the three frameworks. |
+| framemd5 | 450 of 450 frames equal for each of the 7 clips |
+| VA-API frame rate | H.264 419.4 fps, VP9 334.3 fps, AV1 579.2 fps (software: 162.9, 267.9, 226.4); host load average about 46 |
+| `mpv --hwdec=vaapi --vo=gpu`, H.264 | 0 frames dropped |
+| `hengevm`'s log | 11 VA-API runs: each decoded all its frames on a hardware decoder, 0 failed, 0 skipped, 1 session; all 5,040 frames copied on the GPU, with 9 to 24 surfaces for each codec as before (the cache was never dropped in these streams); no frame refused by the new checks |
+| Without `--gpu-video` | no decode profile, and the back end does not start |
+| `make test-vgpu-virgl` | passes with video off (197 checks) and on under `libgmalloc` (217 checks), then runs `make test-vt-crafted` |
+| Henge device build against the new `ios` library | succeeds, with and without the three frameworks in `ios/project.yml` |
+
+Not shown: a pool change in a real stream (FFmpeg makes a new VA-API context when the size changes, so the codec and its cache go away first), and the new libraries on the phone. The new `ios` and `sim` libraries were built into a copy of `build/gfx`, not into the shared tree, which phone builds link. Until the shared tree is rebuilt from this patch, it has the stage 6 libraries, with the defects above. A branch that links it needs `-framework VideoToolbox -framework CoreMedia -framework CoreVideo` (as in `linux/integration`'s `ios/project.yml`).

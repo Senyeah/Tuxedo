@@ -63,10 +63,10 @@ index 26c7f58..a056590 100644
  
  if with_host_windows
 diff --git a/src/vrend/virgl_video.h b/src/vrend/virgl_video.h
-index e954559..705efe0 100644
+index e954559..6a9838a 100644
 --- a/src/vrend/virgl_video.h
 +++ b/src/vrend/virgl_video.h
-@@ -96,7 +96,15 @@ struct virgl_video_dma_buf {
+@@ -96,7 +96,16 @@ struct virgl_video_dma_buf {
          int modifier;
          uint32_t offset;
          uint32_t pitch;
@@ -79,15 +79,16 @@ index e954559..705efe0 100644
      } planes[4];
 +
 +    void *iosurface; /* VideoToolbox: IOSurfaceRef of the decoded frame, valid during the callback */
++    uint32_t pool;   /* VideoToolbox: changes when the decoder's surface pool may have been replaced */
  };
  
  /*
 diff --git a/src/vrend/virgl_video_vt.m b/src/vrend/virgl_video_vt.m
 new file mode 100644
-index 0000000..7192561
+index 0000000..9939233
 --- /dev/null
 +++ b/src/vrend/virgl_video_vt.m
-@@ -0,0 +1,2186 @@
+@@ -0,0 +1,2242 @@
 +/**************************************************************************
 + *
 + * Copyright (C) 2026 Henge contributors
@@ -139,6 +140,13 @@ index 0000000..7192561
 +#include <IOSurface/IOSurfaceRef.h>
 +#include <TargetConditionals.h>
 +#include <VideoToolbox/VideoToolbox.h>
++
++/* vrend_renderer.c always pulls this file in: the .a names its frameworks, so an app's link line need not */
++__asm__(".linker_option \"-framework\", \"VideoToolbox\"\n"
++        ".linker_option \"-framework\", \"CoreMedia\"\n"
++        ".linker_option \"-framework\", \"CoreVideo\"\n"
++        ".linker_option \"-framework\", \"IOSurface\"\n"
++        ".linker_option \"-framework\", \"CoreFoundation\"");
 +
 +#include "util/u_formats.h"
 +#include "virgl_hw.h"
@@ -235,6 +243,7 @@ index 0000000..7192561
 +    CVPixelBufferRef out;
 +    OSStatus out_status;
 +    OSType pixfmt; /* the session's output: NV12, or planar for IYUV and YV12 targets */
++    uint32_t pool; /* a new session or frame size: the old surfaces are not given again */
 +    /* after a failed picture VideoToolbox's references are wrong: skip to the next IDR or intra picture */
 +    bool need_intra;
 +    unsigned frames, failed, skipped, sessions, ps_updates, max_slices_per_call;
@@ -704,6 +713,7 @@ index 0000000..7192561
 +        return -1;
 +    }
 +    c->sessions++;
++    c->pool++;
 +    CFBooleanRef hw = NULL;
 +    VTSessionCopyProperty(c->vt, kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder, NULL, &hw);
 +    CMVideoDimensions dim = CMVideoFormatDescriptionGetDimensions(c->fmt);
@@ -740,8 +750,12 @@ index 0000000..7192561
 +/* Takes fmt; a new session only if the old one refuses it */
 +static int vt_set_format(struct virgl_video_codec *c, CMVideoFormatDescriptionRef fmt)
 +{
-+    if (c->fmt)
++    if (c->fmt) {
++        CMVideoDimensions a = CMVideoFormatDescriptionGetDimensions(c->fmt), b = CMVideoFormatDescriptionGetDimensions(fmt);
++        if (a.width != b.width || a.height != b.height)
++            c->pool++;
 +        CFRelease(c->fmt);
++    }
 +    c->fmt = fmt;
 +    if (c->vt && !VTDecompressionSessionCanAcceptFormatDescription(c->vt, fmt)) {
 +        virgl_warn("vt: new parameter sets need a new session\n");
@@ -774,6 +788,7 @@ index 0000000..7192561
 +    if (d.num_planes > 3)
 +        d.num_planes = 3;
 +    d.iosurface = (void *)surf;
++    d.pool = c->pool;
 +    for (uint32_t i = 0; i < d.num_planes; i++) {
 +        /* VideoToolbox's planar order is Y, Cb, Cr; YV12 is Y, Cr, Cb */
 +        size_t src = c->target->format == PIPE_FORMAT_YV12 && i ? 3 - i : i;
@@ -915,8 +930,23 @@ index 0000000..7192561
 +    return 0;
 +}
 +
-+/* The uncompressed header up to refresh_frame_flags: is it a key, intra-only or hidden frame */
-+static bool vp9_parse_header(struct virgl_video_codec *c, const uint8_t *p, size_t n)
++/* color_config(): read only to reach the frame size */
++static void vp9_color_config(struct br *b, unsigned profile)
++{
++    if (profile >= 2)
++        br_bit(b); /* ten_or_twelve_bit */
++    if (br_u(b, 3) != 7) { /* not CS_RGB */
++        br_bit(b);
++        if (profile == 1 || profile == 3)
++            br_u(b, 3);
++    } else if (profile == 1 || profile == 3) {
++        br_bit(b);
++    }
++}
++
++/* The uncompressed header up to the frame size: is it a key, intra-only or hidden frame. VideoToolbox sizes its
++ * output from the stream, so a coded size must be the descriptor's (at most 4096). */
++static bool vp9_parse_header(struct virgl_video_codec *c, const uint8_t *p, size_t n, unsigned w, unsigned h)
 +{
 +    struct br b = {.p = p, .len = n, .raw = true};
 +    unsigned profile;
@@ -932,7 +962,7 @@ index 0000000..7192561
 +    bool key = !br_bit(&b);
 +    c->pic_shown = br_bit(&b);
 +    bool error_res = br_bit(&b);
-+    bool intra_only = false;
++    bool intra_only = false, sized = true;
 +    c->pic_idr = key;
 +    /* an intra-only frame keeps the other references: only a key frame resumes after a failure */
 +    c->pic_intra = false;
@@ -943,6 +973,23 @@ index 0000000..7192561
 +    }
 +    if ((key || intra_only) && br_u(&b, 24) != 0x498342)
 +        return false;
++    if (key || (intra_only && profile > 0))
++        vp9_color_config(&b, profile);
++    if (!key)
++        br_u(&b, 8); /* refresh_frame_flags */
++    if (!key && !intra_only) {
++        br_u(&b, 12); /* ref_frame_idx and sign bias */
++        /* found_ref: a reference's size, checked when it was coded */
++        for (unsigned i = 0; i < 3 && sized; i++)
++            sized = !br_bit(&b);
++    }
++    if (sized) {
++        unsigned cw = br_u(&b, 16) + 1, ch = br_u(&b, 16) + 1;
++        if (!b.err && (cw != w || ch != h)) {
++            virgl_warn("vt: VP9 frame codes %ux%u, its descriptor %ux%u\n", cw, ch, w, h);
++            return false;
++        }
++    }
 +    return !b.err && profile == c->vp9_profile;
 +}
 +
@@ -962,7 +1009,7 @@ index 0000000..7192561
 +    c->vp9_depth = depth;
 +    if (au_take_raw(c, num_buffers, buffers, sizes))
 +        return -1;
-+    if (!vp9_parse_header(c, c->au, c->au_len)) {
++    if (!vp9_parse_header(c, c->au, c->au_len, d->picture_parameter.frame_width, d->picture_parameter.frame_height)) {
 +        virgl_warn("vt: a VP9 frame header does not parse\n");
 +        return -1;
 +    }
@@ -1751,6 +1798,11 @@ index 0000000..7192561
 +        order[k] = (int16_t)i;
 +        tiles += sp->slice_data_size[i];
 +    }
++    /* overlapping tiles would make the sample up to 256 times the guest's data */
++    if (tiles > len) {
++        virgl_warn("vt: AV1 tiles have %zu bytes in %zu\n", tiles, len);
++        return 0;
++    }
 +    av1_seg(d, prim != AV1_NONE ? &c->av1_slots[vt_idx[prim]] : NULL, &seg);
 +    bool lossless = av1_coded_lossless(d, &seg);
 +
@@ -2024,6 +2076,11 @@ index 0000000..7192561
 +        free(c->au);
 +        c->au = NULL;
 +        c->au_cap = 0;
++    }
++    if (c->sample_cap > VT_AU_KEEP) {
++        free(c->sample);
++        c->sample = NULL;
++        c->sample_cap = 0;
 +    }
 +    return rc;
 +}
@@ -2378,7 +2435,7 @@ index ef033ad..5c12963 100644
  #endif
  
 diff --git a/src/vrend/vrend_video.c b/src/vrend/vrend_video.c
-index 57341d8..bd5a76e 100644
+index 57341d8..003ed2b 100644
 --- a/src/vrend/vrend_video.c
 +++ b/src/vrend/vrend_video.c
 @@ -73,6 +73,16 @@
@@ -2432,7 +2489,7 @@ index 57341d8..bd5a76e 100644
      struct list_head head;
 +#ifdef ENABLE_VIDEO_VT
 +    struct vrend_video_surf surfs[VREND_VIDEO_MAX_SURFS];
-+    uint32_t clock;
++    uint32_t clock, pool;
 +    bool gpu_off;                       /* the GPU copy failed once: CPU copies from then on */
 +    unsigned gpu_frames, cpu_frames, num_surfs;
 +    uint64_t copy_ns; /* thread CPU time in the copies */
@@ -2440,7 +2497,7 @@ index 57341d8..bd5a76e 100644
  };
  
  struct vrend_video_plane {
-@@ -146,6 +183,294 @@ static struct vrend_video_buffer *get_video_buffer(
+@@ -146,6 +183,300 @@ static struct vrend_video_buffer *get_video_buffer(
  }
  
  
@@ -2707,6 +2764,12 @@ index 57341d8..bd5a76e 100644
 +{
 +    uint64_t t0 = vt_thread_ns();
 +
++    /* a replaced pool's surfaces never come back: do not keep them until the cache fills */
++    if (d->pool != cdc->pool) {
++        for (unsigned i = 0; i < VREND_VIDEO_MAX_SURFS; i++)
++            vt_surf_drop(&cdc->surfs[i]);
++        cdc->pool = d->pool;
++    }
 +    if (!cpu_copy_only && !cdc->gpu_off) {
 +        if (!vt_gpu_copy(cdc, buf, d)) {
 +            cdc->gpu_frames++;
@@ -2735,7 +2798,7 @@ index 57341d8..bd5a76e 100644
  static int sync_dmabuf_to_video_buffer(struct vrend_video_buffer *buf,
                                         const struct virgl_video_dma_buf *dmabuf)
  {
-@@ -154,6 +479,7 @@ static int sync_dmabuf_to_video_buffer(struct vrend_video_buffer *buf,
+@@ -154,6 +485,7 @@ static int sync_dmabuf_to_video_buffer(struct vrend_video_buffer *buf,
          return -1;
      }
  
@@ -2743,7 +2806,7 @@ index 57341d8..bd5a76e 100644
      for (unsigned i = 0; i < dmabuf->num_planes && i < buf->num_planes; i++) {
          struct vrend_video_plane *plane = &buf->planes[i];
          struct vrend_resource *res;
-@@ -276,6 +602,13 @@ static void vrend_video_decode_completed(
+@@ -276,6 +608,13 @@ static void vrend_video_decode_completed(
  {
      struct vrend_video_buffer *buf = vrend_video_buffer(dmabuf->buf);
  
@@ -2757,7 +2820,7 @@ index 57341d8..bd5a76e 100644
      (void)codec;
  
      sync_dmabuf_to_video_buffer(buf, dmabuf);
-@@ -354,15 +687,24 @@ static struct virgl_video_callbacks video_callbacks = {
+@@ -354,15 +693,24 @@ static struct virgl_video_callbacks video_callbacks = {
  
  int vrend_video_init(int drm_fd)
  {
@@ -2785,7 +2848,7 @@ index 57341d8..bd5a76e 100644
  }
  
  int vrend_video_fill_caps(union virgl_caps *caps)
-@@ -381,12 +723,20 @@ int vrend_video_create_codec(struct vrend_video_context *ctx,
+@@ -381,12 +729,20 @@ int vrend_video_create_codec(struct vrend_video_context *ctx,
                               uint32_t max_ref,
                               uint32_t flags)
  {
@@ -2807,7 +2870,7 @@ index 57341d8..bd5a76e 100644
      if (profile <= PIPE_VIDEO_PROFILE_UNKNOWN ||
          profile >= PIPE_VIDEO_PROFILE_MAX)
          return -1;
-@@ -423,6 +773,7 @@ int vrend_video_create_codec(struct vrend_video_context *ctx,
+@@ -423,6 +779,7 @@ int vrend_video_create_codec(struct vrend_video_context *ctx,
      cdc->handle = handle;
      cdc->ctx = ctx;
      list_add(&cdc->head, &ctx->codecs);
@@ -2815,7 +2878,7 @@ index 57341d8..bd5a76e 100644
  
      return 0;
  }
-@@ -431,6 +782,10 @@ static void destroy_video_codec(struct vrend_video_codec *cdc)
+@@ -431,6 +788,10 @@ static void destroy_video_codec(struct vrend_video_codec *cdc)
  {
      if (cdc) {
          list_del(&cdc->head);
@@ -2826,7 +2889,7 @@ index 57341d8..bd5a76e 100644
          virgl_video_destroy_codec(cdc->codec);
          free(cdc);
      }
-@@ -439,7 +794,11 @@ static void destroy_video_codec(struct vrend_video_codec *cdc)
+@@ -439,7 +800,11 @@ static void destroy_video_codec(struct vrend_video_codec *cdc)
  void vrend_video_destroy_codec(struct vrend_video_context *ctx,
                                 uint32_t handle)
  {
@@ -2839,7 +2902,7 @@ index 57341d8..bd5a76e 100644
  
      destroy_video_codec(cdc);
  }
-@@ -454,9 +813,12 @@ int vrend_video_create_buffer(struct vrend_video_context *ctx,
+@@ -454,9 +819,12 @@ int vrend_video_create_buffer(struct vrend_video_context *ctx,
  {
      unsigned i;
      struct vrend_video_plane *plane;
@@ -2853,7 +2916,7 @@ index 57341d8..bd5a76e 100644
      if (buf)
          return 0;
  
-@@ -465,8 +827,10 @@ int vrend_video_create_buffer(struct vrend_video_context *ctx,
+@@ -465,8 +833,10 @@ int vrend_video_create_buffer(struct vrend_video_context *ctx,
          return -1;
      }
  
@@ -2865,7 +2928,7 @@ index 57341d8..bd5a76e 100644
  
      buf = (struct vrend_video_buffer *)calloc(1, sizeof(*buf));
      if (!buf)
-@@ -538,7 +902,11 @@ static void destroy_video_buffer(struct vrend_video_buffer *buf)
+@@ -538,7 +908,11 @@ static void destroy_video_buffer(struct vrend_video_buffer *buf)
  void vrend_video_destroy_buffer(struct vrend_video_context *ctx,
                                  uint32_t handle)
  {
@@ -2878,7 +2941,7 @@ index 57341d8..bd5a76e 100644
  
      destroy_video_buffer(buf);
  }
-@@ -547,6 +915,8 @@ struct vrend_video_context *vrend_video_create_context(struct vrend_context *ctx
+@@ -547,6 +921,8 @@ struct vrend_video_context *vrend_video_create_context(struct vrend_context *ctx
  {
      struct vrend_video_context *vctx;
  
@@ -2887,7 +2950,7 @@ index 57341d8..bd5a76e 100644
      vctx = (struct vrend_video_context *)calloc(1, sizeof(*vctx));
      if (vctx) {
          vctx->ctx = ctx;
-@@ -559,6 +929,9 @@ struct vrend_video_context *vrend_video_create_context(struct vrend_context *ctx
+@@ -559,6 +935,9 @@ struct vrend_video_context *vrend_video_create_context(struct vrend_context *ctx
  
  void vrend_video_destroy_context(struct vrend_video_context *ctx)
  {
@@ -2897,7 +2960,7 @@ index 57341d8..bd5a76e 100644
     list_for_each_entry_safe(struct vrend_video_codec, vcdc, &ctx->codecs, head)
        destroy_video_codec(vcdc);
  
-@@ -572,8 +945,8 @@ int vrend_video_begin_frame(struct vrend_video_context *ctx,
+@@ -572,8 +951,8 @@ int vrend_video_begin_frame(struct vrend_video_context *ctx,
                              uint32_t cdc_handle,
                              uint32_t tgt_handle)
  {
@@ -2908,7 +2971,7 @@ index 57341d8..bd5a76e 100644
  
      if (!cdc || !tgt)
          return -1;
-@@ -742,8 +1115,8 @@ int vrend_video_decode_bitstream(struct vrend_video_context *ctx,
+@@ -742,8 +1121,8 @@ int vrend_video_decode_bitstream(struct vrend_video_context *ctx,
      unsigned i, num_bs, *bs_sizes = NULL;
      void **bs_buffers = NULL;
      struct vrend_resource *res;
@@ -2919,7 +2982,7 @@ index 57341d8..bd5a76e 100644
      union virgl_picture_desc desc;
  
      if (!cdc || !tgt){
-@@ -765,16 +1138,16 @@ int vrend_video_decode_bitstream(struct vrend_video_context *ctx,
+@@ -765,16 +1144,16 @@ int vrend_video_decode_bitstream(struct vrend_video_context *ctx,
  
      for (i = 0, num_bs = 0; i < num_buffers; i++) {
          res = vrend_renderer_ctx_res_lookup(ctx->ctx, buffer_handles[i]);
@@ -2941,7 +3004,7 @@ index 57341d8..bd5a76e 100644
          num_bs++;
      }
  
-@@ -807,8 +1180,8 @@ int vrend_video_encode_bitstream(struct vrend_video_context *ctx,
+@@ -807,8 +1186,8 @@ int vrend_video_encode_bitstream(struct vrend_video_context *ctx,
  {
      union virgl_picture_desc desc;
      struct vrend_resource *dest_res, *desc_res, *feed_res;
@@ -2952,7 +3015,7 @@ index 57341d8..bd5a76e 100644
  
      if (!cdc || !src)
          return -1;
-@@ -847,8 +1220,8 @@ int vrend_video_end_frame(struct vrend_video_context *ctx,
+@@ -847,8 +1226,8 @@ int vrend_video_end_frame(struct vrend_video_context *ctx,
                            uint32_t cdc_handle,
                            uint32_t tgt_handle)
  {
