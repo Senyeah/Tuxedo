@@ -246,10 +246,10 @@ Code that both can share, written one time:
 
 ## Not verified
 
-- That Mesa's virgl VA driver and `vaExportSurfaceHandle` work end to end on Henge's virtio-gpu without blob resources. Public reports of guest VA-API on virgl with Linux hosts often show no profiles. No report shows a working setup.
+- That Mesa's virgl VA driver and `vaExportSurfaceHandle` work end to end on Henge's virtio-gpu without blob resources. Public reports of guest VA-API on virgl with Linux hosts often show no profiles. No report shows a working setup. The spike verified it for H.264 on the Mac ([Spike results](#spike-results)).
 - That FFmpeg's VA-API VP9 path sends the whole frame and the AV1 path sends only tile data. This is from memory of FFmpeg's `vaapi_vp9.c` and `vaapi_av1.c`.
 - That common HEVC encoders refer to SPS reference picture sets by index. This is expected; it makes path 1 fail for HEVC.
-- That VideoToolbox gives one output frame for each synchronous decode call, in decode order, for H.264 with B-frames.
+- That VideoToolbox gives one output frame for each synchronous decode call, in decode order, for H.264 with B-frames. The spike verified it on the Mac.
 - That Firefox and Chromium on Debian use VA-API on virgl, and with which flags.
 - Hardware VP9 and AV1 on the iPhone 18 Pro.
 - All effort numbers.
@@ -272,3 +272,41 @@ Code that both can share, written one time:
 - Virgl video encode work (Phoronix): https://www.phoronix.com/news/Virgl-Encode-H264-H265
 - Guest VA-API on virgl reports: https://forum.proxmox.com/threads/virgl-hardware-accelerated-h264-h265.137023/
 - iPhoneOS 27.1 SDK headers: `VideoToolbox.framework/Headers/VTUtilities.h:61`, `VTDecompressionSession.h:331`
+
+## Spike results
+
+Run on 13/11/2026 on the Mac (Apple M4 Pro, 14 cores, host load average 15 to 43 from other work), branch `spike/video-decode`. This is the [First spike](#first-spike): H.264 only, with a CPU copy of the planes.
+
+What was built:
+
+- `tools/gfx/virglrenderer-videotoolbox.patch`, applied by `build-deps.sh` after the timestamp patch. It adds `src/vrend/virgl_video_vt.m` and builds `-Dvideo=true` with no `libva` and no `libdrm`. The back end writes the SPS and PPS from the parsed fields, reads the PPS id from each slice header, collects the slices between `BEGIN_FRAME` and `END_FRAME`, and decodes one `CMSampleBuffer` synchronously. `vrend_video.c` copies the output planes into the plane textures with `glTexSubImage2D`. The IOSurface pbuffer import (item 3 of [What changes](#what-changes)) is not in the spike.
+- Henge: `VIRGL_RENDERER_USE_VIDEO` in `devices/vgpu_virgl.m`, `hengevm --gpu-accel --no-gpu-video` to turn it off, and VideoToolbox, CoreMedia and CoreVideo on the `hengevm` and iOS link lines. The iOS app was not built.
+- `tools/linux/video-decode-check.py` (`make test-linux-video`) runs steps 3 to 5 on a clone of the desktop image.
+
+Guest: Debian desktop image with `mesa-va-drivers` 25.0.7-2+deb13u1, `vainfo` 2.22.0, `ffmpeg` 7.1.5 and `mpv` 0.40.0; 4 CPUs, 3 GB. Clips: made on the Mac with libx264, 1920x1080, 30 fps, High profile, 15 s (450 frames), 3 B-frames with B-pyramid, 4 reference frames. One clip has 1 slice per picture and one has 4.
+
+| Check | Result |
+|---|---|
+| `vainfo`, `VAEntrypointVLD` | `VAProfileH264Main`, `VAProfileH264High` |
+| framemd5, `-hwaccel vaapi` against `-hwaccel none` | 450 of 450 frames match, both clips |
+| `-hwaccel vaapi -hwaccel_output_format vaapi -f null -` | 388.6 fps, guest CPU 0.54 s, `hengevm` 71% of one core |
+| `-hwaccel none -f null -` | 158.6 fps, guest CPU 5.63 s, `hengevm` 197% of one core |
+| `mpv --hwdec=vaapi --vo=gpu`, full screen on the desktop | `hwdec-current=vaapi`, 0 frames dropped (VO and decoder), all 450 frames shown |
+| `hengevm --no-gpu-video` | `vainfo` lists no decode profile |
+| `make test-linux-accel` with the patched libraries | passes (glmark2 1164 against 295 for llvmpipe) |
+
+The spike passes: the checksums match and the hardware path decodes 1080p30 at about 13 times real time. An earlier run on the same day gave the same result (384.0 fps).
+
+What the spike showed:
+
+- Mesa's virgl VA driver works on Henge's virtio-gpu without blob resources and without context-init, for decode and for `mpv`'s `vaExportSurfaceHandle` path. The first item in [Not verified](#not-verified) is now true for H.264.
+- A synchronous `VTDecompressionSessionDecodeFrame` gives one output frame for each call, in decode order, with B-frames. The checksums prove it.
+- On the Mac the gain is CPU time, not frame rate: software decode is also faster than real time at 1080p (159 fps on 4 guest CPUs). Guest CPU time falls by a factor of 10 and `hengevm` CPU by a factor of 2.8.
+- Mesa creates video buffers in many formats when it probes, not only the decode target. The back end must accept all of them and refuse a format only at `BEGIN_FRAME`. An earlier version refused them at creation and logged errors.
+- When the back end fails to create a buffer, `ffmpeg` still ends with status 0 and writes frames. Only the framemd5 comparison finds it (one run had 450 of 450 frames wrong). The check script therefore uses the checksums and `hengevm`'s log, not the exit status.
+- VideoToolbox sessions are 1920x1088 (the coded size). Each guest process makes its own session.
+- The desktop image has no `curl`. The script copies the clips from the `--share` folder with Python.
+
+Not shown by the spike: 4K, HEVC, VP9 and AV1, the IOSurface zero-copy path, browsers, and anything on the phone ([What needs the phone](#what-needs-the-phone)). `mpv` did not report a mistimed-frame count.
+
+Re-run: `make GFX_ROOT=<tree with the patched macOS libraries> test-linux-video`. The libraries come from `GFX_ROOT=<tree> tools/gfx/build-deps.sh --target macos --only virgl`. `VIDEO_ARGS="--image FILE"` names a desktop image that has the packages already; without it, the script runs `apt install` in the clone.
