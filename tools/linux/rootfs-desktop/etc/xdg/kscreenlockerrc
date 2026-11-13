@@ -1,0 +1,4 @@
+# The desktop autologs in and has no password to unlock with.
+[Daemon]
+Autolock=false
+LockOnResume=false
