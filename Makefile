@@ -30,7 +30,7 @@ ENGINE = $(CORE) $(HOST)
 VM = $(B)/vm.o $(B)/linux_boot.o $(B)/status.o
 METAL_LIBS = -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers $(GFX_LDLIBS)
 
-TESTS = $(B)/test_classify $(B)/test_jit_region $(B)/test_operands $(B)/test_jit $(B)/test_mem \
+TESTS = $(B)/test_classify $(B)/test_jit_region $(B)/test_operands $(B)/test_jit $(B)/test_mem $(B)/test_share_keyboard \
         $(B)/test_mmu $(B)/test_exc $(B)/test_devices $(B)/test_shutdown $(B)/test_pause $(B)/test_big_lock $(B)/test_machine_rebuild $(B)/test_fdt $(B)/test_console $(B)/test_virt \
         $(B)/test_status $(B)/test_vgpu_metal $(if $(GFX),$(B)/test_vgpu_virgl)
 
@@ -151,6 +151,10 @@ $(B)/test_console: tests/test_console.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o 
 $(B)/test_virt: tests/test_virt.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/usb_host.o
 	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -o $@
 
+# PUT /.henge/keyboard: what henge-keyboard in a Linux desktop asks of the device.
+$(B)/test_share_keyboard: tests/test_share_keyboard.c $(B)/share.o $(B)/status.o
+	$(CC) $(CFLAGS) $^ -o $@
+
 # Henge's virt device tree against QEMU's (needs qemu-system-aarch64, dtc and uv).
 test-linux-dtb: $(B)/hengevm
 	uv run tools/linux/dtb-compare.py
@@ -247,6 +251,12 @@ test-linux-share: $(B)/hengevm
 test-linux-clipboard: $(B)/hengevm
 	uv run tools/linux/clipboard-check.py $(CLIP_ARGS)
 .PHONY: test-linux-clipboard
+
+# The keyboard helper in the desktop image: the host hears "show" when the focused program wants text, then "hide".
+# KBD_ARGS="--image FILE" for an image that has henge-guest 1.2.2; "--gtk" adds a GTK entry (installs zenity in the clone).
+test-linux-keyboard: $(B)/hengevm
+	uv run tools/linux/keyboard-check.py $(KBD_ARGS)
+.PHONY: test-linux-keyboard
 
 # P10: the guest's virtio_balloon binds, inflate returns host memory, deflate restores it. BALLOON_ARGS="--load --overshoot --cpus 4" adds the package build and OOM runs.
 test-linux-balloon: $(B)/hengevm
@@ -496,6 +506,14 @@ test-machine-model: $(B)/test_machine_model
 # I7: the Linux catalogue, hashes, space and build checks, and the download bookkeeping.
 $(B)/test_linux_catalogue: ios/Henge/LinuxCatalogue.swift ios/Henge/LinuxDownload.swift ios/Henge/RangedDownload.swift tests/test_linux_catalogue.swift | $(B)
 	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
+
+# When the on-screen keyboard follows a Linux desktop (henge-keyboard): pure policy, no UIKit.
+$(B)/test_keyboard_follow: ios/Henge/KeyboardFollow.swift tests/test_keyboard_follow.swift | $(B)
+	xcrun --sdk macosx swiftc $^ -o $@
+
+test-keyboard-follow: $(B)/test_keyboard_follow
+	$(B)/test_keyboard_follow
+.PHONY: test-keyboard-follow
 
 test-linux-catalogue: $(B)/test_linux_catalogue
 	$(B)/test_linux_catalogue

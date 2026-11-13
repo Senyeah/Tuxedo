@@ -720,6 +720,11 @@ static void *input_thread(void *unused) {
             fprintf(stderr, "hengevm: guest clipboard: %s (agent seen %ld s ago)\n", text ? text : "(nothing new)", hv_share_agent_seen());
             free(text);
         }
+        else if (!strncmp(line, "getkbd", 6)) { /* what henge-keyboard in a Linux desktop last asked for */
+            unsigned long seq;
+            int wanted = hv_share_keyboard_wanted(&seq);
+            fprintf(stderr, "hengevm: guest keyboard: %s (request %lu)\n", wanted ? "show" : "hide", seq);
+        }
         else if (sscanf(line, "hiddown %i", &x) == 1) hid_locked((uint8_t)x, 1);
         else if (sscanf(line, "hidup %i", &x) == 1) hid_locked((uint8_t)x, 0);
         else if (sscanf(line, "hidkey %i", &x) == 1) {

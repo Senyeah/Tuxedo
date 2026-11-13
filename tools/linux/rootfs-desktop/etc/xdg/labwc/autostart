@@ -8,6 +8,8 @@ foot -e sh -c 'echo "terminal $(cut -d" " -f1 /proc/uptime)" >> "$0"; exec bash'
 # Clipboard sharing (P7): a user service, which needs the compositor's variables
 systemctl --user import-environment WAYLAND_DISPLAY DISPLAY
 systemctl --user start --no-block henge-clipboard.service
+# The device shows its keyboard when the focused program wants text
+systemctl --user start --no-block henge-keyboard.service
 
 /usr/local/bin/henge-display > "${XDG_RUNTIME_DIR:-/tmp}/henge-display.log" 2>&1 &
 

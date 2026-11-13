@@ -16,4 +16,8 @@ char *hv_share_take_clipboard(void);
 /* Seconds since the helper in macOS was last heard from, or -1 if it never has been. */
 long hv_share_agent_seen(void);
 
+/* 1 when the focused program in a Linux desktop wants text (henge-keyboard), else 0. *seq counts the
+   guest's requests, so a change in it is news; the value stays from one machine to the next. */
+int hv_share_keyboard_wanted(unsigned long *seq);
+
 #endif

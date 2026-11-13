@@ -74,6 +74,19 @@ long hv_share_agent_seen(void) {
     return ago;
 }
 
+/* ---- the keyboard: PUT /.henge/keyboard from a Linux desktop (henge-keyboard) ---- */
+
+static int kbd_wanted; /* the guest's last request */
+static unsigned long kbd_seq;
+
+int hv_share_keyboard_wanted(unsigned long *seq) {
+    pthread_mutex_lock(&clip_mu);
+    int wanted = kbd_wanted;
+    if (seq) *seq = kbd_seq;
+    pthread_mutex_unlock(&clip_mu);
+    return wanted;
+}
+
 /* ---- connections ---- */
 
 typedef struct Conn {
@@ -699,6 +712,21 @@ static int clipboard_get(Conn *c, Request *r) {
     return rc;
 }
 
+/* PUT "show" or "hide": the focused program in the guest wants text, or no longer does. */
+static int keyboard_put(Conn *c, Request *r) {
+    size_t len = 0;
+    char *text = body_small(c, r, &len);
+    if (!text) return -1;
+    int show = len == 4 && !memcmp(text, "show", 4), hide = len == 4 && !memcmp(text, "hide", 4);
+    free(text);
+    if (!show && !hide) return respond_empty(c, r, 400, "Bad Request");
+    pthread_mutex_lock(&clip_mu);
+    kbd_wanted = show;
+    kbd_seq++;
+    pthread_mutex_unlock(&clip_mu);
+    return respond_empty(c, r, 204, "No Content");
+}
+
 static int clipboard_put(Conn *c, Request *r) {
     size_t len = 0;
     char *text = body_small(c, r, &len);
@@ -753,6 +781,7 @@ static int serve_henge(Conn *c, Request *r) {
     if (!strcmp(what, "agent") && !strcmp(r->method, "GET")) return serve_agent(c, r);
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "GET")) return clipboard_get(c, r);
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "PUT")) return clipboard_put(c, r);
+    if (!strcmp(what, "keyboard") && !strcmp(r->method, "PUT")) return keyboard_put(c, r);
     if (body_discard(c, r) != 0) return -1;
     return respond_empty(c, r, 404, "Not Found");
 }
