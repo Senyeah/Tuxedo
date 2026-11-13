@@ -321,6 +321,21 @@ static void test_pixels(void) {
     check("below the cursor: the screen", is1(drawn + (18 * W1 + 20) * 4, 20, 18, 1), 1);
     check("not moved by the hot spot", is1(drawn + (7 * W1 + 18) * 4, 18, 7, 1), 1);
     check("the snapshot has no cursor", hv_vgpu_metal_snapshot(p, shot, W1, H1) == 0 && all1(), 1);
+    hv_vgpu_metal_hide_cursor(p, 1); /* touch mode */
+    ok = 0;
+    for (double end = now() + 2; now() < end && !ok; usleep(2000)) {
+        hv_vgpu_metal_drawn(p, drawn, W1, H1);
+        ok = is1(drawn + (10 * W1 + 20) * 4, 20, 10, 1);
+    }
+    check("a hidden cursor is not drawn", ok, 1);
+    hv_vgpu_metal_hide_cursor(p, 0);
+    ok = 0;
+    for (double end = now() + 2; now() < end && !ok; usleep(2000)) {
+        hv_vgpu_metal_drawn(p, drawn, W1, H1);
+        ok = drawn[(10 * W1 + 20) * 4] == 0xff;
+    }
+    check("shown again with no guest change", ok, 1);
+    hv_vgpu_metal_hide_cursor(NULL, 1);
     cursor(0x301, 40, 20, 4, 0, 0); /* a move keeps the image and its hot spot */
     ok = 0;
     for (double end = now() + 2; now() < end && !ok; usleep(2000)) {

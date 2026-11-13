@@ -26,6 +26,8 @@ void hv_vgpu_metal_pause(HvVgpuMetal *p);
 void hv_vgpu_metal_resume(HvVgpuMetal *p);
 /* Any thread, at any time; NULL stops drawing. The layer is retained until the next call. */
 void hv_vgpu_metal_set_layer(HvVgpuMetal *p, void *layer);
+/* Any thread: draw the guest's cursor or not (touch input). The device's cursor state does not change. */
+void hv_vgpu_metal_hide_cursor(HvVgpuMetal *p, int hidden);
 /* Frames presented to a layer. */
 uint64_t hv_vgpu_metal_frames(HvVgpuMetal *p);
 /* The scanout as last copied, scaled to width x height, BGRA, without the cursor.

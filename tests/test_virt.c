@@ -569,6 +569,35 @@ static void test_vm(void) {
     vm->tick(vm, hv_vm_cpu(0));
     check("tick moves console input into the UART", rd32(vm, VIRT_UART), 'o');
     check("second byte", rd32(vm, VIRT_UART), 'k');
+    /* the touchscreen through the host layer (TS2) */
+    HvVirtioInput *ts = hv_vm_devs()->touch;
+    check("touchscreen in the board's devices", ts && ts == hv_vm_virt()->touch, 1);
+    if (ts) {
+        uint32_t queued = ts->ftail;
+        hv_vm_screen_touch(0, 0, 40000, -3);
+        hv_vm_screen_touch_frame();
+        const HvTouchState *f = &ts->frames[queued % HV_TOUCH_FRAMES];
+        check("host: a touch is one frame, clamped", ts->ftail == queued + 1 && f->down[0] && f->x[0] == 32767 && f->y[0] == 0, 1);
+        hv_vm_screen_touch_cancel();
+        check("host: cancel is a frame with no contact", ts->ftail == queued + 2 && !ts->frames[(queued + 1) % HV_TOUCH_FRAMES].down[0], 1);
+    }
+    check("pointer image shown at first", hv_vm_pointer_hidden(), 0);
+    hv_vm_screen_touch(1, 0, 5, 5);
+    check("pointer mode: a touch does not hide it", hv_vm_pointer_hidden(), 0);
+    hv_vm_set_touch_mode(1);
+    check("touch mode hides it", hv_vm_pointer_hidden(), 1);
+    hv_vm_mouse_move(1, 0);
+    check("a mouse move shows it", hv_vm_pointer_hidden(), 0);
+    hv_vm_screen_touch(1, 0, 5, 5);
+    check("the next touch hides it", hv_vm_pointer_hidden(), 1);
+    hv_vm_touch(1, 2, 0, 0, 0);
+    check("a trackpad lift leaves it hidden", hv_vm_pointer_hidden(), 1);
+    hv_vm_touch(1, 0, 100, 100, 0);
+    check("a trackpad finger shows it", hv_vm_pointer_hidden(), 0);
+    hv_vm_touch(1, 2, 100, 100, 0);
+    hv_vm_screen_touch(1, 2, 5, 5);
+    hv_vm_set_touch_mode(0);
+    check("pointer mode shows it", hv_vm_pointer_hidden(), 0);
     /* the power key: rising edge on pin 3, high for 100 ms */
     uint32_t key = 1u << VIRT_GPIO_POWER, pin = VIRT_GPIO + (key << 2);
     wr32(vm, VIRT_GPIO + 0x40c, key);

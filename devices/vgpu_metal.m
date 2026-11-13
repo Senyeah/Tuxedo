@@ -75,6 +75,7 @@ static NSString *const shaders = @"#include <metal_stdlib>\n"
     dispatch_queue_t work;
     dispatch_group_t completions;
     _Atomic int stopping, queued, paused; /* paused: no present runs, so no command buffer is committed */
+    _Atomic int cursor_hidden;
     _Atomic uint64_t last_ns, frames;
     BOOL capture;
     os_unfair_lock layer_lock; /* the target and its generation */
@@ -408,7 +409,7 @@ static void on_flush(void *opaque) { [(__bridge HvVgpuPresenter *)opaque kick]; 
     [e setFragmentTexture:shown atIndex:0];
     [e setFragmentSamplerState:iw == W && ih == H ? nearest : linear atIndex:0];
     [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
-    if (cursor_shown) {
+    if (cursor_shown && !atomic_load(&cursor_hidden)) {
         NSUInteger sx = (NSUInteger)ox, sy = (NSUInteger)oy;
         NSUInteger sw = (NSUInteger)fmin(iw, DW - sx), sh = (NSUInteger)fmin(ih, DH - sy);
         [e setScissorRect:(MTLScissorRect){sx, sy, sw, sh}]; /* not over the edge */
@@ -587,6 +588,12 @@ void hv_vgpu_metal_set_layer(HvVgpuMetal *m, void *layer) {
     p->generation++;
     os_unfair_lock_unlock(&p->layer_lock);
     [p kick]; /* a new target needs a frame even if the guest is idle */
+}
+
+void hv_vgpu_metal_hide_cursor(HvVgpuMetal *m, int hidden) {
+    if (!m) return;
+    HvVgpuPresenter *p = (__bridge HvVgpuPresenter *)m;
+    if (atomic_exchange(&p->cursor_hidden, !!hidden) != !!hidden) [p kick];
 }
 
 void hv_vgpu_metal_stats(HvVgpuMetal *m, HvVgpuStats *out) {

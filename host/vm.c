@@ -43,6 +43,7 @@ static CFTypeRef display_layer;
 static int display_layer_set;
 static uint32_t display_w, display_h, display_mm_w, display_mm_h;
 static int display_mode_set, display_mm_set;
+static _Atomic int touch_mode, pointer_hidden; /* pointer_hidden changes under display_lock */
 static double display_scale = 1; /* only reported to the guest, not used for drawing */
 static _Atomic(const HvBoardDevs *) display_devs; /* published only when the board is ready */
 typedef struct VgpuDisplay { HvVirtioGpu *gpu; HvVgpuMetal *presenter; } VgpuDisplay;
@@ -90,7 +91,7 @@ static int pvg_pointer(void *d, int *x, int *y) {
 }
 static void pvg_set_mode(void *d, uint32_t w, uint32_t h) { (void)d, hv_pvg_lite_set_mode(w, h); }
 static void pvg_set_size_mm(void *d, uint32_t w, uint32_t h) { (void)d, hv_pvg_lite_set_size_mm(w, h); }
-static const HvDisplayOps pvg_display = {pvg_set_layer, pvg_frames, pvg_snapshot, pvg_pointer, pvg_set_mode, pvg_set_size_mm};
+static const HvDisplayOps pvg_display = {pvg_set_layer, pvg_frames, pvg_snapshot, pvg_pointer, pvg_set_mode, pvg_set_size_mm, NULL};
 
 /* virt: the virtio GPU and its presenter, which is NULL without Metal. */
 static void vgpu_set_layer(void *d, void *layer) { hv_vgpu_metal_set_layer(((VgpuDisplay *)d)->presenter, layer); }
@@ -108,7 +109,9 @@ static int vgpu_pointer(void *d, int *x, int *y) {
     return shown ? 0 : -1;
 }
 static void vgpu_set_mode(void *d, uint32_t w, uint32_t h) { hv_virtio_gpu_set_mode(((VgpuDisplay *)d)->gpu, w, h); }
-static const HvDisplayOps vgpu_display = {vgpu_set_layer, vgpu_frames, vgpu_snapshot, vgpu_pointer, vgpu_set_mode, NULL};
+static void vgpu_hide_cursor(void *d, int hidden) { hv_vgpu_metal_hide_cursor(((VgpuDisplay *)d)->presenter, hidden); }
+static const HvDisplayOps vgpu_display = {vgpu_set_layer, vgpu_frames, vgpu_snapshot, vgpu_pointer, vgpu_set_mode, NULL,
+                                          vgpu_hide_cursor};
 
 static const HvBoardDevs *shown_display(void) { return atomic_load_explicit(&display_devs, memory_order_acquire); }
 
@@ -405,6 +408,7 @@ static void publish_display(void) {
     if (ops && display_mode_set) ops->set_mode(devs.display_opaque, display_w, display_h);
     if (ops && display_mm_set && ops->set_size_mm) ops->set_size_mm(devs.display_opaque, display_mm_w, display_mm_h);
     if (ops && display_layer_set) ops->set_layer(devs.display_opaque, (void *)display_layer);
+    if (ops && ops->hide_cursor) ops->hide_cursor(devs.display_opaque, atomic_load(&pointer_hidden));
     atomic_store_explicit(&display_devs, &devs, memory_order_release);
     os_unfair_lock_unlock(&display_lock);
 }
@@ -450,7 +454,7 @@ static int create_virt(const HvVmConfig *c, uint64_t ram_size, char *err, size_t
     hv_virt_reset(&virt);
     if (c->kernel && hv_linux_boot(&virt, c->kernel, c->initrd, c->cmdline, NULL, err, errlen) != 0) return -1;
     devs = (HvBoardDevs){.gic = virt.gic, .uart = virt.uart, .gpio = virt.gpio, .usb = virt.usb,
-                         .keyboard = virt.keyboard, .mouse = virt.mouse, .net = virt.net, .snd = virt.snd,
+                         .keyboard = virt.keyboard, .mouse = virt.mouse, .touch = virt.touch, .net = virt.net, .snd = virt.snd,
                          .balloon = virt.balloon, .blk = {virt.blk, NULL},
                          .ram = virt.mem.host, .ram_pa = VIRT_MEM, .ram_size = virt.mem.size};
     virt.poll = board_poll;
@@ -895,7 +899,17 @@ static void move_now(void *ctx) {
     hv_virtio_input_send(devs.mouse, HV_EV_SYN, 0, 0);
 }
 
+static void pointer_image(int hidden) {
+    if (atomic_load(&pointer_hidden) == hidden) return;
+    os_unfair_lock_lock(&display_lock);
+    atomic_store(&pointer_hidden, hidden);
+    const HvBoardDevs *shown = shown_display();
+    if (shown && shown->display && shown->display->hide_cursor) shown->display->hide_cursor(shown->display_opaque, hidden);
+    os_unfair_lock_unlock(&display_lock);
+}
+
 void hv_vm_mouse_move(int dx, int dy) {
+    pointer_image(0);
     int64_t packed = (int64_t)((uint64_t)(uint32_t)dx << 32 | (uint32_t)dy);
     dispatch_async_f(pointer_queue(), (void *)(intptr_t)packed, move_now);
 }
@@ -977,12 +991,28 @@ void hv_vm_touch(int id, int phase, int x, int y, uint32_t ts_ms) {
     if (x > HV_TP_SENSOR_X) x = HV_TP_SENSOR_X;
     if (y < 0) y = 0;
     if (y > HV_TP_SENSOR_Y) y = HV_TP_SENSOR_Y;
+    if (phase != 2) pointer_image(0);
     hv_xhci_touch(devs.usb, id, phase, x, y, ts_ms);
 }
 
 void hv_vm_touch_frame(uint32_t ts_ms) { hv_xhci_touch_frame(devs.usb, ts_ms); }
 
 void hv_vm_touch_button(int down) { hv_xhci_touch_button(devs.usb, down); }
+
+void hv_vm_screen_touch(int slot, int phase, int x, int y) {
+    if (phase == 0 && atomic_load(&touch_mode)) pointer_image(1);
+    hv_virtio_input_touch(devs.touch, slot, phase, x, y);
+}
+
+void hv_vm_screen_touch_frame(void) { hv_virtio_input_touch_frame(devs.touch); }
+void hv_vm_screen_touch_cancel(void) { hv_virtio_input_touch_cancel(devs.touch); }
+
+void hv_vm_set_touch_mode(int on) {
+    atomic_store(&touch_mode, !!on);
+    pointer_image(!!on);
+}
+
+int hv_vm_pointer_hidden(void) { return atomic_load(&pointer_hidden); }
 
 int hv_vm_pointer(int *x, int *y) {
     const HvBoardDevs *shown = shown_display();

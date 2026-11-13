@@ -541,6 +541,7 @@ static void hid_locked(uint8_t usage, int down) {
 }
 
 /* HV_INPUT_FILE lines for the virt board: rel DX DY, rclick, msleep MS, tpframe (ends a touch batch), mode WxH [SCALE] (live display mode), and btn, tp, tpclick as on vmapple.
+   Touchscreen: ts SLOT PHASE X Y, tsframe, tscancel, tsmode 0|1.
    --screenshot still writes the --display size, so read the size from the guest after a mode line. */
 static int virt_input(const char *line) {
     int a, b;
@@ -588,6 +589,23 @@ static int virt_input(const char *line) {
         hv_virt_machine_lock();
         hv_vm_touch_button(atoi(line + 8));
         hv_virt_machine_unlock();
+    } else if (!strncmp(line, "ts ", 3)) { /* touchscreen: ts SLOT 0|1|2 X Y (0 to 32767), then tsframe */
+        int slot, phase, px, py;
+        if (sscanf(line + 3, "%d %d %d %d", &slot, &phase, &px, &py) != 4) {
+            fprintf(stderr, "hengevm: input: %s: want ts SLOT 0|1|2 X Y\n", line);
+            return 1;
+        }
+        hv_virt_machine_lock();
+        hv_vm_screen_touch(slot, phase, px, py);
+        hv_virt_machine_unlock();
+    } else if (!strcmp(line, "tsframe") || !strcmp(line, "tscancel")) {
+        hv_virt_machine_lock();
+        if (line[2] == 'f') hv_vm_screen_touch_frame();
+        else hv_vm_screen_touch_cancel();
+        hv_virt_machine_unlock();
+    } else if (!strncmp(line, "tsmode ", 7)) { /* 1: touch mode (the pointer image hides at a touch), 0: pointer */
+        hv_vm_set_touch_mode(atoi(line + 7));
+        fprintf(stderr, "hengevm: touch mode %d, pointer image hidden %d\n", atoi(line + 7) != 0, hv_vm_pointer_hidden());
     } else
         return 0;
     return 1;
@@ -1300,7 +1318,7 @@ static void *cpu_thread(void *unused) {
 }
 
 static void usage(void) {
-    fprintf(stderr, "usage: hengevm --board virt (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N] [--display WxH] [--gpu-accel] [--screenshot PNG] [--window]\n"
+    fprintf(stderr, "usage: hengevm --board virt (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N] [--display WxH] [--gpu-accel] [--screenshot PNG] [--window [--touch]]\n"
                     "       (virt: Ctrl-A x quits, Ctrl-A p and SIGTERM press the power key, Ctrl-A s pauses and resumes, Ctrl-A b is the app's background, SIGTSTP pauses and stops until SIGCONT; exit status 0 shutdown, 3 restart with --no-reboot, 4 panic or engine error)\n");
     fprintf(stderr, "usage: hengevm [--board vmapple] --rom FILE --disk FILE --aux FILE --ecid N [--seed N] [--ram MB] [--log N] [--trace 1] [--screenshot PNG] [--watch VA] [--stats SECONDS [--profile 1]] [--cpus N] [--window] [--no-pvg] [--no-chain] [--break PC [--break-hits N]] [--dump PA LEN FILE] [--aux-offset BYTES] [--install IPSW]\n");
     exit(2);
@@ -1337,6 +1355,11 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--window")) {
             window = 1;
+            continue;
+        }
+        if (!strcmp(argv[i], "--touch")) { /* virt --window: a click is a touch on the screen, at its place */
+            hv_virt_window_touch = 1;
+            hv_vm_set_touch_mode(1);
             continue;
         }
         if (!strcmp(argv[i], "--phone")) {
