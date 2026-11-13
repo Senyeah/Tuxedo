@@ -19,6 +19,7 @@ final class PadHaptics {
 
     private var generators: [String: UIImpactFeedbackGenerator] = [:]
     private var last: CFTimeInterval = -1
+    private var lastRank = 0
 
     init(tuning: PadTuning.Haptics) {
         self.tuning = tuning
@@ -53,13 +54,25 @@ final class PadHaptics {
     func fire(_ e: Event, now: CFTimeInterval = CACurrentMediaTime()) {
         guard level != .off, let x = entry(e) else { return }
         if e == .touchDown && level == .clicksOnly { return }
-        // One haptic in each 50 ms, except a key's release: a press and its release are one click.
+        // One haptic in each 50 ms, except a key's release (a press and its release are one click),
+        // and a click after a lesser haptic: a quick tap must not lose its click to its touch-down tick.
         let release = e == .leftKeyUp || e == .rightKeyUp
-        guard release || last < 0 || now - last >= tuning.minGap else { return }
+        let rank = Self.rank(e)
+        guard release || last < 0 || now - last >= tuning.minGap || rank > lastRank else { return }
         guard let g = generators[x.style] else { return }
         g.impactOccurred(intensity: CGFloat(min(max(x.intensity, 0), 1)))
         g.prepare()
         last = now
+        lastRank = rank
         onFire?(e, x.style, x.intensity)
+    }
+
+    private static func rank(_ e: Event) -> Int {
+        switch e {
+        case .touchDown: return 0
+        case .reveal: return 1
+        case .holdStart, .holdEnd: return 2
+        case .tap, .rightTap, .leftKeyDown, .rightKeyDown, .leftKeyUp, .rightKeyUp: return 3
+        }
     }
 }
