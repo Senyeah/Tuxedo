@@ -6,7 +6,7 @@ OUT="build/display-check"
 mkdir -p "$OUT"
 IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 SOURCES=()
-while IFS= read -r source; do SOURCES+=("$source"); done < <(find ios/Henge -name '*.swift' -print | sort)
+while IFS= read -r source; do SOURCES+=("$source"); done < <(find ios/Henge ios/Pad -name '*.swift' -print | sort)
 SOURCES+=(ios/HengeJITHelper/HengeJITMessages.swift)
 
 # SwiftTerm, at the version in ios/project.yml, built for the device from its own checkout.
