@@ -1,0 +1,215 @@
+#!/usr/bin/python3
+"""Tells the device when the focused program wants text, so the device shows its keyboard (host/share.c, /.henge/keyboard).
+
+wlroots compositors (labwc): this is the seat's input method (input-method-unstable-v2). It sends no text and takes
+no keys: it only hears activate and deactivate, which follow the focused text-input-v3 field.
+KWin: org.kde.kwin.VirtualKeyboard on the session bus has the same state as the property "active".
+PUT /.henge/keyboard has the body "show" or "hide"."""
+import http.client
+import json
+import os
+import select
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import time
+
+HOST = os.environ.get("HENGE_HOST", "10.0.2.4")
+HIDE_DELAY = 0.3  # focus that moves between two fields is deactivate, then activate
+RETRY = 2.0
+KWIN = ["org.kde.KWin", "/VirtualKeyboard", "org.kde.kwin.VirtualKeyboard"]
+
+
+def log(*a):
+    print("henge-keyboard:", *a, file=sys.stderr, flush=True)
+
+
+def put(show):
+    c = http.client.HTTPConnection(HOST, timeout=5)
+    try:
+        c.request("PUT", "/.henge/keyboard", b"show" if show else b"hide")
+        r = c.getresponse()
+        r.read()
+        return r.status == 204
+    except (OSError, http.client.HTTPException):
+        return False
+    finally:
+        c.close()
+
+
+class Sender:
+    """Sends the newest state; a hide waits HIDE_DELAY, and a failed send is tried again."""
+
+    def __init__(self):
+        self.want, self.sent, self.due = False, None, 0.0
+
+    def set(self, show):
+        if show != self.want:
+            self.want = show
+            self.due = time.monotonic() + (0 if show else HIDE_DELAY)
+
+    def step(self):
+        """Sends what is due. Returns the seconds until the next call is needed, or None."""
+        if self.want == self.sent:
+            return None
+        now = time.monotonic()
+        if now < self.due:
+            return self.due - now
+        if put(self.want):
+            self.sent = self.want
+            return None
+        self.due = now + RETRY
+        return RETRY
+
+
+# ---- Wayland: the wire protocol, as tools/linux/wlprobe.py does ----
+
+class Wayland:
+    def __init__(self):
+        fd = os.environ.get("WAYLAND_SOCKET")
+        if fd:
+            self.s = socket.socket(fileno=int(fd))
+        else:
+            name = os.environ.get("WAYLAND_DISPLAY", "wayland-0")
+            self.s = socket.socket(socket.AF_UNIX)
+            self.s.connect(name if name.startswith("/") else os.path.join(os.environ["XDG_RUNTIME_DIR"], name))
+        self.buf, self.next_id = b"", 1
+
+    def new(self):
+        self.next_id += 1
+        return self.next_id
+
+    def send(self, obj, op, args=b""):
+        self.s.sendall(struct.pack("<II", obj, ((8 + len(args)) << 16) | op) + args)
+
+    def events(self):
+        d = self.s.recv(65536)
+        if not d:
+            raise ConnectionError("the compositor closed the connection")
+        self.buf += d
+        out = []
+        while len(self.buf) >= 8:
+            obj, word = struct.unpack_from("<II", self.buf)
+            size = word >> 16
+            if size < 8:
+                raise ConnectionError("bad message")
+            if len(self.buf) < size:
+                break
+            out.append((obj, word & 0xFFFF, self.buf[8:size]))
+            self.buf = self.buf[size:]
+        return out
+
+    def globals(self):
+        reg, cb = self.new(), self.new()
+        self.send(1, 1, struct.pack("<I", reg))  # wl_display.get_registry
+        self.send(1, 0, struct.pack("<I", cb))  # wl_display.sync
+        found = {}
+        while True:
+            for obj, op, a in self.events():
+                if obj == reg and op == 0:
+                    name, n = struct.unpack_from("<II", a)
+                    found[a[8:8 + n - 1].decode()] = name
+                elif obj == cb:
+                    return reg, found
+
+    def bind(self, reg, name, iface, version=1):
+        b = iface.encode() + b"\0"
+        new = self.new()
+        self.send(reg, 0, struct.pack("<II", name, len(b)) + b + b"\0" * (-len(b) % 4) + struct.pack("<II", version, new))
+        return new
+
+
+def follow_input_method(wl, reg, found, sender):
+    seat = wl.bind(reg, found["wl_seat"], "wl_seat")
+    manager = wl.bind(reg, found["zwp_input_method_manager_v2"], "zwp_input_method_manager_v2")
+    im = wl.new()
+    wl.send(manager, 0, struct.pack("<II", seat, im))  # get_input_method
+    pending = False
+    while True:
+        wait = sender.step()
+        if not select.select([wl.s], [], [], wait)[0]:
+            continue
+        for obj, op, a in wl.events():
+            if obj == 1 and op == 0:  # wl_display.error
+                n = struct.unpack_from("<I", a, 8)[0]
+                raise ConnectionError("protocol error: " + a[12:12 + n - 1].decode(errors="replace"))
+            if obj != im:
+                continue
+            if op == 0:
+                pending = True  # activate
+            elif op == 1:
+                pending = False  # deactivate
+            elif op == 5:
+                sender.set(pending)  # done: the state applies
+            elif op == 6:  # unavailable: the seat has an input method already
+                log("another input method has the seat; nothing to do")
+                return 0
+
+
+# ---- KWin ----
+
+def busctl(*args):
+    return subprocess.run(["busctl", "--user", "--json=short", *args], stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL, timeout=10)
+
+
+def kwin_active():
+    """True, False, or None when KWin does not answer."""
+    try:
+        r = busctl("get-property", *KWIN, "active")
+        return bool(json.loads(r.stdout)["data"]) if r.returncode == 0 else None
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        return None
+
+
+def follow_kwin(sender):
+    match = f"type='signal',path='{KWIN[1]}',interface='{KWIN[2]}',member='activeChanged'"
+    p = subprocess.Popen(["busctl", "--user", "--json=short", "monitor", "--match=" + match],
+                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    sender.set(bool(kwin_active()))
+    while True:
+        wait = sender.step()
+        if not select.select([p.stdout], [], [], wait)[0]:
+            continue
+        if not os.read(p.stdout.fileno(), 65536):
+            raise ConnectionError("busctl monitor stopped")
+        active = kwin_active()
+        if active is not None:
+            sender.set(active)
+
+
+def main():
+    sender = Sender()
+
+    def stop(*_):
+        if sender.sent:
+            put(False)
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    try:
+        wl = Wayland()
+        reg, found = wl.globals()
+    except (OSError, KeyError, ValueError, ConnectionError):
+        wl, found = None, {}
+    try:
+        if "zwp_input_method_manager_v2" in found and "wl_seat" in found:
+            return follow_input_method(wl, reg, found, sender)
+        if wl:
+            wl.s.close()
+        if kwin_active() is not None:
+            return follow_kwin(sender)
+    except ConnectionError as e:
+        log(e)
+        if sender.sent:
+            put(False)
+        return 1
+    log("no compositor with input-method-v2, and no KWin; nothing to do")
+    return 0  # exit 0: systemd does not restart it
+
+
+if __name__ == "__main__":
+    sys.exit(main())

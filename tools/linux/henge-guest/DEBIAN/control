@@ -1,5 +1,5 @@
 Package: henge-guest
-Version: 1.2.1
+Version: 1.2.2
 Architecture: all
 Maintainer: Henge <henge@localhost>
 Section: admin
@@ -9,4 +9,5 @@ Recommends: wl-clipboard, xclip, python3
 Description: Henge guest tools
  Grows the root partition and file system to the disk on every boot,
  does the one-time first-boot setup, mounts the shared folder at ~/Henge and
- shares the clipboard with the device on the desktop.
+ shares the clipboard with the device on the desktop, and tells the device
+ when the focused program wants text.

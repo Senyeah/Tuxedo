@@ -243,6 +243,12 @@ test-linux-clipboard: $(B)/hengevm
 	uv run tools/linux/clipboard-check.py $(CLIP_ARGS)
 .PHONY: test-linux-clipboard
 
+# The keyboard helper in the desktop image: the host hears "show" when the focused program wants text, then "hide".
+# KBD_ARGS="--image FILE" for an image that has henge-guest 1.2.2; "--gtk" adds a GTK entry (installs zenity in the clone).
+test-linux-keyboard: $(B)/hengevm
+	uv run tools/linux/keyboard-check.py $(KBD_ARGS)
+.PHONY: test-linux-keyboard
+
 # P10: the guest's virtio_balloon binds, inflate returns host memory, deflate restores it. BALLOON_ARGS="--load --overshoot --cpus 4" adds the package build and OOM runs.
 test-linux-balloon: $(B)/hengevm
 	uv run tools/linux/balloon-check.py $(BALLOON_ARGS)

@@ -9,7 +9,7 @@ Every script runs inside the builder container, so no cross compiler is needed.
 - `Dockerfile`: the builder image (`debian:trixie` with the build tools).
 - `build-uboot.sh`, `build-image.sh`, `customize.sh`, `rootfs/`: see Order.
 - `customize-desktop.sh`, `rootfs-desktop/`: extra files for the desktop image (`build-image.sh --desktop`).
-- `henge-guest/` (G9): the source of the `henge-guest` Debian package. It holds the grow and first-boot scripts (`/usr/lib/henge/`) and units (`/usr/lib/systemd/system/henge-*.service`, G8), and enables them in `postinst`. `build-guest-pkg.sh` builds the `.deb` on its own; `build-image.sh` builds it too and installs it in both images. P6 adds the shared-folder mount (`home-henge-Henge.mount` and `.automount`, `/etc/henge/davfs2.conf`); P7 adds the clipboard helper (`henge-clipboard` and a user unit). `grow-check.py` tests the grow units, `share-check.py` the shared folder and `clipboard-check.py` the clipboard.
+- `henge-guest/` (G9): the source of the `henge-guest` Debian package. It holds the grow and first-boot scripts (`/usr/lib/henge/`) and units (`/usr/lib/systemd/system/henge-*.service`, G8), and enables them in `postinst`. `build-guest-pkg.sh` builds the `.deb` on its own; `build-image.sh` builds it too and installs it in both images. P6 adds the shared-folder mount (`home-henge-Henge.mount` and `.automount`, `/etc/henge/davfs2.conf`); P7 adds the clipboard helper (`henge-clipboard` and a user unit), and 1.2.2 the keyboard helper (`henge-keyboard` and a user unit). `grow-check.py` tests the grow units, `share-check.py` the shared folder, `clipboard-check.py` the clipboard and `keyboard-check.py` the keyboard helper.
 - `run.sh`: runs a command in the builder image. `build/linux/` is mounted at `/out`, the repo's `tools/linux/` at `/tools` (read only), and a named volume at `/work` for source trees.
 
 `run.sh` builds the image on first use. `HENGE_LINUX_OUT` is the artefact directory. `run.sh`, `package-image.sh`, `serve.sh`, `qemu-ref.sh`, `qemu-check.py`, `balloon-check.py` and `sound-check.py` default to the author's `$HOME/Repos/Henge/build/linux`, so on any other Mac set it first (see From nothing). `smoke.py` and the Makefile targets default to `build/linux` of the main checkout, where all worktrees share the files.
@@ -112,6 +112,44 @@ Both units come from the `henge-guest` package. Raise `Version` in `henge-guest/
 - The app's paste button sets the device clipboard, waits 0.8 s and sends Ctrl-V; its menu chooses Ctrl-Shift-V for terminals.
 - The desktop package list adds `wl-clipboard`, `xclip` and `python3`; the package only recommends them.
 - `clipboard-check.py` (`uv run`, `make test-linux-clipboard`) boots a clone of the desktop image with `--share` and `HV_INPUT_FILE` (`clip TEXT` and `getclip`), and checks each of the points above, plus the X11 mode through XWayland. `--image`, `--hengevm`, `--cpus` and `--work-dir` choose the run.
+
+## Keyboard follows the focus
+
+The device shows its on-screen keyboard when the focused program in the desktop wants text, and hides it after. Keys still arrive through the virtio keyboard.
+
+Wayland has one event for "this program wants text": a client enables its `text-input` object when a text field gets the focus (`zwp_text_input_v3.enable`, and the same in v1 and v2), and disables it when the focus leaves. No protocol gives that event to an ordinary client. Each compositor gives it to one place:
+
+- wlroots (labwc 0.8.3): the seat's input method, `zwp_input_method_v2` (`activate`, `deactivate`, applied on `done`). Any client can ask for it; there is one for each seat. labwc has text-input-v3 only.
+- KWin 6.3: `InputMethod::setActive` (`src/inputmethod.cpp`) follows text-input v1, v2 and v3 and shows as the property `active` (signal `activeChanged`) of `org.kde.kwin.VirtualKeyboard` at `/VirtualKeyboard` on `org.kde.KWin`. It changes with no input method installed, so the helper does not take KWin's input method place (`kwinrc` `InputMethod`), and Maliit or Fcitx 5 can stay. It needs `VirtualKeyboardEnabled` (the default). `KWIN_IM_SHOW_ALWAYS` and the last input device only decide if KWin shows its own panel; they do not change `active`.
+
+`henge-keyboard` (`/usr/lib/henge/`, the user unit `henge-keyboard.service`) uses the first of these that it finds:
+
+- It speaks the Wayland wire protocol itself, as `wlprobe.py` does, and binds `zwp_input_method_manager_v2`. It sends no text and takes no keyboard grab, so typing is not changed. If the seat has an input method already (`unavailable`), it stops and exit status 0 keeps systemd from a restart.
+- On KWin it runs `busctl --user monitor` for `activeChanged` and reads `active` with `busctl get-property`.
+- It sends `PUT /.henge/keyboard` with the body `show` or `hide` to `host/share.c`. A `hide` waits 0.3 s, because focus that moves between two fields is `deactivate` then `activate`. A send that fails is tried again after 2 s. It sends `hide` when it stops.
+- labwc's `autostart` starts the unit; in Plasma `/etc/xdg/autostart/henge-keyboard.desktop` (KDE only) does.
+
+The host keeps the last request and a count (`hv_share_keyboard_wanted`). The app looks five times a second (`SessionView.followGuestKeyboard`, policy in `KeyboardFollow.swift`): `show` opens the keyboard; `hide` closes it only if the guest opened it; a keyboard that the person closes stays closed until the guest asks again. It does nothing while the console shows, with a hardware keyboard, or when Settings, "Show the keyboard when Linux wants text" is off.
+
+What asks and what does not (labwc 0.8.3 and `kwin_wayland --virtual` 6.3.6, both in a Debian trixie container; the same result on each):
+
+| Program | Result |
+| --- | --- |
+| GTK 4 entry (`zenity --entry`) | show, then hide |
+| GTK 4 dialog with no entry (`zenity --info`) | nothing |
+| Qt 6 line edit (`kdialog --inputbox`) | show, then hide |
+| Qt 6 dialog with no field (`kdialog --msgbox`) | nothing |
+| foot, Konsole | show while the terminal has the focus |
+| XWayland programs (xterm, tested on labwc only) | nothing: X11 has no text-input. Use the keyboard button |
+
+Limits:
+
+- Programs with their own toolkit and no text-input (some games, SDL without IME) do not ask. Chromium and Electron ask only with text-input enabled (`--enable-wayland-ime`). Qt 5 has text-input-v2 only, so it asks on KWin and not on labwc.
+- On labwc the helper is the input method. An input method for composition (Fcitx 5, IBus) wants the same place; the one that starts first gets it.
+- The request is "a text field has the focus", not "the person tapped it". A terminal that has the focus when the desktop starts opens the keyboard.
+- Not tested: a full Plasma session in the guest (KWin was tested alone, with its virtual backend), and the app on a device.
+
+`keyboard-check.py` (`uv run`, `make test-linux-keyboard`) boots a clone of the desktop image with `--share` and `HV_INPUT_FILE` (`getkbd` prints the last request), and checks in the labwc session: the service runs; foot in focus gives `show`; a window with no text field gives `hide` and `show` comes back when it closes; no window gives `hide`; the helper sends `hide` when it stops and `show` when it starts with a text field in focus. `--gtk` installs zenity in the clone and checks a GTK entry. `tests/test_share_keyboard.c` (in `make test`) checks the endpoint and `make test-keyboard-follow` the app's policy.
 
 ## Packaging and catalogue (G7)
 

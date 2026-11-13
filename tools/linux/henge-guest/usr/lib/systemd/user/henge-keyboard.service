@@ -1,0 +1,7 @@
+[Unit]
+Description=Henge: the device shows its keyboard when the focused program wants text
+
+[Service]
+ExecStart=/usr/lib/henge/henge-keyboard
+Restart=on-failure
+RestartSec=2
