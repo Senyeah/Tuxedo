@@ -10,7 +10,7 @@ the device's lock with HV_INPUT_FILE ("secrets lock|unlock", in place of the app
 secrets-probe.py stores, reads, lists and deletes through secret-tool, a Diffie-Hellman session and the KWallet
 API; each item must land in DIR/MACHINE/ (mode 0600), and not show while locked; the same item shows through
 both APIs; a prompt completes when the device unlocks; no secret is in the journal or hengevm's log. A second
-boot with another machine id must not see the first machine's items. The image needs henge-guest 1.6.0.
+boot with another machine id must not see the first machine's items. The image needs henge-guest 1.6.1.
 
 --container: the same probe in a Debian trixie container (Docker) against secrets-mock-host.py, with kwallet6
 installed: kwallet-query (libkf6wallet) through henge-secrets, a second kwalletd6 that must leave the names
@@ -257,7 +257,8 @@ def import_check(env, daemon_bin, dump):
     import base64
     make_kwallet(env, f"pass-{TAG}")
     print("ok: a kwalletd6 wallet with 2 passwords, a map and binary data", flush=True)
-    run = lambda pw, *a: subprocess.run(["python3", daemon_bin, "--import", "--password-stdin", *a], input=pw + "\n",  # noqa: E731
+    command = "/t/henge-guest/usr/bin/henge-secrets"  # the package's command, not the daemon's path
+    run = lambda pw, *a: subprocess.run([command, "--import", "--password-stdin", *a], input=pw + "\n",  # noqa: E731
                                         capture_output=True, text=True, env=env, timeout=120)
     r = run("wrong")
     if r.returncode == 0 or "does not open" not in r.stderr:
@@ -350,7 +351,7 @@ def package():
     """henge-guest's scripts: the diversions, and the wallet's unit enabled on install and on a reinstall after a
     remove, but an admin's disable kept over an upgrade."""
     import shutil
-    shutil.copytree("/t/henge-guest", "/tmp/pkg", dirs_exist_ok=True)
+    shutil.copytree("/t/henge-guest", "/tmp/pkg", dirs_exist_ok=True, symlinks=True)
     subprocess.run("find /tmp/pkg -type d -exec chmod 0755 {} + && find /tmp/pkg -type f -exec chmod 0644 {} + && "
                    "chmod 0755 /tmp/pkg/usr/lib/henge/* /tmp/pkg/DEBIAN/preinst /tmp/pkg/DEBIAN/postinst /tmp/pkg/DEBIAN/prerm /tmp/pkg/DEBIAN/postrm && "
                    "dpkg-deb --root-owner-group --build /tmp/pkg /tmp/henge-guest.deb >/dev/null", shell=True, check=True)
@@ -369,6 +370,13 @@ def package():
     dpkg("-i", "/tmp/henge-guest.deb")
     if enabled() != "enabled" or diverted() != 3 or "kwalletd6" not in open("/usr/share/dbus-1/services/org.kde.kwalletd6.service.henge").read():
         raise Fail(f"install: unit {enabled()}, {diverted()} diversions")
+    # The README's command, as the user types it in Konsole: on henge's PATH, and it reaches the import
+    as_henge = ["setpriv", "--reuid=henge", "--regid=henge", "--clear-groups", "--reset-env", "sh", "-lc"]
+    where = subprocess.run(as_henge + ["command -v henge-secrets"], capture_output=True, text=True).stdout.strip()
+    r = subprocess.run(as_henge + ["henge-secrets --import --wallet no-such-wallet"], capture_output=True, text=True)
+    if where != "/usr/bin/henge-secrets" or r.returncode == 0 or "no wallet" not in r.stderr:
+        raise Fail(f"henge-secrets for henge: {where!r}, import {r.returncode} {r.stderr[-200:]!r}")
+    print("ok: package: henge-secrets is on henge's PATH and reaches the import", flush=True)
     dpkg("-r", "henge-guest")
     if enabled() == "enabled" or diverted() != 0 or "kwalletd6" not in open("/usr/share/dbus-1/services/org.kde.kwalletd6.service").read():
         raise Fail(f"remove: unit {enabled()}, {diverted()} diversions")
@@ -471,6 +479,12 @@ def boot(args, image, store, machine, steps):
         for i in range(0, len(data), 600):
             need(f"printf %s '{data[i:i + 600]}' >> /tmp/probe.b64")
         need("base64 -d /tmp/probe.b64 > /tmp/probe.py")
+        # The README's command for henge, from a login shell as in Konsole
+        where = need("bash -lc 'command -v henge-secrets'", "henge-secrets on henge's PATH").splitlines()[-1]
+        out, rc = sh(p, "bash -lc 'henge-secrets --import --wallet no-such-wallet' 2>&1", 60)
+        if where != "/usr/bin/henge-secrets" or rc == 0 or "no wallet" not in out:
+            raise Fail(f"henge-secrets for henge: {where!r}, import {rc} {out.strip()[-200:]!r}")
+        print("ok: henge-secrets is on henge's PATH and reaches the import", flush=True)
         steps(host, need, probe, err)
         p.sendline("sudo poweroff")
         p.expect(pexpect.EOF, timeout=120)

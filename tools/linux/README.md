@@ -9,7 +9,7 @@ Every script runs inside the builder container, so no cross compiler is needed.
 - `Dockerfile`: the builder image (`debian:trixie` with the build tools).
 - `build-uboot.sh`, `build-image.sh`, `customize.sh`, `rootfs/`: see Order.
 - `customize-desktop.sh`, `rootfs-desktop/`: extra files for the desktop image (`build-image.sh --desktop`).
-- `henge-guest/` (G9): the source of the `henge-guest` Debian package. It holds the grow and first-boot scripts (`/usr/lib/henge/`) and units (`/usr/lib/systemd/system/henge-*.service`, G8), and enables them in `postinst`. `build-guest-pkg.sh` builds the `.deb` on its own; `build-image.sh` builds it too and installs it in both images. P6 adds the shared-folder mount (`home-henge-Henge.mount` and `.automount`, `/etc/henge/davfs2.conf`); P7 adds the clipboard helper (`henge-clipboard` and a user unit). DS5 adds `henge-status` and its unit, and UPower's settings. 1.6.0 adds the wallet, `henge-secrets` (see Wallet). `grow-check.py` tests the grow units, `share-check.py` the shared folder and `clipboard-check.py` the clipboard.
+- `henge-guest/` (G9): the source of the `henge-guest` Debian package. It holds the grow and first-boot scripts (`/usr/lib/henge/`) and units (`/usr/lib/systemd/system/henge-*.service`, G8), and enables them in `postinst`. `build-guest-pkg.sh` builds the `.deb` on its own; `build-image.sh` builds it too and installs it in both images. P6 adds the shared-folder mount (`home-henge-Henge.mount` and `.automount`, `/etc/henge/davfs2.conf`); P7 adds the clipboard helper (`henge-clipboard` and a user unit). DS5 adds `henge-status` and its unit, and UPower's settings. 1.6.0 adds the wallet, `henge-secrets` (see Wallet); 1.6.1 puts the command on the PATH. `grow-check.py` tests the grow units, `share-check.py` the shared folder and `clipboard-check.py` the clipboard.
 - `run.sh`: runs a command in the builder image. `build/linux/` is mounted at `/out`, the repo's `tools/linux/` at `/tools` (read only), and a named volume at `/work` for source trees.
 
 `run.sh` builds the image on first use. `HENGE_LINUX_OUT` is the artefact directory. `run.sh`, `package-image.sh`, `serve.sh`, `qemu-ref.sh`, `qemu-check.py`, `balloon-check.py` and `sound-check.py` default to the author's `$HOME/Repos/Henge/build/linux`, so on any other Mac set it first (see From nothing). `smoke.py` and the Makefile targets default to `build/linux` of the main checkout, where all worktrees share the files.
@@ -137,7 +137,7 @@ The guest shows the device's battery, charging state, screen brightness, volume,
 
 ## Wallet: KDE Wallet and the Secret Service in the Keychain
 
-A Linux machine keeps its saved passwords in the device's Keychain, not in a wallet file in the guest. `henge-secrets` (`/usr/lib/henge/`, the user unit `henge-secrets.service`, enabled for every user in `default.target`) owns three names on the session bus:
+A Linux machine keeps its saved passwords in the device's Keychain, not in a wallet file in the guest. `henge-secrets` (`/usr/lib/henge/`, the command `/usr/bin/henge-secrets`, the user unit `henge-secrets.service`, enabled for every user in `default.target`) owns three names on the session bus:
 
 - `org.freedesktop.secrets`, the freedesktop Secret Service: libsecret (`secret-tool`, GNOME and GTK programs, Chromium and Electron with `--password-store=gnome-libsecret`), QtKeychain programs (they try libsecret first), and kwalletd from KDE Frameworks 6.14 and later.
 - `org.kde.kwalletd6` and `org.kde.kwalletd5`, the KWallet API (`/modules/kwalletd6`, `org.kde.KWallet`): KDE programs, plasma-nm, KIO, and Chromium and Electron on KDE (their default store there).
@@ -164,7 +164,7 @@ Security:
 - Limits: ids of 64 characters, 16 KB of metadata, 64 KB of secret, 1024 items for each machine.
 - `hengevm` (no Face ID): `--secrets DIR` keeps each item in `DIR/MACHINE/ID` (mode 0600), `--machine-id ID` (default `hengevm`) is the scope. It starts unlocked; `HV_SECRETS_LOCKED=1` starts it locked, and the `HV_INPUT_FILE` lines `secrets lock`, `secrets unlock` and `secrets` change and print the state.
 
-An existing KWallet (`~/.local/share/kwalletd/*.kwl`) stays as it is. To copy it into the device's wallet once, run `/usr/lib/henge/henge-secrets --import` (`--wallet NAME`, default `kdewallet`) while the machine is unlocked:
+An existing KWallet (`~/.local/share/kwalletd/*.kwl`) stays as it is. To copy it into the device's wallet once, run `henge-secrets --import` (`--wallet NAME`, default `kdewallet`) while the machine is unlocked:
 
 - It starts the real kwalletd6 (kwallet6 must be installed) on a private bus of its own, with a `kwalletrc` that has no prompts, so it does not touch the session's names.
 - kwalletd6 opens the wallet. In a desktop session kwalletd6 asks for the wallet's password in its own window. Without a display, or with `--password-stdin` (the password on the first line of stdin), the command takes the password and opens the wallet as `pam_kwallet` does (PBKDF2-SHA512 with the wallet's `.salt`; a GPG wallet needs the window).
