@@ -1,0 +1,1 @@
+# Empty, so it hides alsa-utils' rule: the device owns the volume, and alsactl must not restore or set it up at boot.

@@ -26,7 +26,7 @@ fi
 
 MIRROR=${DEBIAN_MIRROR:-https://snapshot.debian.org/archive/debian/$DEBIAN_SNAPSHOT/}
 SIZE_MB=3072
-PKGS="linux-image-arm64-16k,systemd-sysv,udev,dbus,kmod,initramfs-tools,u-boot-menu,zstd,iproute2,iputils-ping,systemd-resolved,systemd-timesyncd,ca-certificates,sudo,less,nano,procps,cloud-guest-utils,e2fsprogs,gdisk,davfs2,alsa-utils"
+PKGS="linux-image-arm64-16k,systemd-sysv,udev,dbus,kmod,initramfs-tools,u-boot-menu,zstd,iproute2,iputils-ping,systemd-resolved,systemd-timesyncd,ca-certificates,sudo,less,nano,procps,cloud-guest-utils,e2fsprogs,gdisk,davfs2,alsa-utils,python3,tzdata"
 
 # Fixed IDs keep the image and extlinux.conf the same between builds
 if [ "$DESKTOP" = 1 ]; then

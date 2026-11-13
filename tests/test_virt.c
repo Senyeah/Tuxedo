@@ -1564,6 +1564,10 @@ static void test_snd_controls(void) {
     check("snd: and tells the guest's other clients", s->notify_pending[0], 1);
     snd_ctl_req(&d, 0x0303, 0, 0, 0, same, 0);
     check("snd: an unchanged write is not passed on", snd_calls, 1);
+    int32_t one_side[2] = {40, 70};
+    snd_ctl_req(&d, 0x0303, 0, 0, 0, one_side, 0);
+    check("snd: one channel at a time passes on the louder one", snd_percent, 70);
+    snd_ctl_req(&d, 0x0303, 0, 0, 0, v70, 0);
     snd_ctl_req(&d, 0x0303, 0, 0, 0, wide, 0);
     check("snd: values are clamped", snd_read(&d, 0, 0) == 100 && snd_read(&d, 0, 1) == 0, 1);
     snd_ctl_req(&d, 0x0303, 0, 0, 0, v70, 0);

@@ -113,7 +113,8 @@ static void flush_notify(HvVirtioSnd *d) {
         if (d->notify_pending[cid]) send_notify(d, cid);
 }
 
-static int ctl_percent(const HvVirtioSnd *d) { return (d->volume[0] + d->volume[1] + 1) / 2; }
+/* The louder channel: PipeWire writes one channel at a time, and the mean would be a level nobody chose. */
+static int ctl_percent(const HvVirtioSnd *d) { return d->volume[0] > d->volume[1] ? d->volume[0] : d->volume[1]; }
 
 void hv_virtio_snd_set_volume(HvVirtioSnd *d, int percent) {
     if (!d || !d->controls) return;
