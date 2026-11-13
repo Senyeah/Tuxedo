@@ -381,6 +381,8 @@ class Panel:
         if want[1] > 0:
             wl.send(self.viewport, 2, struct.pack("<ii", *want))  # set_destination
             wl.send(region, 1, struct.pack("<iiii", 0, 0, *want))  # add
+        else:
+            wl.send(self.viewport, 2, struct.pack("<ii", 1, 1))  # no keyboard: nothing of its size stays
         wl.send(self.surface, 5, struct.pack("<I", region))  # set_input_region: empty is no keyboard
         wl.send(region, 0)  # destroy
         wl.send(self.surface, 6)  # commit
@@ -394,6 +396,10 @@ def panel_height(fraction, height, top, bottom):
     keyboard = round(fraction * height)
     if keyboard <= 0:
         return 0
+    # The numbers come over the bus, where any program can send them: never more than the screen
+    top, bottom = min(max(top, 0), height), min(max(bottom, 0), height)
+    if top + bottom >= height:
+        top = bottom = 0
     return max(0, min(keyboard - bottom, height - top - bottom - MIN_ROOM))
 
 
