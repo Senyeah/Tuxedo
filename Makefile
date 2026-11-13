@@ -32,7 +32,7 @@ METAL_LIBS = -framework Foundation -framework QuartzCore -framework Metal -frame
 
 TESTS = $(B)/test_classify $(B)/test_jit_region $(B)/test_operands $(B)/test_jit $(B)/test_mem $(B)/test_share_keyboard \
         $(B)/test_mmu $(B)/test_exc $(B)/test_devices $(B)/test_shutdown $(B)/test_pause $(B)/test_big_lock $(B)/test_machine_rebuild $(B)/test_fdt $(B)/test_console $(B)/test_virt \
-        $(B)/test_status $(B)/test_secrets $(B)/test_share_paths $(B)/test_vgpu_metal $(if $(GFX),$(B)/test_vgpu_virgl)
+        $(B)/test_status $(B)/test_secrets $(B)/test_share_paths $(B)/test_fs_server $(B)/test_vgpu_metal $(if $(GFX),$(B)/test_vgpu_virgl)
 
 all: $(TESTS) $(B)/hengevm $(B)/hengevm-ref $(B)/hvsparse
 
@@ -157,6 +157,10 @@ $(B)/test_share_keyboard: tests/test_share_keyboard.c $(B)/share.o $(B)/safe_pat
 
 # The folder's paths: no link or ".." leaves it (host/safe_path.c), through the server and directly.
 $(B)/test_share_paths: tests/test_share_paths.c $(B)/share.o $(B)/safe_path.o $(B)/secrets.o $(B)/status.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+# The Files folder server through FUSE requests: confinement, modes, case and Unicode, folders that move or go.
+$(B)/test_fs_server: tests/test_fs_server.c $(B)/fs_server.o $(B)/safe_path.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 $(B)/test_secrets: tests/test_secrets.c $(B)/share.o $(B)/safe_path.o $(B)/secrets.o $(B)/status.o
@@ -350,7 +354,7 @@ IOS_DEPS ?= $(if $(wildcard ios/deps/include/slirp/libslirp.h),$(CURDIR)/ios/dep
 IOS_CFLAGS = -std=c11 -Wall -Wextra -O2 -g -Icore -Ihost -Idevices -I$(IOS_DEPS)/include/slirp $(if $(GFX),-DHV_GFX=1)
 IB = build/ios
 IOS_GFX_DIR ?= $(GFX_ROOT)/ios
-IOS_SRC = $(wildcard core/*.c) host/prof_ios.c host/jit_region.c host/disk.c host/vm.c host/linux_boot.c host/status.c $(IOS_NET) host/dns_proxy.c host/share.c host/safe_path.c host/secrets.c host/audio_mac.c host/hvsparse.c host/usb_host.c \
+IOS_SRC = $(wildcard core/*.c) host/prof_ios.c host/jit_region.c host/disk.c host/vm.c host/linux_boot.c host/status.c $(IOS_NET) host/dns_proxy.c host/share.c host/safe_path.c host/fs_server.c host/secrets.c host/audio_mac.c host/hvsparse.c host/usb_host.c \
           $(filter-out devices/pvg_mac.m,$(wildcard devices/*.c))
 IOS_OBJ = $(patsubst %.c,$(IB)/%.o,$(IOS_SRC)) $(IB)/host/enter.o $(IB)/devices/pvg_metal.o $(IB)/devices/vgpu_metal.o $(if $(GFX),$(IB)/devices/vgpu_virgl.o)
 
