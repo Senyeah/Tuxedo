@@ -38,6 +38,7 @@ class Host:
 
     def __init__(self, inp, err):
         self.inp, self.err = inp, err
+        self.count = 0  # the request count at the last state a check accepted
 
     def line(self, text):
         with open(self.inp, "a") as f:
@@ -55,14 +56,15 @@ class Host:
         raise Fail("getkbd: hengevm did not answer")
 
     def wait(self, want, what, limit=30):
-        """Waits for want; returns the seconds it took."""
+        """Waits for want from a request newer than the last accepted one; returns the seconds it took."""
         t = time.monotonic()
         while True:
-            got, _ = self.getkbd()
-            if got == want:
+            got, n = self.getkbd()
+            if got == want and n > self.count:
+                self.count = n
                 return time.monotonic() - t
             if time.monotonic() - t > limit:
-                raise Fail(f"{what}: the host has {got!r}, not {want!r}, after {limit} s")
+                raise Fail(f"{what}: the host has {got!r} (request {n}, last accepted {self.count}), not a new {want!r}, after {limit} s")
             time.sleep(0.25)
 
     def stays(self, want, what, secs=4):
@@ -103,6 +105,7 @@ def one(args):
         if r.returncode:
             raise Fail(f"cannot clone {image}: {r.stderr.strip()}")
         open(inp, "w").close()
+        open(err, "w").close()  # getkbd reads it before the shell makes it
         host = Host(inp, err)
         argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.hengevm, "--board", "virt", "--kernel", kernel,
                 "--initrd", initrd, "--append", append, "--disk", clone, "--ram", "2048",
@@ -110,6 +113,11 @@ def one(args):
         p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200),
                           env=dict(os.environ, HV_INPUT_FILE=inp))
         try:
+            # Before the guest runs: nothing asked
+            first = host.getkbd()
+            if first != ("hide", 0):
+                raise Fail(f"before the guest runs the host has {first}, not ('hide', 0)")
+            print("ok: before the guest runs: hide, no request", flush=True)
             login(p, None, 300)
 
             def need(cmd, what="", limit=30):
@@ -125,10 +133,6 @@ def one(args):
                 need(f"{WL} setsid {cmd} > /dev/null 2>&1 < /dev/null & true", what=cmd)
 
             try:
-                got, n = host.getkbd()
-                if (got, n) != ("hide", 0) and n == 0:
-                    raise Fail(f"before the helper: the host has {got!r}")
-
                 # The service starts with labwc
                 end = time.monotonic() + 120
                 while True:
