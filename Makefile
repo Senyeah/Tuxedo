@@ -528,9 +528,26 @@ $(B)/test_vgpu_virgl: tests/test_vgpu_virgl.c $(ENGINE) $(filter-out $(B)/vgpu_v
 test-vgpu-virgl:
 	@if [ -d "$(GFX_DIR)" ]; then $(MAKE) --no-print-directory $(B)/test_vgpu_virgl GFX_DIR="$(GFX_DIR)" && ulimit -s 65520 && $(B)/test_vgpu_virgl && \
 	  if grep -q virglrenderer-video-patch "$(GFX_DIR)/MANIFEST.txt"; then echo "test-vgpu-virgl: again with guest video on, under libgmalloc" && \
-	  VGPU_VIRGL_VIDEO=1 DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib $(B)/test_vgpu_virgl; fi; \
+	  VGPU_VIRGL_VIDEO=1 DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib $(B)/test_vgpu_virgl && \
+	  $(MAKE) --no-print-directory test-vt-crafted GFX_DIR="$(GFX_DIR)"; fi; \
 	else echo "test-vgpu-virgl: skipped: no graphics libraries in $(GFX_DIR)"; fi
 .PHONY: test-vgpu-virgl
+
+# Crafted guest input to the VideoToolbox back end, called directly: overlapping AV1 tiles, and VP9 key frames that code
+# another size than their descriptor. The private headers come from GFX_ROOT's virglrenderer source and macOS build tree.
+# Linked without VideoToolbox, CoreMedia and CoreVideo: the library names them itself, so an app's link line need not.
+VT_SRC = $(GFX_ROOT)/src/virglrenderer/src
+VT_BUILD = $(GFX_ROOT)/work/virgl-macos
+$(B)/test_vt_crafted: tests/test_vt_crafted.c $(GFX_LIBS)
+	$(CC) $(CFLAGS) -Wno-unused-parameter -include $(VT_BUILD)/config.h -I$(VT_SRC) -I$(VT_SRC)/gallium/include -I$(VT_SRC)/mesa \
+	  -I$(VT_SRC)/mesa/compat -I$(VT_SRC)/mesa/util -I$(VT_BUILD)/src/gallium $^ \
+	  $(subst -framework VideoToolbox -framework CoreMedia -framework CoreVideo,,$(GFX_FRAMEWORKS)) -o $@
+
+test-vt-crafted:
+	@if grep -qs virglrenderer-video-patch "$(GFX_DIR)/MANIFEST.txt" && [ -f "$(VT_BUILD)/config.h" ]; then \
+	  $(MAKE) --no-print-directory $(B)/test_vt_crafted GFX_DIR="$(GFX_DIR)" && $(B)/test_vt_crafted; \
+	else echo "test-vt-crafted: skipped: no video libraries or virglrenderer build tree in $(GFX_ROOT)"; fi
+.PHONY: test-vt-crafted
 
 # A5: both iOS libraries with the renderer, linked with the static graphics libraries. The device binary is only linked.
 # The simulator binary runs when a simulator is booted (xcrun simctl spawn).

@@ -152,6 +152,19 @@ struct MachineModelTests {
         chosen.accel = true
         let accelBack = MachineList.decode(try JSONEncoder().encode([chosen]), diskExists: { _ in true })!
         precondition(accelBack[0].accel == true)
+        // Video decode is off unless chosen, and only with acceleration on a Linux machine.
+        precondition(accelBack[0].video == nil && !accelBack[0].decodesVideo && !String(decoding: data, as: UTF8.self).contains("video"))
+        chosen.video = true
+        let videoBack = MachineList.decode(try JSONEncoder().encode([chosen]), diskExists: { _ in true })!
+        precondition(videoBack[0].video == true && videoBack[0].decodesVideo)
+        chosen.accel = false
+        precondition(!chosen.decodesVideo)
+        var videoMac = old[0]
+        videoMac.accel = true
+        videoMac.video = true
+        precondition(!videoMac.decodesVideo)
+        chosen.accel = true
+        chosen.video = nil
 
         // TS5: the touch switch is per machine; old JSON has none (the pointer), and a Mac ignores it.
         precondition(old[0].touchInput == nil && !old[0].usesTouch && back[1].touchInput == nil && !back[1].usesTouch)

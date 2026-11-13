@@ -11,7 +11,7 @@ index 99ead1a..6d7d9b8 100644
  #mesondefine ENABLE_TESTS
  #mesondefine UTIL_ARCH_LITTLE_ENDIAN
 diff --git a/meson.build b/meson.build
-index b863ecc..56f9760 100644
+index b863ecc..d808b3b 100644
 --- a/meson.build
 +++ b/meson.build
 @@ -135,7 +135,7 @@ if with_drm_renderers
@@ -33,7 +33,7 @@ index b863ecc..56f9760 100644
 +    # VideoToolbox back end (virgl_video_vt.m): no libva, no DRM
 +    add_languages('objc', required: true)
 +    conf_data.set('ENABLE_VIDEO_VT', 1)
-+    video_deps = [dependency('appleframeworks', modules : ['VideoToolbox', 'CoreMedia', 'CoreVideo', 'CoreFoundation'])]
++    video_deps = [dependency('appleframeworks', modules : ['VideoToolbox', 'CoreMedia', 'CoreVideo', 'CoreFoundation', 'IOSurface'])]
 +  else
 +    video_deps = [dependency('libva'), dependency('libva-drm')]
 +  endif
@@ -63,27 +63,32 @@ index 26c7f58..a056590 100644
  
  if with_host_windows
 diff --git a/src/vrend/virgl_video.h b/src/vrend/virgl_video.h
-index e954559..6a5e05f 100644
+index e954559..6a9838a 100644
 --- a/src/vrend/virgl_video.h
 +++ b/src/vrend/virgl_video.h
-@@ -96,6 +96,11 @@ struct virgl_video_dma_buf {
+@@ -96,7 +96,16 @@ struct virgl_video_dma_buf {
          int modifier;
          uint32_t offset;
          uint32_t pitch;
-+        /* CPU copy (VideoToolbox): fd is -1, data points at height rows of pitch bytes, cpp bytes per pixel */
-+        const void *data;
++        /* VideoToolbox: fd is -1; plane of the IOSurface, its size, cpp bytes and channels (1 or 2) per pixel */
++        uint32_t plane;
 +        uint32_t width;
 +        uint32_t height;
 +        uint32_t cpp;
++        uint32_t channels;
      } planes[4];
++
++    void *iosurface; /* VideoToolbox: IOSurfaceRef of the decoded frame, valid during the callback */
++    uint32_t pool;   /* VideoToolbox: changes when the decoder's surface pool may have been replaced */
  };
  
+ /*
 diff --git a/src/vrend/virgl_video_vt.m b/src/vrend/virgl_video_vt.m
 new file mode 100644
-index 0000000..7a3797c
+index 0000000..9939233
 --- /dev/null
 +++ b/src/vrend/virgl_video_vt.m
-@@ -0,0 +1,957 @@
+@@ -0,0 +1,2242 @@
 +/**************************************************************************
 + *
 + * Copyright (C) 2026 Henge contributors
@@ -109,7 +114,7 @@ index 0000000..7a3797c
 + **************************************************************************/
 +
 +/*
-+ * The virgl_video.h back end on VideoToolbox. H.264 decode only.
++ * The virgl_video.h back end on VideoToolbox: H.264, VP9 and AV1 decode.
 + *
 + * The guest's VA-API driver is stateless: it sends slices and parsed fields.
 + * VideoToolbox is stateful: it wants the stream with its parameter sets. So
@@ -117,7 +122,10 @@ index 0000000..7a3797c
 + * one picture between begin_frame and end_frame, and decodes them as one
 + * sample at end_frame. VideoToolbox keeps its own reference frames, so the
 + * guest's reference surfaces are not used. The output goes to the target's
-+ * plane textures through decode_completed, as CPU pointers (plane.data).
++ * plane textures through decode_completed, as an IOSurface.
++ *
++ * VP9 needs no rewriting: virgl carries the whole frame, so only the vpcC
++ * atom comes from the fields. AV1 needs its headers written: see below.
 + */
 +
 +#include <stdbool.h>
@@ -129,8 +137,16 @@ index 0000000..7a3797c
 +#include <CoreFoundation/CoreFoundation.h>
 +#include <CoreMedia/CoreMedia.h>
 +#include <CoreVideo/CoreVideo.h>
++#include <IOSurface/IOSurfaceRef.h>
 +#include <TargetConditionals.h>
 +#include <VideoToolbox/VideoToolbox.h>
++
++/* vrend_renderer.c always pulls this file in: the .a names its frameworks, so an app's link line need not */
++__asm__(".linker_option \"-framework\", \"VideoToolbox\"\n"
++        ".linker_option \"-framework\", \"CoreMedia\"\n"
++        ".linker_option \"-framework\", \"CoreVideo\"\n"
++        ".linker_option \"-framework\", \"IOSurface\"\n"
++        ".linker_option \"-framework\", \"CoreFoundation\"");
 +
 +#include "util/u_formats.h"
 +#include "virgl_hw.h"
@@ -138,7 +154,8 @@ index 0000000..7a3797c
 +#include "virgl_util.h"
 +#include "virgl_video.h"
 +
-+#define VT_VIRGL_FORMAT_NV12 166 /* VIRGL_FORMAT_NV12 in Mesa's virgl_hw.h */
++#define VT_VIRGL_FORMAT_NV12 VIRGL_FORMAT_Y8_U8V8_420_UNORM
++#define VT_VIRGL_FORMAT_P010 VIRGL_FORMAT_X6Y10_X6U10X6V10_420_UNORM
 +#define VT_MAX_PPS 256
 +#define VT_PS_MAX 2048 /* 8 scaling lists of 64 values fit with room */
 +#define VT_AU_MAX (16u << 20) /* the slices of one picture */
@@ -165,7 +182,19 @@ index 0000000..7a3797c
 +    unsigned pps_id, type;
 +};
 +
++enum vt_kind { VT_H264, VT_VP9, VT_AV1 };
++
++struct av1_slot {
++    uint32_t surf;  /* the guest's buffer id; 0 is empty */
++    uint8_t order_hint;
++    int32_t gm[7][6];
++    bool seg_enabled;
++    uint8_t seg_mask[8];
++    int16_t seg_data[8][8];
++};
++
 +struct virgl_video_codec {
++    enum vt_kind kind;
 +    enum pipe_video_profile profile;
 +    enum pipe_video_entrypoint entrypoint;
 +    uint32_t level;
@@ -174,14 +203,15 @@ index 0000000..7a3797c
 +    void *opaque;
 +
 +    struct virgl_video_buffer *target;
-+    uint8_t *au; /* AVCC: 4-byte big-endian lengths */
++    uint8_t *au; /* H.264: AVCC, with 4-byte big-endian lengths; VP9: the frame */
 +    size_t au_len, au_cap;
 +    bool have_desc;
 +    struct virgl_h264_picture_desc desc;
 +    int pps_id;
 +    bool pps_mixed;   /* the picture's slices name more than one PPS */
-+    bool pic_idr;     /* an IDR slice in the picture */
-+    bool pic_intra;   /* every slice of the picture is I or SI */
++    bool pic_idr;     /* an IDR slice in the picture; VP9: a key frame */
++    bool pic_intra;   /* every slice of the picture is I or SI; VP9: intra_only */
++    bool pic_shown;   /* VP9: show_frame; a hidden frame gives no output */
 +    unsigned pic_slices;
 +    struct vt_slice last;
 +
@@ -189,11 +219,31 @@ index 0000000..7a3797c
 +    size_t sps_len;
 +    struct vt_pps pps[VT_MAX_PPS];
 +
++    /* VP9: what the vpcC atom came from */
++    unsigned vp9_profile, vp9_depth, vp9_w, vp9_h, fmt_w, fmt_h;
++
++    /* AV1: VideoToolbox's reference slots, the picture's descriptor, the sequence header OBU in the format */
++    struct av1_slot av1_slots[8];
++    struct virgl_av1_picture_desc *av1;
++    uint8_t av1_seq[128];
++    size_t av1_seq_len;
++    /* a frame decoded without a refresh, until the next frame shows whether it is a reference */
++    struct virgl_av1_picture_desc *av1_pend;
++    uint8_t *pend_au;
++    size_t pend_len, pend_cap;
++    uint32_t pend_surf;
++    uint8_t pend_idx[7];
++    unsigned redecodes;
++    uint8_t *sample;
++    size_t sample_cap;
++    bool no_emit;
++
 +    CMVideoFormatDescriptionRef fmt;
 +    VTDecompressionSessionRef vt;
 +    CVPixelBufferRef out;
 +    OSStatus out_status;
 +    OSType pixfmt; /* the session's output: NV12, or planar for IYUV and YV12 targets */
++    uint32_t pool; /* a new session or frame size: the old surfaces are not given again */
 +    /* after a failed picture VideoToolbox's references are wrong: skip to the next IDR or intra picture */
 +    bool need_intra;
 +    unsigned frames, failed, skipped, sessions, ps_updates, max_slices_per_call;
@@ -216,6 +266,21 @@ index 0000000..7a3797c
 +    }
 +}
 +
++static bool is_vp9(enum pipe_video_profile p)
++{
++    return p == PIPE_VIDEO_PROFILE_VP9_PROFILE0 || p == PIPE_VIDEO_PROFILE_VP9_PROFILE2;
++}
++
++static bool is_av1(enum pipe_video_profile p)
++{
++    return p == PIPE_VIDEO_PROFILE_AV1_MAIN;
++}
++
++static const char *vt_name(const struct virgl_video_codec *c)
++{
++    return c->kind == VT_AV1 ? "AV1" : c->kind == VT_VP9 ? "VP9" : "H.264";
++}
++
 +static unsigned h264_profile_idc(enum pipe_video_profile p)
 +{
 +    switch (p) {
@@ -236,12 +301,13 @@ index 0000000..7a3797c
 +    size_t len, pos;
 +    unsigned cur, left, zeros;
 +    bool err;
++    bool raw; /* no emulation prevention bytes (VP9, AV1) */
 +};
 +
 +static unsigned br_bit(struct br *b)
 +{
 +    if (!b->left) {
-+        if (b->pos < b->len && b->zeros >= 2 && b->p[b->pos] == 3) {
++        if (!b->raw && b->pos < b->len && b->zeros >= 2 && b->p[b->pos] == 3) {
 +            b->pos++;
 +            b->zeros = 0;
 +        }
@@ -618,6 +684,8 @@ index 0000000..7a3797c
 +
 +static OSType vt_pixfmt(enum pipe_format f)
 +{
++    if (f == PIPE_FORMAT_P010)
++        return kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange;
 +    return f == PIPE_FORMAT_NV12 ? kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange : kCVPixelFormatType_420YpCbCr8Planar;
 +}
 +
@@ -645,16 +713,20 @@ index 0000000..7a3797c
 +        return -1;
 +    }
 +    c->sessions++;
++    c->pool++;
 +    CFBooleanRef hw = NULL;
 +    VTSessionCopyProperty(c->vt, kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder, NULL, &hw);
-+    virgl_info("vt: H.264 session %ux%u, %s decoder\n", c->width, c->height,
++    CMVideoDimensions dim = CMVideoFormatDescriptionGetDimensions(c->fmt);
++    virgl_info("vt: %s session %dx%d, %s decoder\n", vt_name(c), dim.width, dim.height,
 +               hw == kCFBooleanTrue ? "hardware" : "software");
 +    if (hw)
 +        CFRelease(hw);
 +    return 0;
 +}
 +
-+/* The format description from the SPS and every PPS seen; a new session only if the old one refuses it */
++static int vt_set_format(struct virgl_video_codec *c, CMVideoFormatDescriptionRef fmt);
++
++/* The format description from the SPS and every PPS seen */
 +static int vt_update_format(struct virgl_video_codec *c)
 +{
 +    const uint8_t *sets[1 + VT_MAX_PPS];
@@ -672,8 +744,18 @@ index 0000000..7a3797c
 +        virgl_error("vt: the parameter sets are refused (%d)\n", (int)st);
 +        return -1;
 +    }
-+    if (c->fmt)
++    return vt_set_format(c, fmt);
++}
++
++/* Takes fmt; a new session only if the old one refuses it */
++static int vt_set_format(struct virgl_video_codec *c, CMVideoFormatDescriptionRef fmt)
++{
++    if (c->fmt) {
++        CMVideoDimensions a = CMVideoFormatDescriptionGetDimensions(c->fmt), b = CMVideoFormatDescriptionGetDimensions(fmt);
++        if (a.width != b.width || a.height != b.height)
++            c->pool++;
 +        CFRelease(c->fmt);
++    }
 +    c->fmt = fmt;
 +    if (c->vt && !VTDecompressionSessionCanAcceptFormatDescription(c->vt, fmt)) {
 +        virgl_warn("vt: new parameter sets need a new session\n");
@@ -686,6 +768,77 @@ index 0000000..7a3797c
 +static bool vt_session_lost(OSStatus st)
 +{
 +    return st == kVTInvalidSessionErr || st == kVTVideoDecoderMalfunctionErr;
++}
++
++/* The frame goes to the target's plane textures as an IOSurface: vrend copies it on the GPU */
++static void vt_emit(struct virgl_video_codec *c, CVPixelBufferRef out)
++{
++    IOSurfaceRef surf = CVPixelBufferGetIOSurface(out);
++    struct virgl_video_dma_buf d;
++    bool bi = CVPixelBufferGetPlaneCount(out) == 2;
++
++    if (!callbacks || !callbacks->decode_completed || !surf)
++        return;
++    memset(&d, 0, sizeof(d));
++    d.buf = c->target;
++    d.flags = VIRGL_VIDEO_DMABUF_READ_ONLY;
++    d.width = (uint32_t)CVPixelBufferGetWidth(out);
++    d.height = (uint32_t)CVPixelBufferGetHeight(out);
++    d.num_planes = (uint32_t)CVPixelBufferGetPlaneCount(out);
++    if (d.num_planes > 3)
++        d.num_planes = 3;
++    d.iosurface = (void *)surf;
++    d.pool = c->pool;
++    for (uint32_t i = 0; i < d.num_planes; i++) {
++        /* VideoToolbox's planar order is Y, Cb, Cr; YV12 is Y, Cr, Cb */
++        size_t src = c->target->format == PIPE_FORMAT_YV12 && i ? 3 - i : i;
++        d.planes[i].fd = -1;
++        d.planes[i].plane = (uint32_t)src;
++        d.planes[i].pitch = (uint32_t)IOSurfaceGetBytesPerRowOfPlane(surf, src);
++        d.planes[i].width = (uint32_t)IOSurfaceGetWidthOfPlane(surf, src);
++        d.planes[i].height = (uint32_t)IOSurfaceGetHeightOfPlane(surf, src);
++        d.planes[i].cpp = (uint32_t)IOSurfaceGetBytesPerElementOfPlane(surf, src);
++        d.planes[i].channels = bi && src == 1 ? 2 : 1;
++    }
++    callbacks->decode_completed(c, &d);
++}
++
++/* One sample, decoded synchronously: no asynchronous decode and no temporal processing, so one frame out, in
++ * decode order. A hidden frame (shown false) may give none. */
++static int vt_decode(struct virgl_video_codec *c, uint8_t *data, size_t len, bool shown)
++{
++    CMBlockBufferRef bb = NULL;
++    CMSampleBufferRef sb = NULL;
++    size_t size = len;
++    OSStatus st = CMBlockBufferCreateWithMemoryBlock(NULL, data, len, kCFAllocatorNull, NULL, 0, len, 0, &bb);
++    if (st == noErr)
++        st = CMSampleBufferCreateReady(NULL, bb, c->fmt, 1, 0, NULL, 1, &size, &sb);
++    if (st != noErr) {
++        virgl_error("vt: no sample buffer (%d)\n", (int)st);
++        if (bb)
++            CFRelease(bb);
++        return -1;
++    }
++    c->out_status = noErr;
++    st = VTDecompressionSessionDecodeFrame(c->vt, sb, 0, NULL, NULL);
++    if (st == noErr)
++        VTDecompressionSessionWaitForAsynchronousFrames(c->vt);
++    CFRelease(sb);
++    CFRelease(bb);
++    if (st != noErr || c->out_status != noErr || (shown && !c->out)) {
++        virgl_error("vt: frame %u not decoded (%d, %d)\n", c->frames, (int)st, (int)c->out_status);
++        if (vt_session_lost(st) || vt_session_lost(c->out_status))
++            vt_release_session(c);
++        return -1;
++    }
++    if (c->out) {
++        CVPixelBufferRef out = c->out;
++        c->out = NULL;
++        if (!c->no_emit)
++            vt_emit(c, out);
++        CVPixelBufferRelease(out);
++    }
++    return 0;
 +}
 +
 +static int h264_decode(struct virgl_video_codec *c)
@@ -746,64 +899,1159 @@ index 0000000..7a3797c
 +    if ((changed || !c->vt) && vt_update_format(c))
 +        return -1;
 +
-+    CMBlockBufferRef bb = NULL;
-+    CMSampleBufferRef sb = NULL;
-+    size_t size = c->au_len;
-+    OSStatus st = CMBlockBufferCreateWithMemoryBlock(NULL, c->au, c->au_len, kCFAllocatorNull, NULL, 0, c->au_len, 0, &bb);
-+    if (st == noErr)
-+        st = CMSampleBufferCreateReady(NULL, bb, c->fmt, 1, 0, NULL, 1, &size, &sb);
-+    if (st != noErr) {
-+        virgl_error("vt: no sample buffer (%d)\n", (int)st);
-+        if (bb)
-+            CFRelease(bb);
++    return vt_decode(c, c->au, c->au_len, true);
++}
++
++/* ---- VP9 ---- */
++
++/* The guest's buffers as they are, after those of the picture's earlier calls */
++static int au_take_raw(struct virgl_video_codec *c, unsigned num_buffers, const void *const *buffers,
++                       const unsigned *sizes)
++{
++    for (unsigned i = 0; i < num_buffers; i++) {
++        if (!buffers[i] || !sizes[i])
++            continue;
++        if (sizes[i] > VT_AU_MAX || c->au_len + sizes[i] > VT_AU_MAX) {
++            virgl_error("vt: a frame has more than %u bytes\n", VT_AU_MAX);
++            return -1;
++        }
++        if (c->au_len + sizes[i] > c->au_cap) {
++            size_t cap = c->au_cap ? c->au_cap : 1 << 16;
++            while (cap < c->au_len + sizes[i])
++                cap *= 2;
++            uint8_t *n = realloc(c->au, cap);
++            if (!n)
++                return -1;
++            c->au = n, c->au_cap = cap;
++        }
++        memcpy(c->au + c->au_len, buffers[i], sizes[i]);
++        c->au_len += sizes[i];
++    }
++    return 0;
++}
++
++/* color_config(): read only to reach the frame size */
++static void vp9_color_config(struct br *b, unsigned profile)
++{
++    if (profile >= 2)
++        br_bit(b); /* ten_or_twelve_bit */
++    if (br_u(b, 3) != 7) { /* not CS_RGB */
++        br_bit(b);
++        if (profile == 1 || profile == 3)
++            br_u(b, 3);
++    } else if (profile == 1 || profile == 3) {
++        br_bit(b);
++    }
++}
++
++/* The uncompressed header up to the frame size: is it a key, intra-only or hidden frame. VideoToolbox sizes its
++ * output from the stream, so a coded size must be the descriptor's (at most 4096). */
++static bool vp9_parse_header(struct virgl_video_codec *c, const uint8_t *p, size_t n, unsigned w, unsigned h)
++{
++    struct br b = {.p = p, .len = n, .raw = true};
++    unsigned profile;
++
++    if (br_u(&b, 2) != 2)
++        return false;
++    profile = br_bit(&b);
++    profile |= br_bit(&b) << 1;
++    if (profile == 3)
++        br_bit(&b);
++    if (br_bit(&b)) /* show_existing_frame: FFmpeg shows the reference itself */
++        return false;
++    bool key = !br_bit(&b);
++    c->pic_shown = br_bit(&b);
++    bool error_res = br_bit(&b);
++    bool intra_only = false, sized = true;
++    c->pic_idr = key;
++    /* an intra-only frame keeps the other references: only a key frame resumes after a failure */
++    c->pic_intra = false;
++    if (!key) {
++        intra_only = c->pic_shown ? false : br_bit(&b);
++        if (!error_res)
++            br_u(&b, 2);
++    }
++    if ((key || intra_only) && br_u(&b, 24) != 0x498342)
++        return false;
++    if (key || (intra_only && profile > 0))
++        vp9_color_config(&b, profile);
++    if (!key)
++        br_u(&b, 8); /* refresh_frame_flags */
++    if (!key && !intra_only) {
++        br_u(&b, 12); /* ref_frame_idx and sign bias */
++        /* found_ref: a reference's size, checked when it was coded */
++        for (unsigned i = 0; i < 3 && sized; i++)
++            sized = !br_bit(&b);
++    }
++    if (sized) {
++        unsigned cw = br_u(&b, 16) + 1, ch = br_u(&b, 16) + 1;
++        if (!b.err && (cw != w || ch != h)) {
++            virgl_warn("vt: VP9 frame codes %ux%u, its descriptor %ux%u\n", cw, ch, w, h);
++            return false;
++        }
++    }
++    return !b.err && profile == c->vp9_profile;
++}
++
++static int vp9_take(struct virgl_video_codec *c, const struct virgl_vp9_picture_desc *d, unsigned num_buffers,
++                    const void *const *buffers, const unsigned *sizes)
++{
++    unsigned depth = d->picture_parameter.bit_depth;
++
++    if (d->picture_parameter.profile != c->vp9_profile || (depth != 8 && depth != 10) ||
++        (c->vp9_profile == 0) != (depth == 8) || !d->picture_parameter.frame_width ||
++        !d->picture_parameter.frame_height || d->picture_parameter.frame_width > 4096 ||
++        d->picture_parameter.frame_height > 4096) {
++        virgl_warn("vt: VP9 frame refused (profile %u, %u bits, %ux%u)\n", d->picture_parameter.profile, depth,
++                   d->picture_parameter.frame_width, d->picture_parameter.frame_height);
 +        return -1;
 +    }
-+    c->out_status = noErr;
-+    /* no asynchronous decode and no temporal processing: one frame out, in decode order */
-+    st = VTDecompressionSessionDecodeFrame(c->vt, sb, 0, NULL, NULL);
-+    if (st == noErr)
-+        VTDecompressionSessionWaitForAsynchronousFrames(c->vt);
-+    CFRelease(sb);
-+    CFRelease(bb);
-+    if (st != noErr || c->out_status != noErr || !c->out) {
-+        virgl_error("vt: frame %u not decoded (%d, %d)\n", c->frames, (int)st, (int)c->out_status);
-+        if (vt_session_lost(st) || vt_session_lost(c->out_status))
-+            vt_release_session(c);
++    c->vp9_depth = depth;
++    if (au_take_raw(c, num_buffers, buffers, sizes))
++        return -1;
++    if (!vp9_parse_header(c, c->au, c->au_len, d->picture_parameter.frame_width, d->picture_parameter.frame_height)) {
++        virgl_warn("vt: a VP9 frame header does not parse\n");
++        return -1;
++    }
++    c->vp9_w = d->picture_parameter.frame_width;
++    c->vp9_h = d->picture_parameter.frame_height;
++    c->have_desc = true;
++    c->pic_slices = 1;
++    return 0;
++}
++
++static CMVideoFormatDescriptionRef vp9_format(const struct virgl_video_codec *c)
++{
++    unsigned area = c->vp9_w * c->vp9_h;
++    uint8_t level = area <= 2228224 ? 41 : area <= 8912896 ? 51 : 61;
++    /* vpcC version 1: profile, level, bit depth, 4:2:0 co-located, video range, unspecified colour */
++    const uint8_t vpcc[] = {1, 0, 0, 0, (uint8_t)c->vp9_profile, level, (uint8_t)(c->vp9_depth << 4 | 1 << 1), 2, 2, 2, 0, 0};
++    CFDataRef data = CFDataCreate(NULL, vpcc, sizeof(vpcc));
++    CFMutableDictionaryRef atoms = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks,
++                                                             &kCFTypeDictionaryValueCallBacks);
++    CFMutableDictionaryRef ext = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks,
++                                                           &kCFTypeDictionaryValueCallBacks);
++    CMVideoFormatDescriptionRef fmt = NULL;
++
++    CFDictionarySetValue(atoms, CFSTR("vpcC"), data);
++    CFDictionarySetValue(ext, kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms, atoms);
++    OSStatus st = CMVideoFormatDescriptionCreate(NULL, kCMVideoCodecType_VP9, (int32_t)c->vp9_w, (int32_t)c->vp9_h,
++                                                 ext, &fmt);
++    CFRelease(ext);
++    CFRelease(atoms);
++    CFRelease(data);
++    if (st != noErr) {
++        virgl_error("vt: no VP9 format description (%d)\n", (int)st);
++        return NULL;
++    }
++    return fmt;
++}
++
++static int vp9_decode(struct virgl_video_codec *c)
++{
++    if (!c->have_desc || !c->au_len)
++        return -1;
++    if (c->vt && c->pixfmt != vt_pixfmt(c->target->format)) {
++        virgl_warn("vt: the target format changed, new session\n");
++        vt_release_session(c);
++    }
++    c->pixfmt = vt_pixfmt(c->target->format);
++    if ((c->vp9_depth == 10) != (c->pixfmt == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange)) {
++        virgl_warn("vt: VP9 at %u bits into a %s target\n", c->vp9_depth, c->vp9_depth == 10 ? "8-bit" : "P010");
++        return -1;
++    }
++    /* a new size only at a key frame: inter frames may scale their references */
++    if (!c->vt || !c->fmt || (c->pic_idr && (c->fmt_w != c->vp9_w || c->fmt_h != c->vp9_h))) {
++        CMVideoFormatDescriptionRef fmt = vp9_format(c);
++        if (!fmt)
++            return -1;
++        if (c->vt)
++            c->ps_updates++;
++        c->fmt_w = c->vp9_w, c->fmt_h = c->vp9_h;
++        if (vt_set_format(c, fmt))
++            return -1;
++    }
++    return vt_decode(c, c->au, c->au_len, c->pic_shown);
++}
++
++/* ---- AV1 ----
++ *
++ * virgl carries only the tile data and the parsed fields, so this writes a sequence header OBU and a frame header
++ * OBU from the fields, and a tile group OBU around the tiles. VA-API has no refresh_frame_flags, so the back end
++ * keeps its own map of VideoToolbox's 8 reference slots: the guest's ref[] says which surface is in each of its
++ * slots, and ref_frame_idx is rewritten to the slot that holds that surface. A frame goes into a slot whose surface
++ * the guest no longer holds. When all 8 are held, it is decoded without a refresh, and decoded again into a freed
++ * slot when the next frame shows which one the guest freed. Hidden frames are written as shown, so that the guest's
++ * surface gets the pixels (FFmpeg shows them later through show_existing_frame, which the host never sees).
++ */
++
++#define AV1_NONE 7 /* PRIMARY_REF_NONE */
++#define AV1_KEY 0
++#define AV1_INTRA_ONLY 2
++#define AV1_SWITCH 3
++#define AV1_OBU_SEQ 1
++#define AV1_OBU_FH 3
++#define AV1_OBU_TG 4
++#define AV1_HDR_MAX 4096
++#define AV1_TILE_BYTES 4
++
++static const uint8_t av1_seg_bits[8] = {8, 6, 6, 6, 6, 3, 0, 0};
++static const uint8_t av1_seg_signed[8] = {1, 1, 1, 1, 1, 0, 0, 0};
++static const int av1_seg_max[8] = {255, 63, 63, 63, 63, 7, 0, 0};
++
++static unsigned floor_log2(uint32_t n)
++{
++    unsigned s = 0;
++    while (n > 1)
++        n >>= 1, s++;
++    return s;
++}
++
++static unsigned tile_log2(unsigned blk, unsigned target)
++{
++    unsigned k = 0;
++    while ((blk << k) < target)
++        k++;
++    return k;
++}
++
++static void bw_su(struct bw *b, int32_t v, unsigned n)
++{
++    bw_u(b, (uint32_t)v & ((1u << n) - 1), n);
++}
++
++static void bw_ns(struct bw *b, uint32_t n, uint32_t v)
++{
++    unsigned w = floor_log2(n) + 1;
++    uint32_t m = (1u << w) - n;
++    if (v < m) {
++        bw_u(b, v, w - 1);
++    } else {
++        uint32_t t = v + m;
++        bw_u(b, t >> 1, w - 1);
++        bw_u(b, t & 1, 1);
++    }
++}
++
++static void bw_leb128(uint8_t *out, size_t *o, size_t v)
++{
++    do {
++        uint8_t byte = v & 0x7f;
++        v >>= 7;
++        out[(*o)++] = byte | (v ? 0x80 : 0);
++    } while (v);
++}
++
++/* Byte-aligned payload with trailing bits, as one OBU with a size field */
++static size_t av1_obu(struct bw *b, unsigned type, bool trailing, uint8_t *out, size_t cap)
++{
++    size_t o = 0;
++    if (trailing)
++        bw_u(b, 1, 1);
++    while (b->nb)
++        bw_u(b, 0, 1);
++    if (b->err || cap < b->n + 10)
++        return 0;
++    out[o++] = (uint8_t)(type << 3 | 2);
++    bw_leb128(out, &o, b->n);
++    memcpy(out + o, b->rbsp, b->n);
++    return o + b->n;
++}
++
++static unsigned av1_recenter(unsigned r, unsigned v)
++{
++    if (v > 2 * r)
++        return v;
++    return v >= r ? (v - r) << 1 : ((r - v) << 1) - 1;
++}
++
++static void av1_subexp(struct bw *b, unsigned num, unsigned v)
++{
++    unsigned i = 0, mk = 0, k = 3;
++    for (;;) {
++        unsigned b2 = i ? k + i - 1 : k, a = 1u << b2;
++        if (num <= mk + 3 * a) {
++            bw_ns(b, num - mk, v - mk);
++            return;
++        }
++        bool more = v >= mk + a;
++        bw_u(b, more, 1);
++        if (!more) {
++            bw_u(b, v - mk, b2);
++            return;
++        }
++        i++, mk += a;
++    }
++}
++
++/* The inverse of read_global_param */
++static void av1_global_param(struct bw *b, unsigned type, unsigned idx, int32_t value, int32_t prev, bool hp)
++{
++    unsigned abs_bits = 12, prec_bits = 15;
++    if (idx < 2) {
++        abs_bits = type == 1 ? 9 - !hp : 12;
++        prec_bits = type == 1 ? 3 - !hp : 6;
++    }
++    unsigned prec_diff = 16 - prec_bits;
++    int64_t round = idx % 3 == 2 ? 1 << 16 : 0, sub = idx % 3 == 2 ? 1 << prec_bits : 0, mx = 1 << abs_bits;
++    int64_t r = ((int64_t)prev >> prec_diff) - sub, x = ((int64_t)value - round) >> prec_diff;
++    if (x < -mx)
++        x = -mx;
++    if (x > mx)
++        x = mx;
++    if (r < -mx)
++        r = -mx;
++    if (r > mx)
++        r = mx;
++    unsigned n = 2 * mx + 1, ru = (unsigned)(r + mx), vu = (unsigned)(x + mx);
++    av1_subexp(b, n, (ru << 1) <= n ? av1_recenter(ru, vu) : av1_recenter(n - 1 - ru, n - 1 - vu));
++}
++
++static int av1_relative_dist(unsigned bits, unsigned a, unsigned b)
++{
++    int diff = (int)a - (int)b, m = 1 << (bits - 1);
++    return (diff & (m - 1)) - (diff & m);
++}
++
++static void av1_default_gm(int32_t gm[7][6])
++{
++    for (unsigned r = 0; r < 7; r++)
++        for (unsigned i = 0; i < 6; i++)
++            gm[r][i] = i % 3 == 2 ? 1 << 16 : 0;
++}
++
++struct av1_tiles {
++    unsigned cols, rows, cols_log2, rows_log2;
++    bool uniform;
++    uint32_t sb_cols, sb_rows;
++    uint16_t w[64], h[64]; /* in superblocks */
++};
++
++/* The guest's layout, checked against the frame size; uniform when it is one */
++static bool av1_tiles(const struct virgl_av1_picture_desc *d, unsigned width, unsigned height, struct av1_tiles *t)
++{
++    const __typeof__(d->picture_parameter) *p = &d->picture_parameter;
++    bool sb128 = p->seq_info_fields.use_128x128_superblock;
++    unsigned mi_cols = 2 * ((width + 7) >> 3), mi_rows = 2 * ((height + 7) >> 3);
++    unsigned sb_shift = sb128 ? 5 : 4, sb_size = sb_shift + 2;
++    t->sb_cols = sb128 ? (mi_cols + 31) >> 5 : (mi_cols + 15) >> 4;
++    t->sb_rows = sb128 ? (mi_rows + 31) >> 5 : (mi_rows + 15) >> 4;
++    t->cols = p->tile_cols, t->rows = p->tile_rows;
++    if (!t->cols || !t->rows || t->cols > 64 || t->rows > 64 || t->cols * t->rows > 256)
++        return false;
++    /* Mesa's start arrays end with the frame's size; its uniform widths repeat the first one */
++    if (p->tile_col_start_sb[0] || p->tile_row_start_sb[0] || p->tile_col_start_sb[t->cols] != t->sb_cols ||
++        p->tile_row_start_sb[t->rows] != t->sb_rows)
++        return false;
++    for (unsigned i = 0; i < t->cols; i++) {
++        if (p->tile_col_start_sb[i + 1] <= p->tile_col_start_sb[i])
++            return false;
++        t->w[i] = (uint16_t)(p->tile_col_start_sb[i + 1] - p->tile_col_start_sb[i]);
++    }
++    for (unsigned i = 0; i < t->rows; i++) {
++        if (p->tile_row_start_sb[i + 1] <= p->tile_row_start_sb[i])
++            return false;
++        t->h[i] = (uint16_t)(p->tile_row_start_sb[i + 1] - p->tile_row_start_sb[i]);
++    }
++    unsigned max_w_sb = 4096 >> sb_size, max_area_sb = (4096 * 2304) >> (2 * sb_size);
++    unsigned min_cols = tile_log2(max_w_sb, t->sb_cols), max_cols = tile_log2(1, MIN2(t->sb_cols, 64));
++    unsigned max_rows = tile_log2(1, MIN2(t->sb_rows, 64));
++    unsigned min_tiles = MAX2(min_cols, tile_log2(max_area_sb, t->sb_rows * t->sb_cols));
++    t->uniform = false;
++    for (unsigned cl = min_cols; cl <= max_cols && !t->uniform; cl++) {
++        unsigned w = (t->sb_cols + (1u << cl) - 1) >> cl, n = (t->sb_cols + w - 1) / w;
++        bool same = n == t->cols;
++        for (unsigned i = 0; same && i < n; i++)
++            same = p->tile_col_start_sb[i] == i * w;
++        if (!same)
++            continue;
++        for (unsigned rl = min_tiles > cl ? min_tiles - cl : 0; rl <= max_rows && !t->uniform; rl++) {
++            unsigned h = (t->sb_rows + (1u << rl) - 1) >> rl, m = (t->sb_rows + h - 1) / h;
++            bool rs = m == t->rows;
++            for (unsigned i = 0; rs && i < m; i++)
++                rs = p->tile_row_start_sb[i] == i * h;
++            if (rs)
++                t->uniform = true, t->cols_log2 = cl, t->rows_log2 = rl;
++        }
++    }
++    if (!t->uniform) {
++        t->cols_log2 = tile_log2(1, t->cols);
++        t->rows_log2 = tile_log2(1, t->rows);
++    }
++    return true;
++}
++
++static void av1_write_tile_info(struct bw *b, const struct virgl_av1_picture_desc *d, const struct av1_tiles *t)
++{
++    const __typeof__(d->picture_parameter) *p = &d->picture_parameter;
++    bool sb128 = p->seq_info_fields.use_128x128_superblock;
++    unsigned sb_size = sb128 ? 7 : 6;
++    unsigned max_w_sb = 4096 >> sb_size, max_area_sb = (4096 * 2304) >> (2 * sb_size);
++    unsigned min_cols = tile_log2(max_w_sb, t->sb_cols), max_cols = tile_log2(1, MIN2(t->sb_cols, 64));
++    unsigned max_rows = tile_log2(1, MIN2(t->sb_rows, 64));
++    unsigned min_tiles = MAX2(min_cols, tile_log2(max_area_sb, t->sb_rows * t->sb_cols));
++
++    bw_u(b, t->uniform, 1);
++    if (t->uniform) {
++        for (unsigned l = min_cols; l < max_cols; l++) {
++            bw_u(b, l < t->cols_log2, 1);
++            if (l >= t->cols_log2)
++                break;
++        }
++        for (unsigned l = min_tiles > t->cols_log2 ? min_tiles - t->cols_log2 : 0; l < max_rows; l++) {
++            bw_u(b, l < t->rows_log2, 1);
++            if (l >= t->rows_log2)
++                break;
++        }
++    } else {
++        unsigned widest = 0;
++        for (unsigned i = 0, s = 0; i < t->cols; s += t->w[i], i++) {
++            bw_ns(b, MIN2(t->sb_cols - s, max_w_sb), t->w[i] - 1u);
++            widest = MAX2(widest, t->w[i]);
++        }
++        unsigned area = min_tiles ? (t->sb_rows * t->sb_cols) >> (min_tiles + 1) : t->sb_rows * t->sb_cols;
++        unsigned max_h_sb = MAX2(area / widest, 1);
++        for (unsigned i = 0, s = 0; i < t->rows; s += t->h[i], i++)
++            bw_ns(b, MIN2(t->sb_rows - s, max_h_sb), t->h[i] - 1u);
++    }
++    if (t->cols_log2 || t->rows_log2) {
++        bw_u(b, p->context_update_tile_id, t->rows_log2 + t->cols_log2);
++        bw_u(b, AV1_TILE_BYTES - 1, 2);
++    }
++}
++
++/* What the format description and the sequence header come from */
++struct av1_seq {
++    uint8_t profile, depth_idx, order_hint_bits, flags_a, flags_b;
++    uint16_t max_w, max_h;
++};
++
++static size_t av1_write_seq(const struct virgl_av1_picture_desc *d, uint8_t *out, size_t cap, unsigned *level)
++{
++    const __typeof__(d->picture_parameter) *p = &d->picture_parameter;
++    const __typeof__(p->seq_info_fields) *s = &p->seq_info_fields;
++    struct bw b = {0};
++    unsigned wb = MAX2(floor_log2(p->max_width - 1) + 1, 1), hb = MAX2(floor_log2(p->max_height - 1) + 1, 1);
++    unsigned area = (unsigned)p->max_width * p->max_height;
++
++    *level = area <= 2228224 ? 8 : area <= 8912896 ? 12 : 16; /* 4.0, 5.0, 6.0 */
++    bw_u(&b, p->profile, 3);
++    bw_u(&b, 0, 1); /* still_picture */
++    bw_u(&b, 0, 1); /* reduced_still_picture_header */
++    bw_u(&b, 0, 1); /* timing_info_present_flag */
++    bw_u(&b, 0, 1); /* initial_display_delay_present_flag */
++    bw_u(&b, 0, 5); /* operating_points_cnt_minus_1 */
++    bw_u(&b, 0, 12); /* operating_point_idc[0] */
++    bw_u(&b, *level, 5);
++    if (*level > 7)
++        bw_u(&b, 0, 1); /* seq_tier */
++    bw_u(&b, wb - 1, 4);
++    bw_u(&b, hb - 1, 4);
++    bw_u(&b, p->max_width - 1, wb);
++    bw_u(&b, p->max_height - 1, hb);
++    bw_u(&b, 0, 1); /* frame_id_numbers_present_flag: not carried */
++    bw_u(&b, s->use_128x128_superblock, 1);
++    bw_u(&b, s->enable_filter_intra, 1);
++    bw_u(&b, s->enable_intra_edge_filter, 1);
++    bw_u(&b, s->enable_interintra_compound, 1);
++    bw_u(&b, s->enable_masked_compound, 1);
++    bw_u(&b, 1, 1); /* enable_warped_motion: not carried; each frame codes allow_warped_motion */
++    bw_u(&b, s->enable_dual_filter, 1);
++    bw_u(&b, s->enable_order_hint, 1);
++    if (s->enable_order_hint) {
++        bw_u(&b, s->enable_jnt_comp, 1);
++        bw_u(&b, s->ref_frame_mvs, 1);
++    }
++    bw_u(&b, 1, 1); /* seq_choose_screen_content_tools: each frame codes it */
++    bw_u(&b, 1, 1); /* seq_choose_integer_mv */
++    if (s->enable_order_hint)
++        bw_u(&b, p->order_hint_bits_minus_1, 3);
++    bw_u(&b, 1, 1); /* enable_superres: not carried; each frame codes use_superres */
++    bw_u(&b, s->enable_cdef, 1);
++    bw_u(&b, 1, 1); /* enable_restoration: not carried; each frame codes lr_type */
++    /* color_config */
++    bw_u(&b, p->bit_depth_idx > 0, 1);
++    bw_u(&b, s->mono_chrome, 1);
++    bw_u(&b, 0, 1); /* color_description_present_flag */
++    bw_u(&b, 0, 1); /* color_range: decoding does not depend on it */
++    if (!s->mono_chrome) {
++        bw_u(&b, 0, 2); /* chroma_sample_position */
++        bw_u(&b, 1, 1); /* separate_uv_delta_q: each frame then codes the V deltas */
++    }
++    bw_u(&b, s->film_grain_params_present, 1);
++    return av1_obu(&b, AV1_OBU_SEQ, true, out, cap);
++}
++
++static void av1_delta_q(struct bw *b, int v)
++{
++    bw_u(b, v != 0, 1);
++    if (v)
++        bw_su(b, v, 7);
++}
++
++static void av1_write_quant(struct bw *b, const struct virgl_av1_picture_desc *d)
++{
++    const __typeof__(d->picture_parameter) *p = &d->picture_parameter;
++    bool diff = p->u_dc_delta_q != p->v_dc_delta_q || p->u_ac_delta_q != p->v_ac_delta_q;
++
++    bw_u(b, p->base_qindex, 8);
++    av1_delta_q(b, p->y_dc_delta_q);
++    if (!p->seq_info_fields.mono_chrome) {
++        bw_u(b, diff, 1); /* diff_uv_delta: the sequence header has separate_uv_delta_q */
++        av1_delta_q(b, p->u_dc_delta_q);
++        av1_delta_q(b, p->u_ac_delta_q);
++        if (diff) {
++            av1_delta_q(b, p->v_dc_delta_q);
++            av1_delta_q(b, p->v_ac_delta_q);
++        }
++    }
++    bw_u(b, p->qmatrix_fields.using_qmatrix, 1);
++    if (p->qmatrix_fields.using_qmatrix) {
++        bw_u(b, p->qmatrix_fields.qm_y, 4);
++        bw_u(b, p->qmatrix_fields.qm_u, 4);
++        if (!p->seq_info_fields.mono_chrome)
++            bw_u(b, p->qmatrix_fields.qm_v, 4);
++    }
++}
++
++/* The frame header, with the VideoToolbox slots for the references and refresh as the frame's refreshed slots */
++static size_t av1_write_frame_header(struct virgl_video_codec *c, const struct virgl_av1_picture_desc *d,
++                                     const uint8_t vt_idx[7], uint8_t refresh, const struct av1_tiles *t,
++                                     bool lossless, uint8_t *out, size_t cap)
++{
++    const __typeof__(d->picture_parameter) *p = &d->picture_parameter;
++    const __typeof__(p->seq_info_fields) *s = &p->seq_info_fields;
++    const __typeof__(p->pic_info_fields) *f = &p->pic_info_fields;
++    struct bw b = {0};
++    unsigned type = f->frame_type, oh_bits = s->enable_order_hint ? p->order_hint_bits_minus_1 + 1 : 0;
++    bool intra = type == AV1_KEY || type == AV1_INTRA_ONLY;
++    bool show = f->show_frame || type != AV1_KEY; /* hidden non-key frames are written as shown */
++    bool er = (type == AV1_KEY && show) || f->error_resilient_mode;
++    bool sct = f->allow_screen_content_tools, fimv = sct && f->force_integer_mv;
++    unsigned prim = intra || er ? AV1_NONE : p->primary_ref_frame;
++    unsigned wb = MAX2(floor_log2(p->max_width - 1) + 1, 1), hb = MAX2(floor_log2(p->max_height - 1) + 1, 1);
++    unsigned denom = f->use_superres ? p->superres_scale_denominator : 8;
++    unsigned down_w = (p->frame_width * 8 + denom / 2) / denom;
++    bool intrabc = intra && sct && down_w == p->frame_width && f->allow_intrabc;
++    const struct av1_slot *prev = prim != AV1_NONE ? &c->av1_slots[vt_idx[prim]] : NULL;
++    int32_t prev_gm[7][6];
++    unsigned planes = s->mono_chrome ? 1 : 3;
++
++    bw_u(&b, 0, 1); /* show_existing_frame */
++    bw_u(&b, type, 2);
++    bw_u(&b, show, 1);
++    if (!show)
++        bw_u(&b, f->showable_frame, 1);
++    if (!(type == AV1_KEY && show))
++        bw_u(&b, f->error_resilient_mode, 1);
++    bw_u(&b, f->disable_cdf_update, 1);
++    bw_u(&b, sct, 1);
++    if (sct)
++        bw_u(&b, f->force_integer_mv, 1);
++    bw_u(&b, 1, 1); /* frame_size_override_flag: the size is always coded */
++    bw_u(&b, p->order_hint, oh_bits);
++    if (!(intra || er))
++        bw_u(&b, prim, 3);
++    if (!(type == AV1_KEY && show)) {
++        bw_u(&b, refresh, 8);
++        if (er && s->enable_order_hint && (!intra || refresh != 0xff))
++            for (unsigned i = 0; i < 8; i++)
++                bw_u(&b, c->av1_slots[i].order_hint, oh_bits);
++    }
++    if (!intra) {
++        if (s->enable_order_hint)
++            bw_u(&b, 0, 1); /* frame_refs_short_signaling */
++        for (unsigned i = 0; i < 7; i++)
++            bw_u(&b, vt_idx[i], 3);
++        if (!er)
++            for (unsigned i = 0; i < 7; i++)
++                bw_u(&b, 0, 1); /* found_ref */
++    }
++    /* frame_size, superres_params, render_size */
++    bw_u(&b, p->frame_width - 1, wb);
++    bw_u(&b, p->frame_height - 1, hb);
++    bw_u(&b, f->use_superres, 1);
++    if (f->use_superres)
++        bw_u(&b, denom - 9, 3);
++    bw_u(&b, 0, 1);
++    if (intra) {
++        if (sct && down_w == p->frame_width)
++            bw_u(&b, intrabc, 1);
++    } else {
++        if (!fimv)
++            bw_u(&b, f->allow_high_precision_mv, 1);
++        bw_u(&b, p->interp_filter == 4, 1);
++        if (p->interp_filter != 4)
++            bw_u(&b, p->interp_filter, 2);
++        bw_u(&b, f->is_motion_mode_switchable, 1);
++        if (!(er || !s->ref_frame_mvs))
++            bw_u(&b, f->use_ref_frame_mvs, 1);
++    }
++    if (!f->disable_cdf_update)
++        bw_u(&b, f->disable_frame_end_update_cdf, 1);
++    av1_write_tile_info(&b, d, t);
++    av1_write_quant(&b, d);
++    /* segmentation_params */
++    const __typeof__(p->seg_info) *seg = &p->seg_info;
++    bw_u(&b, seg->segment_info_fields.enabled, 1);
++    bool update_data = prim == AV1_NONE || seg->segment_info_fields.update_data;
++    if (seg->segment_info_fields.enabled) {
++        if (prim != AV1_NONE) {
++            bw_u(&b, seg->segment_info_fields.update_map, 1);
++            if (seg->segment_info_fields.update_map)
++                bw_u(&b, seg->segment_info_fields.temporal_update, 1);
++            bw_u(&b, seg->segment_info_fields.update_data, 1);
++        }
++        if (update_data)
++            for (unsigned i = 0; i < 8; i++)
++                for (unsigned j = 0; j < 8; j++) {
++                    bool on = seg->feature_mask[i] >> j & 1;
++                    bw_u(&b, on, 1);
++                    if (on && av1_seg_signed[j])
++                        bw_su(&b, seg->feature_data[i][j], 1 + av1_seg_bits[j]);
++                    else if (on)
++                        bw_u(&b, seg->feature_data[i][j], av1_seg_bits[j]);
++                }
++    }
++    /* delta_q_params, delta_lf_params */
++    const __typeof__(p->mode_control_fields) *mc = &p->mode_control_fields;
++    if (p->base_qindex) {
++        bw_u(&b, mc->delta_q_present_flag, 1);
++        if (mc->delta_q_present_flag) {
++            bw_u(&b, mc->log2_delta_q_res, 2);
++            if (!intrabc)
++                bw_u(&b, mc->delta_lf_present_flag, 1);
++            if (!intrabc && mc->delta_lf_present_flag) {
++                bw_u(&b, mc->log2_delta_lf_res, 2);
++                bw_u(&b, mc->delta_lf_multi, 1);
++            }
++        }
++    }
++    bool all_lossless = lossless && down_w == p->frame_width;
++    /* loop_filter_params */
++    if (!lossless && !intrabc) {
++        bw_u(&b, p->filter_level[0], 6);
++        bw_u(&b, p->filter_level[1], 6);
++        if (planes > 1 && (p->filter_level[0] || p->filter_level[1])) {
++            bw_u(&b, p->filter_level_u, 6);
++            bw_u(&b, p->filter_level_v, 6);
++        }
++        bw_u(&b, p->loop_filter_info_fields.sharpness_level, 3);
++        bw_u(&b, p->loop_filter_info_fields.mode_ref_delta_enabled, 1);
++        if (p->loop_filter_info_fields.mode_ref_delta_enabled) {
++            bw_u(&b, p->loop_filter_info_fields.mode_ref_delta_update, 1);
++            /* the fields are the deltas in effect: write each one */
++            if (p->loop_filter_info_fields.mode_ref_delta_update) {
++                for (unsigned i = 0; i < 8; i++) {
++                    bw_u(&b, 1, 1);
++                    bw_su(&b, p->ref_deltas[i], 7);
++                }
++                for (unsigned i = 0; i < 2; i++) {
++                    bw_u(&b, 1, 1);
++                    bw_su(&b, p->mode_deltas[i], 7);
++                }
++            }
++        }
++    }
++    /* cdef_params */
++    if (!lossless && !intrabc && s->enable_cdef) {
++        bw_u(&b, p->cdef_damping_minus_3, 2);
++        bw_u(&b, p->cdef_bits, 2);
++        for (unsigned i = 0; i < (1u << (p->cdef_bits & 3)); i++) {
++            bw_u(&b, p->cdef_y_strengths[i] >> 2, 4);
++            bw_u(&b, p->cdef_y_strengths[i] & 3, 2);
++            if (planes > 1) {
++                bw_u(&b, p->cdef_uv_strengths[i] >> 2, 4);
++                bw_u(&b, p->cdef_uv_strengths[i] & 3, 2);
++            }
++        }
++    }
++    /* lr_params: VA's types are FrameRestorationType; the bitstream's lr_type is Remap_Lr_Type's inverse */
++    if (!all_lossless && !intrabc) {
++        static const uint8_t lr_code[4] = {0, 2, 3, 1};
++        const __typeof__(p->loop_restoration_fields) *lr = &p->loop_restoration_fields;
++        unsigned types[3] = {lr->yframe_restoration_type, lr->cbframe_restoration_type, lr->crframe_restoration_type};
++        bool uses = false, chroma = false;
++        for (unsigned i = 0; i < planes; i++) {
++            bw_u(&b, lr_code[types[i] & 3], 2);
++            uses |= types[i] != 0;
++            chroma |= i && types[i];
++        }
++        if (uses) {
++            unsigned shift = lr->lr_unit_shift;
++            if (s->use_128x128_superblock) {
++                bw_u(&b, shift > 1, 1);
++            } else {
++                bw_u(&b, shift > 0, 1);
++                if (shift)
++                    bw_u(&b, shift > 1, 1);
++            }
++            if (chroma)
++                bw_u(&b, lr->lr_uv_shift, 1);
++        }
++    }
++    /* read_tx_mode, frame_reference_mode, skip_mode_params */
++    if (!lossless)
++        bw_u(&b, mc->tx_mode == 2, 1);
++    if (!intra) {
++        bw_u(&b, mc->reference_select, 1);
++        bool skip_ok = false;
++        if (mc->reference_select && s->enable_order_hint) {
++            int fwd = -1, bwd = -1, fwd2 = -1;
++            unsigned fh = 0, bh = 0, fh2 = 0;
++            for (unsigned i = 0; i < 7; i++) {
++                unsigned h = c->av1_slots[vt_idx[i]].order_hint;
++                if (av1_relative_dist(oh_bits, h, p->order_hint) < 0) {
++                    if (fwd < 0 || av1_relative_dist(oh_bits, h, fh) > 0)
++                        fwd = (int)i, fh = h;
++                } else if (av1_relative_dist(oh_bits, h, p->order_hint) > 0) {
++                    if (bwd < 0 || av1_relative_dist(oh_bits, h, bh) < 0)
++                        bwd = (int)i, bh = h;
++                }
++            }
++            if (fwd >= 0 && bwd >= 0) {
++                skip_ok = true;
++            } else if (fwd >= 0) {
++                for (unsigned i = 0; i < 7; i++) {
++                    unsigned h = c->av1_slots[vt_idx[i]].order_hint;
++                    if (av1_relative_dist(oh_bits, h, fh) < 0 && (fwd2 < 0 || av1_relative_dist(oh_bits, h, fh2) > 0))
++                        fwd2 = (int)i, fh2 = h;
++                }
++                skip_ok = fwd2 >= 0;
++            }
++        }
++        if (skip_ok)
++            bw_u(&b, mc->skip_mode_present, 1);
++        if (!er)
++            bw_u(&b, f->allow_warped_motion, 1);
++    }
++    bw_u(&b, mc->reduced_tx_set_used, 1);
++    /* global_motion_params, against the primary reference's */
++    if (prev)
++        memcpy(prev_gm, prev->gm, sizeof(prev_gm));
++    else
++        av1_default_gm(prev_gm);
++    if (!intra) {
++        bool hp = !fimv && f->allow_high_precision_mv;
++        for (unsigned r = 0; r < 7; r++) {
++            unsigned gt = p->wm[r].wmtype & 3;
++            const int32_t *m = p->wm[r].wmmat;
++            bw_u(&b, gt != 0, 1);
++            if (gt) {
++                bw_u(&b, gt == 2, 1);
++                if (gt != 2)
++                    bw_u(&b, gt == 1, 1);
++            }
++            if (gt >= 2) {
++                av1_global_param(&b, gt, 2, m[2], prev_gm[r][2], hp);
++                av1_global_param(&b, gt, 3, m[3], prev_gm[r][3], hp);
++                if (gt == 3) {
++                    av1_global_param(&b, gt, 4, m[4], prev_gm[r][4], hp);
++                    av1_global_param(&b, gt, 5, m[5], prev_gm[r][5], hp);
++                }
++            }
++            if (gt >= 1) {
++                av1_global_param(&b, gt, 0, m[0], prev_gm[r][0], hp);
++                av1_global_param(&b, gt, 1, m[1], prev_gm[r][1], hp);
++            }
++        }
++    }
++    /* film_grain_params, always with update_grain */
++    if (s->film_grain_params_present && (show || f->showable_frame)) {
++        const __typeof__(p->film_grain_info) *g = &p->film_grain_info;
++        const __typeof__(g->film_grain_info_fields) *gf = &g->film_grain_info_fields;
++        bw_u(&b, gf->apply_grain, 1);
++        if (gf->apply_grain) {
++            unsigned ny = MIN2(g->num_y_points, 14), ncb = MIN2(g->num_cb_points, 10), ncr = MIN2(g->num_cr_points, 10);
++            bool csfl = !s->mono_chrome && gf->chroma_scaling_from_luma;
++            bw_u(&b, g->grain_seed, 16);
++            if (type == 1)
++                bw_u(&b, 1, 1);
++            bw_u(&b, ny, 4);
++            for (unsigned i = 0; i < ny; i++) {
++                bw_u(&b, g->point_y_value[i], 8);
++                bw_u(&b, g->point_y_scaling[i], 8);
++            }
++            if (!s->mono_chrome)
++                bw_u(&b, csfl, 1);
++            if (s->mono_chrome || csfl || !ny) {
++                ncb = ncr = 0;
++            } else {
++                bw_u(&b, ncb, 4);
++                for (unsigned i = 0; i < ncb; i++) {
++                    bw_u(&b, g->point_cb_value[i], 8);
++                    bw_u(&b, g->point_cb_scaling[i], 8);
++                }
++                bw_u(&b, ncr, 4);
++                for (unsigned i = 0; i < ncr; i++) {
++                    bw_u(&b, g->point_cr_value[i], 8);
++                    bw_u(&b, g->point_cr_scaling[i], 8);
++                }
++            }
++            bw_u(&b, gf->grain_scaling_minus_8, 2);
++            bw_u(&b, gf->ar_coeff_lag, 2);
++            unsigned lag = gf->ar_coeff_lag, pos_y = 2 * lag * (lag + 1), pos_c = pos_y + (ny ? 1 : 0);
++            for (unsigned i = 0; ny && i < pos_y; i++)
++                bw_u(&b, (uint32_t)(g->ar_coeffs_y[i] + 128), 8);
++            for (unsigned i = 0; (csfl || ncb) && i < pos_c; i++)
++                bw_u(&b, (uint32_t)(g->ar_coeffs_cb[i] + 128), 8);
++            for (unsigned i = 0; (csfl || ncr) && i < pos_c; i++)
++                bw_u(&b, (uint32_t)(g->ar_coeffs_cr[i] + 128), 8);
++            bw_u(&b, gf->ar_coeff_shift_minus_6, 2);
++            bw_u(&b, gf->grain_scale_shift, 2);
++            if (ncb) {
++                bw_u(&b, g->cb_mult, 8);
++                bw_u(&b, g->cb_luma_mult, 8);
++                bw_u(&b, g->cb_offset, 9);
++            }
++            if (ncr) {
++                bw_u(&b, g->cr_mult, 8);
++                bw_u(&b, g->cr_luma_mult, 8);
++                bw_u(&b, g->cr_offset, 9);
++            }
++            bw_u(&b, gf->overlap_flag, 1);
++            bw_u(&b, gf->clip_to_restricted_range, 1);
++        }
++    }
++    return av1_obu(&b, AV1_OBU_FH, true, out, cap);
++}
++
++/* The segment features in effect: the frame's, or its primary reference's when it keeps them */
++static void av1_seg(const struct virgl_av1_picture_desc *d, const struct av1_slot *prev, struct av1_slot *out)
++{
++    const __typeof__(d->picture_parameter.seg_info) *seg = &d->picture_parameter.seg_info;
++    out->seg_enabled = seg->segment_info_fields.enabled;
++    if (!out->seg_enabled) {
++        memset(out->seg_mask, 0, sizeof(out->seg_mask));
++        memset(out->seg_data, 0, sizeof(out->seg_data));
++    } else if (!prev || seg->segment_info_fields.update_data) {
++        memcpy(out->seg_mask, seg->feature_mask, sizeof(out->seg_mask));
++        for (unsigned i = 0; i < 8; i++)
++            for (unsigned j = 0; j < 8; j++) {
++                int v = seg->feature_data[i][j], m = av1_seg_max[j];
++                out->seg_data[i][j] = (int16_t)(v < (av1_seg_signed[j] ? -m : 0) ? (av1_seg_signed[j] ? -m : 0) : v > m ? m : v);
++            }
++    } else {
++        memcpy(out->seg_mask, prev->seg_mask, sizeof(out->seg_mask));
++        memcpy(out->seg_data, prev->seg_data, sizeof(out->seg_data));
++    }
++}
++
++static bool av1_coded_lossless(const struct virgl_av1_picture_desc *d, const struct av1_slot *seg)
++{
++    const __typeof__(d->picture_parameter) *p = &d->picture_parameter;
++    if (p->y_dc_delta_q || p->u_dc_delta_q || p->u_ac_delta_q || p->v_dc_delta_q || p->v_ac_delta_q)
++        return false;
++    for (unsigned i = 0; i < 8; i++) {
++        int q = p->base_qindex;
++        if (seg->seg_enabled && (seg->seg_mask[i] & 1))
++            q += seg->seg_data[i][0];
++        if (q > 0)
++            return false;
++    }
++    return true;
++}
++
++static uint8_t *av1_reserve(struct virgl_video_codec *c, size_t need)
++{
++    if (need > c->sample_cap) {
++        uint8_t *n = realloc(c->sample, need);
++        if (!n)
++            return NULL;
++        c->sample = n, c->sample_cap = need;
++    }
++    return c->sample;
++}
++
++/* [sequence header] frame header, tile group: one sample */
++static size_t av1_build(struct virgl_video_codec *c, const struct virgl_av1_picture_desc *d, const uint8_t *data,
++                        size_t len, const uint8_t vt_idx[7], uint8_t refresh, bool with_seq)
++{
++    const __typeof__(d->picture_parameter) *p = &d->picture_parameter;
++    const __typeof__(d->slice_parameter) *sp = &d->slice_parameter;
++    unsigned denom = p->pic_info_fields.use_superres ? p->superres_scale_denominator : 8;
++    unsigned down_w = (p->frame_width * 8 + denom / 2) / denom;
++    bool intra = p->pic_info_fields.frame_type == AV1_KEY || p->pic_info_fields.frame_type == AV1_INTRA_ONLY;
++    unsigned prim = intra || p->pic_info_fields.error_resilient_mode ? AV1_NONE : p->primary_ref_frame;
++    struct av1_tiles t;
++    struct av1_slot seg;
++    int16_t order[256];
++
++    if (!av1_tiles(d, down_w, p->frame_height, &t)) {
++        virgl_warn("vt: AV1 tile layout refused (%ux%u tiles)\n", p->tile_cols, p->tile_rows);
++        return 0;
++    }
++    unsigned num = t.cols * t.rows;
++    if (sp->slice_count != num) {
++        virgl_warn("vt: AV1 frame with %u of %u tiles\n", sp->slice_count, num);
++        return 0;
++    }
++    memset(order, 0xff, sizeof(order));
++    size_t tiles = 0;
++    for (unsigned i = 0; i < num; i++) {
++        unsigned r = sp->slice_data_row[i], col = sp->slice_data_col[i], k = r * t.cols + col;
++        uint64_t end = (uint64_t)sp->slice_data_offset[i] + sp->slice_data_size[i];
++        if (r >= t.rows || col >= t.cols || order[k] >= 0 || !sp->slice_data_size[i] || end > len) {
++            virgl_warn("vt: AV1 tile %u refused\n", i);
++            return 0;
++        }
++        order[k] = (int16_t)i;
++        tiles += sp->slice_data_size[i];
++    }
++    /* overlapping tiles would make the sample up to 256 times the guest's data */
++    if (tiles > len) {
++        virgl_warn("vt: AV1 tiles have %zu bytes in %zu\n", tiles, len);
++        return 0;
++    }
++    av1_seg(d, prim != AV1_NONE ? &c->av1_slots[vt_idx[prim]] : NULL, &seg);
++    bool lossless = av1_coded_lossless(d, &seg);
++
++    size_t need = (with_seq ? c->av1_seq_len : 0) + AV1_HDR_MAX + 16 + tiles + AV1_TILE_BYTES * num;
++    uint8_t *out = av1_reserve(c, need);
++    size_t o = 0, n;
++    if (!out)
++        return 0;
++    if (with_seq) {
++        memcpy(out, c->av1_seq, c->av1_seq_len);
++        o = c->av1_seq_len;
++    }
++    n = av1_write_frame_header(c, d, vt_idx, refresh, &t, lossless, out + o, AV1_HDR_MAX);
++    if (!n) {
++        virgl_warn("vt: no AV1 frame header\n");
++        return 0;
++    }
++    o += n;
++    /* tile_start_and_end_present_flag 0: one group with every tile, then byte_alignment */
++    size_t payload = (num > 1) + tiles + AV1_TILE_BYTES * (num - 1);
++    out[o++] = AV1_OBU_TG << 3 | 2;
++    bw_leb128(out, &o, payload);
++    if (num > 1)
++        out[o++] = 0;
++    for (unsigned k = 0; k < num; k++) {
++        unsigned i = (unsigned)order[k];
++        uint32_t size = sp->slice_data_size[i];
++        if (k != num - 1)
++            for (unsigned b = 0; b < AV1_TILE_BYTES; b++)
++                out[o++] = (uint8_t)((size - 1) >> (8 * b));
++        memcpy(out + o, data + sp->slice_data_offset[i], size);
++        o += size;
++    }
++    return o;
++}
++
++static CMVideoFormatDescriptionRef av1_format(const struct virgl_video_codec *c, const struct virgl_av1_picture_desc *d,
++                                              unsigned level)
++{
++    const __typeof__(d->picture_parameter) *p = &d->picture_parameter;
++    uint8_t av1c[4 + sizeof(c->av1_seq)];
++    av1c[0] = 0x81; /* marker, version 1 */
++    av1c[1] = (uint8_t)(p->profile << 5 | level);
++    av1c[2] = (uint8_t)((p->bit_depth_idx > 0) << 6 | p->seq_info_fields.mono_chrome << 4 | 1 << 3 | 1 << 2);
++    av1c[3] = 0;
++    memcpy(av1c + 4, c->av1_seq, c->av1_seq_len);
++    CFDataRef data = CFDataCreate(NULL, av1c, (CFIndex)(4 + c->av1_seq_len));
++    CFMutableDictionaryRef atoms = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks,
++                                                             &kCFTypeDictionaryValueCallBacks);
++    CFMutableDictionaryRef ext = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks,
++                                                           &kCFTypeDictionaryValueCallBacks);
++    CMVideoFormatDescriptionRef fmt = NULL;
++
++    CFDictionarySetValue(atoms, CFSTR("av1C"), data);
++    CFDictionarySetValue(ext, kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms, atoms);
++    OSStatus st = CMVideoFormatDescriptionCreate(NULL, kCMVideoCodecType_AV1, p->max_width, p->max_height, ext, &fmt);
++    CFRelease(ext);
++    CFRelease(atoms);
++    CFRelease(data);
++    if (st != noErr) {
++        virgl_error("vt: no AV1 format description (%d)\n", (int)st);
++        return NULL;
++    }
++    return fmt;
++}
++
++static int av1_take(struct virgl_video_codec *c, const struct virgl_av1_picture_desc *d, unsigned num_buffers,
++                    const void *const *buffers, const unsigned *sizes)
++{
++    const __typeof__(d->picture_parameter) *p = &d->picture_parameter;
++    unsigned type = p->pic_info_fields.frame_type;
++
++    if (p->profile != 0 || p->bit_depth_idx > 1 || !p->frame_width || !p->frame_height ||
++        p->frame_width > p->max_width || p->frame_height > p->max_height || p->max_width > 4096 ||
++        p->max_height > 4096 || type == AV1_SWITCH || p->pic_info_fields.large_scale_tile || p->cdef_bits > 3 ||
++        p->order_hint_bits_minus_1 > 7 ||
++        (p->pic_info_fields.use_superres && (p->superres_scale_denominator < 9 || p->superres_scale_denominator > 16)) ||
++        (!(type == AV1_KEY || type == AV1_INTRA_ONLY) && !p->pic_info_fields.error_resilient_mode &&
++         p->primary_ref_frame > AV1_NONE)) {
++        virgl_warn("vt: AV1 frame refused (profile %u, depth %u, %ux%u of %ux%u, type %u)\n", p->profile,
++                   p->bit_depth_idx, p->frame_width, p->frame_height, p->max_width, p->max_height, type);
++        return -1;
++    }
++    /* VA-API puts the grain into film_grain_target, which this back end does not write */
++    if (p->seq_info_fields.film_grain_params_present && p->film_grain_info.film_grain_info_fields.apply_grain) {
++        virgl_warn("vt: AV1 film grain is not supported\n");
++        return -1;
++    }
++    if (au_take_raw(c, num_buffers, buffers, sizes))
++        return -1;
++    memcpy(c->av1, d, sizeof(*d));
++    c->pic_idr = type == AV1_KEY && p->pic_info_fields.show_frame;
++    c->pic_intra = false; /* only a shown key frame resets every reference */
++    c->pic_shown = p->pic_info_fields.show_frame || type != AV1_KEY;
++    c->have_desc = true;
++    c->pic_slices = 1;
++    return 0;
++}
++
++static void av1_store(struct virgl_video_codec *c, const struct virgl_av1_picture_desc *d, const uint8_t vt_idx[7],
++                      uint8_t refresh, uint32_t surf)
++{
++    const __typeof__(d->picture_parameter) *p = &d->picture_parameter;
++    unsigned type = p->pic_info_fields.frame_type;
++    bool intra = type == AV1_KEY || type == AV1_INTRA_ONLY;
++    unsigned prim = intra || p->pic_info_fields.error_resilient_mode ? AV1_NONE : p->primary_ref_frame;
++    struct av1_slot s;
++
++    memset(&s, 0, sizeof(s));
++    s.surf = surf;
++    s.order_hint = p->order_hint;
++    av1_seg(d, prim != AV1_NONE ? &c->av1_slots[vt_idx[prim]] : NULL, &s);
++    av1_default_gm(s.gm);
++    for (unsigned r = 0; !intra && r < 7; r++) {
++        unsigned gt = p->wm[r].wmtype & 3;
++        const int32_t *m = p->wm[r].wmmat;
++        if (gt)
++            for (unsigned i = 0; i < 6; i++)
++                s.gm[r][i] = m[i];
++        if (gt && gt < 3)
++            s.gm[r][4] = -m[3], s.gm[r][5] = m[2];
++        if (gt == 1)
++            s.gm[r][2] = 1 << 16, s.gm[r][3] = 0, s.gm[r][4] = 0, s.gm[r][5] = 1 << 16;
++    }
++    /* the surface's older content is gone */
++    for (unsigned i = 0; i < 8; i++)
++        if (c->av1_slots[i].surf == surf)
++            c->av1_slots[i].surf = 0;
++    for (unsigned i = 0; i < 8; i++)
++        if (refresh >> i & 1)
++            c->av1_slots[i] = s;
++}
++
++static bool av1_held(const struct virgl_av1_picture_desc *d, uint32_t surf)
++{
++    for (unsigned i = 0; i < 8; i++)
++        if (surf && d->ref[i] == surf)
++            return true;
++    return false;
++}
++
++/* A slot that no later frame can need: empty, a surface the guest no longer holds, or a second copy */
++static int av1_free_slot(const struct virgl_video_codec *c, const struct virgl_av1_picture_desc *d)
++{
++    for (unsigned i = 0; i < 8; i++)
++        if (!c->av1_slots[i].surf || !av1_held(d, c->av1_slots[i].surf))
++            return (int)i;
++    for (unsigned i = 1; i < 8; i++)
++        for (unsigned k = 0; k < i; k++)
++            if (c->av1_slots[k].surf == c->av1_slots[i].surf)
++                return (int)i;
++    return -1;
++}
++
++static int av1_decode(struct virgl_video_codec *c)
++{
++    const struct virgl_av1_picture_desc *d = c->av1;
++    const __typeof__(d->picture_parameter) *p = &d->picture_parameter;
++    unsigned type = p->pic_info_fields.frame_type, level;
++    bool intra = type == AV1_KEY || type == AV1_INTRA_ONLY, key_shown = type == AV1_KEY && p->pic_info_fields.show_frame;
++    uint8_t vt_idx[7] = {0}, refresh, seq[sizeof(c->av1_seq)];
++    uint32_t surf = c->target->id;
++    size_t len;
++
++    if (!c->have_desc || !c->au_len)
++        return -1;
++    if (c->vt && c->pixfmt != vt_pixfmt(c->target->format)) {
++        virgl_warn("vt: the target format changed, new session\n");
++        vt_release_session(c);
++    }
++    c->pixfmt = vt_pixfmt(c->target->format);
++    if ((p->bit_depth_idx == 1) != (c->pixfmt == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange)) {
++        virgl_warn("vt: AV1 at %u bits into a %s target\n", p->bit_depth_idx ? 10 : 8, p->bit_depth_idx ? "8-bit" : "P010");
 +        return -1;
 +    }
 +
-+    CVPixelBufferRef out = c->out;
-+    c->out = NULL;
-+    if (callbacks && callbacks->decode_completed &&
-+        CVPixelBufferLockBaseAddress(out, kCVPixelBufferLock_ReadOnly) == kCVReturnSuccess) {
-+        struct virgl_video_dma_buf d;
-+        memset(&d, 0, sizeof(d));
-+        d.buf = c->target;
-+        d.flags = VIRGL_VIDEO_DMABUF_READ_ONLY;
-+        d.width = (uint32_t)CVPixelBufferGetWidth(out);
-+        d.height = (uint32_t)CVPixelBufferGetHeight(out);
-+        d.num_planes = (uint32_t)CVPixelBufferGetPlaneCount(out);
-+        if (d.num_planes > 4)
-+            d.num_planes = 4;
-+        for (uint32_t i = 0; i < d.num_planes; i++) {
-+            /* VideoToolbox's planar order is Y, Cb, Cr; YV12 is Y, Cr, Cb */
-+            size_t src = c->target->format == PIPE_FORMAT_YV12 && i ? 3 - i : i;
-+            d.planes[i].fd = -1;
-+            d.planes[i].data = CVPixelBufferGetBaseAddressOfPlane(out, src);
-+            d.planes[i].pitch = (uint32_t)CVPixelBufferGetBytesPerRowOfPlane(out, src);
-+            d.planes[i].width = (uint32_t)CVPixelBufferGetWidthOfPlane(out, src);
-+            d.planes[i].height = (uint32_t)CVPixelBufferGetHeightOfPlane(out, src);
-+            d.planes[i].cpp = c->pixfmt == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange && src == 1 ? 2 : 1;
++    /* the frame that had no slot: the guest's slots now show whether it is a reference */
++    if (c->pend_surf && !key_shown && av1_held(d, c->pend_surf)) {
++        int j = av1_free_slot(c, d);
++        size_t n = j < 0 ? 0 : av1_build(c, c->av1_pend, c->pend_au, c->pend_len, c->pend_idx, (uint8_t)(1u << j), false);
++        c->no_emit = true;
++        int rc = n ? vt_decode(c, c->sample, n, false) : -1;
++        c->no_emit = false;
++        if (rc) {
++            virgl_warn("vt: an AV1 reference could not be stored again\n");
++            c->pend_surf = 0;
++            return -1;
 +        }
-+        callbacks->decode_completed(c, &d);
-+        CVPixelBufferUnlockBaseAddress(out, kCVPixelBufferLock_ReadOnly);
++        av1_store(c, c->av1_pend, c->pend_idx, (uint8_t)(1u << j), c->pend_surf);
++        c->redecodes++;
 +    }
-+    CVPixelBufferRelease(out);
++    c->pend_surf = 0;
++
++    len = av1_write_seq(d, seq, sizeof(seq), &level);
++    if (!len)
++        return -1;
++    bool new_seq = len != c->av1_seq_len || memcmp(seq, c->av1_seq, len);
++    if (new_seq || !c->vt || !c->fmt) {
++        memcpy(c->av1_seq, seq, len);
++        c->av1_seq_len = len;
++        CMVideoFormatDescriptionRef fmt = av1_format(c, d, level);
++        if (!fmt)
++            return -1;
++        if (c->vt)
++            c->ps_updates++;
++        if (vt_set_format(c, fmt))
++            return -1;
++        new_seq = true;
++    }
++
++
++    if (!intra)
++        for (unsigned i = 0; i < 7; i++) {
++            uint32_t want = d->ref[p->ref_frame_idx[i] & 7];
++            int j = -1;
++            for (unsigned k = 0; want && k < 8 && j < 0; k++)
++                if (c->av1_slots[k].surf == want)
++                    j = (int)k;
++            if (j < 0) {
++                virgl_warn("vt: an AV1 reference is not in a VideoToolbox slot\n");
++                return -1;
++            }
++            vt_idx[i] = (uint8_t)j;
++        }
++    if (key_shown) {
++        refresh = 0xff;
++    } else {
++        int j = av1_free_slot(c, d);
++        refresh = j < 0 ? 0 : (uint8_t)(1u << j);
++    }
++    len = av1_build(c, d, c->au, c->au_len, vt_idx, refresh, key_shown || new_seq);
++    if (!len || vt_decode(c, c->sample, len, c->pic_shown))
++        return -1;
++    av1_store(c, d, vt_idx, refresh, surf);
++    if (!refresh) {
++        /* every slot is held: keep the frame until the next one shows which slot the guest freed */
++        uint8_t *a = c->pend_au;
++        size_t cap = c->pend_cap;
++        c->pend_au = c->au, c->pend_cap = c->au_cap, c->pend_len = c->au_len;
++        c->au = a, c->au_cap = cap, c->au_len = 0;
++        memcpy(c->av1_pend, d, sizeof(*d));
++        memcpy(c->pend_idx, vt_idx, sizeof(vt_idx));
++        c->pend_surf = surf;
++    }
 +    return 0;
 +}
 +
 +/* The guest sees no decode error: on one, the target keeps its old pixels until the next intra picture */
-+static int h264_end_frame(struct virgl_video_codec *c)
++static int vt_end_frame(struct virgl_video_codec *c)
 +{
 +    int rc;
 +
@@ -814,7 +2062,9 @@ index 0000000..7a3797c
 +    if (c->need_intra)
 +        virgl_info("vt: decoding again at frame %u, %u skipped so far\n", c->frames, c->skipped);
 +    c->need_intra = false;
-+    rc = h264_decode(c);
++    rc = c->kind == VT_AV1 ? av1_decode(c) : c->kind == VT_VP9 ? vp9_decode(c) : h264_decode(c);
++    if (rc)
++        c->pend_surf = 0;
 +    if (rc) {
 +        c->failed++;
 +        c->need_intra = true;
@@ -827,17 +2077,30 @@ index 0000000..7a3797c
 +        c->au = NULL;
 +        c->au_cap = 0;
 +    }
++    if (c->sample_cap > VT_AU_KEEP) {
++        free(c->sample);
++        c->sample = NULL;
++        c->sample_cap = 0;
++    }
 +    return rc;
 +}
 +
 +/* ---- virgl_video.h ---- */
 +
++static bool vp9_present, av1_present;
++
 +int virgl_video_init(int drm_fd, struct virgl_video_callbacks *cbs, unsigned int flags)
 +{
 +    (void)drm_fd, (void)flags;
 +    callbacks = cbs;
-+    virgl_info("vt: video decode on VideoToolbox, H.264 hardware decoder %s\n",
-+               VTIsHardwareDecodeSupported(kCMVideoCodecType_H264) ? "present" : "absent");
++    /* VP9 is a supplemental decoder: it needs this opt-in first */
++    if (__builtin_available(macOS 11.0, iOS 26.2, *))
++        VTRegisterSupplementalVideoDecoderIfAvailable(kCMVideoCodecType_VP9);
++    vp9_present = VTIsHardwareDecodeSupported(kCMVideoCodecType_VP9);
++    av1_present = VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1);
++    virgl_info("vt: video decode on VideoToolbox, hardware decoders: H.264 %s, VP9 %s, AV1 %s\n",
++               VTIsHardwareDecodeSupported(kCMVideoCodecType_H264) ? "present" : "absent",
++               vp9_present ? "present" : "absent", av1_present ? "present" : "absent");
 +    return 0;
 +}
 +
@@ -846,33 +2109,40 @@ index 0000000..7a3797c
 +    callbacks = NULL;
 +}
 +
++static void add_cap(union virgl_caps *caps, enum pipe_video_profile profile, unsigned level, unsigned format)
++{
++    struct virgl_video_caps *v = &caps->v2.video_caps[caps->v2.num_video_caps++];
++    memset(v, 0, sizeof(*v));
++    v->profile = profile;
++    v->entrypoint = PIPE_VIDEO_ENTRYPOINT_BITSTREAM;
++    v->max_level = level;
++    v->max_width = 4096;
++    v->max_height = 4096;
++    v->prefered_format = format;
++    v->max_macroblocks = 0xffff;
++    v->npot_texture = 1;
++    v->supports_progressive = 1;
++}
++
 +int virgl_video_fill_caps(union virgl_caps *caps)
 +{
-+    static const enum pipe_video_profile profiles[] = {
-+        PIPE_VIDEO_PROFILE_MPEG4_AVC_CONSTRAINED_BASELINE,
-+        PIPE_VIDEO_PROFILE_MPEG4_AVC_MAIN,
-+        PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH,
-+    };
-+
 +    if (!caps)
 +        return -1;
 +    caps->v2.num_video_caps = 0;
 +    /* no init: the embedder did not ask for video */
-+    if (!callbacks || !VTIsHardwareDecodeSupported(kCMVideoCodecType_H264))
++    if (!callbacks)
 +        return 0;
-+    for (unsigned i = 0; i < sizeof(profiles) / sizeof(profiles[0]); i++) {
-+        struct virgl_video_caps *v = &caps->v2.video_caps[caps->v2.num_video_caps++];
-+        memset(v, 0, sizeof(*v));
-+        v->profile = profiles[i];
-+        v->entrypoint = PIPE_VIDEO_ENTRYPOINT_BITSTREAM;
-+        v->max_level = 52;
-+        v->max_width = 4096;
-+        v->max_height = 4096;
-+        v->prefered_format = VT_VIRGL_FORMAT_NV12;
-+        v->max_macroblocks = 0xffff;
-+        v->npot_texture = 1;
-+        v->supports_progressive = 1;
++    if (VTIsHardwareDecodeSupported(kCMVideoCodecType_H264)) {
++        add_cap(caps, PIPE_VIDEO_PROFILE_MPEG4_AVC_CONSTRAINED_BASELINE, 52, VT_VIRGL_FORMAT_NV12);
++        add_cap(caps, PIPE_VIDEO_PROFILE_MPEG4_AVC_MAIN, 52, VT_VIRGL_FORMAT_NV12);
++        add_cap(caps, PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH, 52, VT_VIRGL_FORMAT_NV12);
 +    }
++    if (vp9_present) {
++        add_cap(caps, PIPE_VIDEO_PROFILE_VP9_PROFILE0, 62, VT_VIRGL_FORMAT_NV12);
++        add_cap(caps, PIPE_VIDEO_PROFILE_VP9_PROFILE2, 62, VT_VIRGL_FORMAT_P010);
++    }
++    if (av1_present)
++        add_cap(caps, PIPE_VIDEO_PROFILE_AV1_MAIN, 23, VT_VIRGL_FORMAT_NV12);
 +    return 0;
 +}
 +
@@ -880,7 +2150,7 @@ index 0000000..7a3797c
 +{
 +    struct virgl_video_codec *c;
 +
-+    if (!args || args->entrypoint != PIPE_VIDEO_ENTRYPOINT_BITSTREAM || !is_h264(args->profile) ||
++    if (!args || args->entrypoint != PIPE_VIDEO_ENTRYPOINT_BITSTREAM || !(is_h264(args->profile) || is_vp9(args->profile) || is_av1(args->profile)) ||
 +        !args->width || !args->height || args->width > 4096 || args->height > 4096) {
 +        virgl_warn("vt: codec refused (profile %d, entrypoint %d, %ux%u)\n", args ? (int)args->profile : -1,
 +                   args ? (int)args->entrypoint : -1, args ? args->width : 0, args ? args->height : 0);
@@ -898,6 +2168,18 @@ index 0000000..7a3797c
 +    c->height = args->height;
 +    c->opaque = args->opaque;
 +    c->pps_id = -1;
++    c->kind = is_av1(args->profile) ? VT_AV1 : is_vp9(args->profile) ? VT_VP9 : VT_H264;
++    if (c->kind == VT_AV1) {
++        c->av1 = calloc(1, sizeof(*c->av1));
++        c->av1_pend = calloc(1, sizeof(*c->av1_pend));
++        if (!c->av1 || !c->av1_pend) {
++            free(c->av1);
++            free(c->av1_pend);
++            free(c);
++            return NULL;
++        }
++    }
++    c->vp9_profile = args->profile == PIPE_VIDEO_PROFILE_VP9_PROFILE2 ? 2 : 0;
 +    return c;
 +}
 +
@@ -906,10 +2188,10 @@ index 0000000..7a3797c
 +    if (!codec)
 +        return;
 +    if (codec->frames || codec->failed || codec->skipped)
-+        virgl_info("vt: codec %ux%u done: %u frames decoded, %u failed, %u skipped, %u sessions, "
-+                   "%u parameter set updates, at most %u slices per decode call\n",
-+                   codec->width, codec->height, codec->frames, codec->failed, codec->skipped, codec->sessions,
-+                   codec->ps_updates, codec->max_slices_per_call);
++        virgl_info("vt: %s codec %ux%u done: %u frames decoded, %u failed, %u skipped, %u sessions, "
++                   "%u parameter set updates, at most %u slices per decode call, %u decoded again\n",
++                   vt_name(codec), codec->width, codec->height, codec->frames, codec->failed, codec->skipped,
++                   codec->sessions, codec->ps_updates, codec->max_slices_per_call, codec->redecodes);
 +    vt_release_session(codec);
 +    if (codec->out)
 +        CVPixelBufferRelease(codec->out);
@@ -918,6 +2200,10 @@ index 0000000..7a3797c
 +    for (unsigned i = 0; i < VT_MAX_PPS; i++)
 +        free(codec->pps[i].nal);
 +    free(codec->au);
++    free(codec->pend_au);
++    free(codec->sample);
++    free(codec->av1);
++    free(codec->av1_pend);
 +    free(codec);
 +}
 +
@@ -978,7 +2264,7 @@ index 0000000..7a3797c
 +
 +static bool decode_target(enum pipe_format f)
 +{
-+    return f == PIPE_FORMAT_NV12 || f == PIPE_FORMAT_IYUV || f == PIPE_FORMAT_YV12;
++    return f == PIPE_FORMAT_NV12 || f == PIPE_FORMAT_IYUV || f == PIPE_FORMAT_YV12 || f == PIPE_FORMAT_P010;
 +}
 +
 +int virgl_video_begin_frame(struct virgl_video_codec *codec, struct virgl_video_buffer *target)
@@ -986,7 +2272,7 @@ index 0000000..7a3797c
 +    if (!codec || !target)
 +        return -1;
 +    if (!decode_target(target->format)) {
-+        virgl_warn("vt: decode target format %d refused, only NV12, IYUV and YV12\n", (int)target->format);
++        virgl_warn("vt: decode target format %d refused, only NV12, IYUV, YV12 and P010\n", (int)target->format);
 +        codec->target = NULL;
 +        return -1;
 +    }
@@ -1005,6 +2291,10 @@ index 0000000..7a3797c
 +        virgl_error("vt: decode does not match the codec or the frame\n");
 +        return -1;
 +    }
++    if (codec->kind == VT_VP9)
++        return vp9_take(codec, &desc->vp9, num_buffers, buffers, sizes);
++    if (codec->kind == VT_AV1)
++        return av1_take(codec, &desc->av1, num_buffers, buffers, sizes);
 +    unsigned before = codec->pic_slices;
 +    memcpy(&codec->desc, &desc->h264, sizeof(codec->desc));
 +    codec->have_desc = true;
@@ -1037,7 +2327,7 @@ index 0000000..7a3797c
 +
 +    if (!codec || !target || target != codec->target)
 +        return -1;
-+    rc = h264_end_frame(codec);
++    rc = vt_end_frame(codec);
 +    vt_reset_picture(codec);
 +    return rc;
 +}
@@ -1145,116 +2435,406 @@ index ef033ad..5c12963 100644
  #endif
  
 diff --git a/src/vrend/vrend_video.c b/src/vrend/vrend_video.c
-index 57341d8..e66fd71 100644
+index 57341d8..003ed2b 100644
 --- a/src/vrend/vrend_video.c
 +++ b/src/vrend/vrend_video.c
-@@ -73,6 +73,7 @@
+@@ -73,6 +73,16 @@
  #include "vrend_winsys.h"
  #include "vrend_renderer.h"
  #include "vrend_video.h"
 +#include "util/u_format.h"
++
++#ifdef ENABLE_VIDEO_VT
++#include <time.h>
++#include <IOSurface/IOSurfaceRef.h>
++#ifndef GL_TEXTURE_RECTANGLE_ANGLE
++#define GL_TEXTURE_RECTANGLE_ANGLE 0x84F5
++#define GL_TEXTURE_BINDING_RECTANGLE_ANGLE 0x84F6
++#endif
++#endif
  
  struct vrend_context;
  
-@@ -80,8 +81,15 @@ struct vrend_video_context {
+@@ -80,7 +90,27 @@ struct vrend_video_context {
      struct vrend_context *ctx;
      struct list_head codecs;
      struct list_head buffers;
 +    unsigned num_codecs;
- };
- 
++};
++
 +/* Each codec can hold a hardware session and its surface pool */
 +#define VREND_VIDEO_MAX_CODECS 16
 +
 +/* Set by a vrend_video_init that worked: without it no context gets video, so the guest's video commands fail */
 +static bool video_enabled;
 +
++#ifdef ENABLE_VIDEO_VT
++/* The decoder's pool reuses a few surfaces, so their pbuffers are kept */
++#define VREND_VIDEO_MAX_SURFS 32
++
++struct vrend_video_surf {
++    IOSurfaceRef iosurface;         /* retained */
++    EGLDisplay dpy;
++    EGLSurface pb[3];               /* one per IOSurface plane, made on first use */
++    GLsync fence;                   /* the last GPU copy; until it signals the surface is in use, so the pool skips it */
++    uint32_t used;
+ };
++#endif
+ 
  struct vrend_video_codec {
      struct virgl_video_codec *codec;
-     uint32_t handle;
-@@ -146,6 +154,62 @@ static struct vrend_video_buffer *get_video_buffer(
+@@ -89,6 +119,13 @@ struct vrend_video_codec {
+     struct vrend_resource *dest_res;    /* encoding coded buffer */
+     struct vrend_video_context *ctx;
+     struct list_head head;
++#ifdef ENABLE_VIDEO_VT
++    struct vrend_video_surf surfs[VREND_VIDEO_MAX_SURFS];
++    uint32_t clock, pool;
++    bool gpu_off;                       /* the GPU copy failed once: CPU copies from then on */
++    unsigned gpu_frames, cpu_frames, num_surfs;
++    uint64_t copy_ns; /* thread CPU time in the copies */
++#endif
+ };
+ 
+ struct vrend_video_plane {
+@@ -146,6 +183,300 @@ static struct vrend_video_buffer *get_video_buffer(
  }
  
  
-+/* The planes are CPU pointers (VideoToolbox): upload them into the plane textures.
-+ * The plane resources are the guest's: only 2D R8 or R8G8 textures of the plane's pixel size take a copy. */
-+static int sync_cpu_planes_to_video_buffer(struct vrend_video_buffer *buf,
-+                                           const struct virgl_video_dma_buf *dmabuf)
++#ifdef ENABLE_VIDEO_VT
++static bool cpu_copy_only; /* VREND_VIDEO_CPU_COPY=1: for measurements */
++
++static enum virgl_formats vt_plane_format(const struct virgl_video_dma_buf_plane *p)
++{
++    if (p->channels == 1 && p->cpp == 1)
++        return VIRGL_FORMAT_R8_UNORM;
++    if (p->channels == 2 && p->cpp == 2)
++        return VIRGL_FORMAT_R8G8_UNORM;
++    if (p->channels == 1 && p->cpp == 2)
++        return VIRGL_FORMAT_R16_UNORM;
++    if (p->channels == 2 && p->cpp == 4)
++        return VIRGL_FORMAT_R16G16_UNORM;
++    return VIRGL_FORMAT_NONE;
++}
++
++/* The plane resources are the guest's: only a 2D texture of the plane's format takes a copy, inside both sizes */
++static struct vrend_resource *vt_plane_res(struct vrend_video_buffer *buf, unsigned i,
++                                           const struct virgl_video_dma_buf_plane *p, uint32_t *w, uint32_t *h)
 +{
 +    static bool warned;
-+    GLint align, row_length, unpack_buf;
++    enum virgl_formats want = vt_plane_format(p);
++    struct vrend_resource *res = vrend_renderer_ctx_res_lookup(buf->ctx->ctx, buf->planes[i].res_handle);
 +
++    if (!res) {
++        virgl_error("%s: res %d not found\n", __func__, buf->planes[i].res_handle);
++        return NULL;
++    }
++    if (want == VIRGL_FORMAT_NONE || res->target != GL_TEXTURE_2D || !(res->storage_bits & VREND_STORAGE_GL_TEXTURE) ||
++        !res->gl_id || res->base.format != want || !vrend_get_format_table_entry(res->base.format) ||
++        util_format_get_blocksize(res->base.format) != p->cpp) {
++        if (!warned)
++            virgl_warn("%s: plane %u: resource %d (format %d, target 0x%x) does not fit a %u-byte, %u-channel plane\n",
++                       __func__, i, buf->planes[i].res_handle, res->base.format, res->target, p->cpp, p->channels);
++        warned = true;
++        return NULL;
++    }
++    *w = MIN2(res->base.width0, p->width);
++    *h = MIN2(res->base.height0, p->height);
++    return *w && *h ? res : NULL;
++}
++
++/* Fallback when ANGLE cannot bind the planes */
++static int vt_cpu_copy(struct vrend_video_buffer *buf, const struct virgl_video_dma_buf *d)
++{
++    IOSurfaceRef surf = d->iosurface;
++    GLint align, row_length, unpack_buf, tex2d;
++
++    if (IOSurfaceLock(surf, kIOSurfaceLockReadOnly, NULL))
++        return -1;
 +    glGetIntegerv(GL_UNPACK_ALIGNMENT, &align);
 +    glGetIntegerv(GL_UNPACK_ROW_LENGTH, &row_length);
 +    glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &unpack_buf);
++    glGetIntegerv(GL_TEXTURE_BINDING_2D, &tex2d);
 +    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 +    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 +
-+    for (unsigned i = 0; i < dmabuf->num_planes && i < buf->num_planes; i++) {
-+        const struct virgl_video_dma_buf_plane *p = &dmabuf->planes[i];
-+        struct vrend_resource *res;
++    for (unsigned i = 0; i < d->num_planes && i < buf->num_planes; i++) {
++        const struct virgl_video_dma_buf_plane *p = &d->planes[i];
 +        const struct vrend_format_table *tf;
-+        enum virgl_formats want;
++        struct vrend_resource *res;
 +        uint32_t w, h;
++        const void *data;
 +
-+        res = vrend_renderer_ctx_res_lookup(buf->ctx->ctx, buf->planes[i].res_handle);
-+        if (!res) {
-+            virgl_error("%s: res %d not found\n", __func__, buf->planes[i].res_handle);
++        res = vt_plane_res(buf, i, p, &w, &h);
++        if (!res || p->plane >= IOSurfaceGetPlaneCount(surf))
 +            continue;
-+        }
-+        want = p->cpp == 2 ? VIRGL_FORMAT_R8G8_UNORM : VIRGL_FORMAT_R8_UNORM;
++        data = IOSurfaceGetBaseAddressOfPlane(surf, p->plane);
 +        tf = vrend_get_format_table_entry(res->base.format);
-+        if (!p->data || (p->cpp != 1 && p->cpp != 2) || res->target != GL_TEXTURE_2D ||
-+            !(res->storage_bits & VREND_STORAGE_GL_TEXTURE) || !res->gl_id ||
-+            res->base.format != want || !tf || util_format_get_blocksize(res->base.format) != p->cpp) {
-+            if (!warned)
-+                virgl_warn("%s: plane %u: resource %d (format %d, target 0x%x) does not fit a %u-byte plane\n",
-+                           __func__, i, buf->planes[i].res_handle, res->base.format, res->target, p->cpp);
-+            warned = true;
-+            continue;
-+        }
-+        w = MIN2(res->base.width0, p->width);
-+        h = MIN2(res->base.height0, p->height);
 +        /* GL reads h-1 strides plus one row: both inside the plane */
-+        if (!w || !h || p->pitch % p->cpp || p->pitch < w * p->cpp)
++        if (!data || p->pitch % p->cpp || p->pitch < w * p->cpp ||
++            p->pitch > IOSurfaceGetBytesPerRowOfPlane(surf, p->plane) || h > IOSurfaceGetHeightOfPlane(surf, p->plane))
 +            continue;
-+
 +        glPixelStorei(GL_UNPACK_ROW_LENGTH, p->pitch / p->cpp);
 +        glBindTexture(GL_TEXTURE_2D, res->gl_id);
-+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, tf->glformat, tf->gltype, p->data);
-+        glBindTexture(GL_TEXTURE_2D, 0);
++        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, tf->glformat, tf->gltype, data);
 +    }
 +
++    glBindTexture(GL_TEXTURE_2D, tex2d);
 +    glPixelStorei(GL_UNPACK_ROW_LENGTH, row_length);
 +    glPixelStorei(GL_UNPACK_ALIGNMENT, align);
 +    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, unpack_buf);
-+
++    IOSurfaceUnlock(surf, kIOSurfaceLockReadOnly, NULL);
 +    return 0;
 +}
++
++/* True when the surface's last copy is done (or wait_ns passed) */
++static bool vt_surf_retire(struct vrend_video_surf *s, GLuint64 wait_ns)
++{
++    if (!s->fence)
++        return true;
++    GLenum r = glClientWaitSync(s->fence, 0, wait_ns);
++    if (r == GL_TIMEOUT_EXPIRED && !wait_ns)
++        return false;
++    if (r == GL_TIMEOUT_EXPIRED || r == GL_WAIT_FAILED)
++        virgl_warn("vrend video: a GPU plane copy did not finish (0x%x)\n", r);
++    glDeleteSync(s->fence);
++    s->fence = NULL;
++    IOSurfaceDecrementUseCount(s->iosurface);
++    return true;
++}
++
++static void vt_surf_drop(struct vrend_video_surf *s)
++{
++    if (!s->iosurface)
++        return;
++    vt_surf_retire(s, 1000000000ull);
++    for (unsigned i = 0; i < 3; i++)
++        if (s->pb[i] != EGL_NO_SURFACE)
++            eglDestroySurface(s->dpy, s->pb[i]);
++    CFRelease(s->iosurface);
++    memset(s, 0, sizeof(*s));
++}
++
++/* A free slot first, then the least recently used idle one, then the least recently used */
++static int vt_surf_rank(const struct vrend_video_surf *s)
++{
++    return !s->iosurface ? 0 : !s->fence ? 1 : 2;
++}
++
++static struct vrend_video_surf *vt_surf_get(struct vrend_video_codec *cdc, IOSurfaceRef surf, EGLDisplay dpy)
++{
++    struct vrend_video_surf *s, *pick = NULL;
++
++    for (unsigned i = 0; i < VREND_VIDEO_MAX_SURFS; i++) {
++        s = &cdc->surfs[i];
++        if (s->iosurface == surf && s->dpy == dpy) {
++            s->used = ++cdc->clock;
++            return s;
++        }
++        if (s->iosurface)
++            vt_surf_retire(s, 0);
++        if (!pick || vt_surf_rank(s) < vt_surf_rank(pick) ||
++            (vt_surf_rank(s) == vt_surf_rank(pick) && s->used < pick->used))
++            pick = s;
++    }
++    vt_surf_drop(pick);
++    pick->iosurface = (IOSurfaceRef)CFRetain(surf);
++    pick->dpy = dpy;
++    pick->used = ++cdc->clock;
++    cdc->num_surfs++;
++    return pick;
++}
++
++static bool vt_pb_config(EGLDisplay dpy, EGLConfig *cfg, EGLint *bind_target)
++{
++    static EGLDisplay cfg_dpy = EGL_NO_DISPLAY;
++    static EGLConfig cfg_cfg;
++    static EGLint cfg_target;
++    EGLint ca[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT, EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RED_SIZE, 8,
++                   EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_BIND_TO_TEXTURE_RGBA, EGL_TRUE, EGL_NONE};
++    EGLint n = 0;
++
++    if (dpy == EGL_NO_DISPLAY)
++        return false;
++    if (dpy != cfg_dpy) {
++        if (!eglChooseConfig(dpy, ca, &cfg_cfg, 1, &n) || n < 1)
++            return false;
++        if (!eglGetConfigAttrib(dpy, cfg_cfg, EGL_BIND_TO_TEXTURE_TARGET_ANGLE, &cfg_target) ||
++            cfg_target != EGL_TEXTURE_RECTANGLE_ANGLE)
++            cfg_target = EGL_TEXTURE_2D;
++        cfg_dpy = dpy;
++    }
++    *cfg = cfg_cfg;
++    *bind_target = cfg_target;
++    return true;
++}
++
++/* Each plane of the IOSurface as a pbuffer, bound to a texture, copied on the GPU into the guest's plane texture */
++static int vt_gpu_copy(struct vrend_video_codec *cdc, struct vrend_video_buffer *buf, const struct virgl_video_dma_buf *d)
++{
++    EGLDisplay dpy = eglGetCurrentDisplay();
++    EGLConfig cfg;
++    EGLint bind_target;
++    GLenum target;
++    GLint read_fb, tex2d, texrect = 0;
++    GLuint tex, fb;
++    struct vrend_video_surf *s;
++    int rc = 0;
++
++    if (!vt_pb_config(dpy, &cfg, &bind_target))
++        return -1;
++    target = bind_target == EGL_TEXTURE_RECTANGLE_ANGLE ? GL_TEXTURE_RECTANGLE_ANGLE : GL_TEXTURE_2D;
++    s = vt_surf_get(cdc, d->iosurface, dpy);
++    vt_surf_retire(s, 1000000000ull); /* the pool skips surfaces in use, so this does not wait */
++
++    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_fb);
++    glGetIntegerv(GL_TEXTURE_BINDING_2D, &tex2d);
++    if (target != GL_TEXTURE_2D)
++        glGetIntegerv(GL_TEXTURE_BINDING_RECTANGLE_ANGLE, &texrect);
++    glGenTextures(1, &tex);
++    glGenFramebuffers(1, &fb);
++
++    for (unsigned i = 0; i < d->num_planes && i < buf->num_planes && !rc; i++) {
++        const struct virgl_video_dma_buf_plane *p = &d->planes[i];
++        bool deep = p->cpp == 2 * p->channels;
++        struct vrend_resource *res;
++        uint32_t w, h;
++
++        res = vt_plane_res(buf, i, p, &w, &h);
++        if (!res || p->plane >= 3)
++            continue;
++        if (s->pb[p->plane] == EGL_NO_SURFACE) {
++            EGLint sa[] = {EGL_WIDTH, (EGLint)p->width, EGL_HEIGHT, (EGLint)p->height,
++                           EGL_IOSURFACE_PLANE_ANGLE, (EGLint)p->plane, EGL_TEXTURE_TARGET, bind_target,
++                           EGL_TEXTURE_INTERNAL_FORMAT_ANGLE, p->channels == 2 ? GL_RG : GL_RED,
++                           EGL_TEXTURE_FORMAT, EGL_TEXTURE_RGBA,
++                           EGL_TEXTURE_TYPE_ANGLE, deep ? GL_UNSIGNED_SHORT : GL_UNSIGNED_BYTE, EGL_NONE};
++            s->pb[p->plane] = eglCreatePbufferFromClientBuffer(dpy, EGL_IOSURFACE_ANGLE, (EGLClientBuffer)s->iosurface,
++                                                               cfg, sa);
++            if (s->pb[p->plane] == EGL_NO_SURFACE) {
++                virgl_warn("vrend video: IOSurface plane %u pbuffer failed (0x%x)\n", p->plane, eglGetError());
++                rc = -1;
++                break;
++            }
++        }
++        glBindTexture(target, tex);
++        if (!eglBindTexImage(dpy, s->pb[p->plane], EGL_BACK_BUFFER)) {
++            virgl_warn("vrend video: eglBindTexImage failed (0x%x)\n", eglGetError());
++            rc = -1;
++            break;
++        }
++        glBindFramebuffer(GL_READ_FRAMEBUFFER, fb);
++        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, target, tex, 0);
++        if (glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
++            glBindTexture(GL_TEXTURE_2D, res->gl_id);
++            glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h);
++        } else {
++            virgl_warn("vrend video: IOSurface plane %u is not a complete framebuffer\n", p->plane);
++            rc = -1;
++        }
++        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, target, 0, 0);
++        glBindTexture(target, tex);
++        eglReleaseTexImage(dpy, s->pb[p->plane], EGL_BACK_BUFFER);
++    }
++
++    glDeleteFramebuffers(1, &fb);
++    glDeleteTextures(1, &tex);
++    glBindFramebuffer(GL_READ_FRAMEBUFFER, read_fb);
++    glBindTexture(GL_TEXTURE_2D, tex2d);
++    if (target != GL_TEXTURE_2D)
++        glBindTexture(target, texrect);
++    if (rc)
++        return rc;
++    s->fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
++    if (s->fence)
++        IOSurfaceIncrementUseCount(s->iosurface);
++    glFlush();
++    return 0;
++}
++
++static uint64_t vt_thread_ns(void)
++{
++    struct timespec t;
++    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
++    return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
++}
++
++static void vt_sync_frame(struct vrend_video_codec *cdc, struct vrend_video_buffer *buf,
++                          const struct virgl_video_dma_buf *d)
++{
++    uint64_t t0 = vt_thread_ns();
++
++    /* a replaced pool's surfaces never come back: do not keep them until the cache fills */
++    if (d->pool != cdc->pool) {
++        for (unsigned i = 0; i < VREND_VIDEO_MAX_SURFS; i++)
++            vt_surf_drop(&cdc->surfs[i]);
++        cdc->pool = d->pool;
++    }
++    if (!cpu_copy_only && !cdc->gpu_off) {
++        if (!vt_gpu_copy(cdc, buf, d)) {
++            cdc->gpu_frames++;
++            cdc->copy_ns += vt_thread_ns() - t0;
++            return;
++        }
++        virgl_warn("vrend video: GPU plane copy failed, copying on the CPU from now on\n");
++        cdc->gpu_off = true;
++    }
++    if (!vt_cpu_copy(buf, d))
++        cdc->cpu_frames++;
++    cdc->copy_ns += vt_thread_ns() - t0;
++}
++
++static void vt_codec_fini(struct vrend_video_codec *cdc)
++{
++    if (cdc->gpu_frames || cdc->cpu_frames)
++        virgl_info("vrend video: codec done: %u frames copied on the GPU, %u on the CPU, %u output surfaces, "
++                   "%.1f ms CPU in the copies\n",
++                   cdc->gpu_frames, cdc->cpu_frames, cdc->num_surfs, cdc->copy_ns / 1e6);
++    for (unsigned i = 0; i < VREND_VIDEO_MAX_SURFS; i++)
++        vt_surf_drop(&cdc->surfs[i]);
++}
++#endif
 +
  static int sync_dmabuf_to_video_buffer(struct vrend_video_buffer *buf,
                                         const struct virgl_video_dma_buf *dmabuf)
  {
-@@ -154,6 +218,9 @@ static int sync_dmabuf_to_video_buffer(struct vrend_video_buffer *buf,
+@@ -154,6 +485,7 @@ static int sync_dmabuf_to_video_buffer(struct vrend_video_buffer *buf,
          return -1;
      }
  
-+    if (dmabuf->num_planes && dmabuf->planes[0].data)
-+        return sync_cpu_planes_to_video_buffer(buf, dmabuf);
 +
      for (unsigned i = 0; i < dmabuf->num_planes && i < buf->num_planes; i++) {
          struct vrend_video_plane *plane = &buf->planes[i];
          struct vrend_resource *res;
-@@ -354,15 +421,20 @@ static struct virgl_video_callbacks video_callbacks = {
+@@ -276,6 +608,13 @@ static void vrend_video_decode_completed(
+ {
+     struct vrend_video_buffer *buf = vrend_video_buffer(dmabuf->buf);
+ 
++#ifdef ENABLE_VIDEO_VT
++    if (dmabuf->iosurface) {
++        if (dmabuf->flags & VIRGL_VIDEO_DMABUF_READ_ONLY)
++            vt_sync_frame(vrend_video_codec(codec), buf, dmabuf);
++        return;
++    }
++#endif
+     (void)codec;
+ 
+     sync_dmabuf_to_video_buffer(buf, dmabuf);
+@@ -354,15 +693,24 @@ static struct virgl_video_callbacks video_callbacks = {
  
  int vrend_video_init(int drm_fd)
  {
 +#ifndef ENABLE_VIDEO_VT
      if (drm_fd < 0)
          return -1;
-+#endif
- 
+-
 -    return virgl_video_init(drm_fd, &video_callbacks, 0);
++#endif
++
++#ifdef ENABLE_VIDEO_VT
++    const char *e = getenv("VREND_VIDEO_CPU_COPY");
++    cpu_copy_only = e && *e == '1';
++#endif
 +    video_enabled = virgl_video_init(drm_fd, &video_callbacks, 0) == 0;
 +    return video_enabled ? 0 : -1;
  }
@@ -1268,7 +2848,7 @@ index 57341d8..e66fd71 100644
  }
  
  int vrend_video_fill_caps(union virgl_caps *caps)
-@@ -381,12 +453,20 @@ int vrend_video_create_codec(struct vrend_video_context *ctx,
+@@ -381,12 +729,20 @@ int vrend_video_create_codec(struct vrend_video_context *ctx,
                               uint32_t max_ref,
                               uint32_t flags)
  {
@@ -1290,7 +2870,7 @@ index 57341d8..e66fd71 100644
      if (profile <= PIPE_VIDEO_PROFILE_UNKNOWN ||
          profile >= PIPE_VIDEO_PROFILE_MAX)
          return -1;
-@@ -423,6 +503,7 @@ int vrend_video_create_codec(struct vrend_video_context *ctx,
+@@ -423,6 +779,7 @@ int vrend_video_create_codec(struct vrend_video_context *ctx,
      cdc->handle = handle;
      cdc->ctx = ctx;
      list_add(&cdc->head, &ctx->codecs);
@@ -1298,15 +2878,18 @@ index 57341d8..e66fd71 100644
  
      return 0;
  }
-@@ -431,6 +512,7 @@ static void destroy_video_codec(struct vrend_video_codec *cdc)
+@@ -431,6 +788,10 @@ static void destroy_video_codec(struct vrend_video_codec *cdc)
  {
      if (cdc) {
          list_del(&cdc->head);
 +        cdc->ctx->num_codecs--;
++#ifdef ENABLE_VIDEO_VT
++        vt_codec_fini(cdc);
++#endif
          virgl_video_destroy_codec(cdc->codec);
          free(cdc);
      }
-@@ -439,7 +521,11 @@ static void destroy_video_codec(struct vrend_video_codec *cdc)
+@@ -439,7 +800,11 @@ static void destroy_video_codec(struct vrend_video_codec *cdc)
  void vrend_video_destroy_codec(struct vrend_video_context *ctx,
                                 uint32_t handle)
  {
@@ -1319,7 +2902,7 @@ index 57341d8..e66fd71 100644
  
      destroy_video_codec(cdc);
  }
-@@ -454,9 +540,12 @@ int vrend_video_create_buffer(struct vrend_video_context *ctx,
+@@ -454,9 +819,12 @@ int vrend_video_create_buffer(struct vrend_video_context *ctx,
  {
      unsigned i;
      struct vrend_video_plane *plane;
@@ -1333,7 +2916,7 @@ index 57341d8..e66fd71 100644
      if (buf)
          return 0;
  
-@@ -465,8 +554,10 @@ int vrend_video_create_buffer(struct vrend_video_context *ctx,
+@@ -465,8 +833,10 @@ int vrend_video_create_buffer(struct vrend_video_context *ctx,
          return -1;
      }
  
@@ -1345,7 +2928,7 @@ index 57341d8..e66fd71 100644
  
      buf = (struct vrend_video_buffer *)calloc(1, sizeof(*buf));
      if (!buf)
-@@ -538,7 +629,11 @@ static void destroy_video_buffer(struct vrend_video_buffer *buf)
+@@ -538,7 +908,11 @@ static void destroy_video_buffer(struct vrend_video_buffer *buf)
  void vrend_video_destroy_buffer(struct vrend_video_context *ctx,
                                  uint32_t handle)
  {
@@ -1358,7 +2941,7 @@ index 57341d8..e66fd71 100644
  
      destroy_video_buffer(buf);
  }
-@@ -547,6 +642,8 @@ struct vrend_video_context *vrend_video_create_context(struct vrend_context *ctx
+@@ -547,6 +921,8 @@ struct vrend_video_context *vrend_video_create_context(struct vrend_context *ctx
  {
      struct vrend_video_context *vctx;
  
@@ -1367,7 +2950,7 @@ index 57341d8..e66fd71 100644
      vctx = (struct vrend_video_context *)calloc(1, sizeof(*vctx));
      if (vctx) {
          vctx->ctx = ctx;
-@@ -559,6 +656,9 @@ struct vrend_video_context *vrend_video_create_context(struct vrend_context *ctx
+@@ -559,6 +935,9 @@ struct vrend_video_context *vrend_video_create_context(struct vrend_context *ctx
  
  void vrend_video_destroy_context(struct vrend_video_context *ctx)
  {
@@ -1377,7 +2960,7 @@ index 57341d8..e66fd71 100644
     list_for_each_entry_safe(struct vrend_video_codec, vcdc, &ctx->codecs, head)
        destroy_video_codec(vcdc);
  
-@@ -572,8 +672,8 @@ int vrend_video_begin_frame(struct vrend_video_context *ctx,
+@@ -572,8 +951,8 @@ int vrend_video_begin_frame(struct vrend_video_context *ctx,
                              uint32_t cdc_handle,
                              uint32_t tgt_handle)
  {
@@ -1388,7 +2971,7 @@ index 57341d8..e66fd71 100644
  
      if (!cdc || !tgt)
          return -1;
-@@ -742,8 +842,8 @@ int vrend_video_decode_bitstream(struct vrend_video_context *ctx,
+@@ -742,8 +1121,8 @@ int vrend_video_decode_bitstream(struct vrend_video_context *ctx,
      unsigned i, num_bs, *bs_sizes = NULL;
      void **bs_buffers = NULL;
      struct vrend_resource *res;
@@ -1399,7 +2982,7 @@ index 57341d8..e66fd71 100644
      union virgl_picture_desc desc;
  
      if (!cdc || !tgt){
-@@ -765,16 +865,16 @@ int vrend_video_decode_bitstream(struct vrend_video_context *ctx,
+@@ -765,16 +1144,16 @@ int vrend_video_decode_bitstream(struct vrend_video_context *ctx,
  
      for (i = 0, num_bs = 0; i < num_buffers; i++) {
          res = vrend_renderer_ctx_res_lookup(ctx->ctx, buffer_handles[i]);
@@ -1421,7 +3004,7 @@ index 57341d8..e66fd71 100644
          num_bs++;
      }
  
-@@ -807,8 +907,8 @@ int vrend_video_encode_bitstream(struct vrend_video_context *ctx,
+@@ -807,8 +1186,8 @@ int vrend_video_encode_bitstream(struct vrend_video_context *ctx,
  {
      union virgl_picture_desc desc;
      struct vrend_resource *dest_res, *desc_res, *feed_res;
@@ -1432,7 +3015,7 @@ index 57341d8..e66fd71 100644
  
      if (!cdc || !src)
          return -1;
-@@ -847,8 +947,8 @@ int vrend_video_end_frame(struct vrend_video_context *ctx,
+@@ -847,8 +1226,8 @@ int vrend_video_end_frame(struct vrend_video_context *ctx,
                            uint32_t cdc_handle,
                            uint32_t tgt_handle)
  {
