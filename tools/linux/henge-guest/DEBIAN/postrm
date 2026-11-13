@@ -7,6 +7,7 @@ if [ "$1" = remove ]; then
     for u in $UNITS; do deb-systemd-helper mask "$u" >/dev/null || true; done
 fi
 if [ "$1" = purge ]; then
+    rm -f /var/lib/henge/secrets-removed
     for u in $UNITS; do
         deb-systemd-helper purge "$u" >/dev/null || true
         deb-systemd-helper unmask "$u" >/dev/null || true

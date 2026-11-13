@@ -14,10 +14,12 @@ case "$1" in
                 deb-systemd-helper update-state "$u" >/dev/null || true
             fi
         done
-        # The wallet starts with each user's session; enabled once, so an admin's disable stays
-        if [ "$1" = configure ] && { [ -z "$2" ] || dpkg --compare-versions "$2" lt 1.6.0; }; then
+        # The wallet starts with each user's session. Enabled on a first install, on an upgrade from before it,
+        # and after a remove (prerm leaves a mark); an admin's disable stays over an upgrade.
+        if [ "$1" = configure ] && { [ -z "$2" ] || dpkg --compare-versions "$2" lt 1.6.0 || [ -e /var/lib/henge/secrets-removed ]; }; then
             systemctl --global enable henge-secrets.service >/dev/null 2>&1 || true
         fi
+        rm -f /var/lib/henge/secrets-removed
         if [ -d /run/systemd/system ]; then
             systemctl --system daemon-reload >/dev/null || true
             deb-systemd-invoke restart henge-secrets-firewall.service >/dev/null || true

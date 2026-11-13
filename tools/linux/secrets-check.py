@@ -173,9 +173,49 @@ def inner():
     print("ok: without the device's wallet, D-Bus activation gets kwalletd6", flush=True)
 
 
+def package():
+    """henge-guest's scripts: the diversions, and the wallet's unit enabled on install and on a reinstall after a
+    remove, but an admin's disable kept over an upgrade."""
+    import shutil
+    shutil.copytree("/t/henge-guest", "/tmp/pkg", dirs_exist_ok=True)
+    subprocess.run("find /tmp/pkg -type d -exec chmod 0755 {} + && find /tmp/pkg -type f -exec chmod 0644 {} + && "
+                   "chmod 0755 /tmp/pkg/usr/lib/henge/* /tmp/pkg/DEBIAN/preinst /tmp/pkg/DEBIAN/postinst /tmp/pkg/DEBIAN/prerm /tmp/pkg/DEBIAN/postrm && "
+                   "dpkg-deb --root-owner-group --build /tmp/pkg /tmp/henge-guest.deb >/dev/null", shell=True, check=True)
+
+    def dpkg(*a):
+        r = subprocess.run(["dpkg", *a], capture_output=True, text=True)
+        if r.returncode:
+            raise Fail(f"dpkg {' '.join(a)}: {r.stderr[-500:]}")
+
+    def enabled():
+        return subprocess.run(["systemctl", "--global", "is-enabled", "henge-secrets.service"], capture_output=True, text=True).stdout.strip()
+
+    def diverted():
+        return subprocess.run(["dpkg-divert", "--list", "*henge*"], capture_output=True, text=True).stdout.count("by henge-guest")
+
+    dpkg("-i", "/tmp/henge-guest.deb")
+    if enabled() != "enabled" or diverted() != 3 or "kwalletd6" not in open("/usr/share/dbus-1/services/org.kde.kwalletd6.service.henge").read():
+        raise Fail(f"install: unit {enabled()}, {diverted()} diversions")
+    dpkg("-r", "henge-guest")
+    if enabled() == "enabled" or diverted() != 0 or "kwalletd6" not in open("/usr/share/dbus-1/services/org.kde.kwalletd6.service").read():
+        raise Fail(f"remove: unit {enabled()}, {diverted()} diversions")
+    dpkg("-i", "/tmp/henge-guest.deb")
+    if enabled() != "enabled":
+        raise Fail(f"reinstall after a remove: the unit is {enabled()}")
+    subprocess.run(["systemctl", "--global", "disable", "henge-secrets.service"], capture_output=True)
+    dpkg("-i", "/tmp/henge-guest.deb")
+    if enabled() != "disabled":
+        raise Fail(f"upgrade after an admin's disable: the unit is {enabled()}")
+    dpkg("--purge", "henge-guest")
+    if diverted() != 0:
+        raise Fail("purge left diversions")
+    print("ok: package: diversions, the unit enabled on install and on a reinstall, an admin's disable kept", flush=True)
+
+
 def container(args):
     dockerfile = ("FROM debian:trixie\nRUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y -q "
-                  "python3-jeepney python3-cryptography libsecret-tools dbus dbus-bin systemd kwallet6 && rm -rf /var/lib/apt/lists/*\n")
+                  "python3-jeepney python3-cryptography libsecret-tools dbus dbus-bin systemd kwallet6 "
+                  "davfs2 cloud-guest-utils gdisk e2fsprogs tzdata nftables && rm -rf /var/lib/apt/lists/*\n")
     env = dict(os.environ, PATH="/opt/homebrew/bin:" + os.environ.get("PATH", ""))
     r = subprocess.run(["docker", "build", "-q", "-t", "henge-secrets-test", "-"], input=dockerfile.encode(), capture_output=True, env=env)
     if r.returncode:
@@ -384,6 +424,7 @@ def vm(args):
 def main():
     if "--inner" in sys.argv:
         inner()
+        package()
         print("secrets-check (container): all checks passed")
         return
     ap = argparse.ArgumentParser()
