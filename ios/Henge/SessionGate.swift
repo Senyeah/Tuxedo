@@ -54,6 +54,19 @@ struct SessionGate: Equatable {
         return covered || inactive
     }
 
+    enum Scene { case active, inactive, background }
+
+    struct Away: Equatable {
+        var lock: Bool  // leave(): lock the wallet, ask again on return
+        var pause: Bool // pause the machine (the app itself is in the background)
+    }
+
+    /// The phone's scene in the background, or the device locking, locks the wallet even while an external
+    /// screen's scene keeps the app active; the machine pauses only when the app is in the background.
+    static func away(scene: Scene, appInBackground: Bool, deviceLocking: Bool) -> Away {
+        Away(lock: scene == .background || appInBackground || deviceLocking, pause: appInBackground)
+    }
+
     /// An external screen has no stopped card: it stays black whenever the session is not open, closed too.
     func blanksExternal(inactive: Bool) -> Bool {
         guard check == .faceID else { return false }

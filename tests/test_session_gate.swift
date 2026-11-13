@@ -125,6 +125,15 @@ struct SessionGateTests {
         ext.end() // the machine stopped while away
         precondition(ext.blanksExternal(inactive: false) && !ext.hidesGuest(inactive: false))
 
+        // Leaving: the phone's scene in the background, or the device locking, locks the wallet and asks again on
+        // return, even while an external screen's scene keeps the app active (the machine then keeps running).
+        typealias S = SessionGate.Scene
+        precondition(SessionGate.away(scene: .background, appInBackground: true, deviceLocking: false) == .init(lock: true, pause: true))
+        precondition(SessionGate.away(scene: .background, appInBackground: false, deviceLocking: false) == .init(lock: true, pause: false))
+        precondition(SessionGate.away(scene: S.active, appInBackground: false, deviceLocking: true) == .init(lock: true, pause: false))
+        precondition(SessionGate.away(scene: .inactive, appInBackground: false, deviceLocking: false) == .init(lock: false, pause: false))
+        precondition(SessionGate.away(scene: .active, appInBackground: false, deviceLocking: false) == .init(lock: false, pause: false))
+
         // One Keychain service per machine, and back.
         let a = UUID(uuidString: "0D3A5F6E-1C2B-4E8F-9A7B-6C5D4E3F2A1B")!, b = UUID()
         precondition(WalletScope.id(a) == "0d3a5f6e-1c2b-4e8f-9a7b-6c5d4e3f2a1b")

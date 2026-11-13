@@ -293,9 +293,19 @@ struct SessionView: View {
             HardwareMouse.shared.releaseButtons()
             VolumeClicks.shared.releaseButtons()
             DeviceStatus.shared.leaveForeground()
-            // An external screen's scene may still be up; then the app is not in the background.
-            if phase == .background && UIApplication.shared.applicationState == .background { setBackground(true) }
+            // An external screen's scene may still be up; then the app is not in the background: the machine runs on,
+            // but the wallet locks and the return asks again.
+            let away = SessionGate.away(scene: phase == .background ? .background : .inactive,
+                                        appInBackground: UIApplication.shared.applicationState == .background, deviceLocking: false)
+            if away.pause { setBackground(true) }
+            else if away.lock { leaveGate() }
             else if phase == .inactive { setBackground(false) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataWillBecomeUnavailableNotification)) { _ in
+            if SessionGate.away(scene: .active, appInBackground: false, deviceLocking: true).lock { leaveGate() } // the device locks
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
+            if scenePhase == .active { setBackground(false) } // asks again if the lock left the session away
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
             setBackground(true)
@@ -1181,10 +1191,7 @@ struct SessionView: View {
     /// Every machine locks in the background and asks for Face ID when the app comes back (SessionGate).
     private func setBackground(_ away: Bool) {
         if away {
-            gate.leave()
-            typing = false
-            gateContext = nil
-            KeychainStore.shared.setUnlocked(false, context: nil)
+            leaveGate()
         } else if gate.phase == .away {
             askToOpen() // resumes when it passes
             return
@@ -1196,6 +1203,14 @@ struct SessionView: View {
         henge_vm_set_background(away ? 1 : 0) // sound keeps only a machine without acceleration running; it pauses when the sound stops
         let now = henge_vm_paused() != 0
         if now != was { HengeLog.log("session", now ? "paused in the background" : "resumed") }
+    }
+
+    /// The wallet locks and the next return asks again (SessionGate.away).
+    private func leaveGate() {
+        gate.leave()
+        typing = false
+        gateContext = nil
+        KeychainStore.shared.setUnlocked(false, context: nil)
     }
 
     private func askToOpen() {
