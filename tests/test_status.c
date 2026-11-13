@@ -154,6 +154,13 @@ static void *later_brightness(void *arg) {
     return NULL;
 }
 
+static void *later_held_brightness(void *arg) {
+    (void)arg;
+    usleep(100000);
+    hv_status_set_brightness(0.4); /* within 500 ms of the last one: held back */
+    return NULL;
+}
+
 static void *later_touch(void *arg) {
     (void)arg;
     usleep(100000);
@@ -189,6 +196,15 @@ static void test_wait(void) {
     unsigned long seq = v.seq;
     check("wait: a touch (a resume) ends it", hv_status_wait(seq, 5000, &v), 1);
     check("wait: one seq more", (long long)(v.seq - seq), 1);
+    pthread_join(t, NULL);
+    usleep(600000);
+    hv_status_set_brightness(0.2);
+    hv_status_get(&v);
+    pthread_create(&t, NULL, later_held_brightness, NULL);
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    check("wait: a change held back during the wait ends it", hv_status_wait(v.seq, 5000, &v), 1);
+    check("wait: when its 500 ms are up", since_ms(t0) > 300 && since_ms(t0) < 1000, 1);
+    check("wait: with the held level", lround(v.brightness * 10), 4);
     pthread_join(t, NULL);
 }
 

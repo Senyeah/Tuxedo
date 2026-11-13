@@ -91,7 +91,10 @@ void hv_status_set_brightness(double v) {
     latest = v;
     if (published >= 0 && fabs(v - published) < 1.0 / 255) pending = 0;
     else if (published < 0 || t - published_ms >= COALESCE_MS) publish_locked(t);
-    else pending = 1, due_ms = published_ms + COALESCE_MS;
+    else {
+        pending = 1, due_ms = published_ms + COALESCE_MS;
+        pthread_cond_broadcast(&cond); /* a waiter sleeps to its end otherwise, not to due_ms */
+    }
     pthread_mutex_unlock(&mu);
 }
 
