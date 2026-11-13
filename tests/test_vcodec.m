@@ -827,6 +827,23 @@ static void test_lost_and_timeouts(const Stream *in) {
     uint32_t dec2 = 0;
     CHECK(dec_open(&c, HV_VC_H264, in->extra, in->extra_len, 0, &dec2) == 0, "a new decoder");
     CHECK(dec_frame(&c, dec2, in->data[0], in->len[0], 0, &r2) == 0 && r2.handle, "decodes");
+    /* decision 7: the background loses the sessions and opens no new one until it ends */
+    hv_vcodec_set_background(1);
+    uint32_t dec3 = 0, enc3 = 0;
+    st = dec_open(&c, HV_VC_H264, in->extra, in->extra_len, 0, &dec3);
+    CHECK(st == HV_VC_E_LOST && strstr(c.err, "background"), "DEC_OPEN in the background: %d %s", st, c.err);
+    st = enc_open(&c, &o, &enc3);
+    CHECK(st == HV_VC_E_LOST && strstr(c.err, "background"), "ENC_OPEN in the background: %d %s", st, c.err);
+    CHECK(dec_frame(&c, dec2, in->data[1], in->len[1], 1, &r2) == HV_VC_E_LOST, "the open decoder is lost too");
+    hv_vcodec_set_background(0);
+    HvVcSession m = {dec, 0};
+    call(&c, HV_VC_DEC_CLOSE, &m, sizeof m, NULL, 0);
+    m.session = enc;
+    call(&c, HV_VC_ENC_CLOSE, &m, sizeof m, NULL, 0); /* room under the limit of 4 */
+    st = dec_open(&c, HV_VC_H264, in->extra, in->extra_len, 0, &dec3);
+    CHECK(st == 0, "a decoder in the foreground again: %d %s", st, c.err);
+    st = enc_open(&c, &o, &enc3);
+    CHECK(st == 0, "an encoder in the foreground again: %d %s", st, c.err);
     conn_close(&c);
 
     /* a message that stops in the middle closes its context after the timeout */
@@ -923,7 +940,12 @@ static _Atomic long race_losses;
 static void *loser(void *arg) {
     (void)arg;
     while (!atomic_load(&race_stop)) {
-        hv_vcodec_lose_sessions();
+        if (arc4random_uniform(2)) { /* the background, against opens in flight */
+            hv_vcodec_set_background(1);
+            usleep(arc4random_uniform(500));
+            hv_vcodec_set_background(0);
+        } else
+            hv_vcodec_lose_sessions();
         atomic_fetch_add(&race_losses, 1);
         usleep(200 + arc4random_uniform(800));
     }

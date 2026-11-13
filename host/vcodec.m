@@ -127,6 +127,7 @@ static void *registry[MAX_CONTEXTS];
 static _Atomic uint64_t total_contexts, total_messages, total_proto_errors;
 static _Atomic int64_t live_frames, live_sessions;
 static _Atomic uint64_t all_frame_bytes, all_wire_bytes, all_packet_bytes;
+static _Atomic int in_background; /* hv_vcodec_set_background: no new sessions */
 
 void hv_vcodec_stats(HvVcodecStats *s) {
     s->contexts = atomic_load(&total_contexts);
@@ -225,6 +226,10 @@ static int vt_fail(Ctx *c, const HvVcHeader *req, const char *what, OSStatus st)
     if (hv_vtd_session_lost(st))
         return fail(c, req, HV_VC_E_LOST, "%s: the system stopped the video session (%d); on iOS, Henge left the screen. Open a new session", what, (int)st);
     return fail(c, req, HV_VC_E_CODEC, "%s: %s (%d)", what, hv_vtd_error(st), (int)st);
+}
+
+static int background_fail(Ctx *c, const HvVcHeader *req, const char *what) {
+    return fail(c, req, HV_VC_E_LOST, "%s: Henge is in the background on iOS, so no video session opens. Open one when it returns", what);
 }
 
 /* H.273 code points to CoreVideo's strings: 0 and 2 are "none"; *bad is set for a code CoreVideo does not know. */
@@ -412,6 +417,7 @@ static int dims_ok(uint32_t w, uint32_t h) { return hv_vc_frame_bytes(HV_VC_FMT_
 
 static int do_dec_open(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     HvVcDecOpen o;
+    if (atomic_load(&in_background)) return background_fail(c, req, "DEC_OPEN");
     if (req->len < sizeof o) return fail(c, req, HV_VC_E_INVAL, "DEC_OPEN is too short");
     memcpy(&o, p, sizeof o);
     if (o.extradata_len != req->len - sizeof o || o.extradata_len > HV_VC_MAX_EXTRADATA) return fail(c, req, HV_VC_E_INVAL, "bad extradata length");
@@ -434,8 +440,14 @@ static int do_dec_open(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
         return vt_fail(c, req, "decoder", st);
     }
     pthread_mutex_lock(&c->mu);
-    s->dec = dec;
+    int away = atomic_load(&in_background); /* under c->mu: else hv_vcodec_set_background's loss sees s->dec */
+    if (!away) s->dec = dec;
     pthread_mutex_unlock(&c->mu);
+    if (away) {
+        hv_vtd_session_destroy(dec);
+        session_free(c, s);
+        return background_fail(c, req, "DEC_OPEN");
+    }
     HvVcOpenReply r = {id, s->hw ? HV_VC_DEC_HW : 0};
     return ok(c, req, &r, sizeof r);
 }
@@ -584,6 +596,7 @@ static OSStatus set_prop(VTCompressionSessionRef s, CFStringRef k, CFTypeRef v, 
 
 static int do_enc_open(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     HvVcEncOpen o;
+    if (atomic_load(&in_background)) return background_fail(c, req, "ENC_OPEN");
     if (req->len != sizeof o) return fail(c, req, HV_VC_E_INVAL, "ENC_OPEN has the wrong length");
     memcpy(&o, p, sizeof o);
     const uint32_t known = HV_VC_ENC_F_BFRAMES | HV_VC_ENC_F_REALTIME | HV_VC_ENC_F_CBR | HV_VC_ENC_F_SOFTWARE_OK | HV_VC_ENC_F_SPEED;
@@ -690,8 +703,15 @@ static int do_enc_open(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
         }
     }
     pthread_mutex_lock(&c->mu);
-    s->enc = v;
+    int away = atomic_load(&in_background); /* as in do_dec_open */
+    if (!away) s->enc = v;
     pthread_mutex_unlock(&c->mu);
+    if (away) {
+        VTCompressionSessionInvalidate(v);
+        CFRelease(v);
+        session_free(c, s);
+        return background_fail(c, req, "ENC_OPEN");
+    }
     HvVcOpenReply r = {id, s->hw ? HV_VC_ENC_HW : 0};
     return ok(c, req, &r, sizeof r);
 }
@@ -1200,6 +1220,12 @@ void hv_vcodec_lose_sessions(void) {
         pthread_mutex_unlock(&c->mu);
     }
     pthread_mutex_unlock(&registry_mu);
+}
+
+/* The flag first: an open in flight then sees it, or its session is there for the loss. */
+void hv_vcodec_set_background(int on) {
+    atomic_store(&in_background, !!on);
+    if (on) hv_vcodec_lose_sessions();
 }
 
 /* ---- the listener ---- */

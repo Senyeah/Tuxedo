@@ -365,12 +365,17 @@ int main(void) {
             henge_vm_set_background(1);
             ef.pts = 1;
             check("the background ends the encoder: one clear error", vc_call(fd, HV_VC_ENC_FRAME, &ef, sizeof ef, NULL, 0) == HV_VC_E_LOST);
+            check("and opens no new encoder", vc_call(fd, HV_VC_ENC_OPEN, &o, sizeof o, NULL, 0) == HV_VC_E_LOST);
         }
+        HvVcDecOpen d = {.codec = HV_VC_H264, .width = 256, .height = 144};
+        check("nor a new decoder", vc_call(fd, HV_VC_DEC_OPEN, &d, sizeof d, NULL, 0) == HV_VC_E_LOST);
         check("the background pauses it", henge_vm_paused());
-        if (fd >= 0) close(fd);
         henge_vm_stop();
         for (int w = 0; w < 3000 && henge_vm_state() != 2; w++) usleep(1000);
         henge_vm_set_background(0);
+        check("the foreground after the stop allows a session again", vc_call(fd, HV_VC_DEC_OPEN, &d, sizeof d, NULL, 0) != HV_VC_E_LOST);
+        if (st != HV_VC_E_NOSUP) check("an encoder opens again", vc_call(fd, HV_VC_ENC_OPEN, &o, sizeof o, NULL, 0) == 0);
+        if (fd >= 0) close(fd);
         check("video encode machine stopped and released", henge_vm_state() == 2 && hv_vm_virt() == NULL);
         HvVcodecStats vs;
         for (int w = 0; w < 1000; w++) {

@@ -33,5 +33,7 @@ void hv_vcodec_set_timeouts(int message_ms, uint32_t wait_ms);
 void hv_vcodec_set_budgets(uint64_t frame_bytes, uint64_t wire_bytes, uint64_t packet_bytes);
 /* Invalidates all VideoToolbox sessions, as iOS does in the background. Any thread, while connections run. */
 void hv_vcodec_lose_sessions(void);
+/* Decision 7, no encode in the background: on loses all sessions, and DEC_OPEN and ENC_OPEN give HV_VC_E_LOST until off. */
+void hv_vcodec_set_background(int on);
 
 #endif

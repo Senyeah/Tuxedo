@@ -413,11 +413,12 @@ void henge_vm_power_button(void) {
 }
 
 void henge_vm_set_background(int on) {
-    if (!on) { /* also when the machine stopped meanwhile: the flag must not pause the next one */
+    if (!on) { /* also when the machine stopped meanwhile: the flags must not pause the next one */
+        hv_vcodec_set_background(0);
         hv_vm_set_background(0);
         return;
     }
-    hv_vcodec_lose_sessions(); /* decision 7, no encode in the background: the guest gets HV_VC_E_LOST */
+    hv_vcodec_set_background(1); /* decision 7, before the pause: the guest gets HV_VC_E_LOST, also for a new session */
     if (!lock_running()) return;
     hv_vm_set_background(1);
     pthread_rwlock_unlock(&api_lock);
