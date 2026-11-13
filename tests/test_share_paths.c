@@ -13,6 +13,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/un.h>
 #include <unistd.h>
 
@@ -106,6 +107,72 @@ static void check_outside(const char *mode, const char *what) {
     }
 }
 
+static int no_clone; /* safe_copy is forced to copy_tree */
+
+static void at_root(char p[PATH_MAX], const char *name) { snprintf(p, PATH_MAX, "%s/%s", root, name); }
+
+/* MOVE and COPY between hard links, and a change of case: what renameat does with one inode by two names. */
+static void test_same_file(const char *mode) {
+    char a[PATH_MAX], b[PATH_MAX], c[PATH_MAX];
+    struct stat st;
+    at_root(a, "h1"), at_root(b, "h2"), at_root(c, "h3");
+    write_file(root, "h1", "h\n");
+    if (link(a, b) != 0) perror(b);
+    check(mode, "MOVE /h1 over its hard link /h2: status", request("MOVE", "/h1", "Destination: /h2\r\nOverwrite: T\r\n", ""), 204);
+    check(mode, "MOVE /h1 over its hard link: moved", exists(root, "h1") * 10 + exists(root, "h2"), 1);
+    if (link(b, c) != 0) perror(c);
+    check(mode, "COPY /h2 over its hard link /h3: status", request("COPY", "/h2", "Destination: /h3\r\nOverwrite: T\r\n", ""), 204);
+    check(mode, "COPY /h2 over its hard link: a file of its own", stat(b, &st) == 0 ? (long)st.st_nlink : -1, 1);
+    check(mode, "COPY /h2 over its hard link: body", !strcmp(read_file(root, "h3"), "h\n"), 1);
+    check(mode, "MOVE /h2 onto itself", request("MOVE", "/h2", "Destination: /h2\r\n", ""), 403);
+    check(mode, "MOVE /h2 onto itself: h2 is there", exists(root, "h2"), 1);
+    if (pathconf(root, _PC_CASE_SENSITIVE) == 0) {
+        check(mode, "MOVE /h2 to /H2: status", request("MOVE", "/h2", "Destination: /H2\r\n", ""), 204);
+        check(mode, "MOVE /h2 to /H2: body", !strcmp(read_file(root, "H2"), "h\n"), 1);
+        check(mode, "MOVE /d to /D: status", request("MOVE", "/d", "Destination: /D\r\n", ""), 204);
+        check(mode, "MOVE /D back to /d: status", request("MOVE", "/D", "Destination: /d\r\n", ""), 204);
+        check(mode, "MOVE /d to /D and back: g", !strcmp(read_file(root, "d/g"), "g\n"), 1);
+    }
+    unlink(b), unlink(c);
+}
+
+/* A copied directory keeps its mode (and, copied, its times); one that fails part way leaves nothing. */
+static void test_copy_dir(const char *mode) {
+    char p[PATH_MAX];
+    struct stat st;
+    at_root(p, "ro");
+    mkdir(p, 0755);
+    write_file(root, "ro/x", "x\n");
+    chmod(p, 0555);
+    struct timeval old[2] = {{1000000000, 0}, {1000000000, 0}};
+    utimes(p, old);
+    check(mode, "COPY /ro to /roc: status", request("COPY", "/ro", "Destination: /roc\r\n", ""), 201);
+    at_root(p, "roc");
+    check(mode, "COPY /ro to /roc: mode", stat(p, &st) == 0 ? (long)(st.st_mode & 0777) : -1, 0555);
+    if (no_clone) check(mode, "COPY /ro to /roc: mtime", (long)st.st_mtime, 1000000000); /* clonefile gives a directory a new mtime */
+    check(mode, "COPY /ro to /roc: x", !strcmp(read_file(root, "roc/x"), "x\n"), 1);
+    chmod(p, 0755);
+    at_root(p, "ro");
+    chmod(p, 0755);
+    check(mode, "DELETE /ro", request("DELETE", "/ro", NULL, ""), 204);
+    check(mode, "DELETE /roc", request("DELETE", "/roc", NULL, ""), 204);
+    if (!no_clone) return; /* a clone does not open the files */
+    at_root(p, "pc");
+    mkdir(p, 0755);
+    at_root(p, "pc/sub");
+    mkdir(p, 0755);
+    write_file(root, "pc/sub/y", "y\n");
+    chmod(p, 0555);
+    write_file(root, "pc/z", "z\n");
+    at_root(p, "pc/z");
+    chmod(p, 0);
+    check(mode, "COPY /pc with a file it can't read: fails", ok(request("COPY", "/pc", "Destination: /pcc\r\n", "")), 0);
+    check(mode, "COPY /pc with a file it can't read: no part left", exists(root, "pcc"), 0);
+    at_root(p, "pc/sub");
+    chmod(p, 0755);
+    check(mode, "DELETE /pc", request("DELETE", "/pc", NULL, ""), 204);
+}
+
 static void test_normal(const char *mode) {
     check(mode, "PROPFIND /: status", request("PROPFIND", "/", "Depth: 1\r\n", ""), 207);
     check(mode, "PROPFIND /: has f", strstr(body(), "<D:href>/f</D:href>") != NULL, 1);
@@ -158,6 +225,8 @@ static void test_normal(const char *mode) {
     check(mode, "COPY /f to /fc: body", !strcmp(read_file(root, "fc"), "f\n"), 1);
     check(mode, "COPY /f over /fc: status", request("COPY", "/f", "Destination: /fc\r\n", ""), 204);
     check(mode, "COPY /d into itself", request("COPY", "/d", "Destination: /d/inside\r\n", ""), 403);
+    test_same_file(mode);
+    test_copy_dir(mode);
 
     check(mode, "LOCK /lockme: status", request("LOCK", "/lockme", NULL, ""), 201);
     check(mode, "LOCK /lockme: made", exists(root, "lockme"), 1);
@@ -338,6 +407,7 @@ int main(void) {
     test_helpers(mode);
 
     safe_path_force(1, 1);
+    no_clone = 1;
     check("walk", "forced to walk", safe_path_beneath(), 0);
     test_normal("walk");
     test_escapes("walk");

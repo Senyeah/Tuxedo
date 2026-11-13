@@ -569,10 +569,16 @@ static int move_copy(Request *r, int move) {
     if (fstatat(fdir, from, &st, AT_SYMLINK_NOFOLLOW) != 0 || !visible(&st)) status = 404;
     else if ((tdir = parent_of(r->destination, to)) < 0) status = gone(errno) ? 409 : errno == EINVAL ? 400 : 403;
     else {
+        struct stat fd_st, td_st;
         int existed = fstatat(tdir, to, &dst, AT_SYMLINK_NOFOLLOW) == 0;
-        int same = existed && dst.st_dev == st.st_dev && dst.st_ino == st.st_ino; /* one file, by another name (a change of case) */
+        int one_dir = fstat(fdir, &fd_st) == 0 && fstat(tdir, &td_st) == 0 && fd_st.st_dev == td_st.st_dev && fd_st.st_ino == td_st.st_ino;
+        /* One entry by another name (a change of case), not a hard link: renameat on two links to one file does
+           nothing. A directory or a file with one link has only the one entry. */
+        int same = existed && dst.st_dev == st.st_dev && dst.st_ino == st.st_ino &&
+                   (S_ISDIR(st.st_mode) || st.st_nlink == 1 || (one_dir && !strcasecmp(from, to)));
         if (existed && !r->overwrite) status = 412;
         else if (existed && !visible(&dst)) status = 403;
+        else if (same && !strcmp(from, to)) status = 403; /* onto itself */
         /* Into itself, or over a directory that holds it: refused before anything is removed. */
         else if ((S_ISDIR(st.st_mode) && safe_below(rootfd, tdir, &st)) || (existed && !same && S_ISDIR(dst.st_mode) && safe_below(rootfd, fdir, &dst)))
             status = 403;

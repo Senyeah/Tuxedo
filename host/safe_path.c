@@ -210,6 +210,19 @@ int safe_remove(int dir, const char *name) {
     return rc ? -1 : unlinkat(dir, name, AT_REMOVEDIR);
 }
 
+/* Owner rwx down a part-made copy, so safe_remove can clear a read-only directory in it. */
+static void unlock_tree(int dir, const char *name) {
+    struct stat st;
+    if (fstatat(dir, name, &st, AT_SYMLINK_NOFOLLOW) != 0 || !S_ISDIR(st.st_mode)) return;
+    fchmodat(dir, name, 0700, AT_SYMLINK_NOFOLLOW);
+    DIR *d = open_dir(dir, name);
+    if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d)))
+        if (!dots(e->d_name)) unlock_tree(dirfd(d), e->d_name);
+    closedir(d);
+}
+
 /* skip is the copy's top directory, so a copy into the source's own tree does not copy itself. */
 static int copy_tree(int fromdir, const char *from, int todir, const char *to, const struct stat *skip) {
     struct stat st;
@@ -228,6 +241,7 @@ static int copy_tree(int fromdir, const char *from, int todir, const char *to, c
     if (!S_ISDIR(st.st_mode)) return 0; /* a link or a device: left out */
     if (mkdirat(todir, to, (st.st_mode & 0777) | 0700) != 0) return -1;
     struct stat made;
+    int top = !skip;
     DIR *in = open_dir(fromdir, from), *out = open_dir(todir, to);
     int rc = in && out && fstat(dirfd(out), &made) == 0 ? 0 : -1;
     if (!skip) skip = &made;
@@ -235,9 +249,15 @@ static int copy_tree(int fromdir, const char *from, int todir, const char *to, c
     while (rc == 0 && (e = readdir(in))) {
         if (!dots(e->d_name)) rc = copy_tree(dirfd(in), e->d_name, dirfd(out), e->d_name, skip);
     }
+    /* Mode, times and xattrs last: a read-only mode stops the copy into it, and each new entry moves the mtime. */
+    if (rc == 0) rc = fcopyfile(dirfd(in), dirfd(out), NULL, COPYFILE_STAT | COPYFILE_XATTR) < 0 ? -1 : 0;
     int err = errno;
     if (in) closedir(in);
     if (out) closedir(out);
+    if (rc != 0 && top) {
+        unlock_tree(todir, to);
+        safe_remove(todir, to);
+    }
     errno = err;
     return rc;
 }
