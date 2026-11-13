@@ -160,6 +160,21 @@ int main(void) {
     check("list: metadata, not the secret",
           strstr(resp_body, "login.1 eyJsYWJlbCI6IkEifQ==\n") != NULL && strstr(resp_body, "login.2 \n") != NULL, 1);
 
+    /* Locked with items: the list gives every id and its metadata, and no secret. */
+    check("a marked secret", put("login.m", "eyJsYWJlbCI6Ik0ifQ==", "SECRET-MARKER-42", 16), 201);
+    hv_secrets_set_locked(1);
+    check("locked list with items", req("GET", "/.henge/secrets/items", NULL), 200);
+    check("locked list: ids and metadata",
+          strstr(resp_body, "login.1 eyJsYWJlbCI6IkEifQ==\n") && strstr(resp_body, "login.2 \n") && strstr(resp_body, "login.m eyJsYWJlbCI6Ik0ifQ==\n"), 1);
+    check("locked list: three lines", (long)(strchr(resp_body, '\n') && strchr(strchr(strchr(resp_body, '\n') + 1, '\n') + 1, '\n')
+                                            && !strchr(strchr(strchr(strchr(resp_body, '\n') + 1, '\n') + 1, '\n') + 1, '\n')), 1);
+    check("locked list: no secret", strstr(resp_body, "SECRET-MARKER") == NULL && strstr(resp_body, "U0VDUkVULU1BUktFUi00Mg") == NULL &&
+                                        memmem(resp_body, resp_len, value + 2, 40) == NULL, 1);
+    check("locked: the marked secret stays", get("login.m"), 423);
+    check("locked: no secret in the answer", strstr(resp_body, "SECRET") == NULL, 1);
+    hv_secrets_set_locked(0);
+    check("the marked secret: delete", req("DELETE", "/.henge/secrets/items/login.m", NULL), 204);
+
     char path[256];
     struct stat st;
     snprintf(path, sizeof path, "%s/machine-a/login.1", store_dir);
