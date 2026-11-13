@@ -31,6 +31,8 @@ static void mouse_button(int b, int down) {
     hv_virt_machine_unlock();
 }
 
+int hv_virt_window_touch;
+
 /* Device-side modifier bits (NX_DEVICE*MASK) per modifier key code. */
 static NSUInteger device_mask(uint16_t k) {
     switch (k) {
@@ -120,18 +122,42 @@ static NSUInteger device_mask(uint16_t k) {
     int dx = (int)lround(e.deltaX), dy = (int)lround(e.deltaY);
     if (dx || dy) { hv_virt_machine_lock(); hv_vm_mouse_move(dx, dy); hv_virt_machine_unlock(); }
 }
+/* --touch: slot 0 at the click's place in the guest picture, which the layer fits by aspect. */
+- (void)touch:(NSEvent *)e phase:(int)phase {
+    NSPoint at = [self convertPoint:e.locationInWindow fromView:nil];
+    NSSize b = self.bounds.size;
+    uint32_t gw = 0, gh = 0;
+    double scale;
+    if (!hv_vm_display(&gw, &gh, &scale) || !gw || !gh) gw = (uint32_t)b.width, gh = (uint32_t)b.height;
+    double k = fmin(b.width / gw, b.height / gh), w = gw * k, h = gh * k;
+    double u = (at.x - (b.width - w) / 2) / w, v = 1 - (at.y - (b.height - h) / 2) / h; /* AppKit's y goes up */
+    hv_virt_machine_lock();
+    hv_vm_screen_touch(0, phase, (int)lround(u * 32767), (int)lround(v * 32767));
+    hv_vm_screen_touch_frame();
+    hv_virt_machine_unlock();
+}
 - (void)mouseMoved:(NSEvent *)e { [self moved:e]; }
-- (void)mouseDragged:(NSEvent *)e { [self moved:e]; }
+- (void)mouseDragged:(NSEvent *)e {
+    if (hv_virt_window_touch) [self touch:e phase:1];
+    else [self moved:e];
+}
 - (void)rightMouseDragged:(NSEvent *)e { [self moved:e]; }
 - (void)otherMouseDragged:(NSEvent *)e { [self moved:e]; }
 - (void)mouseDown:(NSEvent *)e {
+    if (hv_virt_window_touch) {
+        [self touch:e phase:0];
+        return;
+    }
     if (!self.captured) { /* the first click only takes the mouse */
         [self setCapture:YES];
         return;
     }
     mouse_button(0, 1);
 }
-- (void)mouseUp:(NSEvent *)e { if (self.captured) mouse_button(0, 0); }
+- (void)mouseUp:(NSEvent *)e {
+    if (hv_virt_window_touch) [self touch:e phase:2];
+    else if (self.captured) mouse_button(0, 0);
+}
 - (void)rightMouseDown:(NSEvent *)e { if (self.captured) mouse_button(1, 1); }
 - (void)rightMouseUp:(NSEvent *)e { if (self.captured) mouse_button(1, 0); }
 - (void)otherMouseDown:(NSEvent *)e { if (self.captured) mouse_button(2, 1); }
@@ -184,7 +210,7 @@ void hv_virt_window_run(unsigned width, unsigned height) {
         static VWDelegate *delegate;
         delegate = [VWDelegate new];
         w.delegate = delegate;
-        w.title = @"HengeVM Linux — click to use the mouse";
+        w.title = hv_virt_window_touch ? @"HengeVM Linux — a click is a touch on the screen" : @"HengeVM Linux — click to use the mouse";
         [w center];
         [w makeKeyAndOrderFront:nil];
         [w makeFirstResponder:v];

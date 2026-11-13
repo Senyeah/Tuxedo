@@ -71,6 +71,7 @@ typedef struct HvVirt {
     HvVirtioInput *keyboard, *mouse;
     HvVirtioGpu *gpu;
     HvVirtioSnd *snd;
+    HvVirtioInput *touch;     /* before the balloon, so HV_BALLOON does not move it */
     HvVirtioBalloon *balloon; /* HV_BALLOON=MB, as on vmapple */
     uint8_t *flash0, *flash1;
     HvGuestRam mem;

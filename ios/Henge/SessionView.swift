@@ -89,6 +89,10 @@ struct SessionView: View {
     }
 
     private var consoleShown: Bool { mac.guest == .linux && consoleChoice == .console }
+    /// LINUX-PLAN-12: the picture takes direct touches. Only while the phone shows the picture; the saved choice stays.
+    private var touchActive: Bool { mac.guest == .linux && current.usesTouch && !consoleShown && !display.isExternal }
+    /// Zoom is off in touch mode, and comes back with the pointer.
+    private var zoomShown: Bool { zoomed && !touchActive }
 
     /// The guest's shape now: the phone's own screen for phone Linux, else the machine's fixed size.
     private var layoutAspect: CGFloat {
@@ -109,11 +113,11 @@ struct SessionView: View {
                               height: geo.size.height + insets.top + insets.bottom)
             let landscape = full.width > full.height
             let window = WindowKey(size: full, insets: DisplayInsets(top: insets.top, left: insets.leading, bottom: insets.bottom, right: insets.trailing))
-            let layout = Layout(full: full, insets: insets, landscape: landscape, zoomed: zoomed && !consoleShown, typing: typing,
+            let layout = Layout(full: full, insets: insets, landscape: landscape, zoomed: zoomShown && !consoleShown, typing: typing,
                                 centre: zoomCentre, aspect: layoutAspect, console: consoleShown,
                                 native: current.followsPhoneScreen ? windowMode.map { DisplayModePolicy.framePoints($0, contentsScale: Device.nativeScale) } : nil)
             ZStack(alignment: .topLeading) {
-                (landscape || zoomed || layout.native != nil ? Color.black : Desk.page)
+                (landscape || zoomShown || layout.native != nil ? Color.black : Desk.page)
                 // One view in every layout: it holds the layer the engine draws into.
                 BootDisplay(display: display, role: .device, guest: mac.guest, console: console,
                             showConsole: consoleShown, typing: $typing)
@@ -142,9 +146,16 @@ struct SessionView: View {
                     .position(x: layout.screen.midX, y: layout.screen.midY)
                 if state != 2 {
                     if !consoleShown { // the console takes touches itself
-                        Trackpad()
-                            .frame(width: layout.touch.width, height: layout.touch.height)
-                            .position(x: layout.touch.midX, y: layout.touch.midY)
+                        if touchActive {
+                            TouchScreen(guestRect: touchPicture(layout))
+                                .defersSystemGestures(on: .all) // the first edge swipe is the guest's
+                                .frame(width: layout.touch.width, height: layout.touch.height)
+                                .position(x: layout.touch.midX, y: layout.touch.midY)
+                        } else {
+                            Trackpad()
+                                .frame(width: layout.touch.width, height: layout.touch.height)
+                                .position(x: layout.touch.midX, y: layout.touch.midY)
+                        }
                         if inputMode == .volumeButtons && volumeMode == .intercept {
                             // The capture interaction must live in the SwiftUI hierarchy to receive
                             // the volume-button events; it passes touches through to the trackpad.
@@ -203,7 +214,7 @@ struct SessionView: View {
             }
             .frame(width: full.width, height: full.height)
             .ignoresSafeArea()
-            .animation(.easeInOut(duration: 0.25), value: zoomed)
+            .animation(.easeInOut(duration: 0.25), value: zoomShown)
             .animation(.easeInOut(duration: 0.25), value: typing)
             .animation(.easeInOut(duration: 0.25), value: controlsHidden)
             .animation(.easeInOut(duration: 0.25), value: showRevealHint)
@@ -240,17 +251,19 @@ struct SessionView: View {
                  ? "\(mac.name) is asked to shut down, as if you pressed its power button. It can take a few seconds."
                  : "This turns the Mac off at once. Anything not saved on it is lost.")
         }
-        .onChange(of: zoomed) { on in
+        .onChange(of: zoomShown) { on in
             zoomFollowing?.cancel()
             zoomFollowing = on ? Task { await followPointer() } : nil
         }
         .onChange(of: pointerNeeded) { PointerLock.set(!$0) }
+        .onChange(of: touchActive) { touchModeChanged($0) }
         .onChange(of: scenePhase) { phase in
             guard phase != .active else {
                 display.refresh()
                 setBackground(false)
                 return
             }
+            henge_vm_screen_touch_cancel()
             HardwareKeys.releaseAll()
             HardwareMouse.shared.releaseButtons()
             VolumeClicks.shared.releaseButtons()
@@ -275,6 +288,7 @@ struct SessionView: View {
             UIApplication.shared.isIdleTimerDisabled = true
             HardwareMouse.shared.start()
             VolumeClicks.shared.start()
+            henge_vm_set_touch_mode(touchActive ? 1 : 0)
         }
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
@@ -282,6 +296,8 @@ struct SessionView: View {
             modeTask?.cancel()
             henge_vm_set_pointer_scale(0)
             console.stop()
+            henge_vm_screen_touch_cancel()
+            henge_vm_set_touch_mode(0)
             StickyKeys.shared.releaseAll()
             HardwareKeys.releaseAll()
             HardwareMouse.shared.stop()
@@ -415,12 +431,18 @@ struct SessionView: View {
                 }
                 tool("keyboard", "Keyboard") { typing.toggle() }
                 Spacer()
-                pasteTool
+                if mac.guest == .linux && !consoleShown {
+                    inputSwitch()
+                    Spacer()
+                }
+                pasteTool(keysMenu: Self.roomForKeysMenu(layout.pad.width + 16))
                 Spacer()
                 if consoleShown {
                     fitTool()
                 } else {
                     tool("plus.magnifyingglass", "Zoom in") { zoomed = true }
+                        .disabled(touchActive)
+                        .opacity(touchActive ? 0.4 : 1)
                 }
                 Spacer()
                 tool("info.circle", "Details") { showDetails = true }
@@ -475,8 +497,8 @@ struct SessionView: View {
     }
 
     /// The system's paste button: iOS asks no permission for it, as it would if the app read the clipboard itself.
-    /// A Linux desktop adds a menu for what to paste with: terminals want Ctrl-Shift-V.
-    private var pasteTool: some View {
+    /// A Linux desktop adds a menu for what to paste with: terminals want Ctrl-Shift-V. Details has the same choice.
+    private func pasteTool(keysMenu: Bool = true) -> some View {
         HStack(spacing: 0) {
             PasteButton(payloadType: String.self) { texts in
                 if let text = texts.first {
@@ -487,7 +509,7 @@ struct SessionView: View {
             .buttonBorderShape(.circle)
             .tint(Desk.raised)
             .accessibilityHint(mac.guest == .linux ? "Types the copied text into the machine" : "Pastes the copied text into the Mac")
-            if mac.guest == .linux && !consoleShown {
+            if mac.guest == .linux && !consoleShown && keysMenu {
                 Menu {
                     Picker("Paste with", selection: $pasteKeys) {
                         Text("Ctrl-V").tag(Sharing.PasteKeys.control.rawValue)
@@ -498,6 +520,26 @@ struct SessionView: View {
                 }
                 .accessibilityLabel("Paste keys")
             }
+        }
+    }
+
+    /// The guest picture in the touch view's coordinates, as the layer fits it into the screen's frame.
+    private func touchPicture(_ layout: Layout) -> CGRect {
+        let frame = layout.screen.offsetBy(dx: -layout.touch.minX, dy: -layout.touch.minY)
+        return TouchMapping.pictureRect(guest: CGSize(width: guestScreen.width, height: guestScreen.height), in: frame)
+    }
+
+    /// A switch between the trackpad and touch: nothing stays down in the guest across it.
+    private func touchModeChanged(_ on: Bool) {
+        HengeLog.log("input", "touch input \(on ? "on" : "off")")
+        henge_vm_set_touch_mode(on ? 1 : 0)
+        if on {
+            let ms = UInt32(truncatingIfNeeded: Int(ProcessInfo.processInfo.systemUptime * 1000))
+            for id in Int32(1)...5 { henge_vm_touch(id, 2, 0, 0, ms) }
+            henge_vm_touch_frame(ms)
+            henge_vm_mouse_button(0, 0) // a drag in progress ends
+        } else {
+            henge_vm_screen_touch_cancel()
         }
     }
 
@@ -532,6 +574,22 @@ struct SessionView: View {
         .accessibilityLabel("Fit the console to the view")
     }
 
+    /// Linux: the picture takes direct touches, or it is a trackpad. As the view switch, it names what a tap selects.
+    private func inputSwitch(tint: Color = Desk.text) -> some View {
+        let touch = current.usesTouch
+        return tool(touch ? "cursorarrow" : "hand.point.up.left", touch ? "Use the pointer" : "Use touch", tint: tint) {
+            var m = current
+            m.touchInput = !touch
+            Machines.shared.update(m)
+        }
+        .accessibilityValue(touch ? "Touch" : "Pointer")
+        .disabled(display.isExternal) // the phone shows no picture to touch
+        .opacity(display.isExternal ? 0.4 : 1)
+    }
+
+    /// With the touch tool, a phone held upright has no room for the paste keys' menu (an estimate: 431 pt against 402).
+    private static func roomForKeysMenu(_ width: CGFloat) -> Bool { width >= 440 }
+
     private func tool(_ symbol: String, _ label: String, tint: Color = Desk.text, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
@@ -548,7 +606,8 @@ struct SessionView: View {
     @ViewBuilder private func floatingControls(_ layout: Layout) -> some View {
         let landscape = layout.touch.width > layout.touch.height
         let top = layout.insets.top + (landscape ? 8 : 6)
-        let pill = HStack(spacing: 4) {
+        let roomy = Self.roomForKeysMenu(layout.touch.width) || mac.guest == .mac || consoleShown
+        let pill = HStack(spacing: roomy ? 4 : 2) {
             if consoleShown {
                 viewSwitch(tint: .white)
             } else {
@@ -556,11 +615,14 @@ struct SessionView: View {
                 if mac.guest == .linux { viewSwitch(tint: .white) }
             }
             tool("keyboard", "Keyboard", tint: .white) { typing.toggle() }
-            pasteTool
+            if mac.guest == .linux && !consoleShown { inputSwitch(tint: .white) }
+            pasteTool(keysMenu: roomy)
             if consoleShown {
                 fitTool(tint: .white)
             } else {
-                tool(zoomed ? "minus.magnifyingglass" : "plus.magnifyingglass", zoomed ? "Zoom out" : "Zoom in", tint: zoomed ? Desk.accentLight : .white) { zoomed.toggle() }
+                tool(zoomShown ? "minus.magnifyingglass" : "plus.magnifyingglass", zoomShown ? "Zoom out" : "Zoom in", tint: zoomShown ? Desk.accentLight : .white) { zoomed.toggle() }
+                    .disabled(touchActive)
+                    .opacity(touchActive ? 0.4 : 1)
             }
             tool("info.circle", "Details", tint: .white) { showDetails = true }
             Rectangle().fill(Color.white.opacity(0.3)).frame(width: 1, height: 22).padding(.horizontal, 4)
@@ -578,7 +640,7 @@ struct SessionView: View {
         } else {
             pill.position(x: layout.touch.midX, y: layout.touch.height - layout.insets.bottom - 34)
         }
-        if zoomed { zoomMap(layout) }
+        if zoomShown { zoomMap(layout) }
     }
 
     /// The whole screen, small, with where the zoomed view is on it.
@@ -819,8 +881,12 @@ struct SessionView: View {
                         }
                     }
                     if mac.guest == .linux {
+                        Picker("Paste with", selection: $pasteKeys) {
+                            Text("Ctrl-V").tag(Sharing.PasteKeys.control.rawValue)
+                            Text("Ctrl-Shift-V (terminals)").tag(Sharing.PasteKeys.controlShift.rawValue)
+                        }
                         Text(helperRunning
-                             ? "What you copy in the guest is copied here too, and the paste button pastes from here into the guest. The arrow beside it chooses Ctrl-V or Ctrl-Shift-V, which terminals want."
+                             ? "What you copy in the guest is copied here too, and the paste button pastes from here into the guest. Paste with chooses Ctrl-V or Ctrl-Shift-V, which terminals want. When there is room, the arrow beside the paste button also chooses it."
                              : "The clipboard helper runs on a Debian desktop. Without it, and on the console, the paste button types the text into the guest.")
                             .font(.footnote).foregroundStyle(.secondary)
                     } else {
@@ -884,6 +950,7 @@ struct SessionView: View {
         framesOut = 0
         framesIn = 0
         zoomed = false
+        henge_vm_screen_touch_cancel()
         controlsHidden = false
         showRevealHint = false
         zoomCentre = CGPoint(x: 0.5, y: 0.5)

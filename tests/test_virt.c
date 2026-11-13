@@ -55,13 +55,14 @@ static void test_memory_map(void) {
     check("GIC distributor PIDR2", rd32(&m, VIRT_GIC_DIST + 0xffe8), 0x3b);
     check("GIC redistributor 0 PIDR2", rd32(&m, VIRT_GIC_REDIST + 0xffe8), 0x3b);
     static const uint32_t ids[] = {0x00081b36, 0x10421af4, 0x10411af4, 0x10441af4, 0x000d1b36, 0x10521af4, 0x10521af4,
-                                   0x10501af4, 0x10591af4};
-    for (int s = 0; s < 9; s++) {
+                                   0x10501af4, 0x10591af4, 0x10521af4};
+    for (int s = 0; s < 10; s++) {
         char what[48];
         snprintf(what, sizeof what, "ECAM slot %d vendor and device", s);
         check(what, rd32(&m, VIRT_PCIE_ECAM + ((uint64_t)s << 15)), ids[s]);
     }
-    check("ECAM slot 9 is empty", rd32(&m, VIRT_PCIE_ECAM + (9ull << 15)), 0xffffffff);
+    check("the touchscreen is in slot 9", b.touch && b.touch->vio.pci.slot == 9, 1);
+    check("ECAM slot 10 is empty", rd32(&m, VIRT_PCIE_ECAM + (10ull << 15)), 0xffffffff);
     check("ECAM bus 1 is empty", rd32(&m, VIRT_PCIE_ECAM + (1ull << 20)), 0xffffffff);
     check("PCI I/O window reads as all ones", rd32(&m, VIRT_PCIE_PIO + 0x10), 0xffffffff);
     wr32(&m, VIRT_PCIE_PIO + 0x10, 0);
@@ -583,6 +584,35 @@ static void test_vm(void) {
     vm->tick(vm, hv_vm_cpu(0));
     check("tick moves console input into the UART", rd32(vm, VIRT_UART), 'o');
     check("second byte", rd32(vm, VIRT_UART), 'k');
+    /* the touchscreen through the host layer (TS2) */
+    HvVirtioInput *ts = hv_vm_devs()->touch;
+    check("touchscreen in the board's devices", ts && ts == hv_vm_virt()->touch, 1);
+    if (ts) {
+        uint32_t queued = ts->ftail;
+        hv_vm_screen_touch(0, 0, 40000, -3);
+        hv_vm_screen_touch_frame();
+        const HvTouchState *f = &ts->frames[queued % HV_TOUCH_FRAMES];
+        check("host: a touch is one frame, clamped", ts->ftail == queued + 1 && f->down[0] && f->x[0] == 32767 && f->y[0] == 0, 1);
+        hv_vm_screen_touch_cancel();
+        check("host: cancel is a frame with no contact", ts->ftail == queued + 2 && !ts->frames[(queued + 1) % HV_TOUCH_FRAMES].down[0], 1);
+    }
+    check("pointer image shown at first", hv_vm_pointer_hidden(), 0);
+    hv_vm_screen_touch(1, 0, 5, 5);
+    check("pointer mode: a touch does not hide it", hv_vm_pointer_hidden(), 0);
+    hv_vm_set_touch_mode(1);
+    check("touch mode hides it", hv_vm_pointer_hidden(), 1);
+    hv_vm_mouse_move(1, 0);
+    check("a mouse move shows it", hv_vm_pointer_hidden(), 0);
+    hv_vm_screen_touch(1, 0, 5, 5);
+    check("the next touch hides it", hv_vm_pointer_hidden(), 1);
+    hv_vm_touch(1, 2, 0, 0, 0);
+    check("a trackpad lift leaves it hidden", hv_vm_pointer_hidden(), 1);
+    hv_vm_touch(1, 0, 100, 100, 0);
+    check("a trackpad finger shows it", hv_vm_pointer_hidden(), 0);
+    hv_vm_touch(1, 2, 100, 100, 0);
+    hv_vm_screen_touch(1, 2, 5, 5);
+    hv_vm_set_touch_mode(0);
+    check("pointer mode shows it", hv_vm_pointer_hidden(), 0);
     /* the power key: rising edge on pin 3, high for 100 ms */
     uint32_t key = 1u << VIRT_GPIO_POWER, pin = VIRT_GPIO + (key << 2);
     wr32(vm, VIRT_GPIO + 0x40c, key);
@@ -1671,6 +1701,208 @@ static void test_rng(void) {
     wr16(d.cfg + 0x04, 0);
 }
 
+/* The touchscreen (TS1): its config answers, and the protocol B events each frame gives. */
+#define TOUCH_SLOT 9
+#define TOUCH_BAR (VIRT_PCIE_MMIO + 0x1500000) /* not 0x1300000: test_snd_controls leaves the sound device there */
+static Vdev touch_dev;
+static int touch_posted; /* one event buffer at a time, at VD_BUF */
+
+static uint32_t touch_cfg(uint8_t select, uint8_t subsel, uint8_t *data) {
+    wr8(TOUCH_BAR + 0x2000, select);
+    wr8(TOUCH_BAR + 0x2001, subsel);
+    for (int i = 0; i < 128; i++) data[i] = rd8(TOUCH_BAR + 0x2008 + i);
+    return rd8(TOUCH_BAR + 0x2002);
+}
+
+/* Every event the device hands over now, as "S0 T0 X1 Y2 B1 |" (slot, tracking ID, x, y, BTN_TOUCH, report). */
+static void touch_take(char *out, size_t cap, int *reports) {
+    uint64_t ring = touch_dev.ring[0];
+    uint16_t *avail = (uint16_t *)ram(ring + 0x1000), *used = (uint16_t *)ram(ring + 0x2000);
+    size_t at = 0;
+    out[0] = 0;
+    if (reports) *reports = 0;
+    for (;;) {
+        if (!touch_posted) {
+            put_desc(ring, 0, VD_BUF, 8, 2, 0);
+            avail[2 + touch_dev.avail[0] % 16] = 0;
+            avail[1] = ++touch_dev.avail[0];
+            touch_posted = 1;
+        }
+        uint16_t before = used[1];
+        hv_virtio_input_poll(b.touch);
+        if (used[1] == before) return;
+        touch_posted = 0;
+        uint16_t type, code;
+        int32_t value;
+        memcpy(&type, ram(VD_BUF), 2);
+        memcpy(&code, ram(VD_BUF + 2), 2);
+        memcpy(&value, ram(VD_BUF + 4), 4);
+        char tok[32];
+        if (type == HV_EV_SYN) {
+            snprintf(tok, sizeof tok, "|");
+            if (reports) ++*reports;
+        } else if (type == HV_EV_KEY && code == HV_BTN_TOUCH) snprintf(tok, sizeof tok, "B%d", value);
+        else if (type == HV_EV_ABS && code == HV_ABS_MT_SLOT) snprintf(tok, sizeof tok, "S%d", value);
+        else if (type == HV_EV_ABS && code == HV_ABS_MT_TRACKING_ID) snprintf(tok, sizeof tok, "T%d", value);
+        else if (type == HV_EV_ABS && code == HV_ABS_MT_POSITION_X) snprintf(tok, sizeof tok, "X%d", value);
+        else if (type == HV_EV_ABS && code == HV_ABS_MT_POSITION_Y) snprintf(tok, sizeof tok, "Y%d", value);
+        else snprintf(tok, sizeof tok, "?%u:%u:%d", type, code, value);
+        if (at + strlen(tok) + 2 < cap) at += (size_t)snprintf(out + at, cap - at, "%s%s", at ? " " : "", tok);
+    }
+}
+
+static void touch_expect(const char *what, const char *want) {
+    static char got[4096];
+    touch_take(got, sizeof got, NULL);
+    checks++;
+    if (strcmp(got, want)) {
+        printf("  FAIL %s: \"%s\", expected \"%s\"\n", what, got, want);
+        failures++;
+    }
+}
+
+static void test_touch(void) {
+    HvVirtioInput *t = b.touch;
+    uint8_t data[128];
+    vdev_init(&touch_dev, TOUCH_SLOT, 2, TOUCH_BAR);
+    touch_posted = 0;
+    uint32_t n = touch_cfg(0x01, 0, data);
+    check("touch: name", n == 19 && !memcmp(data, "HengeVM Touchscreen", 19), 1);
+    n = touch_cfg(0x03, 0, data);
+    uint16_t ids[4];
+    memcpy(ids, data, sizeof ids);
+    check("touch: ids are virtual bus, 0x0627, product 3", n == 8 && ids[0] == 6 && ids[1] == 0x627 && ids[2] == 3, 1);
+    check("touch: one property byte", touch_cfg(0x10, 0, data), 1);
+    check("touch: INPUT_PROP_DIRECT only", data[0], 2);
+    check("touch: key bits reach BTN_TOUCH", touch_cfg(0x11, HV_EV_KEY, data), HV_BTN_TOUCH / 8 + 1);
+    int keys = 0;
+    for (int i = 0; i < 42 * 8; i++) keys += data[i / 8] >> (i % 8) & 1;
+    check("touch: BTN_TOUCH is the only key", keys == 1 && (data[HV_BTN_TOUCH / 8] >> (HV_BTN_TOUCH % 8) & 1), 1);
+    check("touch: axis bits reach ABS_MT_TRACKING_ID", touch_cfg(0x11, HV_EV_ABS, data), 8);
+    static const uint8_t abs_bits[8] = {0, 0, 0, 0, 0, 0x80, 0x60, 0x02};
+    check("touch: slot, x, y and tracking ID axes", !memcmp(data, abs_bits, 8), 1);
+    check("touch: no relative axes", touch_cfg(0x11, HV_EV_REL, data), 0);
+    static const struct { uint8_t axis; uint32_t max; } info[] = {{HV_ABS_MT_SLOT, 9}, {HV_ABS_MT_TRACKING_ID, 65535},
+                                                                  {HV_ABS_MT_POSITION_X, 32767}, {HV_ABS_MT_POSITION_Y, 32767}};
+    for (int i = 0; i < 4; i++) {
+        char what[48];
+        uint32_t v[5];
+        n = touch_cfg(0x12, info[i].axis, data);
+        memcpy(v, data, sizeof v);
+        snprintf(what, sizeof what, "touch: ABS_INFO %#x", info[i].axis);
+        check(what, n == 20 && v[0] == 0 && v[1] == info[i].max && !v[2] && !v[3] && !v[4], 1);
+    }
+    check("touch: no ABS_INFO for ABS_X", touch_cfg(0x12, 0, data), 0);
+    b.mouse->vio.config_write(&b.mouse->vio, 0, 0x12 | HV_ABS_MT_SLOT << 8, 2);
+    check("touch: the mouse has no ABS_INFO", b.mouse->vio.config[2], 0);
+    b.mouse->vio.config_write(&b.mouse->vio, 0, 0x10, 2);
+    check("touch: the mouse keeps INPUT_PROP_POINTER", b.mouse->vio.config[2] == 1 && b.mouse->vio.config[8] == 1, 1);
+
+    touch_expect("touch: nothing before a frame", "");
+    hv_virtio_input_touch(t, 0, 0, 100, 200);
+    touch_expect("touch: a contact waits for its frame", "");
+    hv_virtio_input_touch_frame(t);
+    touch_expect("touch: down", "S0 T0 X100 Y200 B1 |");
+    hv_virtio_input_touch(t, 0, 1, 150, 200);
+    hv_virtio_input_touch_frame(t);
+    touch_expect("touch: move sends the changed axis", "S0 X150 |");
+    hv_virtio_input_touch_frame(t);
+    touch_expect("touch: a frame with no change sends nothing", "");
+    hv_virtio_input_touch(t, 0, 2, 150, 200);
+    hv_virtio_input_touch_frame(t);
+    touch_expect("touch: up", "S0 T-1 B0 |");
+
+    hv_virtio_input_touch(t, 0, 0, 1000, 1000);
+    hv_virtio_input_touch(t, 1, 0, 2000, 2000);
+    hv_virtio_input_touch_frame(t);
+    touch_expect("touch: two down", "S0 T1 X1000 Y1000 S1 T2 X2000 Y2000 B1 |");
+    hv_virtio_input_touch(t, 0, 1, 900, 1000);
+    hv_virtio_input_touch(t, 1, 1, 2100, 2100);
+    hv_virtio_input_touch_frame(t);
+    touch_expect("touch: two move apart", "S0 X900 S1 X2100 Y2100 |");
+    hv_virtio_input_touch(t, 0, 2, 0, 0);
+    hv_virtio_input_touch_frame(t);
+    touch_expect("touch: the first lifts, BTN_TOUCH stays", "S0 T-1 |");
+    hv_virtio_input_touch(t, 1, 2, 0, 0);
+    hv_virtio_input_touch_frame(t);
+    touch_expect("touch: the last lifts", "S1 T-1 B0 |");
+
+    hv_virtio_input_touch(t, 3, 0, -5, 40000);
+    hv_virtio_input_touch(t, 10, 0, 1, 1);
+    hv_virtio_input_touch(t, -1, 0, 1, 1);
+    hv_virtio_input_touch_frame(t);
+    touch_expect("touch: clamped, slots out of range ignored", "S3 T3 X0 Y32767 B1 |");
+    hv_virtio_input_touch(t, 3, 0, 7, 8);
+    hv_virtio_input_touch_frame(t);
+    touch_expect("touch: a new contact in a held slot lifts the old one first", "S3 T-1 B0 | S3 T4 X7 Y8 B1 |");
+    hv_virtio_input_touch(t, 5, 1, 1, 1);
+    hv_virtio_input_touch_frame(t);
+    touch_expect("touch: a move of a slot that is up does nothing", "");
+    hv_virtio_input_touch(t, 5, 0, 9, 9);
+    hv_virtio_input_touch_frame(t);
+    touch_expect("touch: second contact", "S5 T5 X9 Y9 |");
+    hv_virtio_input_touch_cancel(t);
+    touch_expect("touch: cancel lifts every contact", "S3 T-1 S5 T-1 B0 |");
+
+    /* No guest buffer: 300 frames, the last one a lift. The queue keeps 256 and the newest. */
+    uint16_t *used = (uint16_t *)ram(touch_dev.ring[0] + 0x2000);
+    uint16_t seen = used[1];
+    uint64_t replaced = t->frames_replaced;
+    hv_virtio_input_touch(t, 0, 0, 10, 10);
+    hv_virtio_input_touch_frame(t);
+    for (int i = 1; i < 299; i++) {
+        hv_virtio_input_touch(t, 0, 1, 10 + i, 10);
+        hv_virtio_input_touch_frame(t);
+    }
+    hv_virtio_input_touch(t, 0, 2, 0, 0);
+    hv_virtio_input_touch_frame(t);
+    check("touch: nothing delivered while the guest is away", used[1], seen);
+    check("touch: 44 of 300 frames replaced", t->frames_replaced - replaced, 44);
+    static char all[1 << 16];
+    int reports;
+    touch_take(all, sizeof all, &reports);
+    size_t len = strlen(all);
+    check("touch: the queued reports arrive", (uint64_t)reports, 256);
+    check("touch: the lift is not lost", len > 12 && !strcmp(all + len - 12, " S0 T-1 B0 |"), 1);
+    check("touch: no contact left down", t->touch_sent.down[0], 0);
+
+    /* A lift and a new contact in the same slot, both in replaced frames. */
+    hv_virtio_input_touch(t, 0, 0, 10, 10);
+    hv_virtio_input_touch_frame(t);
+    touch_take(all, sizeof all, NULL);
+    for (int i = 0; i < 256; i++) {
+        hv_virtio_input_touch(t, 0, 1, 11, 10 + i % 2);
+        hv_virtio_input_touch_frame(t);
+    }
+    hv_virtio_input_touch(t, 0, 2, 0, 0);
+    hv_virtio_input_touch_frame(t);
+    hv_virtio_input_touch(t, 0, 0, 500, 600);
+    hv_virtio_input_touch_frame(t);
+    touch_take(all, sizeof all, NULL);
+    len = strlen(all);
+    const char *tail = " S0 T-1 B0 | S0 T8 X500 Y600 B1 |";
+    check("touch: a hidden lift is still sent", len > strlen(tail) && !strcmp(all + len - strlen(tail), tail), 1);
+    if (!(len > strlen(tail) && !strcmp(all + len - strlen(tail), tail))) printf("  got ...%s\n", len > 60 ? all + len - 60 : all);
+
+    /* A driver reset: the contact still down comes back as a new one. */
+    vdev_init(&touch_dev, TOUCH_SLOT, 2, TOUCH_BAR);
+    touch_posted = 0;
+    touch_expect("touch: after a reset the contact is new", "S0 T9 X500 Y600 B1 |");
+    hv_virtio_input_touch(t, 0, 2, 0, 0);
+    hv_virtio_input_touch_frame(t);
+    touch_expect("touch: and it lifts", "S0 T-1 B0 |");
+
+    uint32_t mhead = b.mouse->head, mtail = b.mouse->tail;
+    hv_virtio_input_touch(b.mouse, 0, 0, 1, 1);
+    hv_virtio_input_touch_frame(b.mouse);
+    hv_virtio_input_touch_cancel(b.mouse);
+    hv_virtio_input_touch_frame(NULL);
+    check("touch: the mouse ignores touch calls", b.mouse->head == mhead && b.mouse->tail == mtail, 1);
+    rd8(TOUCH_BAR + 0x1000); /* INTx line 1 is the disk's too */
+    check("touch: its INTx drops", b.gic->level[32 + VIRT_IRQ_PCIE + TOUCH_SLOT % 4], 0);
+    wr16(touch_dev.cfg + 0x04, 0);
+}
+
 static void blk_settle(void) { hv_virtio_blk_drain(b.blk); }
 
 #define BLK_SLOT 1
@@ -2081,7 +2313,7 @@ static void test_create_limits(void) {
     check("create: 0 CPUs becomes 1", hv_virt_create(&vb, &mm, cc, 0, 64ull << 20, NULL, NULL), 0);
     check("create: 1 CPU", vb.ncpus, 1);
     check("create: no disk, no net", (uint64_t)(vb.blk != NULL) + (vb.net != NULL), 0);
-    check("create: the other devices are there", vb.rng && vb.usb && vb.keyboard && vb.mouse && vb.gpu, 1);
+    check("create: the other devices are there", vb.rng && vb.usb && vb.keyboard && vb.mouse && vb.gpu && vb.touch, 1);
     check("create: the rng takes the first slot", vb.rng->vio.pci.slot, 1);
     check("create: xHCI follows", vb.usb->pci.slot, 2);
     check("create: E0PD in ID_AA64MMFR2 (no forced KPTI under KASLR)", mm.id.mmfr2 >> 60 & 15, 1);
@@ -2097,6 +2329,7 @@ static void test_create_limits(void) {
     if (hv_machine_init(&mm, 1 << 20) == 0 && hv_virt_create(&vb, &mm, cc, 1, 64ull << 20, NULL, NULL) == 0) {
         check("balloon: HV_BALLOON adds it", vb.balloon != NULL, 1);
         check("balloon: Linux may deflate it on OOM", vb.balloon && (vb.balloon->vio.features & HV_VIRTIO_BALLOON_F_DEFLATE_ON_OOM) != 0, 1);
+        check("balloon: after the touchscreen, which keeps its slot", vb.balloon && vb.balloon->vio.pci.slot == vb.touch->vio.pci.slot + 1, 1);
         hv_virt_destroy(&vb);
         hv_machine_free(&mm);
     }
@@ -3587,6 +3820,7 @@ int main(void) {
     test_rng();
     test_devstatus();
     test_snd_controls();
+    test_touch();
     test_blk(disk_path);
     test_gpu3d(b.gpu);
     hv_virt_destroy(&b);

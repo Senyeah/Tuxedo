@@ -54,6 +54,10 @@ struct VirtualMac: Identifiable, Codable, Hashable {
     var sharpText: Bool?
     /// A9: Linux "Graphics acceleration" (virgl). Missing: off.
     var accel: Bool?
+    /// LINUX-PLAN-12: the picture takes direct touches (the toolbar's touch switch). Missing: the pointer.
+    var touchInput: Bool?
+    /// Never for a Mac: its board has no touchscreen.
+    var usesTouch: Bool { guest == .linux && touchInput == true }
 
     var directory: URL { MachinePaths.directory(for: id) }
     var rom: URL { directory.appendingPathComponent("AVPBooter.vmapple2.bin") }

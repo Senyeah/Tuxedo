@@ -18,6 +18,8 @@ struct LinuxImage: Codable, Identifiable, Hashable {
     var firmwareSHA256: String
     var kernel: String?
     var minBuild: Int?
+    /// A machine made from it starts in touch mode (LINUX-PLAN-12 decision 8: a Plasma image). Missing: the pointer.
+    var touch: Bool?
 
     var downloadBytes: Int64 { diskBytes + firmwareBytes }
 

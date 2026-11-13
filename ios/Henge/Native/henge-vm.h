@@ -108,6 +108,13 @@ void henge_vm_mouse_scroll(int dx, int dy);
 void henge_vm_touch(int finger, int phase, int x, int y, uint32_t ts_ms);
 void henge_vm_touch_frame(uint32_t ts_ms); /* commit one frame with every finger that moved */
 void henge_vm_touch_button(int down); /* the pad's full press (a click) */
+/* A Linux machine's touchscreen: slot 0..9; phase 0 down, 1 move, 2 up; x, y 0..32767 over the whole
+   guest picture. Nothing reaches the guest until _frame. cancel lifts every contact. No effect on a Mac. */
+void henge_vm_screen_touch(int slot, int phase, int x, int y);
+void henge_vm_screen_touch_frame(void);
+void henge_vm_screen_touch_cancel(void);
+/* Touch mode: no guest pointer image from a screen touch until the mouse or trackpad moves it. Any time. */
+void henge_vm_set_touch_mode(int on);
 /* Where the guest has its pointer, in display pixels. 0, or -1 before it has one. */
 int henge_vm_pointer(int *x, int *y);
 /* A small picture of the display, BGRA, width * height * 4 bytes. 0, or -1 before anything shows. */

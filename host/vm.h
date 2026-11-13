@@ -39,6 +39,7 @@ typedef struct HvDisplayOps {
     int (*pointer)(void *d, int *x, int *y);
     void (*set_mode)(void *d, uint32_t width, uint32_t height);
     void (*set_size_mm)(void *d, uint32_t width_mm, uint32_t height_mm); /* NULL: the guest is not told */
+    void (*hide_cursor)(void *d, int hidden); /* NULL: the cursor is part of the guest's picture */
 } HvDisplayOps;
 
 /* The devices of any board, for the code that does not care which board it is. */
@@ -48,6 +49,7 @@ typedef struct HvBoardDevs {
     HvPl061 *gpio;
     HvXhci *usb;
     HvVirtioInput *keyboard, *mouse;
+    HvVirtioInput *touch; /* virt only */
     HvVirtioNet *net;
     HvVirtioSnd *snd;
     HvVirtioBalloon *balloon;
@@ -147,6 +149,15 @@ int hv_vm_power_button(void); /* 1 if the key will be pressed */
 void hv_vm_touch(int id, int phase, int x, int y, uint32_t ts_ms);
 void hv_vm_touch_frame(uint32_t ts_ms); /* commit one frame with every finger that moved */
 void hv_vm_touch_button(int down); /* the pad's full press (a click) */
+/* The virt board's touchscreen (no effect on vmapple). slot 0 to 9; phase 0 down, 1 move, 2 up;
+   x, y 0 to 32767 over the whole guest picture, clamped. Nothing reaches the guest until _frame. */
+void hv_vm_screen_touch(int slot, int phase, int x, int y);
+void hv_vm_screen_touch_frame(void);
+void hv_vm_screen_touch_cancel(void); /* every contact lifts */
+/* Touch mode: the guest's pointer image is not drawn from a screen touch until the mouse or the USB trackpad
+   moves the pointer. Kept for later machines. Off draws it again. */
+void hv_vm_set_touch_mode(int on);
+int hv_vm_pointer_hidden(void);
 /* Where the guest has its pointer, in display pixels. 0, or -1 before it has one. */
 int hv_vm_pointer(int *x, int *y);
 /* A small picture of the display, BGRA, width * height * 4 bytes. 0, or -1 before anything shows. */
