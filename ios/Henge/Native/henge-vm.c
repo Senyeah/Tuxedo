@@ -367,11 +367,6 @@ void henge_share_set_clipboard(const char *text) { hv_share_set_clipboard(text);
 char *henge_share_take_clipboard(void) { return hv_share_take_clipboard(); }
 long henge_share_agent_seen(void) { return hv_share_agent_seen(); }
 int henge_share_keyboard_wanted(unsigned long *seq) { return hv_share_keyboard_wanted(seq); }
-void henge_vm_secrets(const HvSecretStore *store, const char *machine_id) {
-    hv_secrets_set_store(store);
-    hv_secrets_set_scope(machine_id);
-}
-void henge_vm_secrets_set_locked(int locked) { hv_secrets_set_locked(locked); }
 
 /* vm.c keeps the mode and gives it to the board's display once one exists. */
 void henge_vm_set_battery(int level, int state) { hv_vm_set_battery(level, state); }
@@ -379,6 +374,12 @@ void henge_vm_set_brightness(double level) { hv_vm_set_brightness(level); }
 void henge_vm_set_volume(double level) { hv_vm_set_volume(level); }
 int henge_vm_set_timezone(const char *name) { return hv_vm_set_timezone(name); }
 void henge_vm_status_touch(void) { hv_vm_status_touch(); }
+
+void henge_vm_secrets(const HvSecretStore *store, const char *machine_id) {
+    hv_secrets_set_store(store);
+    hv_secrets_set_scope(machine_id);
+}
+void henge_vm_secrets_set_locked(int locked) { hv_secrets_set_locked(locked); }
 
 int henge_vm_take_brightness_request(double *level) {
     if (!lock_running()) return 0;

@@ -135,6 +135,39 @@ The guest shows the device's battery, charging state, screen brightness, volume,
 - `linux-images.json` is `{"images": [...]}`. Each entry has `id`, `name`, `version`, `kind`, `diskURL`, `diskBytes` (download), `diskSHA256`, `unpackedBytes` (the `.hvsparse` file, the data to write), `logicalBytes` (the disk), `firmwareURL`, `firmwareBytes`, `firmwareSHA256`, `kernel`, `minBuild`. The two URLs are relative to the catalogue's URL.
 - `serve.sh` serves `build/linux/dist/` on the LAN address (`--bind`, `--port`, `--dir`). It asks before it opens the port; `--yes` skips the question. It answers `Range` requests, which `http.server` does not, because the app resumes downloads with them. Stop it with Ctrl-C.
 
+## Wallet: KDE Wallet and the Secret Service in the Keychain
+
+A Linux machine keeps its saved passwords in the device's Keychain, not in a wallet file in the guest. `henge-secrets` (`/usr/lib/henge/`, the user unit `henge-secrets.service`, enabled for every user in `default.target`) owns three names on the session bus:
+
+- `org.freedesktop.secrets`, the freedesktop Secret Service: libsecret (`secret-tool`, GNOME and GTK programs, Chromium and Electron with `--password-store=gnome-libsecret`), QtKeychain programs (they try libsecret first), and kwalletd from KDE Frameworks 6.14 and later.
+- `org.kde.kwalletd6` and `org.kde.kwalletd5`, the KWallet API (`/modules/kwalletd6`, `org.kde.KWallet`): KDE programs, plasma-nm, KIO, and Chromium and Electron on KDE (their default store there).
+
+Why both, and not kwalletd6 itself: Debian trixie has KDE Frameworks 6.13. Its kwalletd6 keeps its own `.kwl` files and can only be a Secret Service provider, not a client of one. From 6.14, kwalletd is a client of any Secret Service provider (`kwalletrc`: `[KSecretD] Enabled=false`, `[Migration] MigrateTo3rdParty=true`), but trixie does not have it. So `henge-secrets` does what kwalletd 6.14 does: it serves the KWallet API from the Secret Service items (attributes `server` = folder, `user` = key, `type` = `plaintext`, `base64` or `map`; maps as JSON). A KWallet entry is the same item through both APIs. Without Plasma (labwc), nothing else is needed.
+
+- The package diverts the D-Bus activation files `org.freedesktop.secrets.service` (gnome-keyring), `org.kde.kwalletd6.service` and `org.kde.kwalletd5.service` (kwallet6) to `*.service.henge`, and puts its own in their place (`henge-secrets --activated`).
+- The unit starts with the user's systemd, before Plasma. When `pam_kwallet_init` or D-Bus starts kwalletd6 later, kwalletd6 finds `org.kde.kwalletd6` taken (`KDBusService::Unique`) and exits.
+- Without the device's wallet (an older app, or no share server) `henge-secrets` takes no name. Started by D-Bus (`--activated`), it runs `/usr/bin/kwalletd6` in its place when that is installed, else gnome-keyring's secrets part.
+- Sessions: `plain`, and `dh-ietf1024-sha256-aes128-cbc-pkcs7` when `python3-cryptography` is installed (in the desktop image). libsecret falls back to `plain` without it.
+- Collections: `login` (alias `default`), `session` (alias `session`, in memory only), and those that programs make. KWallet's `kdewallet` is the `default` collection. Lock does nothing: only the device locks.
+- It keeps no secret on disk and logs no secret, label or attribute.
+
+The protocol (`host/secrets.c`, under `/.henge/secrets`): `GET /state[?since=N]` (`locked` or `unlocked`, long poll), `GET /items` (one line per item: id and base64 metadata), `GET`, `PUT` (base64 metadata, a newline, the secret) and `DELETE /items/ID`. Ids are `c.NAME` for a collection and `i.COLLECTION.HEX32` for an item.
+
+Security:
+
+- The host chooses the scope: the machine's id. The guest cannot name another machine's items. On iOS each machine has its own Keychain service, `com.henge.linux-wallet.<machine id>`, and each item is an account in it. Deleting a machine deletes its items.
+- Only the guest reaches the share server: the network hands 10.0.2.4:80 to a Unix socket in the app's storage (mode 0600). But in the guest, any process of any user that can open a TCP connection to 10.0.2.4 can read the machine's secrets while it is unlocked, as any process of the user can with an unlocked KWallet or GNOME keyring.
+- Locked: until the person passes the app's Face ID check (the device passcode is the fallback), while the app is in the background, and after the session ends. The app asks at every session start and every return from the background. While locked, labels and attributes show (a Secret Service search lists the items as locked) and secrets do not: `GetSecret` gives `IsLocked`, `GetSecrets` leaves the items out, the host answers 423, KWallet's `open` gives -1, and `Unlock` gives a prompt that completes when the device unlocks (up to 120 s). `openAsync` waits for the same.
+- Keychain: `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` with user presence (`.userPresence`; `SessionGate.faceIDOnly` changes it to `.biometryCurrentSet`). So an item never leaves the device (no iCloud Keychain, no backup to another device), and a read needs the session's `LAContext` (the one Face ID check, reused). The metadata (`kSecAttrGeneric`) needs no check.
+- Limits: ids of 64 characters, 16 KB of metadata, 64 KB of secret, 1024 items for each machine.
+- `hengevm` (no Face ID): `--secrets DIR` keeps each item in `DIR/MACHINE/ID` (mode 0600), `--machine-id ID` (default `hengevm`) is the scope. It starts unlocked; `HV_SECRETS_LOCKED=1` starts it locked, and the `HV_INPUT_FILE` lines `secrets lock`, `secrets unlock` and `secrets` change and print the state.
+
+An existing KWallet (`~/.local/share/kwalletd/*.kwl`) stays as it is and is not imported: its entries are encrypted with the wallet's password, and only kwalletd6 can open it. To use it again, `systemctl --user disable --now henge-secrets`.
+
+Not tested: a full Plasma session in the guest (the KWallet API was tested with `kwallet-query` from kwallet6 6.13 in a Debian trixie container), and the Keychain on a device.
+
+`secrets-check.py` (`uv run`, `make test-linux-secrets`) boots a clone of the desktop image with `--share`, `--secrets` and `--machine-id` and drives `secrets-probe.py` in the guest: `secret-tool` store, lookup, search and clear, a Diffie-Hellman session, the KWallet API (passwords, maps, lists, remove) and a KWallet entry read through `secret-tool`. Each item must be in the folder under the machine, mode 0600. Locked (`secrets lock`): the item shows as locked, no secret comes, the host answers 423, and an `Unlock` prompt completes after `secrets unlock`. No secret may be in the journal or hengevm's log. A second boot with another machine id must not see the first machine's items. `--container` (`make test-linux-secrets-container`) runs the probe in a Debian trixie container against `secrets-mock-host.py`, with kwallet6: `kwallet-query`, a second kwalletd6, and the fallback to kwalletd6. `tests/test_secrets.c` (in `make test`) checks the endpoint and the folder store, and `make test-session-gate` the app's Face ID policy and the Keychain names.
+
 ## Keyboard follows the focus
 
 The device shows its on-screen keyboard when the focused program in the desktop wants text, and hides it after. Keys still arrive through the virtio keyboard.
@@ -172,39 +205,6 @@ Limits:
 - Not tested: a full Plasma session in the guest (KWin was tested alone, with its virtual backend), and the app on a device.
 
 `keyboard-check.py` (`uv run`, `make test-linux-keyboard`) boots a clone of the desktop image with `--share` and `HV_INPUT_FILE` (`getkbd` prints the last request), and checks in the labwc session: the service runs; foot in focus gives `show`; a window with no text field gives `hide` and `show` comes back when it closes; no window gives `hide`; the helper sends `hide` when it stops and `show` when it starts with a text field in focus. `--gtk` installs zenity in the clone and checks a GTK entry. `tests/test_share_keyboard.c` (in `make test`) checks the endpoint and `make test-keyboard-follow` the app's policy.
-
-## Wallet: KDE Wallet and the Secret Service in the Keychain
-
-A Linux machine keeps its saved passwords in the device's Keychain, not in a wallet file in the guest. `henge-secrets` (`/usr/lib/henge/`, the user unit `henge-secrets.service`, enabled for every user in `default.target`) owns three names on the session bus:
-
-- `org.freedesktop.secrets`, the freedesktop Secret Service: libsecret (`secret-tool`, GNOME and GTK programs, Chromium and Electron with `--password-store=gnome-libsecret`), QtKeychain programs (they try libsecret first), and kwalletd from KDE Frameworks 6.14 and later.
-- `org.kde.kwalletd6` and `org.kde.kwalletd5`, the KWallet API (`/modules/kwalletd6`, `org.kde.KWallet`): KDE programs, plasma-nm, KIO, and Chromium and Electron on KDE (their default store there).
-
-Why both, and not kwalletd6 itself: Debian trixie has KDE Frameworks 6.13. Its kwalletd6 keeps its own `.kwl` files and can only be a Secret Service provider, not a client of one. From 6.14, kwalletd is a client of any Secret Service provider (`kwalletrc`: `[KSecretD] Enabled=false`, `[Migration] MigrateTo3rdParty=true`), but trixie does not have it. So `henge-secrets` does what kwalletd 6.14 does: it serves the KWallet API from the Secret Service items (attributes `server` = folder, `user` = key, `type` = `plaintext`, `base64` or `map`; maps as JSON). A KWallet entry is the same item through both APIs. Without Plasma (labwc), nothing else is needed.
-
-- The package diverts the D-Bus activation files `org.freedesktop.secrets.service` (gnome-keyring), `org.kde.kwalletd6.service` and `org.kde.kwalletd5.service` (kwallet6) to `*.service.henge`, and puts its own in their place (`henge-secrets --activated`).
-- The unit starts with the user's systemd, before Plasma. When `pam_kwallet_init` or D-Bus starts kwalletd6 later, kwalletd6 finds `org.kde.kwalletd6` taken (`KDBusService::Unique`) and exits.
-- Without the device's wallet (an older app, or no share server) `henge-secrets` takes no name. Started by D-Bus (`--activated`), it runs `/usr/bin/kwalletd6` in its place when that is installed, else gnome-keyring's secrets part.
-- Sessions: `plain`, and `dh-ietf1024-sha256-aes128-cbc-pkcs7` when `python3-cryptography` is installed (in the desktop image). libsecret falls back to `plain` without it.
-- Collections: `login` (alias `default`), `session` (alias `session`, in memory only), and those that programs make. KWallet's `kdewallet` is the `default` collection. Lock does nothing: only the device locks.
-- It keeps no secret on disk and logs no secret, label or attribute.
-
-The protocol (`host/secrets.c`, under `/.henge/secrets`): `GET /state[?since=N]` (`locked` or `unlocked`, long poll), `GET /items` (one line per item: id and base64 metadata), `GET`, `PUT` (base64 metadata, a newline, the secret) and `DELETE /items/ID`. Ids are `c.NAME` for a collection and `i.COLLECTION.HEX32` for an item.
-
-Security:
-
-- The host chooses the scope: the machine's id. The guest cannot name another machine's items. On iOS each machine has its own Keychain service, `com.henge.linux-wallet.<machine id>`, and each item is an account in it. Deleting a machine deletes its items.
-- Only the guest reaches the share server: the network hands 10.0.2.4:80 to a Unix socket in the app's storage (mode 0600). But in the guest, any process of any user that can open a TCP connection to 10.0.2.4 can read the machine's secrets while it is unlocked, as any process of the user can with an unlocked KWallet or GNOME keyring.
-- Locked: until the person passes the app's Face ID check (the device passcode is the fallback), while the app is in the background, and after the session ends. The app asks at every session start and every return from the background. While locked, labels and attributes show (a Secret Service search lists the items as locked) and secrets do not: `GetSecret` gives `IsLocked`, `GetSecrets` leaves the items out, the host answers 423, KWallet's `open` gives -1, and `Unlock` gives a prompt that completes when the device unlocks (up to 120 s). `openAsync` waits for the same.
-- Keychain: `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` with user presence (`.userPresence`; `SessionGate.faceIDOnly` changes it to `.biometryCurrentSet`). So an item never leaves the device (no iCloud Keychain, no backup to another device), and a read needs the session's `LAContext` (the one Face ID check, reused). The metadata (`kSecAttrGeneric`) needs no check.
-- Limits: ids of 64 characters, 16 KB of metadata, 64 KB of secret, 1024 items for each machine.
-- `hengevm` (no Face ID): `--secrets DIR` keeps each item in `DIR/MACHINE/ID` (mode 0600), `--machine-id ID` (default `hengevm`) is the scope. It starts unlocked; `HV_SECRETS_LOCKED=1` starts it locked, and the `HV_INPUT_FILE` lines `secrets lock`, `secrets unlock` and `secrets` change and print the state.
-
-An existing KWallet (`~/.local/share/kwalletd/*.kwl`) stays as it is and is not imported: its entries are encrypted with the wallet's password, and only kwalletd6 can open it. To use it again, `systemctl --user disable --now henge-secrets`.
-
-Not tested: a full Plasma session in the guest (the KWallet API was tested with `kwallet-query` from kwallet6 6.13 in a Debian trixie container), and the Keychain on a device.
-
-`secrets-check.py` (`uv run`, `make test-linux-secrets`) boots a clone of the desktop image with `--share`, `--secrets` and `--machine-id` and drives `secrets-probe.py` in the guest: `secret-tool` store, lookup, search and clear, a Diffie-Hellman session, the KWallet API (passwords, maps, lists, remove) and a KWallet entry read through `secret-tool`. Each item must be in the folder under the machine, mode 0600. Locked (`secrets lock`): the item shows as locked, no secret comes, the host answers 423, and an `Unlock` prompt completes after `secrets unlock`. No secret may be in the journal or hengevm's log. A second boot with another machine id must not see the first machine's items. `--container` (`make test-linux-secrets-container`) runs the probe in a Debian trixie container against `secrets-mock-host.py`, with kwallet6: `kwallet-query`, a second kwalletd6, and the fallback to kwalletd6. `tests/test_secrets.c` (in `make test`) checks the endpoint and the folder store, and `make test-session-gate` the app's Face ID policy and the Keychain names.
 
 ## Checks on the Mac
 

@@ -721,11 +721,6 @@ static void *input_thread(void *unused) {
             fprintf(stderr, "hengevm: guest clipboard: %s (agent seen %ld s ago)\n", text ? text : "(nothing new)", hv_share_agent_seen());
             free(text);
         }
-        else if (!strncmp(line, "secrets", 7)) { /* "secrets lock|unlock": the app's Face ID check (testing) */
-            if (!strcmp(line + 7, " lock")) hv_secrets_set_locked(1);
-            else if (!strcmp(line + 7, " unlock")) hv_secrets_set_locked(0);
-            fprintf(stderr, "hengevm: secrets %s\n", hv_secrets_locked() ? "locked" : "unlocked");
-        }
         else if (!strncmp(line, "getkbd", 6)) { /* what henge-keyboard in a Linux desktop last asked for */
             unsigned long seq;
             int wanted = hv_share_keyboard_wanted(&seq);
@@ -737,6 +732,11 @@ static void *input_thread(void *unused) {
             hid_locked((uint8_t)x, 1);
             usleep(60000);
             hid_locked((uint8_t)x, 0);
+        }
+        else if (!strncmp(line, "secrets", 7)) { /* "secrets lock|unlock": the app's Face ID check (testing) */
+            if (!strcmp(line + 7, " lock")) hv_secrets_set_locked(1);
+            else if (!strcmp(line + 7, " unlock")) hv_secrets_set_locked(0);
+            fprintf(stderr, "hengevm: secrets %s\n", hv_secrets_locked() ? "locked" : "unlocked");
         }
         else if (sscanf(line, "key %d", &x) == 1) key_press(x, 0);
         else if (sscanf(line, "shiftkey %d", &x) == 1) key_press(x, 1);

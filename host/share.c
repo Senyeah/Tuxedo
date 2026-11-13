@@ -799,12 +799,12 @@ static int serve_henge(Conn *c, Request *r) {
         int n = snprintf(line, sizeof line, "%u %u %g\n", w, h, scale);
         return respond(c, r, 200, "OK", "Content-Type: text/plain\r\nCache-Control: no-store\r\n", line, (size_t)n);
     }
+    if (!strncmp(what, "secrets", 7) && (!what[7] || what[7] == '/')) return secrets_route(c, r, what + 7);
     if (!strcmp(what, "status") && !strcmp(r->method, "GET")) return status_get(c, r);
     if (!strcmp(what, "agent") && !strcmp(r->method, "GET")) return serve_agent(c, r);
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "GET")) return clipboard_get(c, r);
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "PUT")) return clipboard_put(c, r);
     if (!strcmp(what, "keyboard") && !strcmp(r->method, "PUT")) return keyboard_put(c, r);
-    if (!strncmp(what, "secrets", 7) && (!what[7] || what[7] == '/')) return secrets_route(c, r, what + 7);
     if (body_discard(c, r) != 0) return -1;
     return respond_empty(c, r, 404, "Not Found");
 }
