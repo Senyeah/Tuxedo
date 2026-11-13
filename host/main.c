@@ -23,6 +23,7 @@
 #include "mmu.h"
 #include "pvg.h"
 #include "pvg_lite.h"
+#include "status.h"
 #include "vm.h"
 #include "audio_mac.h"
 #include "install.h"
@@ -541,6 +542,7 @@ static void hid_locked(uint8_t usage, int down) {
 }
 
 /* HV_INPUT_FILE lines for the virt board: rel DX DY, rclick, msleep MS, tpframe (ends a touch batch), mode WxH [SCALE] (live display mode), and btn, tp, tpclick as on vmapple.
+   Device status: battery LEVEL unplugged|charging|full|unknown, brightness F, volume F, tz NAME, and status (prints it). HV_STATUS_LOG=1 logs the guest's requests.
    --screenshot still writes the --display size, so read the size from the guest after a mode line. */
 static int virt_input(const char *line) {
     int a, b;
@@ -558,6 +560,27 @@ static int virt_input(const char *line) {
             hv_vm_set_display_mode(w, h);
             if (n == 3) hv_vm_set_display_scale(scale);
         }
+    } else if (!strncmp(line, "battery ", 8)) {
+        char state[16] = "";
+        static const char *const states[] = {"unknown", "unplugged", "charging", "full"};
+        int s = -1;
+        if (sscanf(line + 8, "%d %15s", &a, state) == 2)
+            for (int k = 0; k < 4; k++)
+                if (!strcmp(state, states[k])) s = k;
+        if (s < 0) fprintf(stderr, "hengevm: input: %s: want battery LEVEL unplugged|charging|full|unknown\n", line);
+        else hv_vm_set_battery(a, s);
+    } else if (!strncmp(line, "brightness ", 11)) {
+        hv_vm_set_brightness(atof(line + 11));
+    } else if (!strncmp(line, "volume ", 7)) {
+        hv_vm_set_volume(atof(line + 7));
+    } else if (!strncmp(line, "tz ", 3)) {
+        if (hv_vm_set_timezone(line + 3) != 0) fprintf(stderr, "hengevm: input: %s: not a time zone name\n", line);
+    } else if (!strcmp(line, "status")) {
+        HvStatusView v;
+        hv_status_get(&v);
+        fprintf(stderr, "hengevm: status: battery %d state %d current %d mA, brightness %.3f, volume %.2f%s, tz %s, seq %lu\n",
+                v.battery_level, v.battery_state, v.current_ma, v.brightness, v.volume, v.muted ? " muted" : "",
+                v.tz[0] ? v.tz : "-", v.seq);
     } else if (sscanf(line, "msleep %d", &a) == 1) {
         usleep((useconds_t)a * 1000);
     } else if (!strncmp(line, "rclick", 6)) {

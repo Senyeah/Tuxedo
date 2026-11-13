@@ -6,10 +6,12 @@
 
    /.henge/ is not part of the folder. It has the clipboard, where the helper inside macOS (tools/henge-agent.m)
    waits for the device's clipboard and sends the guest's, and what it takes to install that helper.
-   It also serves the Linux display follower: GET /.henge/display is "W H SCALE".
+   It also serves the Linux display follower: GET /.henge/display is "W H SCALE"; and henge-status:
+   GET /.henge/status is the device's time, time zone and brightness.
 
    Locks are accepted but not enforced: macOS only writes to a server that offers them, and there is one client. */
 #include "share.h"
+#include "status.h"
 #include "vm.h"
 
 #include <copyfile.h>
@@ -709,6 +711,24 @@ static int clipboard_put(Conn *c, Request *r) {
     return respond_empty(c, r, 204, "No Content");
 }
 
+/* GET ?since=N waits up to 120 s for newer status than N. Read only: the guest changes the device through its devices. */
+static int status_get(Conn *c, Request *r) {
+    if (body_discard(c, r) != 0) return -1;
+    unsigned long since = 0;
+    const char *q = strstr(r->query, "since=");
+    if (q) since = strtoul(q + 6, NULL, 10);
+    HvStatusView v;
+    hv_status_wait(since, 120 * 1000, &v);
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    char body[256], headers[96];
+    int n = snprintf(body, sizeof body, "time %lld.%03ld\n", (long long)ts.tv_sec, ts.tv_nsec / 1000000);
+    if (v.tz[0] && hv_status_valid_timezone(v.tz)) n += snprintf(body + n, sizeof body - (size_t)n, "tz %s\n", v.tz);
+    if (v.brightness >= 0) n += snprintf(body + n, sizeof body - (size_t)n, "brightness %.3f\n", v.brightness);
+    snprintf(headers, sizeof headers, "Content-Type: text/plain\r\nCache-Control: no-store\r\nX-Henge-Seq: %lu\r\n", v.seq);
+    return respond(c, r, 200, "OK", headers, body, (size_t)n);
+}
+
 static int serve_henge(Conn *c, Request *r) {
     const char *what = r->path + strlen("/.henge/");
     if (!strcmp(what, "install") && !strcmp(r->method, "GET")) {
@@ -729,6 +749,7 @@ static int serve_henge(Conn *c, Request *r) {
         int n = snprintf(line, sizeof line, "%u %u %g\n", w, h, scale);
         return respond(c, r, 200, "OK", "Content-Type: text/plain\r\nCache-Control: no-store\r\n", line, (size_t)n);
     }
+    if (!strcmp(what, "status") && !strcmp(r->method, "GET")) return status_get(c, r);
     if (!strcmp(what, "agent") && !strcmp(r->method, "GET")) return serve_agent(c, r);
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "GET")) return clipboard_get(c, r);
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "PUT")) return clipboard_put(c, r);
