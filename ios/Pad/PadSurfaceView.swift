@@ -444,7 +444,8 @@ final class PadSurfaceView: UIView {
         float eC = max(s.r * s.r, s.a * s.a), eT = s.g * s.g, grab = s.b;
         for (int k = 0; k < 2; k++) {
             float4 kr = rects[k];
-            if (all(dc >= kr.xy) && all(dc <= kr.xy + kr.zw)) eC = max(eC, u[7].y * press[k] * ko);
+            if (press[k] > 0.0 && roundBox(dc - (kr.xy + 0.5 * kr.zw), 0.5 * kr.zw - 1.0, radii[k], smooth_) < 0.0)
+                eC = max(eC, u[7].y * press[k] * ko);
         }
         float e = max(eC, eT);
         uint2 ci = uint2(int2(cell) + 4096);

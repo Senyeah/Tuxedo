@@ -126,7 +126,7 @@ struct PadTuning: Codable, Equatable {
         var topEdge = 0.12
         var pressedFill = 0.14
         var pressedTint = 0.08
-        var pressedEnergy = 0.6
+        var pressedEnergy = 0.3
         var pressedShadow = 0.40
         var attack = 0.06
         var release = 0.18
