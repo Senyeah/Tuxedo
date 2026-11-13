@@ -32,7 +32,7 @@ METAL_LIBS = -framework Foundation -framework QuartzCore -framework Metal -frame
 
 TESTS = $(B)/test_classify $(B)/test_jit_region $(B)/test_operands $(B)/test_jit $(B)/test_mem $(B)/test_share_keyboard \
         $(B)/test_mmu $(B)/test_exc $(B)/test_devices $(B)/test_shutdown $(B)/test_pause $(B)/test_big_lock $(B)/test_machine_rebuild $(B)/test_fdt $(B)/test_console $(B)/test_virt \
-        $(B)/test_status $(B)/test_secrets $(B)/test_share_paths $(B)/test_fs_server $(B)/test_vgpu_metal $(if $(GFX),$(B)/test_vgpu_virgl)
+        $(B)/test_status $(B)/test_secrets $(B)/test_share_paths $(B)/test_fs_server $(B)/test_virtio_fs $(B)/test_vgpu_metal $(if $(GFX),$(B)/test_vgpu_virgl)
 
 all: $(TESTS) $(B)/hengevm $(B)/hengevm-ref $(B)/hvsparse
 
@@ -161,6 +161,10 @@ $(B)/test_share_paths: tests/test_share_paths.c $(B)/share.o $(B)/safe_path.o $(
 
 # The Files folder server through FUSE requests: confinement, modes, case and Unicode, folders that move or go.
 $(B)/test_fs_server: tests/test_fs_server.c $(B)/fs_server.o $(B)/safe_path.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+# The virtio-fs device on a fake ring: a 1 MB READ in 64 segments, 129 segments refused, FORGET, the workers.
+$(B)/test_virtio_fs: tests/test_virtio_fs.c $(B)/virtio_fs.o $(B)/virtio.o $(B)/pcie.o $(B)/gicv3.o $(B)/timer.o $(B)/fs_server.o $(B)/safe_path.o $(ENGINE)
 	$(CC) $(CFLAGS) $^ -o $@
 
 $(B)/test_secrets: tests/test_secrets.c $(B)/share.o $(B)/safe_path.o $(B)/secrets.o $(B)/status.o
