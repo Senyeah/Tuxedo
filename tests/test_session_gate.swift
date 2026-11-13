@@ -137,11 +137,9 @@ struct SessionGateTests {
         // One Keychain service per machine, and back.
         let a = UUID(uuidString: "0D3A5F6E-1C2B-4E8F-9A7B-6C5D4E3F2A1B")!, b = UUID()
         precondition(WalletScope.id(a) == "0d3a5f6e-1c2b-4e8f-9a7b-6c5d4e3f2a1b")
-        precondition(WalletScope.service(a) == "com.henge.linux-wallet.0d3a5f6e-1c2b-4e8f-9a7b-6c5d4e3f2a1b")
+        precondition(WalletScope.service(a) == "com.henge.linux-wallet.v2.0d3a5f6e-1c2b-4e8f-9a7b-6c5d4e3f2a1b")
+        precondition(WalletScope.oldService(a) == "com.henge.linux-wallet.0d3a5f6e-1c2b-4e8f-9a7b-6c5d4e3f2a1b")
         precondition(WalletScope.service(a) != WalletScope.service(b))
-        precondition(WalletScope.machine(service: WalletScope.service(a)) == a)
-        precondition(WalletScope.machine(service: "com.henge.other") == nil)
-        precondition(WalletScope.machine(service: WalletScope.servicePrefix + "not-a-uuid") == nil)
         // The scope is a valid host/secrets.c id: [A-Za-z0-9._-], 1 to 64, not starting with '.'.
         let id = WalletScope.id(b)
         precondition(id.count <= 64 && !id.hasPrefix(".") && id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) })

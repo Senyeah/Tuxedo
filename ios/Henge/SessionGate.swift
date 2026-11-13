@@ -1,10 +1,10 @@
 /// When a session asks for Face ID, and when a Linux machine's wallet is open. A Linux machine asks at each start
 /// (a restart too) and each time the app comes back from the background; the machine stays paused and hidden until
 /// the check passes. A Mac does not ask: it has no wallet.
-/// Pure policy: SessionAuth does the check, SessionView and KeychainStore follow the phase.
+/// Pure policy: SessionAuth does the check, SessionView follows the phase and opens KeychainStore with it.
 struct SessionGate: Equatable {
-    /// Face ID only (no passcode fallback, items lost when Face ID enrolment changes). The owner chose the passcode
-    /// fallback: SessionAuth and KeychainStore read this one value.
+    /// Face ID only, with no passcode fallback, for the session's check (SessionAuth). The owner chose the fallback.
+    /// It does not bind the wallet's items to Face ID: they have no rule of their own (KeychainStore).
     static let faceIDOnly = false
 
     enum Check: Equatable {

@@ -23,7 +23,6 @@ struct SessionView: View {
     @State private var error: String?
     @State private var gate: SessionGate // Face ID before a Linux machine runs or comes back
     @State private var gateMessage: String?
-    @State private var gateContext: LAContext?
     @State private var inactive = false // the app switcher's picture is taken while inactive
     private var hidesGuest: Bool { gate.hidesGuest(inactive: inactive) }
     @State private var state: Int32 = 0
@@ -339,8 +338,7 @@ struct SessionView: View {
             VolumeClicks.shared.stop()
             DeviceStatus.shared.stop()
             gate.end()
-            gateContext = nil
-            KeychainStore.shared.setUnlocked(false, context: nil)
+            KeychainStore.shared.setUnlocked(false)
         }
         .modifier(ExternalMacDisplayModifier(presentation: MacPresentation(display: display, aspect: layoutAspect, isLinux: mac.guest == .linux)))
         .task(id: bootAttempt) { await run() }
@@ -1028,8 +1026,7 @@ struct SessionView: View {
         }
         guard !Task.isCancelled else { return }
         gate.end() // a restart asks again
-        gateContext = nil
-        KeychainStore.shared.setUnlocked(false, context: nil)
+        KeychainStore.shared.setUnlocked(false)
         askToOpen()
         while gate.phase != .open { // a refusal waits here for Try Again or Close
             guard !Task.isCancelled else { return }
@@ -1047,7 +1044,7 @@ struct SessionView: View {
         JITBootstrap.releaseLingeringDebugger()
         Sharing.prepare()
         KeychainStore.shared.attach(mac)
-        KeychainStore.shared.setUnlocked(gate.secretsUnlocked, context: gateContext)
+        KeychainStore.shared.setUnlocked(gate.secretsUnlocked)
         if mac.guest == .linux { DeviceStatus.shared.start { [display] in !display.isExternal } }
         EngineTuning.apply()
         let saved = current
@@ -1148,8 +1145,7 @@ struct SessionView: View {
                 HardwareMouse.shared.stop()
                 UIApplication.shared.isIdleTimerDisabled = false
                 gate.end() // no machine runs: the wallet locks
-                gateContext = nil
-                KeychainStore.shared.setUnlocked(false, context: nil)
+                KeychainStore.shared.setUnlocked(false)
                 let outcome = henge_vm_exit_outcome()
                 if shutdownAsked != nil && outcome == Int32(HENGE_VM_OUTCOME_SHUTDOWN.rawValue) {
                     close() // the person asked for it: no stopped card
@@ -1209,8 +1205,7 @@ struct SessionView: View {
     private func leaveGate() {
         gate.leave()
         typing = false
-        gateContext = nil
-        KeychainStore.shared.setUnlocked(false, context: nil)
+        KeychainStore.shared.setUnlocked(false)
     }
 
     private func askToOpen() {
@@ -1221,18 +1216,17 @@ struct SessionView: View {
             if gate.check == .skippedForTest {
                 HengeLog.log("session", "face id: skipped (HENGE_AUTOPILOT); wallet \(gate.secretsUnlocked ? "unlocked by the test" : "locked")")
             }
-            KeychainStore.shared.setUnlocked(gate.secretsUnlocked, context: nil)
+            KeychainStore.shared.setUnlocked(gate.secretsUnlocked)
             setBackground(false)
         case .check(let ticket):
             gateMessage = nil
             Task { @MainActor in
                 let outcome = await SessionAuth.check(mac.name)
                 switch outcome {
-                case .passed(let context):
+                case .passed:
                     gate.checked(ticket, passed: true)
                     guard gate.secretsUnlocked else { return } // the app left during the check
-                    gateContext = context
-                    KeychainStore.shared.setUnlocked(true, context: context)
+                    KeychainStore.shared.setUnlocked(true)
                     setBackground(false)
                 case .failed(let message):
                     gate.checked(ticket, passed: false)

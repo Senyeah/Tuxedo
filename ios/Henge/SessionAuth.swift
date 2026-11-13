@@ -2,20 +2,20 @@ import Foundation
 import LocalAuthentication
 
 /// The Face ID check before a machine's session opens or comes back (SessionGate). With the passcode as the
-/// fallback (SessionGate.faceIDOnly). The context that passed reads the wallet's Keychain items, so the person is
+/// fallback (SessionGate.faceIDOnly). The wallet's Keychain items open with the session (KeychainStore), so the person is
 /// asked once for each return.
 enum SessionAuth {
     static var policy: LAPolicy { SessionGate.faceIDOnly ? .deviceOwnerAuthenticationWithBiometrics : .deviceOwnerAuthentication }
 
     enum Outcome {
-        case passed(LAContext?)
+        case passed
         case failed(String)
     }
 
     static func check(_ name: String) async -> Outcome {
         #if targetEnvironment(simulator)
         HengeLog.log("session", "face id: skipped in the simulator")
-        return .passed(nil)
+        return .passed
         #else
         let context = LAContext()
         context.localizedCancelTitle = "Not Now"
@@ -26,9 +26,8 @@ enum SessionAuth {
         }
         do {
             try await context.evaluatePolicy(policy, localizedReason: "Unlock \(name) and its saved passwords.")
-            context.interactionNotAllowed = true // Keychain calls from the guest never show a prompt
             HengeLog.log("session", "face id: passed")
-            return .passed(context)
+            return .passed
         } catch {
             HengeLog.log("session", "face id: refused (\((error as NSError).code))")
             return .failed(message(error as NSError))
