@@ -9,6 +9,8 @@ struct SettingsView: View {
     @AppStorage(VolumeClicks.inputModeKey) private var inputMode = VolumeClicks.InputMode.touchscreen
     @AppStorage(VolumeClicks.modeKey) private var volumeMode = VolumeClicks.Mode.delayHold
     @AppStorage(VolumeClicks.swapKey) private var swapButtons = false
+    @AppStorage(TrackpadFeel.hapticsKey) private var haptics = PadHaptics.Level.all
+    @AppStorage(TrackpadFeel.motionKey) private var motionFeel = PadTuning.Motion().style
     @AppStorage(PhysicalMouseButtons.swapKey) private var swapMouseButtons = false
     @AppStorage(EngineTuning.refreshKey) private var refreshRate = 60
     @AppStorage(EngineTuning.fastFlushKey) private var fastFlush = true
@@ -98,7 +100,23 @@ struct SettingsView: View {
                             .pickerStyle(.menu)
                             Toggle("Swap buttons", isOn: $swapButtons)
                         }
-                        Text("Henge is able to emulate a Magic Trackpad, allowing you to use native gestures, such as two-finger scrolling, on your device's touchscreen.\n\n\(inputDescription)")
+                        Text("Henge is able to emulate a Magic Trackpad, allowing you to use native gestures, such as two-finger scrolling, on your device's touchscreen.\n\n\(inputDescription)\n\nIn both modes, a quick two-finger tap is a right-click. While the on-screen keyboard is up, a tap is a click.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                        Picker("Haptics", selection: $haptics) {
+                            Text("All").tag(PadHaptics.Level.all)
+                            Text("Clicks only").tag(PadHaptics.Level.clicksOnly)
+                            Text("Off").tag(PadHaptics.Level.off)
+                        }
+                        .pickerStyle(.menu)
+                        if haptics == .all {
+                            Picker("Motion feel", selection: $motionFeel) {
+                                Text("Texture").tag("texture")
+                                Text("Ticks").tag("ticks")
+                                Text("Off").tag("none")
+                            }
+                            .pickerStyle(.menu)
+                        }
+                        Text("All adds a soft tick when a finger touches the trackpad, and a feel that follows the finger as it speeds up, slows down or turns. Clicks only keeps the clicks and the trackpad's buttons. The system's own haptics setting also applies.")
                             .font(.footnote).foregroundStyle(.secondary)
                         Text("On a Linux machine, the hand button in the session's controls (Use touch) makes the screen a touchscreen. Each machine keeps its own choice.")
                             .font(.footnote).foregroundStyle(.secondary)

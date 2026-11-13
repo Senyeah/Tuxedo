@@ -6,19 +6,26 @@ import UIKit
 /// the fingers: two scroll, three swipe between Spaces and to Mission Control, four
 /// show the session's hidden controls.
 ///
-/// Clicking depends on the input mode (Settings > Trackpad):
-///  - Touchscreen: the surface itself clicks. A quick tap is a left click, a quick
-///    two-finger tap is a right click, and touching then holding presses the button
-///    down so moving drags. These go out as mouse buttons alongside the pad's fingers.
-///  - Volume buttons: the surface only points and gestures; the clicks live on the
-///    volume keys (VolumeClicks), so a tap here does nothing.
+/// Clicking depends on the input mode (Settings > Trackpad) and the keyboard (PadClickRule):
+///  - Touchscreen: the surface itself clicks. A quick tap is a left click, and touching
+///    then holding presses the button down so moving drags.
+///  - Volume buttons: the clicks live on the volume keys (VolumeClicks), so a tap does
+///    nothing, unless the on-screen keyboard is up.
+///  - In each mode a quick two-finger tap is a right click.
+/// Clicks go through PointerButtons, so a tap during a held key or volume button cannot drop it.
 /// Only fingers count: a real trackpad or mouse goes through HardwareMouse.
 struct Trackpad: UIViewRepresentable {
     /// Four fingers tapped together: the session shows its hidden controls.
     static let revealTap = Notification.Name("henge.trackpad.revealTap")
 
+    /// The on-screen keyboard is up.
+    var keyboardUp = false
+
     func makeUIView(context: Context) -> Surface { Surface() }
-    func updateUIView(_ view: Surface, context: Context) {}
+    func updateUIView(_ view: Surface, context: Context) {
+        let up = keyboardUp
+        view.keyboardUp = { up }
+    }
 
     final class Surface: UIView, UIPointerInteractionDelegate {
         /// The emulated pad's sensor, in the Magic Trackpad 2's own units.
@@ -35,20 +42,33 @@ struct Trackpad: UIViewRepresentable {
         private var started = Date()
         private var travelled: CGFloat = 0
         private var mostFingers = 0
+        private var firstPoints: [CGPoint] = []
         private var touchesLogged = 0
 
-        /* Touchscreen-mode clicking. */
         private var holding = false
         private var holdTimer: Timer?
-        private let buzz = UIImpactFeedbackGenerator(style: .medium)
-        private var tapsClick: Bool { VolumeClicks.inputMode == .touchscreen }
 
-        override init(frame: CGRect) {
-            super.init(frame: frame)
+        /// The pad's look and haptics, told after the guest. nil: the surface plays its own clicks.
+        weak var feedback: PadFeedback?
+        let buttons: PointerButtons
+        var keyboardUp: () -> Bool = { false }
+        private lazy var haptics = PadHaptics(tuning: PadTuning().haptics)
+        private var tapsClick: Bool { VolumeClicks.tapsClick(keyboardUp: keyboardUp()) }
+        private var twoFingerTapClicks: Bool { PadClickRule.twoFingerTapClicks(VolumeClicks.padMode, keyboardUp: keyboardUp()) }
+
+        init(buttons: PointerButtons = .guest) {
+            self.buttons = buttons
+            super.init(frame: .zero)
             isMultipleTouchEnabled = true
             backgroundColor = .clear
             addInteraction(UIPointerInteraction(delegate: self))
             addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered)))
+        }
+
+        /// The pad's surface: its keys use up this surface's gesture.
+        func attach(_ pad: PadFeedback) {
+            feedback = pad
+            buttons.onGestureUsed = { [weak self] in self?.cancelHold() }
         }
 
         private var hoversLogged = 0, typesLogged = 0
@@ -94,38 +114,48 @@ struct Trackpad: UIViewRepresentable {
             }
             let touches = touches.filter { $0.type != .indirectPointer }
             guard !touches.isEmpty else { return }
-            if fingers.isEmpty {
+            let first = fingers.isEmpty
+            if first {
                 started = Date()
                 travelled = 0
                 mostFingers = 0
-                if tapsClick { buzz.prepare() }
+                firstPoints = []
+                if feedback == nil {
+                    haptics.level = TrackpadFeel.level
+                    haptics.prepare()
+                }
             }
+            var downs: [(Int32, CGPoint, TimeInterval, Bool)] = []
             for t in touches {
                 guard let id = freeIds.min() else { break }
                 freeIds.remove(id)
                 fingers.append(Finger(touch: t, id: id))
                 let (x, y) = sensor(t)
                 henge_vm_touch(id, 0, x, y, Self.ms(t.timestamp))
+                let p = t.location(in: self)
+                if firstPoints.count < 2 { firstPoints.append(p) }
+                downs.append((id, p, t.timestamp, first && t == touches.first))
                 if touchesLogged < 12 {
                     touchesLogged += 1
                     HengeLog.log("input", "trackpad: finger \(id) down at \(x),\(y)")
                 }
             }
             mostFingers = max(mostFingers, fingers.count)
-            guard tapsClick else { return }
+            buttons.padFingers(fingers.count)
+            for d in downs { feedback?.padFingerDown(Int(d.0), at: d.1, time: d.2, first: d.3) }
             if fingers.count >= 2 {
                 cancelHold()
                 if holding { /* a drag becomes a multi-finger gesture */
                     holding = false
-                    henge_vm_mouse_button(0, 0)
+                    if buttons.holdEnd() { holdEnded() }
                 }
-            } else {
+            } else if tapsClick {
                 armHold()
             }
         }
 
         override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-            var moved = false
+            var moved: [(Int32, UITouch)] = []
             let ts = Self.ms(event?.timestamp ?? touches.first?.timestamp ?? 0)
             for t in touches where t.type != .indirectPointer {
                 guard let i = fingers.firstIndex(where: { $0.touch == t }) else { continue }
@@ -133,19 +163,26 @@ struct Trackpad: UIViewRepresentable {
                 travelled += abs(now.x - before.x) + abs(now.y - before.y)
                 let (x, y) = sensor(t)
                 henge_vm_touch(fingers[i].id, 1, x, y, ts)
-                moved = true
+                moved.append((fingers[i].id, t))
             }
             /* Moving means pointing or a gesture, not a tap or a press-to-drag. */
-            if tapsClick && travelled >= Self.tapDistance && !holding { cancelHold() }
+            if travelled >= Self.tapDistance && !holding { cancelHold() }
             /* One frame with every finger that moved, so the guest sees a gesture's
                fingers move together rather than one at a time. */
-            if moved { henge_vm_touch_frame(ts) }
+            guard !moved.isEmpty else { return }
+            henge_vm_touch_frame(ts)
+            guard let feedback else { return }
+            for (id, t) in moved { // the coalesced samples draw a smoother trail; the guest keeps one each
+                let all = event?.coalescedTouches(for: t) ?? [t]
+                feedback.padFingerMoved(Int(id), samples: all.map { ($0.location(in: self), $0.timestamp) })
+            }
         }
 
         override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { lift(touches) }
-        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { lift(touches) }
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { lift(touches, cancelled: true) }
 
-        private func lift(_ touches: Set<UITouch>) {
+        /// A cancelled touch (a system gesture, a call) ends a hold, and is never a tap or a gesture.
+        private func lift(_ touches: Set<UITouch>, cancelled: Bool = false) {
             var lifted: [Int32] = []
             fingers.removeAll { finger in
                 guard touches.contains(finger.touch), finger.touch.type != .indirectPointer else { return false }
@@ -154,33 +191,41 @@ struct Trackpad: UIViewRepresentable {
                 return true
             }
             guard !lifted.isEmpty else { return }
-            let ts = Self.ms(touches.map(\.timestamp).max() ?? 0)
+            let time = touches.map(\.timestamp).max() ?? 0
+            let ts = Self.ms(time)
             for id in lifted { henge_vm_touch(id, 2, 0, 0, ts) }
+            for id in lifted { feedback?.padFingerUp(Int(id), time: time) }
+            buttons.padFingers(fingers.count)
             guard fingers.isEmpty else { return } /* fingers still down: the gesture goes on */
             /* The whole gesture is over. */
-            if tapsClick {
-                cancelHold()
-                let quick = Date().timeIntervalSince(started) < Self.tapTime
-                let still = travelled < Self.tapDistance
-                if holding {
-                    holding = false
-                    henge_vm_mouse_button(0, 0) /* let go of the drag */
-                } else if quick && still {
-                    if mostFingers == 1 { click(0) }      /* a tap is a left click */
-                    else if mostFingers == 2 { click(1) } /* a two-finger tap is a right click */
+            cancelHold()
+            let quick = Date().timeIntervalSince(started) < Self.tapTime
+            let still = travelled < Self.tapDistance
+            if holding {
+                holding = false
+                if buttons.holdEnd() { holdEnded() } /* let go of the drag */
+            } else if quick && still && !cancelled {
+                if mostFingers == 1, tapsClick, buttons.tap(0) {
+                    clicked(0, at: firstPoints[0])
+                } else if mostFingers == 2, twoFingerTapClicks, buttons.tap(1) {
+                    let a = firstPoints[0], b = firstPoints.count > 1 ? firstPoints[1] : a
+                    clicked(1, at: CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2))
                 }
             }
-            if mostFingers >= 4, travelled < Self.tapDistance * 3, Date().timeIntervalSince(started) < Self.tapTime * 2 {
+            if mostFingers >= 4, !cancelled, travelled < Self.tapDistance * 3, Date().timeIntervalSince(started) < Self.tapTime * 2 {
                 NotificationCenter.default.post(name: Trackpad.revealTap, object: nil)
+                feedback?.padReveal()
             }
+            if buttons.padLifted() { feedback?.padLatchReleased() }
             StickyKeys.shared.releaseAll()
         }
 
-        /// A brief press of a mouse button: down then up.
-        private func click(_ button: Int32) {
-            henge_vm_mouse_button(button, 1)
-            henge_vm_mouse_button(button, 0)
-            buzz.impactOccurred()
+        private func clicked(_ button: Int, at p: CGPoint) {
+            if let feedback { feedback.padClick(button, at: p) } else { haptics.fire(button == 0 ? .tap : .rightTap) }
+        }
+
+        private func holdEnded() {
+            if let feedback { feedback.padHoldEnd() } else { haptics.fire(.holdEnd) }
         }
 
         /// A finger that stays put presses the left button down, so moving it drags.
@@ -188,9 +233,13 @@ struct Trackpad: UIViewRepresentable {
             cancelHold()
             let timer = Timer(timeInterval: Self.holdTime, repeats: false) { [weak self] _ in
                 guard let self, self.fingers.count == 1, self.travelled < Self.tapDistance else { return }
+                guard self.buttons.holdStart() else { return } // a key is down, or a late timer
                 self.holding = true
-                henge_vm_mouse_button(0, 1)
-                self.buzz.impactOccurred()
+                if let feedback = self.feedback {
+                    feedback.padHoldStart(at: self.fingers[0].touch.location(in: self))
+                } else {
+                    self.haptics.fire(.holdStart)
+                }
             }
             RunLoop.main.add(timer, forMode: .common)
             holdTimer = timer
@@ -200,36 +249,81 @@ struct Trackpad: UIViewRepresentable {
             holdTimer?.invalidate()
             holdTimer = nil
         }
+
+        /// Forgets every finger, after the session lifted them in the guest.
+        func reset() {
+            cancelHold()
+            fingers = []
+            freeIds = Set(1...5)
+            holding = false
+        }
     }
 }
 
-/// One mouse button you can hold: down when touched, up when let go.
-struct MouseButton: View {
-    let title: String
-    let button: Int32
-    @State private var down = false
+extension PointerButtons {
+    /// The guest's mouse buttons: the pad, its keys and the volume buttons share the owners.
+    static let guest = PointerButtons { b, down in henge_vm_mouse_button(Int32(b), down ? 1 : 0) }
+}
+
+/// The trackpad's haptic settings (Settings > Trackpad), for every pad.
+enum TrackpadFeel {
+    static let hapticsKey = "henge.trackpad.haptics"
+    static let motionKey = "henge.trackpad.motionFeel"
+
+    static var level: PadHaptics.Level {
+        PadHaptics.Level(rawValue: UserDefaults.standard.string(forKey: hapticsKey) ?? "") ?? .all
+    }
+    /// PadTuning.Motion.style: "texture", "ticks" or "none".
+    static var motion: String { UserDefaults.standard.string(forKey: motionKey) ?? PadTuning.Motion().style }
+
+    /// Henge's tuning: the Lab's approved defaults with the motion feel from Settings.
+    static func tuning(motion: String, page: String? = nil) -> PadTuning {
+        var t = PadTuning()
+        t.motion.style = motion
+        if let page { t.light.page = page }
+        return t
+    }
+}
+
+/// The session's pad: one surface for each PadView, and where the pad puts the tool pill.
+final class PadSession: ObservableObject {
+    private(set) lazy var surface = Trackpad.Surface()
+    @Published private(set) var pill = CGPoint(x: -100, y: -100)
+    @Published private(set) var pillOpacity = 1.0
+    private(set) weak var host: PadHostView?
+    /// Counts the first sessions, which show the first-use stroke.
+    private let ghostKey: String?
+
+    init(ghostKey: String? = nil) { self.ghostKey = ghostKey }
+
+    func attach(_ host: PadHostView) {
+        self.host = host
+        if let ghostKey, UserDefaults.standard.integer(forKey: ghostKey) < Int(host.tuning.ghost.sessions) {
+            UserDefaults.standard.set(UserDefaults.standard.integer(forKey: ghostKey) + 1, forKey: ghostKey)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak host] in host?.playGhost() } // after the first layout
+        }
+        surface.attach(host)
+        surface.keyboardUp = { [weak host] in host?.keyboardUp ?? false }
+        host.onLayout = { [weak self] l in
+            let p = CGPoint(x: l.pillX, y: l.pillY)
+            if let self, p != self.pill { self.pill = p }
+        }
+        host.onPillOpacity = { [weak self] o in self?.pillOpacity = o }
+        host.haptics.prepare()
+    }
+}
+
+/// The session's tools on the pad, where the pad's layout puts them.
+struct PadToolPill<Content: View>: View {
+    @ObservedObject var pad: PadSession
+    let tuning: PadTuning
+    @ViewBuilder var content: Content
 
     var body: some View {
-        Text(title)
-            .font(.system(size: 15))
-            .foregroundStyle(down ? Desk.text : Desk.dim)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(down ? Desk.raised : Color.clear)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        guard !down else { return }
-                        down = true
-                        henge_vm_mouse_button(button, 1)
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    }
-                    .onEnded { _ in
-                        down = false
-                        henge_vm_mouse_button(button, 0)
-                        StickyKeys.shared.releaseAll()
-                    }
-            )
-            .accessibilityLabel(title)
+        PadPill(tuning: tuning) { content }
+            .fixedSize()
+            .position(pad.pill)
+            .opacity(pad.pillOpacity)
+            .allowsHitTesting(pad.pillOpacity > 0.05)
     }
 }
