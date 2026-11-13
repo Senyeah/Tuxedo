@@ -84,10 +84,10 @@ index e954559..705efe0 100644
  /*
 diff --git a/src/vrend/virgl_video_vt.m b/src/vrend/virgl_video_vt.m
 new file mode 100644
-index 0000000..2907c7d
+index 0000000..922cd3b
 --- /dev/null
 +++ b/src/vrend/virgl_video_vt.m
-@@ -0,0 +1,967 @@
+@@ -0,0 +1,1154 @@
 +/**************************************************************************
 + *
 + * Copyright (C) 2026 Henge contributors
@@ -113,7 +113,7 @@ index 0000000..2907c7d
 + **************************************************************************/
 +
 +/*
-+ * The virgl_video.h back end on VideoToolbox. H.264 decode only.
++ * The virgl_video.h back end on VideoToolbox: H.264 and VP9 decode.
 + *
 + * The guest's VA-API driver is stateless: it sends slices and parsed fields.
 + * VideoToolbox is stateful: it wants the stream with its parameter sets. So
@@ -122,6 +122,9 @@ index 0000000..2907c7d
 + * sample at end_frame. VideoToolbox keeps its own reference frames, so the
 + * guest's reference surfaces are not used. The output goes to the target's
 + * plane textures through decode_completed, as an IOSurface.
++ *
++ * VP9 needs no rewriting: virgl carries the whole frame, so only the vpcC
++ * atom comes from the fields.
 + */
 +
 +#include <stdbool.h>
@@ -143,7 +146,8 @@ index 0000000..2907c7d
 +#include "virgl_util.h"
 +#include "virgl_video.h"
 +
-+#define VT_VIRGL_FORMAT_NV12 166 /* VIRGL_FORMAT_NV12 in Mesa's virgl_hw.h */
++#define VT_VIRGL_FORMAT_NV12 VIRGL_FORMAT_Y8_U8V8_420_UNORM
++#define VT_VIRGL_FORMAT_P010 VIRGL_FORMAT_X6Y10_X6U10X6V10_420_UNORM
 +#define VT_MAX_PPS 256
 +#define VT_PS_MAX 2048 /* 8 scaling lists of 64 values fit with room */
 +#define VT_AU_MAX (16u << 20) /* the slices of one picture */
@@ -170,7 +174,10 @@ index 0000000..2907c7d
 +    unsigned pps_id, type;
 +};
 +
++enum vt_kind { VT_H264, VT_VP9 };
++
 +struct virgl_video_codec {
++    enum vt_kind kind;
 +    enum pipe_video_profile profile;
 +    enum pipe_video_entrypoint entrypoint;
 +    uint32_t level;
@@ -179,20 +186,24 @@ index 0000000..2907c7d
 +    void *opaque;
 +
 +    struct virgl_video_buffer *target;
-+    uint8_t *au; /* AVCC: 4-byte big-endian lengths */
++    uint8_t *au; /* H.264: AVCC, with 4-byte big-endian lengths; VP9: the frame */
 +    size_t au_len, au_cap;
 +    bool have_desc;
 +    struct virgl_h264_picture_desc desc;
 +    int pps_id;
 +    bool pps_mixed;   /* the picture's slices name more than one PPS */
-+    bool pic_idr;     /* an IDR slice in the picture */
-+    bool pic_intra;   /* every slice of the picture is I or SI */
++    bool pic_idr;     /* an IDR slice in the picture; VP9: a key frame */
++    bool pic_intra;   /* every slice of the picture is I or SI; VP9: intra_only */
++    bool pic_shown;   /* VP9: show_frame; a hidden frame gives no output */
 +    unsigned pic_slices;
 +    struct vt_slice last;
 +
 +    uint8_t sps[VT_PS_MAX];
 +    size_t sps_len;
 +    struct vt_pps pps[VT_MAX_PPS];
++
++    /* VP9: what the vpcC atom came from */
++    unsigned vp9_profile, vp9_depth, vp9_w, vp9_h, fmt_w, fmt_h;
 +
 +    CMVideoFormatDescriptionRef fmt;
 +    VTDecompressionSessionRef vt;
@@ -221,6 +232,16 @@ index 0000000..2907c7d
 +    }
 +}
 +
++static bool is_vp9(enum pipe_video_profile p)
++{
++    return p == PIPE_VIDEO_PROFILE_VP9_PROFILE0 || p == PIPE_VIDEO_PROFILE_VP9_PROFILE2;
++}
++
++static const char *vt_name(const struct virgl_video_codec *c)
++{
++    return c->kind == VT_VP9 ? "VP9" : "H.264";
++}
++
 +static unsigned h264_profile_idc(enum pipe_video_profile p)
 +{
 +    switch (p) {
@@ -241,12 +262,13 @@ index 0000000..2907c7d
 +    size_t len, pos;
 +    unsigned cur, left, zeros;
 +    bool err;
++    bool raw; /* no emulation prevention bytes (VP9, AV1) */
 +};
 +
 +static unsigned br_bit(struct br *b)
 +{
 +    if (!b->left) {
-+        if (b->pos < b->len && b->zeros >= 2 && b->p[b->pos] == 3) {
++        if (!b->raw && b->pos < b->len && b->zeros >= 2 && b->p[b->pos] == 3) {
 +            b->pos++;
 +            b->zeros = 0;
 +        }
@@ -623,6 +645,8 @@ index 0000000..2907c7d
 +
 +static OSType vt_pixfmt(enum pipe_format f)
 +{
++    if (f == PIPE_FORMAT_P010)
++        return kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange;
 +    return f == PIPE_FORMAT_NV12 ? kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange : kCVPixelFormatType_420YpCbCr8Planar;
 +}
 +
@@ -652,14 +676,17 @@ index 0000000..2907c7d
 +    c->sessions++;
 +    CFBooleanRef hw = NULL;
 +    VTSessionCopyProperty(c->vt, kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder, NULL, &hw);
-+    virgl_info("vt: H.264 session %ux%u, %s decoder\n", c->width, c->height,
++    CMVideoDimensions dim = CMVideoFormatDescriptionGetDimensions(c->fmt);
++    virgl_info("vt: %s session %dx%d, %s decoder\n", vt_name(c), dim.width, dim.height,
 +               hw == kCFBooleanTrue ? "hardware" : "software");
 +    if (hw)
 +        CFRelease(hw);
 +    return 0;
 +}
 +
-+/* The format description from the SPS and every PPS seen; a new session only if the old one refuses it */
++static int vt_set_format(struct virgl_video_codec *c, CMVideoFormatDescriptionRef fmt);
++
++/* The format description from the SPS and every PPS seen */
 +static int vt_update_format(struct virgl_video_codec *c)
 +{
 +    const uint8_t *sets[1 + VT_MAX_PPS];
@@ -677,6 +704,12 @@ index 0000000..2907c7d
 +        virgl_error("vt: the parameter sets are refused (%d)\n", (int)st);
 +        return -1;
 +    }
++    return vt_set_format(c, fmt);
++}
++
++/* Takes fmt; a new session only if the old one refuses it */
++static int vt_set_format(struct virgl_video_codec *c, CMVideoFormatDescriptionRef fmt)
++{
 +    if (c->fmt)
 +        CFRelease(c->fmt);
 +    c->fmt = fmt;
@@ -723,6 +756,43 @@ index 0000000..2907c7d
 +        d.planes[i].channels = bi && src == 1 ? 2 : 1;
 +    }
 +    callbacks->decode_completed(c, &d);
++}
++
++/* One sample, decoded synchronously: no asynchronous decode and no temporal processing, so one frame out, in
++ * decode order. A hidden frame (shown false) may give none. */
++static int vt_decode(struct virgl_video_codec *c, uint8_t *data, size_t len, bool shown)
++{
++    CMBlockBufferRef bb = NULL;
++    CMSampleBufferRef sb = NULL;
++    size_t size = len;
++    OSStatus st = CMBlockBufferCreateWithMemoryBlock(NULL, data, len, kCFAllocatorNull, NULL, 0, len, 0, &bb);
++    if (st == noErr)
++        st = CMSampleBufferCreateReady(NULL, bb, c->fmt, 1, 0, NULL, 1, &size, &sb);
++    if (st != noErr) {
++        virgl_error("vt: no sample buffer (%d)\n", (int)st);
++        if (bb)
++            CFRelease(bb);
++        return -1;
++    }
++    c->out_status = noErr;
++    st = VTDecompressionSessionDecodeFrame(c->vt, sb, 0, NULL, NULL);
++    if (st == noErr)
++        VTDecompressionSessionWaitForAsynchronousFrames(c->vt);
++    CFRelease(sb);
++    CFRelease(bb);
++    if (st != noErr || c->out_status != noErr || (shown && !c->out)) {
++        virgl_error("vt: frame %u not decoded (%d, %d)\n", c->frames, (int)st, (int)c->out_status);
++        if (vt_session_lost(st) || vt_session_lost(c->out_status))
++            vt_release_session(c);
++        return -1;
++    }
++    if (c->out) {
++        CVPixelBufferRef out = c->out;
++        c->out = NULL;
++        vt_emit(c, out);
++        CVPixelBufferRelease(out);
++    }
++    return 0;
 +}
 +
 +static int h264_decode(struct virgl_video_codec *c)
@@ -783,41 +853,142 @@ index 0000000..2907c7d
 +    if ((changed || !c->vt) && vt_update_format(c))
 +        return -1;
 +
-+    CMBlockBufferRef bb = NULL;
-+    CMSampleBufferRef sb = NULL;
-+    size_t size = c->au_len;
-+    OSStatus st = CMBlockBufferCreateWithMemoryBlock(NULL, c->au, c->au_len, kCFAllocatorNull, NULL, 0, c->au_len, 0, &bb);
-+    if (st == noErr)
-+        st = CMSampleBufferCreateReady(NULL, bb, c->fmt, 1, 0, NULL, 1, &size, &sb);
-+    if (st != noErr) {
-+        virgl_error("vt: no sample buffer (%d)\n", (int)st);
-+        if (bb)
-+            CFRelease(bb);
-+        return -1;
-+    }
-+    c->out_status = noErr;
-+    /* no asynchronous decode and no temporal processing: one frame out, in decode order */
-+    st = VTDecompressionSessionDecodeFrame(c->vt, sb, 0, NULL, NULL);
-+    if (st == noErr)
-+        VTDecompressionSessionWaitForAsynchronousFrames(c->vt);
-+    CFRelease(sb);
-+    CFRelease(bb);
-+    if (st != noErr || c->out_status != noErr || !c->out) {
-+        virgl_error("vt: frame %u not decoded (%d, %d)\n", c->frames, (int)st, (int)c->out_status);
-+        if (vt_session_lost(st) || vt_session_lost(c->out_status))
-+            vt_release_session(c);
-+        return -1;
-+    }
++    return vt_decode(c, c->au, c->au_len, true);
++}
 +
-+    CVPixelBufferRef out = c->out;
-+    c->out = NULL;
-+    vt_emit(c, out);
-+    CVPixelBufferRelease(out);
++/* ---- VP9 ---- */
++
++/* The uncompressed header up to refresh_frame_flags: is it a key, intra-only or hidden frame */
++static bool vp9_parse_header(struct virgl_video_codec *c, const uint8_t *p, size_t n)
++{
++    struct br b = {.p = p, .len = n, .raw = true};
++    unsigned profile;
++
++    if (br_u(&b, 2) != 2)
++        return false;
++    profile = br_bit(&b);
++    profile |= br_bit(&b) << 1;
++    if (profile == 3)
++        br_bit(&b);
++    if (br_bit(&b)) /* show_existing_frame: FFmpeg shows the reference itself */
++        return false;
++    bool key = !br_bit(&b);
++    c->pic_shown = br_bit(&b);
++    bool error_res = br_bit(&b);
++    bool intra_only = false;
++    c->pic_idr = key;
++    /* an intra-only frame keeps the other references: only a key frame resumes after a failure */
++    c->pic_intra = false;
++    if (!key) {
++        intra_only = c->pic_shown ? false : br_bit(&b);
++        if (!error_res)
++            br_u(&b, 2);
++    }
++    if ((key || intra_only) && br_u(&b, 24) != 0x498342)
++        return false;
++    return !b.err && profile == c->vp9_profile;
++}
++
++static int vp9_take(struct virgl_video_codec *c, const struct virgl_vp9_picture_desc *d, unsigned num_buffers,
++                    const void *const *buffers, const unsigned *sizes)
++{
++    unsigned depth = d->picture_parameter.bit_depth;
++
++    if (d->picture_parameter.profile != c->vp9_profile || (depth != 8 && depth != 10) ||
++        (c->vp9_profile == 0) != (depth == 8) || !d->picture_parameter.frame_width ||
++        !d->picture_parameter.frame_height || d->picture_parameter.frame_width > 4096 ||
++        d->picture_parameter.frame_height > 4096) {
++        virgl_warn("vt: VP9 frame refused (profile %u, %u bits, %ux%u)\n", d->picture_parameter.profile, depth,
++                   d->picture_parameter.frame_width, d->picture_parameter.frame_height);
++        return -1;
++    }
++    c->vp9_depth = depth;
++    for (unsigned i = 0; i < num_buffers; i++) {
++        if (!buffers[i] || !sizes[i])
++            continue;
++        if (sizes[i] > VT_AU_MAX || c->au_len + sizes[i] > VT_AU_MAX) {
++            virgl_error("vt: a frame has more than %u bytes\n", VT_AU_MAX);
++            return -1;
++        }
++        if (c->au_len + sizes[i] > c->au_cap) {
++            size_t cap = c->au_cap ? c->au_cap : 1 << 16;
++            while (cap < c->au_len + sizes[i])
++                cap *= 2;
++            uint8_t *n = realloc(c->au, cap);
++            if (!n)
++                return -1;
++            c->au = n, c->au_cap = cap;
++        }
++        memcpy(c->au + c->au_len, buffers[i], sizes[i]);
++        c->au_len += sizes[i];
++    }
++    if (!vp9_parse_header(c, c->au, c->au_len)) {
++        virgl_warn("vt: a VP9 frame header does not parse\n");
++        return -1;
++    }
++    c->vp9_w = d->picture_parameter.frame_width;
++    c->vp9_h = d->picture_parameter.frame_height;
++    c->have_desc = true;
++    c->pic_slices = 1;
 +    return 0;
 +}
 +
++static CMVideoFormatDescriptionRef vp9_format(const struct virgl_video_codec *c)
++{
++    unsigned area = c->vp9_w * c->vp9_h;
++    uint8_t level = area <= 2228224 ? 41 : area <= 8912896 ? 51 : 61;
++    /* vpcC version 1: profile, level, bit depth, 4:2:0 co-located, video range, unspecified colour */
++    const uint8_t vpcc[] = {1, 0, 0, 0, (uint8_t)c->vp9_profile, level, (uint8_t)(c->vp9_depth << 4 | 1 << 1), 2, 2, 2, 0, 0};
++    CFDataRef data = CFDataCreate(NULL, vpcc, sizeof(vpcc));
++    CFMutableDictionaryRef atoms = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks,
++                                                             &kCFTypeDictionaryValueCallBacks);
++    CFMutableDictionaryRef ext = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks,
++                                                           &kCFTypeDictionaryValueCallBacks);
++    CMVideoFormatDescriptionRef fmt = NULL;
++
++    CFDictionarySetValue(atoms, CFSTR("vpcC"), data);
++    CFDictionarySetValue(ext, kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms, atoms);
++    OSStatus st = CMVideoFormatDescriptionCreate(NULL, kCMVideoCodecType_VP9, (int32_t)c->vp9_w, (int32_t)c->vp9_h,
++                                                 ext, &fmt);
++    CFRelease(ext);
++    CFRelease(atoms);
++    CFRelease(data);
++    if (st != noErr) {
++        virgl_error("vt: no VP9 format description (%d)\n", (int)st);
++        return NULL;
++    }
++    return fmt;
++}
++
++static int vp9_decode(struct virgl_video_codec *c)
++{
++    if (!c->have_desc || !c->au_len)
++        return -1;
++    if (c->vt && c->pixfmt != vt_pixfmt(c->target->format)) {
++        virgl_warn("vt: the target format changed, new session\n");
++        vt_release_session(c);
++    }
++    c->pixfmt = vt_pixfmt(c->target->format);
++    if ((c->vp9_depth == 10) != (c->pixfmt == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange)) {
++        virgl_warn("vt: VP9 at %u bits into a %s target\n", c->vp9_depth, c->vp9_depth == 10 ? "8-bit" : "P010");
++        return -1;
++    }
++    /* a new size only at a key frame: inter frames may scale their references */
++    if (!c->vt || !c->fmt || (c->pic_idr && (c->fmt_w != c->vp9_w || c->fmt_h != c->vp9_h))) {
++        CMVideoFormatDescriptionRef fmt = vp9_format(c);
++        if (!fmt)
++            return -1;
++        if (c->vt)
++            c->ps_updates++;
++        c->fmt_w = c->vp9_w, c->fmt_h = c->vp9_h;
++        if (vt_set_format(c, fmt))
++            return -1;
++    }
++    return vt_decode(c, c->au, c->au_len, c->pic_shown);
++}
++
 +/* The guest sees no decode error: on one, the target keeps its old pixels until the next intra picture */
-+static int h264_end_frame(struct virgl_video_codec *c)
++static int vt_end_frame(struct virgl_video_codec *c)
 +{
 +    int rc;
 +
@@ -828,7 +999,7 @@ index 0000000..2907c7d
 +    if (c->need_intra)
 +        virgl_info("vt: decoding again at frame %u, %u skipped so far\n", c->frames, c->skipped);
 +    c->need_intra = false;
-+    rc = h264_decode(c);
++    rc = c->kind == VT_VP9 ? vp9_decode(c) : h264_decode(c);
 +    if (rc) {
 +        c->failed++;
 +        c->need_intra = true;
@@ -846,12 +1017,19 @@ index 0000000..2907c7d
 +
 +/* ---- virgl_video.h ---- */
 +
++static bool vp9_present;
++
 +int virgl_video_init(int drm_fd, struct virgl_video_callbacks *cbs, unsigned int flags)
 +{
 +    (void)drm_fd, (void)flags;
 +    callbacks = cbs;
-+    virgl_info("vt: video decode on VideoToolbox, H.264 hardware decoder %s\n",
-+               VTIsHardwareDecodeSupported(kCMVideoCodecType_H264) ? "present" : "absent");
++    /* VP9 is a supplemental decoder: it needs this opt-in first */
++    if (__builtin_available(macOS 11.0, iOS 26.2, *))
++        VTRegisterSupplementalVideoDecoderIfAvailable(kCMVideoCodecType_VP9);
++    vp9_present = VTIsHardwareDecodeSupported(kCMVideoCodecType_VP9);
++    virgl_info("vt: video decode on VideoToolbox, hardware decoders: H.264 %s, VP9 %s\n",
++               VTIsHardwareDecodeSupported(kCMVideoCodecType_H264) ? "present" : "absent",
++               vp9_present ? "present" : "absent");
 +    return 0;
 +}
 +
@@ -860,32 +1038,37 @@ index 0000000..2907c7d
 +    callbacks = NULL;
 +}
 +
++static void add_cap(union virgl_caps *caps, enum pipe_video_profile profile, unsigned level, unsigned format)
++{
++    struct virgl_video_caps *v = &caps->v2.video_caps[caps->v2.num_video_caps++];
++    memset(v, 0, sizeof(*v));
++    v->profile = profile;
++    v->entrypoint = PIPE_VIDEO_ENTRYPOINT_BITSTREAM;
++    v->max_level = level;
++    v->max_width = 4096;
++    v->max_height = 4096;
++    v->prefered_format = format;
++    v->max_macroblocks = 0xffff;
++    v->npot_texture = 1;
++    v->supports_progressive = 1;
++}
++
 +int virgl_video_fill_caps(union virgl_caps *caps)
 +{
-+    static const enum pipe_video_profile profiles[] = {
-+        PIPE_VIDEO_PROFILE_MPEG4_AVC_CONSTRAINED_BASELINE,
-+        PIPE_VIDEO_PROFILE_MPEG4_AVC_MAIN,
-+        PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH,
-+    };
-+
 +    if (!caps)
 +        return -1;
 +    caps->v2.num_video_caps = 0;
 +    /* no init: the embedder did not ask for video */
-+    if (!callbacks || !VTIsHardwareDecodeSupported(kCMVideoCodecType_H264))
++    if (!callbacks)
 +        return 0;
-+    for (unsigned i = 0; i < sizeof(profiles) / sizeof(profiles[0]); i++) {
-+        struct virgl_video_caps *v = &caps->v2.video_caps[caps->v2.num_video_caps++];
-+        memset(v, 0, sizeof(*v));
-+        v->profile = profiles[i];
-+        v->entrypoint = PIPE_VIDEO_ENTRYPOINT_BITSTREAM;
-+        v->max_level = 52;
-+        v->max_width = 4096;
-+        v->max_height = 4096;
-+        v->prefered_format = VT_VIRGL_FORMAT_NV12;
-+        v->max_macroblocks = 0xffff;
-+        v->npot_texture = 1;
-+        v->supports_progressive = 1;
++    if (VTIsHardwareDecodeSupported(kCMVideoCodecType_H264)) {
++        add_cap(caps, PIPE_VIDEO_PROFILE_MPEG4_AVC_CONSTRAINED_BASELINE, 52, VT_VIRGL_FORMAT_NV12);
++        add_cap(caps, PIPE_VIDEO_PROFILE_MPEG4_AVC_MAIN, 52, VT_VIRGL_FORMAT_NV12);
++        add_cap(caps, PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH, 52, VT_VIRGL_FORMAT_NV12);
++    }
++    if (vp9_present) {
++        add_cap(caps, PIPE_VIDEO_PROFILE_VP9_PROFILE0, 62, VT_VIRGL_FORMAT_NV12);
++        add_cap(caps, PIPE_VIDEO_PROFILE_VP9_PROFILE2, 62, VT_VIRGL_FORMAT_P010);
 +    }
 +    return 0;
 +}
@@ -894,7 +1077,7 @@ index 0000000..2907c7d
 +{
 +    struct virgl_video_codec *c;
 +
-+    if (!args || args->entrypoint != PIPE_VIDEO_ENTRYPOINT_BITSTREAM || !is_h264(args->profile) ||
++    if (!args || args->entrypoint != PIPE_VIDEO_ENTRYPOINT_BITSTREAM || !(is_h264(args->profile) || is_vp9(args->profile)) ||
 +        !args->width || !args->height || args->width > 4096 || args->height > 4096) {
 +        virgl_warn("vt: codec refused (profile %d, entrypoint %d, %ux%u)\n", args ? (int)args->profile : -1,
 +                   args ? (int)args->entrypoint : -1, args ? args->width : 0, args ? args->height : 0);
@@ -912,6 +1095,8 @@ index 0000000..2907c7d
 +    c->height = args->height;
 +    c->opaque = args->opaque;
 +    c->pps_id = -1;
++    c->kind = is_vp9(args->profile) ? VT_VP9 : VT_H264;
++    c->vp9_profile = args->profile == PIPE_VIDEO_PROFILE_VP9_PROFILE2 ? 2 : 0;
 +    return c;
 +}
 +
@@ -920,9 +1105,9 @@ index 0000000..2907c7d
 +    if (!codec)
 +        return;
 +    if (codec->frames || codec->failed || codec->skipped)
-+        virgl_info("vt: codec %ux%u done: %u frames decoded, %u failed, %u skipped, %u sessions, "
++        virgl_info("vt: %s codec %ux%u done: %u frames decoded, %u failed, %u skipped, %u sessions, "
 +                   "%u parameter set updates, at most %u slices per decode call\n",
-+                   codec->width, codec->height, codec->frames, codec->failed, codec->skipped, codec->sessions,
++                   vt_name(codec), codec->width, codec->height, codec->frames, codec->failed, codec->skipped, codec->sessions,
 +                   codec->ps_updates, codec->max_slices_per_call);
 +    vt_release_session(codec);
 +    if (codec->out)
@@ -992,7 +1177,7 @@ index 0000000..2907c7d
 +
 +static bool decode_target(enum pipe_format f)
 +{
-+    return f == PIPE_FORMAT_NV12 || f == PIPE_FORMAT_IYUV || f == PIPE_FORMAT_YV12;
++    return f == PIPE_FORMAT_NV12 || f == PIPE_FORMAT_IYUV || f == PIPE_FORMAT_YV12 || f == PIPE_FORMAT_P010;
 +}
 +
 +int virgl_video_begin_frame(struct virgl_video_codec *codec, struct virgl_video_buffer *target)
@@ -1000,7 +1185,7 @@ index 0000000..2907c7d
 +    if (!codec || !target)
 +        return -1;
 +    if (!decode_target(target->format)) {
-+        virgl_warn("vt: decode target format %d refused, only NV12, IYUV and YV12\n", (int)target->format);
++        virgl_warn("vt: decode target format %d refused, only NV12, IYUV, YV12 and P010\n", (int)target->format);
 +        codec->target = NULL;
 +        return -1;
 +    }
@@ -1019,6 +1204,8 @@ index 0000000..2907c7d
 +        virgl_error("vt: decode does not match the codec or the frame\n");
 +        return -1;
 +    }
++    if (codec->kind == VT_VP9)
++        return vp9_take(codec, &desc->vp9, num_buffers, buffers, sizes);
 +    unsigned before = codec->pic_slices;
 +    memcpy(&codec->desc, &desc->h264, sizeof(codec->desc));
 +    codec->have_desc = true;
@@ -1051,7 +1238,7 @@ index 0000000..2907c7d
 +
 +    if (!codec || !target || target != codec->target)
 +        return -1;
-+    rc = h264_end_frame(codec);
++    rc = vt_end_frame(codec);
 +    vt_reset_picture(codec);
 +    return rc;
 +}

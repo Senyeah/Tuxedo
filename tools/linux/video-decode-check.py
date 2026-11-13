@@ -43,11 +43,26 @@ RENDER = "/dev/dri/renderD128"
 # VREND_VIDEO_CPU_COPY=1 in the environment: hengevm copies the planes on the CPU (the spike's path), to measure against
 CPU_COPY = os.environ.get("VREND_VIDEO_CPU_COPY") == "1"
 FPS = 30
-# name: extra libx264 options
-CLIPS = {
-    "high-bframes": "bframes=3:b-pyramid=normal:ref=4",
-    "high-4slices": "bframes=3:b-pyramid=normal:ref=4:slices=4",
+# codec: the VA profiles vainfo must list with VAEntrypointVLD
+PROFILES = {
+    "h264": ["VAProfileH264Main", "VAProfileH264High"],
+    "vp9": ["VAProfileVP9Profile0", "VAProfileVP9Profile2"],
 }
+# name: codec, the guest's pixel format for framemd5, the encoder arguments on the Mac
+CLIPS = {
+    "high-bframes": ("h264", "yuv420p", ["-c:v", "libx264", "-profile:v", "high", "-preset", "medium", "-g", "60",
+                                         "-x264-params", "bframes=3:b-pyramid=normal:ref=4"]),
+    "high-4slices": ("h264", "yuv420p", ["-c:v", "libx264", "-profile:v", "high", "-preset", "medium", "-g", "60",
+                                         "-x264-params", "bframes=3:b-pyramid=normal:ref=4:slices=4"]),
+    # two passes: libvpx makes hidden alt-ref frames (show_frame 0) only then
+    "vp9-profile0": ("vp9", "yuv420p", ["-c:v", "libvpx-vp9", "-b:v", "6M", "-g", "60", "-deadline", "good",
+                                        "-cpu-used", "4", "-row-mt", "1", "-tile-columns", "2", "-auto-alt-ref", "1",
+                                        "-lag-in-frames", "25", "PASSES"]),
+    "vp9-profile2": ("vp9", "yuv420p10le", ["-c:v", "libvpx-vp9", "-profile:v", "2", "-b:v", "6M", "-g", "60",
+                                            "-deadline", "good", "-cpu-used", "4", "-row-mt", "1", "-auto-alt-ref", "1",
+                                            "-lag-in-frames", "25", "PASSES"]),
+}
+EXT = {"h264": "mp4", "vp9": "webm"}
 
 
 class Fail(Exception):
@@ -89,23 +104,36 @@ def cpu_secs(pid):
     return secs
 
 
-def make_clips(share, seconds):
-    for name, opts in CLIPS.items():
-        out = os.path.join(share, f"{name}.mp4")
+def clip_file(name):
+    return f"{name}.{EXT[CLIPS[name][0]]}"
+
+
+def make_clips(share, seconds, names):
+    for name in names:
+        codec, pix, enc = CLIPS[name]
+        out = os.path.join(share, clip_file(name))
         if os.path.exists(out):
             continue
         cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
                f"testsrc2=size=1920x1080:rate={FPS}", "-f", "lavfi", "-i", f"cellauto=s=1920x1080:rate={FPS}:rule=110",
-               "-filter_complex", "[0][1]blend=all_mode=average,format=yuv420p", "-t", str(seconds),
-               "-c:v", "libx264", "-profile:v", "high", "-preset", "medium", "-g", "60", "-x264-params", opts,
-               "-movflags", "+faststart", out]
-        r = subprocess.run(cmd, capture_output=True, text=True)
-        if r.returncode:
-            raise Fail(f"cannot make {name}.mp4 on the Mac: {r.stderr.strip()[-800:]}")
-        probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v", "-show_entries",
-                                "stream=profile,width,height,has_b_frames,nb_frames", "-of", "csv=p=0", out],
+               "-filter_complex", f"[0][1]blend=all_mode=average,format={pix}", "-t", str(seconds)]
+        enc = [a for a in enc if a != "PASSES"]
+        log = os.path.join(share, f"{name}.pass")
+        runs = [cmd + enc + ["-pass", "1", "-passlogfile", log, "-f", "null", "-"],
+                cmd + enc + ["-pass", "2", "-passlogfile", log, out]] if "PASSES" in CLIPS[name][2] else [cmd + enc + [out]]
+        if EXT[codec] == "mp4":
+            runs[-1][-1:-1] = ["-movflags", "+faststart"]
+        for c in runs:
+            r = subprocess.run(c, capture_output=True, text=True)
+            if r.returncode:
+                raise Fail(f"cannot make {clip_file(name)} on the Mac: {r.stderr.strip()[-800:]}")
+        probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v", "-count_frames", "-show_entries",
+                                "stream=codec_name,profile,width,height,pix_fmt,nb_read_frames", "-of", "csv=p=0", out],
                                capture_output=True, text=True).stdout.strip()
-        print(f"     clip {name}.mp4: {probe} (profile,width,height,has_b_frames,frames), "
+        coded = subprocess.run(["ffmpeg", "-v", "error", "-i", out, "-c", "copy", "-bsf:v",
+                                "vp9_superframe_split" if codec == "vp9" else "null", "-f", "framecrc", "-"],
+                               capture_output=True, text=True).stdout.count("\n0,")
+        print(f"     clip {clip_file(name)}: {probe} (codec,profile,width,height,pix_fmt,frames), {coded} coded frames, "
               f"{os.path.getsize(out) / 1e6:.1f} MB")
 
 
@@ -141,33 +169,35 @@ def install(p):
     print("ok   packages: " + ", ".join(l.strip() for l in out.splitlines() if l.strip()))
 
 
-def check_vainfo(p):
+def check_vainfo(p, codecs):
     out, rc = sh(p, f"vainfo --display drm --device {RENDER} 2>&1", 120)
     lines = [l.strip() for l in out.splitlines()]
     driver = next((l for l in lines if "Driver version" in l), "no driver line")
     profiles = sorted({l.split(":")[0].strip() for l in lines if "VAEntrypointVLD" in l})
     print(f"     vainfo: {driver}")
     print(f"     vainfo decode profiles (VAEntrypointVLD): {', '.join(profiles) or 'none'}")
-    want = ["VAProfileH264Main", "VAProfileH264High"]
+    want = [w for c in codecs for w in PROFILES[c]]
     if rc or any(w not in profiles for w in want):
-        raise Fail(f"vainfo (status {rc}) does not list {' and '.join(want)} with VAEntrypointVLD:\n{out.strip()[-2000:]}")
-    print("ok   vainfo lists VAProfileH264Main and VAProfileH264High with VAEntrypointVLD")
+        raise Fail(f"vainfo (status {rc}) does not list {', '.join(want)} with VAEntrypointVLD:\n{out.strip()[-2000:]}")
+    print(f"ok   vainfo lists {', '.join(want)} with VAEntrypointVLD")
     return ", ".join(profiles)
 
 
-def fetch_clips(p):
-    for name in CLIPS:
+def fetch_clips(p, names):
+    for name in names:
+        f = clip_file(name)
         # the desktop image has no curl
-        need(p, f"python3 -c 'import shutil,urllib.request as u; shutil.copyfileobj(u.urlopen(\"http://10.0.2.4/{name}.mp4\"), "
-             f"open(\"/tmp/{name}.mp4\", \"wb\"))'", f"copy {name}.mp4 from --share", 300)
+        need(p, f"python3 -c 'import shutil,urllib.request as u; shutil.copyfileobj(u.urlopen(\"http://10.0.2.4/{f}\"), "
+             f"open(\"/tmp/{f}\", \"wb\"))'", f"copy {f} from --share", 300)
 
 
 def framemd5(p, name):
-    clip = f"/tmp/{name}.mp4"
-    # both sides as yuv420p: nv12 to yuv420p only moves the chroma bytes
+    clip = f"/tmp/{clip_file(name)}"
+    pix = CLIPS[name][1]
+    # both sides in the clip's format: nv12 to yuv420p (p010 to yuv420p10le) only moves the bytes
     hw = (f"ffmpeg -hide_banner -v warning -hwaccel vaapi -hwaccel_device {RENDER} -i {clip} "
-          f"-vf format=yuv420p -f framemd5 /tmp/{name}.hw.md5 2>/tmp/{name}.hw.log")
-    sw = f"ffmpeg -hide_banner -v warning -hwaccel none -i {clip} -vf format=yuv420p -f framemd5 /tmp/{name}.sw.md5 2>/tmp/{name}.sw.log"
+          f"-vf format={pix} -f framemd5 /tmp/{name}.hw.md5 2>/tmp/{name}.hw.log")
+    sw = f"ffmpeg -hide_banner -v warning -hwaccel none -i {clip} -vf format={pix} -f framemd5 /tmp/{name}.sw.md5 2>/tmp/{name}.sw.log"
     out, rc = sh(p, hw, 1800)
     log, _ = sh(p, f"cat /tmp/{name}.hw.log")
     if rc:
@@ -183,7 +213,7 @@ def framemd5(p, name):
     if not m:
         raise Fail(f"[{name}] no comparison: {out.strip()}")
     n, mm, diff, first = int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4)
-    res = f"{name}: {n} frames compared, {diff} differ" + (f" (first at frame {first})" if diff else "")
+    res = f"{name} ({CLIPS[name][0]}): {n} frames compared, {diff} differ" + (f" (first at frame {first})" if diff else "")
     if mm != n:
         res += f"; the hardware path gave {mm} frames"
     if diff or mm != n or n == 0:
@@ -194,7 +224,7 @@ def framemd5(p, name):
 
 
 def bench(p, pid, name, hw):
-    clip = f"/tmp/{name}.mp4"
+    clip = f"/tmp/{clip_file(name)}"
     acc = f"-hwaccel vaapi -hwaccel_device {RENDER} -hwaccel_output_format vaapi" if hw else "-hwaccel none"
     tag = "vaapi" if hw else "software"
     c0, t0 = cpu_secs(pid), time.monotonic()
@@ -236,7 +266,8 @@ def mpv(p, name, seconds):
     import base64
     need(p, f"echo {base64.b64encode(MPV_LUA.encode()).decode()} | base64 -d > /tmp/mpvstat.lua", "write the mpv script")
     out, rc = sh(p, f"{WAYLAND}; mpv --no-config --hwdec=vaapi --vo=gpu --gpu-context=wayland --no-audio --fs "
-                    f"--msg-level=all=warn,vd=info --script=/tmp/mpvstat.lua /tmp/{name}.mp4 2>&1 | tail -c 3000", seconds + 120)
+                    f"--msg-level=all=warn,vd=info --script=/tmp/mpvstat.lua /tmp/{clip_file(name)} 2>&1 | tail -c 3000",
+                 seconds + 120)
     m = re.search(r"MPVSTAT hw=(\S*) vo_drop=(\S+) dec_drop=(\S+) mistimed=(\S+) frames=(\S+) pos=(\S+)", out)
     if not m:
         return f"mpv gave no counters (status {rc}): {out.strip()[-600:]}"
@@ -247,10 +278,10 @@ def mpv(p, name, seconds):
 
 def host_log(err_log):
     text = open(err_log, errors="replace").read() if os.path.exists(err_log) else ""
-    sessions = re.findall(r"vt: H\.264 session (\d+x\d+), (\w+) decoder", text)
-    # (decoded, failed, skipped, sessions, parameter set updates, slices per call) per codec
-    codecs = [tuple(map(int, m)) for m in re.findall(
-        r"vt: codec \d+x\d+ done: (\d+) frames decoded, (\d+) failed, (\d+) skipped, (\d+) sessions, "
+    sessions = re.findall(r"vt: (\S+) session (\d+x\d+), (\w+) decoder", text)
+    # (codec, decoded, failed, skipped, sessions, parameter set updates, slices per call) per codec
+    codecs = [(m[0], *map(int, m[1:])) for m in re.findall(
+        r"vt: (\S+) codec \d+x\d+ done: (\d+) frames decoded, (\d+) failed, (\d+) skipped, (\d+) sessions, "
         r"(\d+) parameter set updates, at most (\d+) slices", text)]
     bad = [l for l in re.findall(r"[^\n]*(?:vt: |video)[^\n]*", text, re.I)
            if " done: " not in l and re.search(r"not decoded|refused|failed|does not parse|does not fit|no sample buffer|"
@@ -276,7 +307,12 @@ def main():
     ap.add_argument("--no-mpv", action="store_true")
     ap.add_argument("--bench", type=int, default=1, help="runs of the VA-API benchmark (the median is the result)")
     ap.add_argument("--no-video", action="store_true", help="boot without --gpu-video: vainfo must then list no decode profile")
+    ap.add_argument("--codecs", default=",".join(PROFILES), help="comma-separated: " + ", ".join(PROFILES))
     args = ap.parse_args()
+    codecs = [c for c in args.codecs.split(",") if c]
+    if not codecs or any(c not in PROFILES for c in codecs):
+        raise Fail(f"--codecs: pick from {', '.join(PROFILES)}")
+    names = [n for n in CLIPS if CLIPS[n][0] in codecs]
     args.linux_dir = args.linux_dir or linux_dir()
     image = args.image or os.path.join(args.linux_dir, "debian-desktop.img")
     for f in (args.hengevm, image, os.path.join(args.linux_dir, "Image"), os.path.join(args.linux_dir, "initrd.img"),
@@ -287,7 +323,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="vdec-", dir=args.work_dir) as tmp:
         share = os.path.join(tmp, "share")
         os.mkdir(share)
-        make_clips(share, args.seconds)
+        make_clips(share, args.seconds, names)
         disk, err_log = os.path.join(tmp, "disk.img"), os.path.join(tmp, "hengevm.stderr")
         r = subprocess.run(["/bin/cp", "-c", image, disk], capture_output=True, text=True)
         if r.returncode:
@@ -302,26 +338,30 @@ def main():
                     raise Fail(f"without --gpu-video vainfo still lists decode profiles: {out.strip()}")
                 print("ok   without --gpu-video vainfo lists no decode profile")
             else:
-                results["vainfo"] = check_vainfo(p)
-                fetch_clips(p)
+                results["vainfo"] = check_vainfo(p, codecs)
+                fetch_clips(p, names)
                 sums = []
-                for name in CLIPS:
+                for name in names:
                     good, line = framemd5(p, name)
                     ok &= good
                     sums.append(line)
                 results["checksum"] = "; ".join(sums)
-                name = next(iter(CLIPS))
-                hw = [bench(p, p.pid, name, True) for _ in range(args.bench)]
-                hw_fps, hw_line = sorted(hw)[len(hw) // 2]
-                if args.bench > 1:
-                    hw_line = f"median of {args.bench}: {hw_line}"
-                _, sw_line = bench(p, p.pid, name, False)
-                results["speed"] = f"{hw_line}; {sw_line}"
-                if hw_fps <= FPS:
-                    print(f"FAIL the hardware path decodes {hw_fps:.1f} fps, not faster than real time ({FPS} fps)")
-                    ok = False
-                else:
-                    print(f"ok   the hardware path decodes {hw_fps:.1f} fps > {FPS} fps (real time)")
+                speed = []
+                for codec in codecs:
+                    name = next(n for n in names if CLIPS[n][0] == codec)
+                    hw = [bench(p, p.pid, name, True) for _ in range(args.bench)]
+                    hw_fps, hw_line = sorted(hw)[len(hw) // 2]
+                    if args.bench > 1:
+                        hw_line = f"median of {args.bench}: {hw_line}"
+                    _, sw_line = bench(p, p.pid, name, False)
+                    speed.append(f"[{name}] {hw_line}; {sw_line}")
+                    if hw_fps <= FPS:
+                        print(f"FAIL [{name}] the hardware path decodes {hw_fps:.1f} fps, not faster than real time ({FPS} fps)")
+                        ok = False
+                    else:
+                        print(f"ok   [{name}] the hardware path decodes {hw_fps:.1f} fps > {FPS} fps (real time)")
+                results["speed"] = "; ".join(speed)
+                name = names[0]
                 if not args.no_mpv:
                     line = mpv(p, name, args.seconds)
                     print(f"     {line}")
@@ -342,13 +382,13 @@ def main():
                 except pexpect.TIMEOUT:
                     p.terminate(force=True)
             p.close()
-            sessions, codecs, bad, started, copies = host_log(err_log)
+            sessions, done, bad, started, copies = host_log(err_log)
             if args.keep_log and os.path.exists(err_log):
                 shutil.copy(err_log, args.keep_log)
-            print(f"     hengevm: {len(sessions)} VideoToolbox session(s): " + ", ".join(f"{s} {k}" for s, k in sessions[:6]))
-            for c in codecs:
-                print(f"     hengevm codec: {c[0]} frames decoded on VideoToolbox, {c[1]} failed, {c[2]} skipped, "
-                      f"{c[3]} session(s), {c[4]} parameter set updates, at most {c[5]} slice(s) per decode call")
+            print(f"     hengevm: {len(sessions)} VideoToolbox session(s): " + ", ".join(f"{c} {s} {k}" for c, s, k in sessions[:8]))
+            for c in done:
+                print(f"     hengevm {c[0]} codec: {c[1]} frames decoded on VideoToolbox, {c[2]} failed, {c[3]} skipped, "
+                      f"{c[4]} session(s), {c[5]} format updates, at most {c[6]} slice(s) per decode call")
             if copies:
                 n = sum(c[0] + c[1] for c in copies)
                 print(f"     hengevm plane copies: {sum(c[0] for c in copies):.0f} frames on the GPU, {sum(c[1] for c in copies):.0f} "
@@ -367,24 +407,28 @@ def main():
             raise Fail(f"hengevm exit status {p.exitstatus}, expected 0 after poweroff")
         print("ok   power off: exit status 0")
         if args.no_video:
-            if started or sessions or codecs:
+            if started or sessions or done:
                 raise Fail("without --gpu-video the VideoToolbox back end still started")
             print("ok   without --gpu-video the VideoToolbox back end did not start")
         else:
-            if not sessions or any(k != "hardware" for _, k in sessions):
+            if not sessions or any(k != "hardware" for _, _, k in sessions):
                 print("FAIL not every VideoToolbox session used the hardware decoder")
                 ok = False
-            # framemd5 twice, the benchmark, mpv: each run's codec decodes the whole clip on VideoToolbox
-            runs = len(CLIPS) + args.bench + (0 if args.no_mpv else 1)
-            whole = [c for c in codecs if c[0] >= FPS * args.seconds and not c[1] and not c[2]]
-            line = (f"{len(whole)} of {runs} VA-API runs decoded all {FPS * args.seconds} frames on VideoToolbox, "
-                    f"{sum(c[1] for c in codecs)} failed, {sum(c[2] for c in codecs)} skipped")
-            results["host"] = line
-            if len(whole) < runs or any(c[1] or c[2] for c in codecs):
-                print(f"FAIL {line}")
-                ok = False
-            else:
-                print(f"ok   {line}")
+            # each framemd5 run, each benchmark, mpv: each run's codec decodes the whole clip on VideoToolbox
+            want = {"h264": "H.264", "vp9": "VP9"}
+            lines = []
+            for codec in codecs:
+                runs = sum(CLIPS[n][0] == codec for n in names) + args.bench + (1 if codec == CLIPS[names[0]][0] and not args.no_mpv else 0)
+                mine = [c for c in done if c[0] == want[codec]]
+                whole = [c for c in mine if c[1] >= FPS * args.seconds and not c[2] and not c[3]]
+                lines.append(f"{want[codec]}: {len(whole)} of {runs} VA-API runs decoded all {FPS * args.seconds} frames on "
+                             f"VideoToolbox, {sum(c[2] for c in mine)} failed, {sum(c[3] for c in mine)} skipped")
+                if len(whole) < runs or any(c[2] or c[3] for c in mine):
+                    print(f"FAIL {lines[-1]}")
+                    ok = False
+                else:
+                    print(f"ok   {lines[-1]}")
+            results["host"] = "; ".join(lines)
     for k, v in results.items():
         print(f"RESULT {k}: {v}")
     if not ok:

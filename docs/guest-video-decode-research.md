@@ -356,3 +356,30 @@ The clips and the guest are the spike's. Each mode ran three times with `--bench
 The GPU copy cuts the copy's CPU time by a factor of 3.7, and `hengevm`'s CPU time for the clip by 14%. The guest's CPU time does not change, because the copy is on the host. Most of `hengevm`'s remaining CPU time is the guest's emulated CPUs and the virgl command stream, not the copy.
 
 Not shown: the pbuffer path on the iPhone GPU, and 10-bit planes (no 10-bit H.264 decode). The CPU fallback ran only when forced.
+
+## Stage 4 results
+
+Run on 14/11/2026 on the same Mac. This is stage 4 of [Stages](#stages): VP9. Stage 3 needs the phone and is not done.
+
+What changed:
+
+- At init the back end calls `VTRegisterSupplementalVideoDecoderIfAvailable(kCMVideoCodecType_VP9)` (macOS 11, iOS 26.2). The capset lists `PIPE_VIDEO_PROFILE_VP9_PROFILE0` (NV12) and `PIPE_VIDEO_PROFILE_VP9_PROFILE2` (P010) only when `VTIsHardwareDecodeSupported` is then true. A phone without a VP9 decoder lists no VP9.
+- Mesa's VA frontend gives the whole frame to `decode_bitstream` (`picture.c:481` to `:483` in Mesa 25.0.7 only reads the header for itself). The first item of [Not verified](#not-verified) about VP9 is now true. The back end collects the frame, reads the uncompressed header up to the sync code (key frame, `show_frame`, `intra_only`), and decodes the frame as one sample. Nothing is rewritten.
+- The format description is `kCMVideoCodecType_VP9` with a `vpcC` atom (version 1) from the profile, the bit depth and the frame size: 4:2:0 co-located, video range, unspecified colour. A new description follows only a key frame with a new size.
+- A hidden frame (`show_frame` 0) may give no output. VideoToolbox gave one for each hidden frame on the Mac, so the guest's surface for an alt-ref frame has its pixels.
+- After a failed frame the back end skips to the next key frame. An intra-only frame keeps the other references, so it does not resume.
+- A P010 target gets `kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange`. Its planes go to the guest's `R16` and `R16G16` textures through 16-bit pbuffers.
+
+Clips: made on the Mac with libvpx (FFmpeg 9.0.2), 1920x1080, 30 fps, 15 s, two passes, 6 Mbit/s, `-auto-alt-ref 1 -lag-in-frames 25`. The two passes give 480 coded frames for 450 shown, so 30 alt-ref frames are hidden. Profile 0 is 8-bit with 4 tile columns; profile 2 is 10-bit.
+
+| Check | Result |
+|---|---|
+| `vainfo` | `VAProfileVP9Profile0`, `VAProfileVP9Profile2` with `VAEntrypointVLD`, as well as H.264 |
+| framemd5 against `-hwaccel none` (`yuv420p`, `yuv420p10le`) | 450 of 450 frames, both clips |
+| `-hwaccel vaapi -hwaccel_output_format vaapi -f null -`, profile 0 | 356.0 fps, guest CPU 0.49 s, `hengevm` CPU 0.74 s |
+| `-hwaccel none -f null -`, profile 0 | 263.8 fps, guest CPU 2.52 s, `hengevm` CPU 2.58 s |
+| `mpv --hwdec=vaapi --vo=gpu`, profile 0 | `hwdec-current=vaapi`, 0 frames dropped |
+| `hengevm`'s log | 4 VA-API runs, each 480 frames on the hardware VP9 decoder, 0 failed, 0 skipped, 1 session; all 1920 frames copied on the GPU |
+
+Not shown: VP9 on the phone, VP9 profile 1 and 3 (4:4:4; the guest driver does not offer them), resolution changes inside a stream, and `show_existing_frame` (FFmpeg shows the reference itself and sends nothing).
+
