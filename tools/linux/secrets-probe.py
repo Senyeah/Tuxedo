@@ -181,6 +181,67 @@ def main():
         (rc,) = call(conn, KWD, "removeEntry", "isss", (h, args[0], args[1], APP))
         (has,) = call(conn, KWD, "hasEntry", "isss", (h, args[0], args[1], APP))
         ok("kw remove") if rc == 0 and not has else fail("kw remove", rc)
+    if step == "kw-wildcard":  # kwalletd's readEntryList key is a wildcard pattern, "*" by default
+        for k in ("w-one", "w-two", "x/y"):
+            call(conn, KWD, "writePassword", "issss", (h, "Wild", k, "v-" + k, APP))
+        m = {"user": "sam"}
+        call(conn, KWD, "writeMap", "issays", (h, "Wild", "w-map", qmap(m), APP))
+        (all_,) = call(conn, KWD, "readPasswordList", "isss", (h, "Wild", "*", APP))
+        (some,) = call(conn, KWD, "readPasswordList", "isss", (h, "Wild", "w-*", APP))
+        (one,) = call(conn, KWD, "readEntryList", "isss", (h, "Wild", "w-?ne", APP))
+        (maps,) = call(conn, KWD, "readMapList", "isss", (h, "Wild", "*", APP))
+        (none,) = call(conn, KWD, "readPasswordList", "isss", (h, "Wild", "w-", APP))
+        got = ({k: v[1] for k, v in all_.items()}, sorted(some), sorted(one), sorted(maps), none)
+        want = ({"w-one": "v-w-one", "w-two": "v-w-two", "x/y": "v-x/y"}, ["w-one", "w-two"], ["w-one"], ["w-map"], {})
+        if got != want or maps["w-map"][0] != "ay" or bytes(maps["w-map"][1]) != qmap(m):
+            fail("kw wildcard", got)
+        ok("kw wildcard: *, w-*, w-?ne and maps")
+    if step == "kw-signal":  # the folder signals name the wallet the client opened, not the collection's label
+        rule = MatchRule(type="signal", interface="org.kde.KWallet", path="/modules/kwalletd6")
+        call(conn, DBusAddress("/org/freedesktop/DBus", bus_name="org.freedesktop.DBus", interface="org.freedesktop.DBus"),
+             "AddMatch", "s", (rule.serialise(),))
+        with conn.filter(rule, bufsize=20) as q:
+            call(conn, KWD, "writePassword", "issss", (h, "SigFolder", "k", "v", APP))
+            seen = []
+            try:
+                while True:
+                    seen.append(conn.recv_until_filtered(q, timeout=2))
+            except TimeoutError:
+                pass
+        names = {(m.header.fields.get(3), tuple(m.body)) for m in seen}
+        if ("folderUpdated", ("kdewallet", "SigFolder")) not in names or ("folderListUpdated", ("kdewallet",)) not in names:
+            fail("kw signal", sorted(names))
+        ok("kw signals carry the opened wallet's name")
+    if step == "clients":  # a client's sessions and KWallet handles go when it leaves; one client cannot evict another's
+        other = open_dbus_connection(bus="SESSION")
+        (_, kept) = call(conn, SS, "OpenSession", "sv", ("plain", ("s", "")))
+        (_, gone) = call(other, SS, "OpenSession", "sv", ("plain", ("s", "")))
+        (h2,) = call(other, KWD, "open", "sxs", ("kdewallet", 0, APP + "-other"))
+        for _ in range(100):  # many sessions from one client
+            (_, last) = call(other, SS, "OpenSession", "sv", ("plain", ("s", "")))
+        call(conn, SS, "GetSecrets", "aoo", ([], kept))  # another client's session survives
+        call(other, SS, "GetSecrets", "aoo", ([], last))
+        try:
+            call(other, SS, "GetSecrets", "aoo", ([], gone))
+            fail("clients: one client kept more than its share of sessions")
+        except RuntimeError as e:
+            if "NoSession" not in str(e):
+                raise
+        (_, alive) = call(other, SS, "OpenSession", "sv", ("plain", ("s", "")))
+        other.close()
+        import time
+        time.sleep(1)
+        try:
+            call(conn, SS, "GetSecrets", "aoo", ([], alive))
+            fail("clients: a session outlived its client")
+        except RuntimeError as e:
+            if "NoSession" not in str(e):
+                raise
+        (still,) = call(conn, KWD, "isOpen", "i", (h2,))
+        if still:
+            fail("clients: a KWallet handle outlived its client")
+        call(conn, SS, "GetSecrets", "aoo", ([], kept))
+        ok("clients: sessions and handles go with their client, with a cap for each client")
     if step == "kw-cross":
         r = subprocess.run(["secret-tool", "lookup", "server", args[0], "user", args[1], "type", "plaintext"], capture_output=True, timeout=30)
         ok("kwallet entry seen through the Secret Service") if r.stdout.decode() == args[2] else fail("kw cross", r.returncode)

@@ -90,6 +90,9 @@ def inner():
         probe("kw-list", "Passwords", "k1")
         probe("kw-map", "Maps", "m1")
         probe("kw-cross", "Passwords", "k1", "kw-" + value)
+        probe("kw-wildcard")
+        probe("kw-signal")
+        probe("clients")
         d = dump()
         attrs = [v["meta"].get("attributes") for v in d.values()]
         if {"test": "a"} not in attrs or {"server": "Passwords", "user": "k1", "type": "plaintext"} not in attrs:
@@ -302,6 +305,9 @@ def vm(args):
             probe("kw-list", "Passwords", "k1")
             probe("kw-map", "Maps", "m1")
             probe("kw-cross", "Passwords", "k1", "kw-" + value)
+            probe("kw-wildcard")
+            probe("kw-signal")
+            probe("clients")
             if not any(v[0].get("attributes", {}).get("server") == "Passwords" for v in files(store, "check-a").values()):
                 raise Fail("the KWallet entry is not in the host's store")
             print("ok: the KWallet entry is in the host's store", flush=True)
