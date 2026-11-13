@@ -17,6 +17,9 @@ tools/gfx/virglrenderer-videotoolbox.patch) and checks, over the serial console:
   5. mpv --hwdec=vaapi --vo=gpu on the desktop: dropped frames (printed; not a gate).
   6. hengevm's log: VideoToolbox sessions on the hardware decoder, no decode error, and one codec per VA-API run that
      decoded every frame of the clip on VideoToolbox (the back end logs its totals when the guest destroys it).
+  7. hengevm's log: every frame's planes went to the guest's textures on the GPU (IOSurface pbuffers). With
+     VREND_VIDEO_CPU_COPY=1 in the environment hengevm copies them on the CPU instead, to measure against.
+--bench N repeats step 4's VA-API run N times and reports the median.
 With --no-video, hengevm runs without --gpu-video: vainfo must list no decode profile and the back end must not start.
 The shared image never changes: the guest runs on an APFS clone. Exit 1 on a failed check.
 """
@@ -37,6 +40,8 @@ SHELL = r"henge@henge:[^\n]*\$ "
 WAYLAND = "export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0"
 PACKAGES = ["mesa-va-drivers", "vainfo", "ffmpeg", "mpv"]
 RENDER = "/dev/dri/renderD128"
+# VREND_VIDEO_CPU_COPY=1 in the environment: hengevm copies the planes on the CPU (the spike's path), to measure against
+CPU_COPY = os.environ.get("VREND_VIDEO_CPU_COPY") == "1"
 FPS = 30
 # name: extra libx264 options
 CLIPS = {
@@ -251,7 +256,10 @@ def host_log(err_log):
            if " done: " not in l and re.search(r"not decoded|refused|failed|does not parse|does not fit|no sample buffer|"
                                                r"more than|not supported|invalid|not found", l)]
     started = "vt: video decode on VideoToolbox" in text
-    return sessions, codecs, bad, started
+    copies = [tuple(map(float, m)) for m in re.findall(
+        r"vrend video: codec done: (\d+) frames copied on the GPU, (\d+) on the CPU, (\d+) output surfaces, "
+        r"([\d.]+) ms CPU", text)]
+    return sessions, codecs, bad, started, copies
 
 
 def main():
@@ -266,6 +274,7 @@ def main():
     ap.add_argument("--cpus", type=int, default=4)
     ap.add_argument("--ram", type=int, default=3072)
     ap.add_argument("--no-mpv", action="store_true")
+    ap.add_argument("--bench", type=int, default=1, help="runs of the VA-API benchmark (the median is the result)")
     ap.add_argument("--no-video", action="store_true", help="boot without --gpu-video: vainfo must then list no decode profile")
     args = ap.parse_args()
     args.linux_dir = args.linux_dir or linux_dir()
@@ -302,7 +311,10 @@ def main():
                     sums.append(line)
                 results["checksum"] = "; ".join(sums)
                 name = next(iter(CLIPS))
-                hw_fps, hw_line = bench(p, p.pid, name, True)
+                hw = [bench(p, p.pid, name, True) for _ in range(args.bench)]
+                hw_fps, hw_line = sorted(hw)[len(hw) // 2]
+                if args.bench > 1:
+                    hw_line = f"median of {args.bench}: {hw_line}"
                 _, sw_line = bench(p, p.pid, name, False)
                 results["speed"] = f"{hw_line}; {sw_line}"
                 if hw_fps <= FPS:
@@ -330,13 +342,21 @@ def main():
                 except pexpect.TIMEOUT:
                     p.terminate(force=True)
             p.close()
-            sessions, codecs, bad, started = host_log(err_log)
+            sessions, codecs, bad, started, copies = host_log(err_log)
             if args.keep_log and os.path.exists(err_log):
                 shutil.copy(err_log, args.keep_log)
             print(f"     hengevm: {len(sessions)} VideoToolbox session(s): " + ", ".join(f"{s} {k}" for s, k in sessions[:6]))
             for c in codecs:
                 print(f"     hengevm codec: {c[0]} frames decoded on VideoToolbox, {c[1]} failed, {c[2]} skipped, "
                       f"{c[3]} session(s), {c[4]} parameter set updates, at most {c[5]} slice(s) per decode call")
+            if copies:
+                n = sum(c[0] + c[1] for c in copies)
+                print(f"     hengevm plane copies: {sum(c[0] for c in copies):.0f} frames on the GPU, {sum(c[1] for c in copies):.0f} "
+                      f"on the CPU, at most {max(c[2] for c in copies):.0f} output surfaces per codec, "
+                      f"{1000 * sum(c[3] for c in copies) / max(n, 1):.0f} us CPU per frame in the copies")
+            if copies and not CPU_COPY and any(c[1] for c in copies):
+                print("FAIL some frames were copied on the CPU: the IOSurface pbuffer path failed")
+                ok = False
             if bad:
                 print(f"FAIL hengevm logged {len(bad)} video errors, first: {bad[0].strip()}")
                 ok = False
@@ -355,7 +375,7 @@ def main():
                 print("FAIL not every VideoToolbox session used the hardware decoder")
                 ok = False
             # framemd5 twice, the benchmark, mpv: each run's codec decodes the whole clip on VideoToolbox
-            runs = len(CLIPS) + 1 + (0 if args.no_mpv else 1)
+            runs = len(CLIPS) + args.bench + (0 if args.no_mpv else 1)
             whole = [c for c in codecs if c[0] >= FPS * args.seconds and not c[1] and not c[2]]
             line = (f"{len(whole)} of {runs} VA-API runs decoded all {FPS * args.seconds} frames on VideoToolbox, "
                     f"{sum(c[1] for c in codecs)} failed, {sum(c[2] for c in codecs)} skipped")

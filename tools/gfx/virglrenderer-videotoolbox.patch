@@ -11,7 +11,7 @@ index 99ead1a..6d7d9b8 100644
  #mesondefine ENABLE_TESTS
  #mesondefine UTIL_ARCH_LITTLE_ENDIAN
 diff --git a/meson.build b/meson.build
-index b863ecc..56f9760 100644
+index b863ecc..d808b3b 100644
 --- a/meson.build
 +++ b/meson.build
 @@ -135,7 +135,7 @@ if with_drm_renderers
@@ -33,7 +33,7 @@ index b863ecc..56f9760 100644
 +    # VideoToolbox back end (virgl_video_vt.m): no libva, no DRM
 +    add_languages('objc', required: true)
 +    conf_data.set('ENABLE_VIDEO_VT', 1)
-+    video_deps = [dependency('appleframeworks', modules : ['VideoToolbox', 'CoreMedia', 'CoreVideo', 'CoreFoundation'])]
++    video_deps = [dependency('appleframeworks', modules : ['VideoToolbox', 'CoreMedia', 'CoreVideo', 'CoreFoundation', 'IOSurface'])]
 +  else
 +    video_deps = [dependency('libva'), dependency('libva-drm')]
 +  endif
@@ -63,27 +63,31 @@ index 26c7f58..a056590 100644
  
  if with_host_windows
 diff --git a/src/vrend/virgl_video.h b/src/vrend/virgl_video.h
-index e954559..6a5e05f 100644
+index e954559..705efe0 100644
 --- a/src/vrend/virgl_video.h
 +++ b/src/vrend/virgl_video.h
-@@ -96,6 +96,11 @@ struct virgl_video_dma_buf {
+@@ -96,7 +96,15 @@ struct virgl_video_dma_buf {
          int modifier;
          uint32_t offset;
          uint32_t pitch;
-+        /* CPU copy (VideoToolbox): fd is -1, data points at height rows of pitch bytes, cpp bytes per pixel */
-+        const void *data;
++        /* VideoToolbox: fd is -1; plane of the IOSurface, its size, cpp bytes and channels (1 or 2) per pixel */
++        uint32_t plane;
 +        uint32_t width;
 +        uint32_t height;
 +        uint32_t cpp;
++        uint32_t channels;
      } planes[4];
++
++    void *iosurface; /* VideoToolbox: IOSurfaceRef of the decoded frame, valid during the callback */
  };
  
+ /*
 diff --git a/src/vrend/virgl_video_vt.m b/src/vrend/virgl_video_vt.m
 new file mode 100644
-index 0000000..7a3797c
+index 0000000..2907c7d
 --- /dev/null
 +++ b/src/vrend/virgl_video_vt.m
-@@ -0,0 +1,957 @@
+@@ -0,0 +1,967 @@
 +/**************************************************************************
 + *
 + * Copyright (C) 2026 Henge contributors
@@ -117,7 +121,7 @@ index 0000000..7a3797c
 + * one picture between begin_frame and end_frame, and decodes them as one
 + * sample at end_frame. VideoToolbox keeps its own reference frames, so the
 + * guest's reference surfaces are not used. The output goes to the target's
-+ * plane textures through decode_completed, as CPU pointers (plane.data).
++ * plane textures through decode_completed, as an IOSurface.
 + */
 +
 +#include <stdbool.h>
@@ -129,6 +133,7 @@ index 0000000..7a3797c
 +#include <CoreFoundation/CoreFoundation.h>
 +#include <CoreMedia/CoreMedia.h>
 +#include <CoreVideo/CoreVideo.h>
++#include <IOSurface/IOSurfaceRef.h>
 +#include <TargetConditionals.h>
 +#include <VideoToolbox/VideoToolbox.h>
 +
@@ -688,6 +693,38 @@ index 0000000..7a3797c
 +    return st == kVTInvalidSessionErr || st == kVTVideoDecoderMalfunctionErr;
 +}
 +
++/* The frame goes to the target's plane textures as an IOSurface: vrend copies it on the GPU */
++static void vt_emit(struct virgl_video_codec *c, CVPixelBufferRef out)
++{
++    IOSurfaceRef surf = CVPixelBufferGetIOSurface(out);
++    struct virgl_video_dma_buf d;
++    bool bi = CVPixelBufferGetPlaneCount(out) == 2;
++
++    if (!callbacks || !callbacks->decode_completed || !surf)
++        return;
++    memset(&d, 0, sizeof(d));
++    d.buf = c->target;
++    d.flags = VIRGL_VIDEO_DMABUF_READ_ONLY;
++    d.width = (uint32_t)CVPixelBufferGetWidth(out);
++    d.height = (uint32_t)CVPixelBufferGetHeight(out);
++    d.num_planes = (uint32_t)CVPixelBufferGetPlaneCount(out);
++    if (d.num_planes > 3)
++        d.num_planes = 3;
++    d.iosurface = (void *)surf;
++    for (uint32_t i = 0; i < d.num_planes; i++) {
++        /* VideoToolbox's planar order is Y, Cb, Cr; YV12 is Y, Cr, Cb */
++        size_t src = c->target->format == PIPE_FORMAT_YV12 && i ? 3 - i : i;
++        d.planes[i].fd = -1;
++        d.planes[i].plane = (uint32_t)src;
++        d.planes[i].pitch = (uint32_t)IOSurfaceGetBytesPerRowOfPlane(surf, src);
++        d.planes[i].width = (uint32_t)IOSurfaceGetWidthOfPlane(surf, src);
++        d.planes[i].height = (uint32_t)IOSurfaceGetHeightOfPlane(surf, src);
++        d.planes[i].cpp = (uint32_t)IOSurfaceGetBytesPerElementOfPlane(surf, src);
++        d.planes[i].channels = bi && src == 1 ? 2 : 1;
++    }
++    callbacks->decode_completed(c, &d);
++}
++
 +static int h264_decode(struct virgl_video_codec *c)
 +{
 +    uint8_t ps[VT_PS_MAX];
@@ -774,30 +811,7 @@ index 0000000..7a3797c
 +
 +    CVPixelBufferRef out = c->out;
 +    c->out = NULL;
-+    if (callbacks && callbacks->decode_completed &&
-+        CVPixelBufferLockBaseAddress(out, kCVPixelBufferLock_ReadOnly) == kCVReturnSuccess) {
-+        struct virgl_video_dma_buf d;
-+        memset(&d, 0, sizeof(d));
-+        d.buf = c->target;
-+        d.flags = VIRGL_VIDEO_DMABUF_READ_ONLY;
-+        d.width = (uint32_t)CVPixelBufferGetWidth(out);
-+        d.height = (uint32_t)CVPixelBufferGetHeight(out);
-+        d.num_planes = (uint32_t)CVPixelBufferGetPlaneCount(out);
-+        if (d.num_planes > 4)
-+            d.num_planes = 4;
-+        for (uint32_t i = 0; i < d.num_planes; i++) {
-+            /* VideoToolbox's planar order is Y, Cb, Cr; YV12 is Y, Cr, Cb */
-+            size_t src = c->target->format == PIPE_FORMAT_YV12 && i ? 3 - i : i;
-+            d.planes[i].fd = -1;
-+            d.planes[i].data = CVPixelBufferGetBaseAddressOfPlane(out, src);
-+            d.planes[i].pitch = (uint32_t)CVPixelBufferGetBytesPerRowOfPlane(out, src);
-+            d.planes[i].width = (uint32_t)CVPixelBufferGetWidthOfPlane(out, src);
-+            d.planes[i].height = (uint32_t)CVPixelBufferGetHeightOfPlane(out, src);
-+            d.planes[i].cpp = c->pixfmt == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange && src == 1 ? 2 : 1;
-+        }
-+        callbacks->decode_completed(c, &d);
-+        CVPixelBufferUnlockBaseAddress(out, kCVPixelBufferLock_ReadOnly);
-+    }
++    vt_emit(c, out);
 +    CVPixelBufferRelease(out);
 +    return 0;
 +}
@@ -1145,116 +1159,400 @@ index ef033ad..5c12963 100644
  #endif
  
 diff --git a/src/vrend/vrend_video.c b/src/vrend/vrend_video.c
-index 57341d8..e66fd71 100644
+index 57341d8..bd5a76e 100644
 --- a/src/vrend/vrend_video.c
 +++ b/src/vrend/vrend_video.c
-@@ -73,6 +73,7 @@
+@@ -73,6 +73,16 @@
  #include "vrend_winsys.h"
  #include "vrend_renderer.h"
  #include "vrend_video.h"
 +#include "util/u_format.h"
++
++#ifdef ENABLE_VIDEO_VT
++#include <time.h>
++#include <IOSurface/IOSurfaceRef.h>
++#ifndef GL_TEXTURE_RECTANGLE_ANGLE
++#define GL_TEXTURE_RECTANGLE_ANGLE 0x84F5
++#define GL_TEXTURE_BINDING_RECTANGLE_ANGLE 0x84F6
++#endif
++#endif
  
  struct vrend_context;
  
-@@ -80,8 +81,15 @@ struct vrend_video_context {
+@@ -80,7 +90,27 @@ struct vrend_video_context {
      struct vrend_context *ctx;
      struct list_head codecs;
      struct list_head buffers;
 +    unsigned num_codecs;
- };
- 
++};
++
 +/* Each codec can hold a hardware session and its surface pool */
 +#define VREND_VIDEO_MAX_CODECS 16
 +
 +/* Set by a vrend_video_init that worked: without it no context gets video, so the guest's video commands fail */
 +static bool video_enabled;
 +
++#ifdef ENABLE_VIDEO_VT
++/* The decoder's pool reuses a few surfaces, so their pbuffers are kept */
++#define VREND_VIDEO_MAX_SURFS 32
++
++struct vrend_video_surf {
++    IOSurfaceRef iosurface;         /* retained */
++    EGLDisplay dpy;
++    EGLSurface pb[3];               /* one per IOSurface plane, made on first use */
++    GLsync fence;                   /* the last GPU copy; until it signals the surface is in use, so the pool skips it */
++    uint32_t used;
+ };
++#endif
+ 
  struct vrend_video_codec {
      struct virgl_video_codec *codec;
-     uint32_t handle;
-@@ -146,6 +154,62 @@ static struct vrend_video_buffer *get_video_buffer(
+@@ -89,6 +119,13 @@ struct vrend_video_codec {
+     struct vrend_resource *dest_res;    /* encoding coded buffer */
+     struct vrend_video_context *ctx;
+     struct list_head head;
++#ifdef ENABLE_VIDEO_VT
++    struct vrend_video_surf surfs[VREND_VIDEO_MAX_SURFS];
++    uint32_t clock;
++    bool gpu_off;                       /* the GPU copy failed once: CPU copies from then on */
++    unsigned gpu_frames, cpu_frames, num_surfs;
++    uint64_t copy_ns; /* thread CPU time in the copies */
++#endif
+ };
+ 
+ struct vrend_video_plane {
+@@ -146,6 +183,294 @@ static struct vrend_video_buffer *get_video_buffer(
  }
  
  
-+/* The planes are CPU pointers (VideoToolbox): upload them into the plane textures.
-+ * The plane resources are the guest's: only 2D R8 or R8G8 textures of the plane's pixel size take a copy. */
-+static int sync_cpu_planes_to_video_buffer(struct vrend_video_buffer *buf,
-+                                           const struct virgl_video_dma_buf *dmabuf)
++#ifdef ENABLE_VIDEO_VT
++static bool cpu_copy_only; /* VREND_VIDEO_CPU_COPY=1: for measurements */
++
++static enum virgl_formats vt_plane_format(const struct virgl_video_dma_buf_plane *p)
++{
++    if (p->channels == 1 && p->cpp == 1)
++        return VIRGL_FORMAT_R8_UNORM;
++    if (p->channels == 2 && p->cpp == 2)
++        return VIRGL_FORMAT_R8G8_UNORM;
++    if (p->channels == 1 && p->cpp == 2)
++        return VIRGL_FORMAT_R16_UNORM;
++    if (p->channels == 2 && p->cpp == 4)
++        return VIRGL_FORMAT_R16G16_UNORM;
++    return VIRGL_FORMAT_NONE;
++}
++
++/* The plane resources are the guest's: only a 2D texture of the plane's format takes a copy, inside both sizes */
++static struct vrend_resource *vt_plane_res(struct vrend_video_buffer *buf, unsigned i,
++                                           const struct virgl_video_dma_buf_plane *p, uint32_t *w, uint32_t *h)
 +{
 +    static bool warned;
-+    GLint align, row_length, unpack_buf;
++    enum virgl_formats want = vt_plane_format(p);
++    struct vrend_resource *res = vrend_renderer_ctx_res_lookup(buf->ctx->ctx, buf->planes[i].res_handle);
 +
++    if (!res) {
++        virgl_error("%s: res %d not found\n", __func__, buf->planes[i].res_handle);
++        return NULL;
++    }
++    if (want == VIRGL_FORMAT_NONE || res->target != GL_TEXTURE_2D || !(res->storage_bits & VREND_STORAGE_GL_TEXTURE) ||
++        !res->gl_id || res->base.format != want || !vrend_get_format_table_entry(res->base.format) ||
++        util_format_get_blocksize(res->base.format) != p->cpp) {
++        if (!warned)
++            virgl_warn("%s: plane %u: resource %d (format %d, target 0x%x) does not fit a %u-byte, %u-channel plane\n",
++                       __func__, i, buf->planes[i].res_handle, res->base.format, res->target, p->cpp, p->channels);
++        warned = true;
++        return NULL;
++    }
++    *w = MIN2(res->base.width0, p->width);
++    *h = MIN2(res->base.height0, p->height);
++    return *w && *h ? res : NULL;
++}
++
++/* Fallback when ANGLE cannot bind the planes */
++static int vt_cpu_copy(struct vrend_video_buffer *buf, const struct virgl_video_dma_buf *d)
++{
++    IOSurfaceRef surf = d->iosurface;
++    GLint align, row_length, unpack_buf, tex2d;
++
++    if (IOSurfaceLock(surf, kIOSurfaceLockReadOnly, NULL))
++        return -1;
 +    glGetIntegerv(GL_UNPACK_ALIGNMENT, &align);
 +    glGetIntegerv(GL_UNPACK_ROW_LENGTH, &row_length);
 +    glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &unpack_buf);
++    glGetIntegerv(GL_TEXTURE_BINDING_2D, &tex2d);
 +    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 +    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 +
-+    for (unsigned i = 0; i < dmabuf->num_planes && i < buf->num_planes; i++) {
-+        const struct virgl_video_dma_buf_plane *p = &dmabuf->planes[i];
-+        struct vrend_resource *res;
++    for (unsigned i = 0; i < d->num_planes && i < buf->num_planes; i++) {
++        const struct virgl_video_dma_buf_plane *p = &d->planes[i];
 +        const struct vrend_format_table *tf;
-+        enum virgl_formats want;
++        struct vrend_resource *res;
 +        uint32_t w, h;
++        const void *data;
 +
-+        res = vrend_renderer_ctx_res_lookup(buf->ctx->ctx, buf->planes[i].res_handle);
-+        if (!res) {
-+            virgl_error("%s: res %d not found\n", __func__, buf->planes[i].res_handle);
++        res = vt_plane_res(buf, i, p, &w, &h);
++        if (!res || p->plane >= IOSurfaceGetPlaneCount(surf))
 +            continue;
-+        }
-+        want = p->cpp == 2 ? VIRGL_FORMAT_R8G8_UNORM : VIRGL_FORMAT_R8_UNORM;
++        data = IOSurfaceGetBaseAddressOfPlane(surf, p->plane);
 +        tf = vrend_get_format_table_entry(res->base.format);
-+        if (!p->data || (p->cpp != 1 && p->cpp != 2) || res->target != GL_TEXTURE_2D ||
-+            !(res->storage_bits & VREND_STORAGE_GL_TEXTURE) || !res->gl_id ||
-+            res->base.format != want || !tf || util_format_get_blocksize(res->base.format) != p->cpp) {
-+            if (!warned)
-+                virgl_warn("%s: plane %u: resource %d (format %d, target 0x%x) does not fit a %u-byte plane\n",
-+                           __func__, i, buf->planes[i].res_handle, res->base.format, res->target, p->cpp);
-+            warned = true;
-+            continue;
-+        }
-+        w = MIN2(res->base.width0, p->width);
-+        h = MIN2(res->base.height0, p->height);
 +        /* GL reads h-1 strides plus one row: both inside the plane */
-+        if (!w || !h || p->pitch % p->cpp || p->pitch < w * p->cpp)
++        if (!data || p->pitch % p->cpp || p->pitch < w * p->cpp ||
++            p->pitch > IOSurfaceGetBytesPerRowOfPlane(surf, p->plane) || h > IOSurfaceGetHeightOfPlane(surf, p->plane))
 +            continue;
-+
 +        glPixelStorei(GL_UNPACK_ROW_LENGTH, p->pitch / p->cpp);
 +        glBindTexture(GL_TEXTURE_2D, res->gl_id);
-+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, tf->glformat, tf->gltype, p->data);
-+        glBindTexture(GL_TEXTURE_2D, 0);
++        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, tf->glformat, tf->gltype, data);
 +    }
 +
++    glBindTexture(GL_TEXTURE_2D, tex2d);
 +    glPixelStorei(GL_UNPACK_ROW_LENGTH, row_length);
 +    glPixelStorei(GL_UNPACK_ALIGNMENT, align);
 +    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, unpack_buf);
-+
++    IOSurfaceUnlock(surf, kIOSurfaceLockReadOnly, NULL);
 +    return 0;
 +}
++
++/* True when the surface's last copy is done (or wait_ns passed) */
++static bool vt_surf_retire(struct vrend_video_surf *s, GLuint64 wait_ns)
++{
++    if (!s->fence)
++        return true;
++    GLenum r = glClientWaitSync(s->fence, 0, wait_ns);
++    if (r == GL_TIMEOUT_EXPIRED && !wait_ns)
++        return false;
++    if (r == GL_TIMEOUT_EXPIRED || r == GL_WAIT_FAILED)
++        virgl_warn("vrend video: a GPU plane copy did not finish (0x%x)\n", r);
++    glDeleteSync(s->fence);
++    s->fence = NULL;
++    IOSurfaceDecrementUseCount(s->iosurface);
++    return true;
++}
++
++static void vt_surf_drop(struct vrend_video_surf *s)
++{
++    if (!s->iosurface)
++        return;
++    vt_surf_retire(s, 1000000000ull);
++    for (unsigned i = 0; i < 3; i++)
++        if (s->pb[i] != EGL_NO_SURFACE)
++            eglDestroySurface(s->dpy, s->pb[i]);
++    CFRelease(s->iosurface);
++    memset(s, 0, sizeof(*s));
++}
++
++/* A free slot first, then the least recently used idle one, then the least recently used */
++static int vt_surf_rank(const struct vrend_video_surf *s)
++{
++    return !s->iosurface ? 0 : !s->fence ? 1 : 2;
++}
++
++static struct vrend_video_surf *vt_surf_get(struct vrend_video_codec *cdc, IOSurfaceRef surf, EGLDisplay dpy)
++{
++    struct vrend_video_surf *s, *pick = NULL;
++
++    for (unsigned i = 0; i < VREND_VIDEO_MAX_SURFS; i++) {
++        s = &cdc->surfs[i];
++        if (s->iosurface == surf && s->dpy == dpy) {
++            s->used = ++cdc->clock;
++            return s;
++        }
++        if (s->iosurface)
++            vt_surf_retire(s, 0);
++        if (!pick || vt_surf_rank(s) < vt_surf_rank(pick) ||
++            (vt_surf_rank(s) == vt_surf_rank(pick) && s->used < pick->used))
++            pick = s;
++    }
++    vt_surf_drop(pick);
++    pick->iosurface = (IOSurfaceRef)CFRetain(surf);
++    pick->dpy = dpy;
++    pick->used = ++cdc->clock;
++    cdc->num_surfs++;
++    return pick;
++}
++
++static bool vt_pb_config(EGLDisplay dpy, EGLConfig *cfg, EGLint *bind_target)
++{
++    static EGLDisplay cfg_dpy = EGL_NO_DISPLAY;
++    static EGLConfig cfg_cfg;
++    static EGLint cfg_target;
++    EGLint ca[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT, EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RED_SIZE, 8,
++                   EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_BIND_TO_TEXTURE_RGBA, EGL_TRUE, EGL_NONE};
++    EGLint n = 0;
++
++    if (dpy == EGL_NO_DISPLAY)
++        return false;
++    if (dpy != cfg_dpy) {
++        if (!eglChooseConfig(dpy, ca, &cfg_cfg, 1, &n) || n < 1)
++            return false;
++        if (!eglGetConfigAttrib(dpy, cfg_cfg, EGL_BIND_TO_TEXTURE_TARGET_ANGLE, &cfg_target) ||
++            cfg_target != EGL_TEXTURE_RECTANGLE_ANGLE)
++            cfg_target = EGL_TEXTURE_2D;
++        cfg_dpy = dpy;
++    }
++    *cfg = cfg_cfg;
++    *bind_target = cfg_target;
++    return true;
++}
++
++/* Each plane of the IOSurface as a pbuffer, bound to a texture, copied on the GPU into the guest's plane texture */
++static int vt_gpu_copy(struct vrend_video_codec *cdc, struct vrend_video_buffer *buf, const struct virgl_video_dma_buf *d)
++{
++    EGLDisplay dpy = eglGetCurrentDisplay();
++    EGLConfig cfg;
++    EGLint bind_target;
++    GLenum target;
++    GLint read_fb, tex2d, texrect = 0;
++    GLuint tex, fb;
++    struct vrend_video_surf *s;
++    int rc = 0;
++
++    if (!vt_pb_config(dpy, &cfg, &bind_target))
++        return -1;
++    target = bind_target == EGL_TEXTURE_RECTANGLE_ANGLE ? GL_TEXTURE_RECTANGLE_ANGLE : GL_TEXTURE_2D;
++    s = vt_surf_get(cdc, d->iosurface, dpy);
++    vt_surf_retire(s, 1000000000ull); /* the pool skips surfaces in use, so this does not wait */
++
++    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_fb);
++    glGetIntegerv(GL_TEXTURE_BINDING_2D, &tex2d);
++    if (target != GL_TEXTURE_2D)
++        glGetIntegerv(GL_TEXTURE_BINDING_RECTANGLE_ANGLE, &texrect);
++    glGenTextures(1, &tex);
++    glGenFramebuffers(1, &fb);
++
++    for (unsigned i = 0; i < d->num_planes && i < buf->num_planes && !rc; i++) {
++        const struct virgl_video_dma_buf_plane *p = &d->planes[i];
++        bool deep = p->cpp == 2 * p->channels;
++        struct vrend_resource *res;
++        uint32_t w, h;
++
++        res = vt_plane_res(buf, i, p, &w, &h);
++        if (!res || p->plane >= 3)
++            continue;
++        if (s->pb[p->plane] == EGL_NO_SURFACE) {
++            EGLint sa[] = {EGL_WIDTH, (EGLint)p->width, EGL_HEIGHT, (EGLint)p->height,
++                           EGL_IOSURFACE_PLANE_ANGLE, (EGLint)p->plane, EGL_TEXTURE_TARGET, bind_target,
++                           EGL_TEXTURE_INTERNAL_FORMAT_ANGLE, p->channels == 2 ? GL_RG : GL_RED,
++                           EGL_TEXTURE_FORMAT, EGL_TEXTURE_RGBA,
++                           EGL_TEXTURE_TYPE_ANGLE, deep ? GL_UNSIGNED_SHORT : GL_UNSIGNED_BYTE, EGL_NONE};
++            s->pb[p->plane] = eglCreatePbufferFromClientBuffer(dpy, EGL_IOSURFACE_ANGLE, (EGLClientBuffer)s->iosurface,
++                                                               cfg, sa);
++            if (s->pb[p->plane] == EGL_NO_SURFACE) {
++                virgl_warn("vrend video: IOSurface plane %u pbuffer failed (0x%x)\n", p->plane, eglGetError());
++                rc = -1;
++                break;
++            }
++        }
++        glBindTexture(target, tex);
++        if (!eglBindTexImage(dpy, s->pb[p->plane], EGL_BACK_BUFFER)) {
++            virgl_warn("vrend video: eglBindTexImage failed (0x%x)\n", eglGetError());
++            rc = -1;
++            break;
++        }
++        glBindFramebuffer(GL_READ_FRAMEBUFFER, fb);
++        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, target, tex, 0);
++        if (glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
++            glBindTexture(GL_TEXTURE_2D, res->gl_id);
++            glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h);
++        } else {
++            virgl_warn("vrend video: IOSurface plane %u is not a complete framebuffer\n", p->plane);
++            rc = -1;
++        }
++        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, target, 0, 0);
++        glBindTexture(target, tex);
++        eglReleaseTexImage(dpy, s->pb[p->plane], EGL_BACK_BUFFER);
++    }
++
++    glDeleteFramebuffers(1, &fb);
++    glDeleteTextures(1, &tex);
++    glBindFramebuffer(GL_READ_FRAMEBUFFER, read_fb);
++    glBindTexture(GL_TEXTURE_2D, tex2d);
++    if (target != GL_TEXTURE_2D)
++        glBindTexture(target, texrect);
++    if (rc)
++        return rc;
++    s->fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
++    if (s->fence)
++        IOSurfaceIncrementUseCount(s->iosurface);
++    glFlush();
++    return 0;
++}
++
++static uint64_t vt_thread_ns(void)
++{
++    struct timespec t;
++    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
++    return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
++}
++
++static void vt_sync_frame(struct vrend_video_codec *cdc, struct vrend_video_buffer *buf,
++                          const struct virgl_video_dma_buf *d)
++{
++    uint64_t t0 = vt_thread_ns();
++
++    if (!cpu_copy_only && !cdc->gpu_off) {
++        if (!vt_gpu_copy(cdc, buf, d)) {
++            cdc->gpu_frames++;
++            cdc->copy_ns += vt_thread_ns() - t0;
++            return;
++        }
++        virgl_warn("vrend video: GPU plane copy failed, copying on the CPU from now on\n");
++        cdc->gpu_off = true;
++    }
++    if (!vt_cpu_copy(buf, d))
++        cdc->cpu_frames++;
++    cdc->copy_ns += vt_thread_ns() - t0;
++}
++
++static void vt_codec_fini(struct vrend_video_codec *cdc)
++{
++    if (cdc->gpu_frames || cdc->cpu_frames)
++        virgl_info("vrend video: codec done: %u frames copied on the GPU, %u on the CPU, %u output surfaces, "
++                   "%.1f ms CPU in the copies\n",
++                   cdc->gpu_frames, cdc->cpu_frames, cdc->num_surfs, cdc->copy_ns / 1e6);
++    for (unsigned i = 0; i < VREND_VIDEO_MAX_SURFS; i++)
++        vt_surf_drop(&cdc->surfs[i]);
++}
++#endif
 +
  static int sync_dmabuf_to_video_buffer(struct vrend_video_buffer *buf,
                                         const struct virgl_video_dma_buf *dmabuf)
  {
-@@ -154,6 +218,9 @@ static int sync_dmabuf_to_video_buffer(struct vrend_video_buffer *buf,
+@@ -154,6 +479,7 @@ static int sync_dmabuf_to_video_buffer(struct vrend_video_buffer *buf,
          return -1;
      }
  
-+    if (dmabuf->num_planes && dmabuf->planes[0].data)
-+        return sync_cpu_planes_to_video_buffer(buf, dmabuf);
 +
      for (unsigned i = 0; i < dmabuf->num_planes && i < buf->num_planes; i++) {
          struct vrend_video_plane *plane = &buf->planes[i];
          struct vrend_resource *res;
-@@ -354,15 +421,20 @@ static struct virgl_video_callbacks video_callbacks = {
+@@ -276,6 +602,13 @@ static void vrend_video_decode_completed(
+ {
+     struct vrend_video_buffer *buf = vrend_video_buffer(dmabuf->buf);
+ 
++#ifdef ENABLE_VIDEO_VT
++    if (dmabuf->iosurface) {
++        if (dmabuf->flags & VIRGL_VIDEO_DMABUF_READ_ONLY)
++            vt_sync_frame(vrend_video_codec(codec), buf, dmabuf);
++        return;
++    }
++#endif
+     (void)codec;
+ 
+     sync_dmabuf_to_video_buffer(buf, dmabuf);
+@@ -354,15 +687,24 @@ static struct virgl_video_callbacks video_callbacks = {
  
  int vrend_video_init(int drm_fd)
  {
 +#ifndef ENABLE_VIDEO_VT
      if (drm_fd < 0)
          return -1;
-+#endif
- 
+-
 -    return virgl_video_init(drm_fd, &video_callbacks, 0);
++#endif
++
++#ifdef ENABLE_VIDEO_VT
++    const char *e = getenv("VREND_VIDEO_CPU_COPY");
++    cpu_copy_only = e && *e == '1';
++#endif
 +    video_enabled = virgl_video_init(drm_fd, &video_callbacks, 0) == 0;
 +    return video_enabled ? 0 : -1;
  }
@@ -1268,7 +1566,7 @@ index 57341d8..e66fd71 100644
  }
  
  int vrend_video_fill_caps(union virgl_caps *caps)
-@@ -381,12 +453,20 @@ int vrend_video_create_codec(struct vrend_video_context *ctx,
+@@ -381,12 +723,20 @@ int vrend_video_create_codec(struct vrend_video_context *ctx,
                               uint32_t max_ref,
                               uint32_t flags)
  {
@@ -1290,7 +1588,7 @@ index 57341d8..e66fd71 100644
      if (profile <= PIPE_VIDEO_PROFILE_UNKNOWN ||
          profile >= PIPE_VIDEO_PROFILE_MAX)
          return -1;
-@@ -423,6 +503,7 @@ int vrend_video_create_codec(struct vrend_video_context *ctx,
+@@ -423,6 +773,7 @@ int vrend_video_create_codec(struct vrend_video_context *ctx,
      cdc->handle = handle;
      cdc->ctx = ctx;
      list_add(&cdc->head, &ctx->codecs);
@@ -1298,15 +1596,18 @@ index 57341d8..e66fd71 100644
  
      return 0;
  }
-@@ -431,6 +512,7 @@ static void destroy_video_codec(struct vrend_video_codec *cdc)
+@@ -431,6 +782,10 @@ static void destroy_video_codec(struct vrend_video_codec *cdc)
  {
      if (cdc) {
          list_del(&cdc->head);
 +        cdc->ctx->num_codecs--;
++#ifdef ENABLE_VIDEO_VT
++        vt_codec_fini(cdc);
++#endif
          virgl_video_destroy_codec(cdc->codec);
          free(cdc);
      }
-@@ -439,7 +521,11 @@ static void destroy_video_codec(struct vrend_video_codec *cdc)
+@@ -439,7 +794,11 @@ static void destroy_video_codec(struct vrend_video_codec *cdc)
  void vrend_video_destroy_codec(struct vrend_video_context *ctx,
                                 uint32_t handle)
  {
@@ -1319,7 +1620,7 @@ index 57341d8..e66fd71 100644
  
      destroy_video_codec(cdc);
  }
-@@ -454,9 +540,12 @@ int vrend_video_create_buffer(struct vrend_video_context *ctx,
+@@ -454,9 +813,12 @@ int vrend_video_create_buffer(struct vrend_video_context *ctx,
  {
      unsigned i;
      struct vrend_video_plane *plane;
@@ -1333,7 +1634,7 @@ index 57341d8..e66fd71 100644
      if (buf)
          return 0;
  
-@@ -465,8 +554,10 @@ int vrend_video_create_buffer(struct vrend_video_context *ctx,
+@@ -465,8 +827,10 @@ int vrend_video_create_buffer(struct vrend_video_context *ctx,
          return -1;
      }
  
@@ -1345,7 +1646,7 @@ index 57341d8..e66fd71 100644
  
      buf = (struct vrend_video_buffer *)calloc(1, sizeof(*buf));
      if (!buf)
-@@ -538,7 +629,11 @@ static void destroy_video_buffer(struct vrend_video_buffer *buf)
+@@ -538,7 +902,11 @@ static void destroy_video_buffer(struct vrend_video_buffer *buf)
  void vrend_video_destroy_buffer(struct vrend_video_context *ctx,
                                  uint32_t handle)
  {
@@ -1358,7 +1659,7 @@ index 57341d8..e66fd71 100644
  
      destroy_video_buffer(buf);
  }
-@@ -547,6 +642,8 @@ struct vrend_video_context *vrend_video_create_context(struct vrend_context *ctx
+@@ -547,6 +915,8 @@ struct vrend_video_context *vrend_video_create_context(struct vrend_context *ctx
  {
      struct vrend_video_context *vctx;
  
@@ -1367,7 +1668,7 @@ index 57341d8..e66fd71 100644
      vctx = (struct vrend_video_context *)calloc(1, sizeof(*vctx));
      if (vctx) {
          vctx->ctx = ctx;
-@@ -559,6 +656,9 @@ struct vrend_video_context *vrend_video_create_context(struct vrend_context *ctx
+@@ -559,6 +929,9 @@ struct vrend_video_context *vrend_video_create_context(struct vrend_context *ctx
  
  void vrend_video_destroy_context(struct vrend_video_context *ctx)
  {
@@ -1377,7 +1678,7 @@ index 57341d8..e66fd71 100644
     list_for_each_entry_safe(struct vrend_video_codec, vcdc, &ctx->codecs, head)
        destroy_video_codec(vcdc);
  
-@@ -572,8 +672,8 @@ int vrend_video_begin_frame(struct vrend_video_context *ctx,
+@@ -572,8 +945,8 @@ int vrend_video_begin_frame(struct vrend_video_context *ctx,
                              uint32_t cdc_handle,
                              uint32_t tgt_handle)
  {
@@ -1388,7 +1689,7 @@ index 57341d8..e66fd71 100644
  
      if (!cdc || !tgt)
          return -1;
-@@ -742,8 +842,8 @@ int vrend_video_decode_bitstream(struct vrend_video_context *ctx,
+@@ -742,8 +1115,8 @@ int vrend_video_decode_bitstream(struct vrend_video_context *ctx,
      unsigned i, num_bs, *bs_sizes = NULL;
      void **bs_buffers = NULL;
      struct vrend_resource *res;
@@ -1399,7 +1700,7 @@ index 57341d8..e66fd71 100644
      union virgl_picture_desc desc;
  
      if (!cdc || !tgt){
-@@ -765,16 +865,16 @@ int vrend_video_decode_bitstream(struct vrend_video_context *ctx,
+@@ -765,16 +1138,16 @@ int vrend_video_decode_bitstream(struct vrend_video_context *ctx,
  
      for (i = 0, num_bs = 0; i < num_buffers; i++) {
          res = vrend_renderer_ctx_res_lookup(ctx->ctx, buffer_handles[i]);
@@ -1421,7 +1722,7 @@ index 57341d8..e66fd71 100644
          num_bs++;
      }
  
-@@ -807,8 +907,8 @@ int vrend_video_encode_bitstream(struct vrend_video_context *ctx,
+@@ -807,8 +1180,8 @@ int vrend_video_encode_bitstream(struct vrend_video_context *ctx,
  {
      union virgl_picture_desc desc;
      struct vrend_resource *dest_res, *desc_res, *feed_res;
@@ -1432,7 +1733,7 @@ index 57341d8..e66fd71 100644
  
      if (!cdc || !src)
          return -1;
-@@ -847,8 +947,8 @@ int vrend_video_end_frame(struct vrend_video_context *ctx,
+@@ -847,8 +1220,8 @@ int vrend_video_end_frame(struct vrend_video_context *ctx,
                            uint32_t cdc_handle,
                            uint32_t tgt_handle)
  {

@@ -329,3 +329,30 @@ An independent review of runs 1 to 6 found these defects. The patch and Henge no
 Not shown by the spike: 4K, HEVC, VP9 and AV1, interlaced content, the IOSurface zero-copy path, browsers, a crafted guest beyond the oversized bitstream, and anything on the phone ([What needs the phone](#what-needs-the-phone)). `mpv` did not report a mistimed-frame count.
 
 Re-run: `make GFX_ROOT=<tree with the patched macOS libraries> test-linux-video`. The libraries come from `GFX_ROOT=<tree> tools/gfx/build-deps.sh --target macos --only virgl`. `VIDEO_ARGS="--image FILE"` names a desktop image that has the packages already; without it, the script runs `apt install` in the clone. `uv run tools/linux/video-decode-check.py --no-video` checks the default (video off).
+
+## Stage 2 results
+
+Run on 14/11/2026 on the same Mac, branch `linux/VD-decode`. This is stage 2 of [Stages](#stages): the GPU copy replaces the CPU copy.
+
+What changed:
+
+- The back end gives `vrend_video.c` the decoded `CVPixelBuffer`'s IOSurface, not CPU pointers. `vrend_video.c` makes one ANGLE pbuffer for each IOSurface plane (`EGL_IOSURFACE_ANGLE`: `GL_RED` or `GL_RG`, 8 or 16 bits), binds it to a texture and copies it into the guest's plane texture with `glCopyTexSubImage2D`. The guest's plane resource must be a 2D texture of the plane's format. The copy stays inside the smaller of the two sizes.
+- The pbuffers are kept in a cache of 32 surfaces for each codec, keyed by IOSurface. VideoToolbox used 9 surfaces for `ffmpeg` and 12 for `mpv`.
+- A fence follows each copy. Until it signals, the IOSurface's use count is raised. A test on the Mac showed that a `CVPixelBufferPool` does not give back a surface that is in use, and that a Metal texture on a surface does not raise the count. So the decoder cannot write a surface that the GPU still reads.
+- When ANGLE refuses a plane, that codec copies on the CPU from then on (`IOSurfaceLock`). `VREND_VIDEO_CPU_COPY=1` in `hengevm`'s environment forces the CPU copy. The script fails when a frame went to the CPU without that variable.
+- `vrend_video.c` logs, for each codec, the frames copied on the GPU and on the CPU, the surfaces and the thread CPU time of the copies.
+
+The clips and the guest are the spike's. Each mode ran three times with `--bench 5` (15 runs of `ffmpeg -hwaccel vaapi -hwaccel_output_format vaapi -f null -` each), alternately, on one patched library. The host load average was 23 to 42, from other work on the Mac.
+
+| | GPU copy | CPU copy |
+|---|---|---|
+| framemd5 against `-hwaccel none` | 450 of 450, both clips, each run | 450 of 450, both clips, each run |
+| VA-API frame rate, median of 15 | 424.9 fps (343.0 to 442.9) | 384.9 fps (358.6 to 397.2) |
+| Guest CPU for 450 frames, median | 0.52 s | 0.52 s |
+| `hengevm` CPU for 450 frames, median | 0.74 s (0.70 to 0.89) | 0.86 s (0.79 to 0.95) |
+| Thread CPU in the plane copy, per frame | 81 µs | 296 µs |
+| `mpv --hwdec=vaapi --vo=gpu` | 0 frames dropped; all 450 frames decoded and copied on the GPU | (not run) |
+
+The GPU copy cuts the copy's CPU time by a factor of 3.7, and `hengevm`'s CPU time for the clip by 14%. The guest's CPU time does not change, because the copy is on the host. Most of `hengevm`'s remaining CPU time is the guest's emulated CPUs and the virgl command stream, not the copy.
+
+Not shown: the pbuffer path on the iPhone GPU, and 10-bit planes (no 10-bit H.264 decode). The CPU fallback ran only when forced.
