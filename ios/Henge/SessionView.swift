@@ -9,10 +9,19 @@ struct SessionView: View {
     let mac: VirtualMac
     let close: () -> Void
 
+    init(mac: VirtualMac, close: @escaping () -> Void) {
+        self.mac = mac
+        self.close = close
+        let check = SessionGate.Check.for(linux: mac.guest == .linux, environment: ProcessInfo.processInfo.environment)
+        var gate = SessionGate(check: check)
+        if SessionGate.testUnlock(environment: ProcessInfo.processInfo.environment) { gate.unlockForTest() }
+        _gate = State(initialValue: gate)
+    }
+
     @ObservedObject private var machines = Machines.shared
     @StateObject private var display = DisplayRouter()
     @State private var error: String?
-    @State private var gate = SessionGate() // Face ID before the machine runs or comes back
+    @State private var gate: SessionGate // Face ID before a Linux machine runs or comes back
     @State private var gateMessage: String?
     @State private var gateContext: LAContext?
     @State private var state: Int32 = 0
@@ -1003,6 +1012,9 @@ struct SessionView: View {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         guard !Task.isCancelled else { return }
+        gate.end() // a restart asks again
+        gateContext = nil
+        KeychainStore.shared.setUnlocked(false, context: nil)
         askToOpen()
         while gate.phase != .open { // a refusal waits here for Try Again or Close
             guard !Task.isCancelled else { return }
@@ -1120,6 +1132,9 @@ struct SessionView: View {
                 HardwareKeys.releaseAll()
                 HardwareMouse.shared.stop()
                 UIApplication.shared.isIdleTimerDisabled = false
+                gate.end() // no machine runs: the wallet locks
+                gateContext = nil
+                KeychainStore.shared.setUnlocked(false, context: nil)
                 let outcome = henge_vm_exit_outcome()
                 if shutdownAsked != nil && outcome == Int32(HENGE_VM_OUTCOME_SHUTDOWN.rawValue) {
                     close() // the person asked for it: no stopped card
@@ -1179,20 +1194,30 @@ struct SessionView: View {
     }
 
     private func askToOpen() {
-        guard let ticket = gate.ask() else { return }
-        gateMessage = nil
-        Task { @MainActor in
-            let outcome = await SessionAuth.check(mac.name)
-            switch outcome {
-            case .passed(let context):
-                gate.checked(ticket, passed: true)
-                guard gate.secretsUnlocked else { return } // the app left during the check
-                gateContext = context
-                KeychainStore.shared.setUnlocked(true, context: context)
-                setBackground(false)
-            case .failed(let message):
-                gate.checked(ticket, passed: false)
-                gateMessage = message
+        switch gate.ask() {
+        case .nothing:
+            return
+        case .opened: // a Mac, or HENGE_AUTOPILOT
+            if gate.check == .skippedForTest {
+                HengeLog.log("session", "face id: skipped (HENGE_AUTOPILOT); wallet \(gate.secretsUnlocked ? "unlocked by the test" : "locked")")
+            }
+            KeychainStore.shared.setUnlocked(gate.secretsUnlocked, context: nil)
+            setBackground(false)
+        case .check(let ticket):
+            gateMessage = nil
+            Task { @MainActor in
+                let outcome = await SessionAuth.check(mac.name)
+                switch outcome {
+                case .passed(let context):
+                    gate.checked(ticket, passed: true)
+                    guard gate.secretsUnlocked else { return } // the app left during the check
+                    gateContext = context
+                    KeychainStore.shared.setUnlocked(true, context: context)
+                    setBackground(false)
+                case .failed(let message):
+                    gate.checked(ticket, passed: false)
+                    gateMessage = message
+                }
             }
         }
     }

@@ -30,6 +30,8 @@ import UIKit
 ///   stop               stop the machine
 ///   exit               quit Henge
 /// Each command is written to henge.log as it runs, so the log has the timeline.
+/// HENGE_AUTOPILOT in the launch environment (not the once file) also skips a Linux machine's Face ID check
+/// (SessionGate). The wallet stays locked unless HENGE_AUTOPILOT_WALLET=unlocked is in the launch environment too.
 enum Autopilot {
     private static let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
 

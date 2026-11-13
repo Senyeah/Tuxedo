@@ -60,8 +60,16 @@ final class KeychainStore {
         #if targetEnvironment(simulator)
         return (!unlocked, nil)
         #else
-        return (!unlocked || context == nil, context)
+        // Unlocked with no context: HENGE_AUTOPILOT_WALLET. A secret then reads as locked: it needs Face ID.
+        return (!unlocked, context ?? Self.quietContext())
         #endif
+    }
+
+    /// Never shows a prompt: a call that needs Face ID fails instead.
+    private static func quietContext() -> LAContext {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        return context
     }
 
     private func base(_ scope: String, _ id: String? = nil) -> [CFString: Any] {
@@ -86,9 +94,7 @@ final class KeychainStore {
         var q = base(scope)
         q[kSecMatchLimit] = kSecMatchLimitAll
         q[kSecReturnAttributes] = true
-        let quiet = LAContext()
-        quiet.interactionNotAllowed = true // metadata needs no check; never prompt
-        q[kSecUseAuthenticationContext] = quiet
+        q[kSecUseAuthenticationContext] = Self.quietContext() // metadata needs no check
         var result: CFTypeRef?
         let status = SecItemCopyMatching(q as CFDictionary, &result)
         guard status == errSecSuccess else { return Self.code(status) }
