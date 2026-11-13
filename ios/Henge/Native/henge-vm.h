@@ -78,6 +78,17 @@ void henge_share_set_clipboard(const char *text);
 char *henge_share_take_clipboard(void);
 long henge_share_agent_seen(void);
 
+/* The phone's status for a Linux guest (host/status.h). Any time, before boot too; kept for the next machine.
+   state: UIDeviceBatteryState (0 unknown, 1 unplugged, 2 charging, 3 full); level 0-100, or -1. */
+void henge_vm_set_battery(int level, int state);
+void henge_vm_set_brightness(double level); /* 0 to 1 */
+void henge_vm_set_volume(double level);     /* 0 to 1 */
+int henge_vm_set_timezone(const char *name); /* -1: not a zone name */
+void henge_vm_status_touch(void);           /* the wall clock changed */
+/* The guest's own brightness and volume sliders: 1 once per new request, 0 when none or no machine runs. */
+int henge_vm_take_brightness_request(double *level);
+int henge_vm_take_volume_request(double *level, int *muted);
+
 /* The size macOS is told its screen is. Before henge_vm_boot. */
 void henge_vm_set_display(uint32_t width, uint32_t height);
 /* The panel's physical size; 0, 0 for the default (a ~122 ppi, 1x screen). Before boot. */

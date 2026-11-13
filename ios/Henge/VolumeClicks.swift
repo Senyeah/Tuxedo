@@ -1,6 +1,5 @@
 import SwiftUI
 import UIKit
-import MediaPlayer
 import AVFAudio
 import AVFoundation
 import AVKit
@@ -55,13 +54,6 @@ final class VolumeClicks: NSObject {
         if left { leftDown = down } else { rightDown = down }
     }
 
-    private func keyWindow() -> UIWindow? {
-        UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap { $0.windows }
-            .first { $0.isKeyWindow }
-    }
-
     // MARK: Lifecycle
 
     func start() {
@@ -100,9 +92,17 @@ final class VolumeClicks: NSObject {
 
     // MARK: - Volume-change path (delayHold, tapThenDrag)
 
-    private var volumeView: MPVolumeView?
     private var observingVolume = false
     private var originalVolume: Float = 0.5
+
+    /// The buttons are clicks and the system volume is pinned in the middle (DeviceStatus then gives the guest
+    /// volumeToRestore instead).
+    var pinsVolume: Bool { observingVolume }
+    /// The level that comes back when the buttons stop being clicks; a Linux guest's slider changes it.
+    var volumeToRestore: Float {
+        get { originalVolume }
+        set { originalVolume = min(1, max(0, newValue)) }
+    }
     private let baseline: Float = 0.5
     private let step: Float = 0.01
     private let releaseAfter: TimeInterval = 0.5
@@ -112,11 +112,7 @@ final class VolumeClicks: NSObject {
     private func startVolumeKVO() {
         try? AVAudioSession.sharedInstance().setActive(true)
         originalVolume = AVAudioSession.sharedInstance().outputVolume
-        let view = MPVolumeView(frame: CGRect(x: -2000, y: -2000, width: 1, height: 1))
-        view.showsRouteButton = false
-        view.isUserInteractionEnabled = false
-        keyWindow()?.addSubview(view)
-        volumeView = view
+        SystemVolume.shared.attach()
         setVolume(baseline)
         AVAudioSession.sharedInstance().addObserver(self, forKeyPath: "outputVolume", options: [.new], context: nil)
         observingVolume = true
@@ -132,8 +128,7 @@ final class VolumeClicks: NSObject {
         AVAudioSession.sharedInstance().removeObserver(self, forKeyPath: "outputVolume")
         observingVolume = false
         setVolume(originalVolume)
-        volumeView?.removeFromSuperview()
-        volumeView = nil
+        SystemVolume.shared.detach()
     }
 
     override func observeValue(forKeyPath keyPath: String?, of object: Any?,
@@ -153,17 +148,7 @@ final class VolumeClicks: NSObject {
         }
     }
 
-    /// Set the system volume through MPVolumeView's slider, the one place an app can.
-    private func setVolume(_ value: Float) {
-        guard let view = volumeView, let slider = findSlider(in: view) else { return }
-        slider.value = value
-    }
-
-    private func findSlider(in view: UIView) -> UISlider? {
-        if let slider = view as? UISlider { return slider }
-        for sub in view.subviews { if let slider = findSlider(in: sub) { return slider } }
-        return nil
-    }
+    private func setVolume(_ value: Float) { SystemVolume.shared.set(value) }
 
     // MARK: delayHold
 

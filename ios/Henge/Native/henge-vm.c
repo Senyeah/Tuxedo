@@ -368,6 +368,26 @@ char *henge_share_take_clipboard(void) { return hv_share_take_clipboard(); }
 long henge_share_agent_seen(void) { return hv_share_agent_seen(); }
 
 /* vm.c keeps the mode and gives it to the board's display once one exists. */
+void henge_vm_set_battery(int level, int state) { hv_vm_set_battery(level, state); }
+void henge_vm_set_brightness(double level) { hv_vm_set_brightness(level); }
+void henge_vm_set_volume(double level) { hv_vm_set_volume(level); }
+int henge_vm_set_timezone(const char *name) { return hv_vm_set_timezone(name); }
+void henge_vm_status_touch(void) { hv_vm_status_touch(); }
+
+int henge_vm_take_brightness_request(double *level) {
+    if (!lock_running()) return 0;
+    int got = hv_vm_take_brightness_request(level);
+    pthread_rwlock_unlock(&api_lock);
+    return got;
+}
+
+int henge_vm_take_volume_request(double *level, int *muted) {
+    if (!lock_running()) return 0;
+    int got = hv_vm_take_volume_request(level, muted);
+    pthread_rwlock_unlock(&api_lock);
+    return got;
+}
+
 void henge_vm_set_display(uint32_t width, uint32_t height) { hv_vm_set_display_mode(width, height); }
 void henge_vm_set_display_scale(double scale) { hv_vm_set_display_scale(scale); }
 void henge_vm_set_display_mm(uint32_t width_mm, uint32_t height_mm) { hv_vm_set_display_size_mm(width_mm, height_mm); }

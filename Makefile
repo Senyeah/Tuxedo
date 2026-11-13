@@ -504,6 +504,13 @@ gate-engine:
 .PHONY: gate-engine
 
 # What the JIT setup tells the user and when it retries by itself, for each kind of network path and helper error.
+$(B)/test_device_status_policy: ios/Henge/DeviceStatusPolicy.swift tests/test_device_status_policy.swift | $(B)
+	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
+
+test-device-status-policy: $(B)/test_device_status_policy
+	$(B)/test_device_status_policy
+.PHONY: test-device-status-policy
+
 $(B)/test_jit_advice: ios/Henge/JIT/JITNetworkAdvice.swift tests/test_jit_advice.swift | $(B)
 	xcrun --sdk macosx swiftc $^ -o $@
 
