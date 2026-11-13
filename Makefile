@@ -532,6 +532,24 @@ test-vgpu-virgl:
 	else echo "test-vgpu-virgl: skipped: no graphics libraries in $(GFX_DIR)"; fi
 .PHONY: test-vgpu-virgl
 
+# Guest video codecs (hvcodec, docs/guest-video-encode-plan.md): VideoToolbox on the host. vt_decode.m is the
+# decode code that the virgl video back end can share; vt_caps.m is the run-time codec table.
+VT_FRAMEWORKS = -framework Foundation -framework VideoToolbox -framework CoreMedia -framework CoreVideo -framework CoreFoundation -framework IOSurface
+VT_OBJ = $(B)/vt_decode.o $(B)/vt_caps.o
+$(B)/vt_decode.o $(B)/vt_caps.o: $(B)/%.o: host/%.m host/*.h | $(B)
+	$(CC) $(CFLAGS) -fobjc-arc -c $< -o $@
+
+# VE0.1 and VE0.2: the transcode limit with no guest, and the codec table. VT_BENCH_ARGS: clips, --probe-only, --write DIR.
+$(B)/vt_transcode_bench: tests/vt_transcode_bench.m $(VT_OBJ)
+	$(CC) $(CFLAGS) -fobjc-arc $^ -framework AVFoundation $(VT_FRAMEWORKS) -o $@
+vt-transcode-bench: $(B)/vt_transcode_bench
+	$(B)/vt_transcode_bench $(VT_BENCH_ARGS)
+# The same program for the phone, as gfx_ios_probe: linked, not installed.
+ios-vt-bench: | $(B)
+	xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=17.0 -fobjc-arc -Wall -Wextra -O2 -Ihost tests/vt_transcode_bench.m host/vt_decode.m host/vt_caps.m \
+	  -framework AVFoundation $(VT_FRAMEWORKS) -o $(B)/vt_transcode_bench_ios
+.PHONY: vt-transcode-bench ios-vt-bench
+
 # A5: both iOS libraries with the renderer, linked with the static graphics libraries. The device binary is only linked.
 # The simulator binary runs when a simulator is booted (xcrun simctl spawn).
 IOS_GFX_FW = -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework CoreFoundation -framework UIKit -framework VideoToolbox -framework CoreMedia -framework CoreVideo -lc++
