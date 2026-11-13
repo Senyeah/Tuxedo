@@ -25,6 +25,8 @@ final class DeviceStatus: NSObject {
         self.pictureOnPhone = pictureOnPhone
         UIDevice.current.isBatteryMonitoringEnabled = true
         SystemVolume.shared.attach() // its slider is there by the time the guest asks
+        // outputVolume is current, and its KVO fires, only in an active session; the category (HengeApp) stays as it is
+        try? AVAudioSession.sharedInstance().setActive(true)
         sendBattery()
         sendBrightness()
         sendVolume()
