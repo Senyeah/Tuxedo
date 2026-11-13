@@ -260,13 +260,16 @@ build_virgl() {
 	local t=$1 O=$GFX_ROOT/$1
 	git_pin "$GFX_SRC/virglrenderer" "$VIRGLRENDERER_REPO" "$VIRGLRENDERER_COMMIT"
 	# ANGLE's Metal GL_TIMESTAMP never answers, and the guest waits for it (see README). Idempotent.
-	local patch=$HERE/virglrenderer-angle-timestamp.patch
-	if ! git -C "$GFX_SRC/virglrenderer" apply --reverse --check "$patch" 2>/dev/null; then
-		git -C "$GFX_SRC/virglrenderer" apply "$patch"
-	fi
-	# No venus means no render server in this tree. EGL only: no GBM, no DRM, no minigbm.
+	# Then guest video decode on VideoToolbox (H.264), on top of it (see README). Idempotent, in this order.
+	local patch
+	for patch in "$HERE"/virglrenderer-angle-timestamp.patch "$HERE"/virglrenderer-videotoolbox.patch; do
+		if ! git -C "$GFX_SRC/virglrenderer" apply --reverse --check "$patch" 2>/dev/null; then
+			git -C "$GFX_SRC/virglrenderer" apply "$patch"
+		fi
+	done
+	# No venus means no render server in this tree. EGL only: no GBM, no DRM, no minigbm. Video has no libva.
 	meson_build "$t" virgl "$GFX_SRC/virglrenderer" -Dtests=false -Dvtest=false -Dcheck-gl-errors=false \
-		-Dvenus=false -Dplatforms=egl -Dminigbm_allocation=false -Dvideo=false
+		-Dvenus=false -Dplatforms=egl -Dminigbm_allocation=false -Dvideo=true
 	mkdir -p "$O/share/licenses/virglrenderer"
 	cp "$GFX_SRC/virglrenderer/COPYING" "$O/share/licenses/virglrenderer/COPYING"
 }
@@ -280,6 +283,7 @@ write_manifest() {
 		echo "libepoxy-patch $(shasum -a 256 "$HERE/libepoxy-static-gl.patch" | cut -d' ' -f1)"
 		echo "virglrenderer $VIRGLRENDERER_COMMIT"
 		echo "virglrenderer-patch $(shasum -a 256 "$HERE/virglrenderer-angle-timestamp.patch" | cut -d' ' -f1)"
+		echo "virglrenderer-video-patch $(shasum -a 256 "$HERE/virglrenderer-videotoolbox.patch" | cut -d' ' -f1)"
 		for f in libvirglrenderer.a libepoxy.a libEGL.a libGLESv2.a; do
 			echo "$f $(fsize "$O/lib/$f") $(shasum -a 256 "$O/lib/$f" | cut -d' ' -f1)"
 		done
