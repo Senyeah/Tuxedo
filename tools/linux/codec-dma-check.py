@@ -146,7 +146,7 @@ def main():
             deb = debs[-1]
             fetch(p, deb, f"/tmp/{deb}")
             text = need(p, f"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q linux-headers-$(uname -r) /tmp/{deb} >/tmp/apt.log 2>&1; "
-                           "echo APT_RC=$?; grep -E 'henge-codec|dkms|Building|Installing|newly installed' /tmp/apt.log | tail -15", "install", 3600)
+                           "echo APT_RC=$?; grep -E 'henge-codec|dkms|Building|Installing|newly installed|Need to get|After this operation' /tmp/apt.log | tail -18", "install", 3600)
             res["install_secs"] = time.time() - t0
             check("apt install henge-codec-dkms", "APT_RC=0" in text, f"{res['install_secs']:.0f} s\n" + text.strip())
             st = need(p, "sudo dkms status henge-codec; ls -l /dev/hvcodec; id henge | tr ' ' '\\n' | grep -c video; lsmod | grep -c henge_codec; "
