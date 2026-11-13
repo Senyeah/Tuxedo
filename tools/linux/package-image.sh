@@ -1,12 +1,13 @@
 #!/bin/bash
 # G7: pack a guest image for download and add it to linux-images.json. Runs on a Mac (needs build/hvsparse).
 # Usage: package-image.sh --image FILE --kind console|desktop [--out DIR] [--firmware FILE] [--manifest FILE]
-#        [--date YYYYMMDD] [--min-build N] [--no-verify]
+#        [--date YYYYMMDD] [--min-build N] [--no-verify] [--touch]
+# --touch: "touch": true in the entry, so a machine installed from it starts in touch mode (a Plasma image).
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 LINUX=${HENGE_LINUX_OUT:-$HOME/Repos/Henge/build/linux}
-IMAGE= KIND= OUT= FIRMWARE=$LINUX/u-boot.bin MANIFEST= VERIFY=1 MIN_BUILD=
+IMAGE= KIND= OUT= FIRMWARE=$LINUX/u-boot.bin MANIFEST= VERIFY=1 MIN_BUILD= TOUCH=0
 DATE=$(TZ=Etc/GMT-12 date +%Y%m%d)
 
 while [ $# -gt 0 ]; do
@@ -19,6 +20,7 @@ while [ $# -gt 0 ]; do
         --date) DATE=$2; shift 2 ;;
         --min-build) MIN_BUILD=$2; shift 2 ;;
         --no-verify) VERIFY=0; shift ;;
+        --touch) TOUCH=1; shift ;;
         *) echo "unknown option $1" >&2; exit 2 ;;
     esac
 done
@@ -70,10 +72,10 @@ DISK_SHA=$(sha "$OUT/$BASE.hvsparse.lzfse")
 KERNEL=$(sed -n 's/^kernel_version=//p' "$MANIFEST")
 python3 - "$OUT/linux-images.json" "$KIND" "$DATE" "$KERNEL" "$MIN_BUILD" \
     "$BASE.hvsparse.lzfse" "$(size "$OUT/$BASE.hvsparse.lzfse")" "$DISK_SHA" "$UNPACKED" "$(size "$IMAGE")" \
-    "$FW_NAME" "$(size "$FIRMWARE")" "$FW_SHA" <<'PY'
+    "$FW_NAME" "$(size "$FIRMWARE")" "$FW_SHA" "$TOUCH" <<'PY'
 import json, os, sys
 (path, kind, date, kernel, min_build, disk, disk_bytes, disk_sha, unpacked, logical,
- fw, fw_bytes, fw_sha) = sys.argv[1:]
+ fw, fw_bytes, fw_sha, touch) = sys.argv[1:]
 entry = {
     "id": f"debian-{kind}",
     "name": "Debian 13 (console)" if kind == "console" else "Debian 13 (desktop)",
@@ -89,6 +91,7 @@ entry = {
     "firmwareSHA256": fw_sha,
     "kernel": kernel,
     "minBuild": int(min_build),
+    **({"touch": True} if touch == "1" else {}),
 }
 cat = {"images": []}
 if os.path.exists(path):

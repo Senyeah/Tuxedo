@@ -131,6 +131,7 @@ final class LinuxInstaller: ObservableObject {
         var mac = VirtualMac(name: name.isEmpty ? "Debian" : name, ecid: 0, seed: 0, ramMB: options.ramMB, diskBytes: options.diskBytes)
         mac.kind = .linux
         mac.osName = image.name
+        if image.touch == true { mac.touchInput = true }
         phase = .decoding
         received = 0
         expected = image.diskBytes

@@ -153,6 +153,19 @@ struct MachineModelTests {
         let accelBack = MachineList.decode(try JSONEncoder().encode([chosen]), diskExists: { _ in true })!
         precondition(accelBack[0].accel == true)
 
+        // TS5: the touch switch is per machine; old JSON has none (the pointer), and a Mac ignores it.
+        precondition(old[0].touchInput == nil && !old[0].usesTouch && back[1].touchInput == nil && !back[1].usesTouch)
+        precondition(!String(decoding: data, as: UTF8.self).contains("touchInput"))
+        var touchLinux = linux
+        touchLinux.touchInput = true
+        let touchBack = MachineList.decode(try JSONEncoder().encode([touchLinux]), diskExists: { _ in true })!
+        precondition(touchBack[0].touchInput == true && touchBack[0].usesTouch)
+        var touchMac = old[0]
+        touchMac.touchInput = true
+        precondition(!touchMac.usesTouch)
+        touchLinux.touchInput = false
+        precondition(!touchLinux.usesTouch)
+
         // A9: the Home thumbnail follows the saved picture, not the machine's 16:9 screen.
         precondition(PreviewShape.aspect(width: 640, height: 1386, fallback: 16.0 / 9) == 640.0 / 1386)
         precondition(PreviewShape.aspect(width: 0, height: 0, fallback: 16.0 / 9) == 16.0 / 9)

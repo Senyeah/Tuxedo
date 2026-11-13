@@ -398,6 +398,14 @@ test-display-mode-policy: $(B)/test_display_mode_policy
 	$(B)/test_display_mode_policy
 .PHONY: test-display-mode-policy
 
+# TS5: a touch on the Linux picture as guest units, and the slot table. Pure, no UIKit.
+$(B)/test_touch_mapping: ios/Henge/TouchMapping.swift tests/test_touch_mapping.swift | $(B)
+	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
+
+test-touch-mapping: $(B)/test_touch_mapping
+	$(B)/test_touch_mapping
+.PHONY: test-touch-mapping
+
 test-display-routing: $(B)/test_display_targets $(B)/test_display_router $(B)/test_external_screen_plan $(B)/test_legacy_external_display $(B)/test_scene_manifest
 	$(B)/test_display_targets
 	$(B)/test_display_router

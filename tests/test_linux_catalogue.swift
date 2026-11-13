@@ -14,7 +14,7 @@ struct LinuxCatalogueTests {
       "kernel":"6.12.107+deb13-arm64-16k","minBuild":102},
      {"id":"future","name":"Future","version":"1","kind":"console","diskURL":"https://cdn.example.com/f.lzfse","diskBytes":10,
       "diskSHA256":"00","unpackedBytes":20,"logicalBytes":30,"firmwareURL":"https://cdn.example.com/u.bin","firmwareBytes":5,
-      "firmwareSHA256":"00","minBuild":9999}]}
+      "firmwareSHA256":"00","minBuild":9999,"touch":true}]}
     """
 
     static func fails(_ body: () throws -> Void) -> String? {
@@ -30,6 +30,7 @@ struct LinuxCatalogueTests {
         precondition(a.diskURL.absoluteString == "http://192.168.1.5:8000/debian-console-20261112.hvsparse.lzfse")
         precondition(a.firmwareURL.absoluteString == "http://192.168.1.5:8000/u-boot-860450f43d3b.bin")
         precondition(images[1].diskURL.absoluteString == "https://cdn.example.com/f.lzfse") // absolute URLs stay
+        precondition(a.touch == nil && images[1].touch == true) // TS7: "touch": true starts a new machine in touch mode
         precondition(fails { _ = try LinuxCatalogue.decode(Data("{\"nope\":1}".utf8), base: base) } != nil)
         precondition(fails { _ = try LinuxCatalogue.decode(Data("{\"images\":[{\"id\":\"x\"}]}".utf8), base: base) } != nil)
 
