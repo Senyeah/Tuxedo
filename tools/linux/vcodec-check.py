@@ -395,6 +395,26 @@ def apt_checks(p, share, tree, clips):
     check(rc == 0 and not set(lines) - set(base) and "10.0.2.4" in log,
           f"henge.sources with Enabled: yes (URIs set to the local copy) and the shipped key: status {rc}, "
           f"new W/E lines {sorted(set(lines) - set(base))}")
+    # The admin's file, not a conffile: the README's edit in place stays over an upgrade with another default, with no prompt.
+    SRC = "/etc/apt/sources.list.d/henge.sources"
+    own = nonblank(need(p, f"dpkg-query -W -f '${{Conffiles}}\\n' henge-guest | grep -c henge.sources || true; "
+                           f"dpkg -S {SRC} >/dev/null 2>&1 && echo owned || echo unowned", "henge.sources owner"))
+    check(own == ["0", "unowned"], f"henge.sources is not a conffile and no package owns it: {own}")
+    nxt = f"{got}+test1"
+    fetch(p, f"apt/pool/main/h/henge-guest/henge-guest_{got}_all.deb", "/tmp/hg.deb")
+    need(p, "rm -rf /tmp/hgn && dpkg-deb -R /tmp/hg.deb /tmp/hgn && "
+            f"sed -i 's/^Version: .*/Version: {nxt}/' /tmp/hgn/DEBIAN/control && "
+            "sed -i 's#^URIs: .*#URIs: https://example.invalid/next#' /tmp/hgn/usr/share/henge/henge.sources && "
+            "dpkg-deb --root-owner-group -b /tmp/hgn /tmp/hg-next.deb >/dev/null", "henge-guest with another default")
+    need(p, f"sudo sed -i 's/^Enabled: no/Enabled: yes/' {SRC}", "the README's edit")
+    out, rc = sh(p, "sudo dpkg -i /tmp/hg-next.deb </dev/null >/tmp/dpkg.log 2>&1; echo rc=$?; grep -c 'Configuration file' /tmp/dpkg.log; "
+                    f"grep -E '^(Enabled|URIs):' {SRC}", 300)
+    got_next = need(p, "dpkg-query -W -f '${Version}' henge-guest", "henge-guest version").strip()
+    out = nonblank(out)
+    check(out[:2] == ["rc=0", "0"] and got_next == nxt and "Enabled: yes" in out
+          and "URIs: https://walkies.site/henge-linux-catalogue/apt" in out,
+          f"henge-guest {got} to {nxt} (another default): no prompt, the edit stays: {out}")
+    need(p, f"sudo sed -i 's/^Enabled: yes/Enabled: no/' {SRC}; rm -rf /tmp/hgn /tmp/hg.deb /tmp/hg-next.deb", "turn the source off again")
 
     def resolve():
         out = need(p, "hash -r; for c in ffmpeg ffprobe; do echo \"$c $(command -v $c) $(readlink /usr/local/bin/$c)\"; done", "which ffmpeg")

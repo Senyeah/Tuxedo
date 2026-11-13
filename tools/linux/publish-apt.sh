@@ -72,8 +72,14 @@ with arm64 containers. The Debian packages come from snapshot.debian.org at the 
 EOF
     (cd "$N" && sha256sum ffmpeg-$FFMPEG_VERSION.tar.xz ffmpeg-henge.patch build-ffmpeg.sh henge-ffmpeg-src.tar.xz ffmpeg.manifest README.txt > SHA256SUMS)
     if [ -d "$S" ]; then
+        # The manifest holds the binaries' hashes. A change only to other files of the offer (LICENSE, the U-Boot line
+        # of versions.env) keeps the published directory: it is still the source of those binaries.
+        # A changed man page or package script changes the .deb, and the pool step above stops that.
+        cmp -s "$N/ffmpeg.manifest" "$S/ffmpeg.manifest" ||
+            die "$S has another ffmpeg.manifest; the build changed, so raise FFMPEG_HENGE_REV"
         cmp -s "$N/SHA256SUMS" "$S/SHA256SUMS" ||
-            die "$S exists with other files; the build sources changed, so raise FFMPEG_HENGE_REV"
+            echo "kept $S (same binaries; these files of the offer changed since:" \
+                "$(grep -vxF -f "$S/SHA256SUMS" "$N/SHA256SUMS" | awk '{print $2}' | tr '\n' ' '| sed 's/ $//'))"
     else
         mkdir -p /out/source && mv "$N" "$S"
         echo "added $S"
