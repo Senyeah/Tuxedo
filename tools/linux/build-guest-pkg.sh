@@ -17,8 +17,9 @@ cp -a /tools/henge-guest "$TMP/pkg"
 find "$TMP/pkg" -type d -exec chmod 0755 {} +
 find "$TMP/pkg" -type f -exec chmod 0644 {} +
 chmod 0755 "$TMP"/pkg/usr/lib/henge/* "$TMP"/pkg/DEBIAN/preinst "$TMP"/pkg/DEBIAN/postinst "$TMP"/pkg/DEBIAN/prerm "$TMP"/pkg/DEBIAN/postrm
-# A fixed time keeps the package the same between builds
-find "$TMP/pkg" -exec touch -h -d @1762905600 {} +
+# A fixed time keeps the package the same between builds (SOURCE_DATE_EPOCH: the ar member times)
+export SOURCE_DATE_EPOCH=1762905600
+find "$TMP/pkg" -exec touch -h -d @$SOURCE_DATE_EPOCH {} +
 VER=$(sed -n 's/^Version: //p' "$TMP/pkg/DEBIAN/control")
 dpkg-deb --root-owner-group -Zxz --build "$TMP/pkg" "$OUTDIR/henge-guest_${VER}_all.deb" >/dev/null
 echo "$OUTDIR/henge-guest_${VER}_all.deb"

@@ -37,7 +37,10 @@ enum {
     HV_VC_FRAME_UPLOAD = 11,
     HV_VC_FRAME_DOWNLOAD = 12,
     HV_VC_XFER = 13,
+    HV_VC_FRAME_UPLOAD_DMA = 14, /* only on /dev/hvcodec (vcodec_dev.h): the planes stay where the guest has them */
+    HV_VC_FRAME_DOWNLOAD_DMA = 15,
 };
+#define HV_VC_LAST HV_VC_FRAME_DOWNLOAD_DMA
 
 enum {
     HV_VC_OK = 0,
@@ -270,6 +273,16 @@ typedef struct {
     uint32_t reserved;
 } HvVcXfer;
 
+/* ---- FRAME_UPLOAD_DMA, FRAME_DOWNLOAD_DMA: HvVcPlanesDma. The planes are the request's raw data (in for an upload,
+   out for a download), each at its offset with its stride. Reply: none for an upload, HvVcFrameReply for a download.
+   A socket has no raw data, so there these are HV_VC_E_NOSUP. ---- */
+typedef struct {
+    uint32_t handle;
+    uint32_t format, width, height; /* the frame's own, which the host checks */
+    uint64_t offset[2]; /* where each plane starts in the raw data */
+    uint32_t stride[2]; /* bytes from one row to the next: at least the plane's row */
+} HvVcPlanesDma;
+
 /* The two sides must agree on these sizes (both are LP64). */
 typedef char hv_vc_check_enc_open[sizeof(HvVcEncOpen) == 176 ? 1 : -1];
 typedef char hv_vc_check_enc_info[sizeof(HvVcEncoderInfo) == 4320 ? 1 : -1];
@@ -277,6 +290,7 @@ typedef char hv_vc_check_frame_reply[sizeof(HvVcFrameReply) == 32 ? 1 : -1];
 typedef char hv_vc_check_query[sizeof(HvVcQueryHead) == 48 ? 1 : -1];
 typedef char hv_vc_check_alloc[sizeof(HvVcFrameAlloc) == 32 ? 1 : -1];
 typedef char hv_vc_check_xfer[sizeof(HvVcXfer) == 40 ? 1 : -1];
+typedef char hv_vc_check_planes_dma[sizeof(HvVcPlanesDma) == 40 ? 1 : -1];
 
 /* Plane layout of a format. Returns the plane count, 0 for a bad format or size. */
 static inline int hv_vc_planes(uint32_t fmt, uint32_t w, uint32_t h, uint32_t row[2], uint32_t rows[2]) {

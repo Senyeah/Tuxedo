@@ -27,6 +27,8 @@ the App Store.
 | libusb's header | LGPL-2.1-or-later | `third_party/libusb-1.0/libusb.h` |
 | U-Boot `v2026.10` (Linux guest firmware, not in the app) | GPL-2.0, most files also under later versions | the Linux image catalogue; see below |
 | Debian packages in the Linux images, and their kernel | each package's own licence | the Linux image catalogue; see below |
+| FFmpeg 9.0.2 with the Henge patch, in the `henge-ffmpeg` package for Linux guests (not in the app) | GPL-2.0-or-later as built; FFmpeg's own code is LGPL-2.1-or-later with GPL parts | the Henge apt repository; see below |
+| `libhvcodec`, `henge-codec-info`, and the files that the FFmpeg patch adds | LGPL-2.1-or-later | `tools/linux/hvcodec/` |
 | libslirp, pcre2 | BSD | Prebuilt from Husk |
 | glib, libintl | LGPL-2.1-or-later | Prebuilt from Husk |
 
@@ -49,7 +51,7 @@ one made by `tools/export_ios.sh`. Those folders are for your own devices, not f
 
 ## Linux guests
 
-A Linux machine needs two things that are not in the repository or in the app: a U-Boot binary and a Debian disk image. `tools/linux` builds both ([README](../tools/linux/README.md)). The app downloads them from a catalogue, or imports them from a folder. Whoever hosts them hands out GPL binaries, so that person must also hand out, or offer, the source. The repository holds no U-Boot or Debian source and applies no patch to either.
+A Linux machine needs two things that are not in the repository or in the app: a U-Boot binary and a Debian disk image. `tools/linux` builds both ([README](../tools/linux/README.md)). The app downloads them from a catalogue, or imports them from a folder. Whoever hosts them hands out GPL binaries, so that person must also hand out, or offer, the source. The repository holds no U-Boot or Debian source and applies no patch to either. FFmpeg is different: the repository has a patch to it, and the source offer is part of the apt repository (see FFmpeg below).
 
 ### ANGLE, libepoxy and virglrenderer
 
@@ -99,3 +101,26 @@ apt-cache showsrc PACKAGE          # names the source package of a binary packag
 ```
 
 The binary package `linux-image-6.12.107+deb13-arm64-16k` does not resolve by its own name. Its source is `linux`, and `linux-image-arm64-16k` is a metapackage whose source is `linux-signed-arm64`. The build passes `mmdebstrap` only a `deb` line, so the image has no source line, and a person who has only the image needs the lines above. `snapshot.debian.org` is run by Debian, and Henge does not control it.
+
+### FFmpeg (henge-ffmpeg)
+
+`henge-ffmpeg` is an `ffmpeg` for the Linux guest with the device's codecs (`docs/guest-video-encode-plan.md`). It is not in the app or in the images yet. `tools/linux/build-ffmpeg.sh` builds it, `build-ffmpeg-pkg.sh` packages it, and `publish-apt.sh` puts it in the Henge apt repository with its source.
+
+| Item | Value |
+| --- | --- |
+| Upstream | `https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz`, SHA-256 `8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e` (`FFMPEG_VERSION`, `FFMPEG_SHA256` in `tools/linux/versions.env`). The release signature was checked against FFmpeg's release key when it was pinned. |
+| Patch | `tools/linux/hvcodec/ffmpeg-henge.patch`, SHA-256 `949e760cf014a8eec4144470113048d5b3db9c9789c438dcabfc3fcfadca3dd5`. It adds `libavutil/hwcontext_henge.*`, `libavcodec/henge*.c`, `libavcodec/hengeenc.c` and `libavfilter/vf_scale_henge.c`, each with FFmpeg's LGPL-2.1-or-later header, and changes FFmpeg files to register them. |
+| Henge code linked in | `libhvcodec` (`tools/linux/hvcodec/libhvcodec/`) and `henge-codec-info.c`, LGPL-2.1-or-later. Both include `host/vcodec_proto.h`, which has no licence line, so it has the repository's GPL-2.0-or-later. A `libhvcodec` that is LGPL on its own needs an LGPL line on that header. |
+| Configure | `--enable-gpl` with `libx264` and `libx265`, so the binaries are GPL-2.0-or-later. The `libav*` libraries are static. The full line is in `ffmpeg.manifest`. |
+| Shared libraries | x264, x265, dav1d, Opus, LAME, GnuTLS and their dependencies come from Debian at run time. Each has its own `copyright` file in the guest, and its source comes from the snapshot as for the image (above). |
+| Build record | `build/linux/ffmpeg/ffmpeg.manifest`: the release, the hashes of the tarball, the patch, `libhvcodec` and each binary, the configure line, and the version of each Debian build and run-time package. The package has a copy at `/usr/share/doc/henge-ffmpeg/ffmpeg.manifest`. Two builds from the same inputs gave the same binaries and the same `.deb` on 14/11/2026. |
+| In the package | `/usr/share/doc/henge-ffmpeg/copyright` (machine-readable, with the source URL) and FFmpeg's `LICENSE.md`. The GPL and LGPL texts are Debian's `/usr/share/common-licenses/`. |
+
+The source offer. Whoever hosts the `.deb` hands out a GPL binary, so that person must also hand out the source. `publish-apt.sh` writes `build/linux/source/ffmpeg-<release>-henge<N>/` next to the repository, and the server gets it at `https://walkies.site/henge-linux-catalogue/source/ffmpeg-9.0.2-henge1/`, the URL in the package's `copyright` file. It holds the unmodified tarball, the patch, `build-ffmpeg.sh`, `ffmpeg.manifest`, `henge-ffmpeg-src.tar.xz` (the Henge files of the build: `libhvcodec`, `henge-codec-info.c`, `vcodec_proto.h`, the man page, the package scripts, `versions.env` and the repository's `LICENSE`), `README.txt` with the build steps, and `SHA256SUMS`. The script does not publish a `henge-ffmpeg` whose source directory is missing or has another manifest, and it does not let a source directory change under the same version. A later change only to a file of the offer that does not change the binaries, such as `LICENSE`, keeps the published directory as it was. Keep each source directory on the server for as long as its `.deb` is in the pool. Whether this offer is enough in law is for the host to decide; it gives the complete source of the binary from the same place.
+
+`henge-ffmpeg` does not change Debian's `ffmpeg` package or its files. The two can be installed together.
+
+The H.264 and HEVC patent position for a person who distributes this package is not verified. This is not legal advice. The codecs run in the device's hardware, which Apple sells with its licences.
+
+The apt repository's public key is in the repository (`tools/linux/henge-archive.asc` and `henge-guest/usr/share/keyrings/henge-archive.gpg`). The private key is only on the owner's Mac.
+

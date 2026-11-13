@@ -1,0 +1,50 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: FFmpeg
+Upstream-Contact: https://ffmpeg.org/
+Source: @SOURCE_URL@
+Comment:
+ This package is FFmpeg @FFMPEG_VERSION@ with the Henge patch (ffmpeg-henge.patch),
+ libhvcodec and henge-codec-info, built by build-ffmpeg.sh. The source of this
+ build is at the Source URL above: the unmodified FFmpeg release tarball, the
+ patch, the build scripts and ffmpeg.manifest. ffmpeg.manifest in this
+ directory gives the hashes of each part and the configure line.
+ .
+ The binaries link libx264 and libx265, so the whole is GPL-2.0-or-later
+ (configure --enable-gpl). x264, x265, dav1d, opus, LAME, GnuTLS and the other
+ shared libraries come from Debian packages, each with its own copyright file.
+ FFmpeg's own licence statement is LICENSE.md in this directory.
+
+Files: *
+Copyright: the FFmpeg developers
+License: GPL-2+
+Comment: FFmpeg's code is LGPL-2.1-or-later, with some parts GPL-2.0-or-later.
+ This build enables the GPL parts and links GPL libraries.
+
+Files: libavutil/hwcontext_henge.* libavcodec/henge* libavcodec/hengeenc.c
+ libavfilter/vf_scale_henge.c libhvcodec/* henge-codec-info.c
+Copyright: the Henge authors
+License: LGPL-2.1+
+
+Files: vcodec_proto.h
+Copyright: the Henge authors
+License: GPL-2+
+Comment: The hvcodec messages, from Henge's host/vcodec_proto.h. It has no licence
+ line of its own, so it has Henge's licence.
+
+License: GPL-2+
+ This program is free software; you can redistribute it and/or modify it
+ under the terms of the GNU General Public License as published by the Free
+ Software Foundation; either version 2 of the License, or (at your option)
+ any later version.
+ .
+ On Debian systems, the full text of the GNU General Public License version 2
+ is in /usr/share/common-licenses/GPL-2.
+
+License: LGPL-2.1+
+ This library is free software; you can redistribute it and/or modify it
+ under the terms of the GNU Lesser General Public License as published by the
+ Free Software Foundation; either version 2.1 of the License, or (at your
+ option) any later version.
+ .
+ On Debian systems, the full text of the GNU Lesser General Public License
+ version 2.1 is in /usr/share/common-licenses/LGPL-2.1.

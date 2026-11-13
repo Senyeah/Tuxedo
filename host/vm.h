@@ -32,6 +32,7 @@ typedef struct HvVmConfig {
     int no_net, no_sound;
     int accel;                /* virt: the virtio GPU draws with virgl (needs a GFX=1 build) */
     int video;                /* with accel: guest video decode through virgl on VideoToolbox (default 0) */
+    const struct HvHvcodecOps *codec_ops; /* virt: the hvcodec DMA device with this backend; NULL for none */
     int installer;            /* boot the ROM in DFU mode with the USB device port (installing macOS) */
     /* virt: the Files folders, at most HV_FS_MAX_FOLDERS, each at its own index (one with no name is left out).
        They replace the folder table (none clears it); with none the board has no virtio-fs device, as before.

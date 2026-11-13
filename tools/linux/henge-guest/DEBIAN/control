@@ -1,5 +1,5 @@
 Package: henge-guest
-Version: 1.8.0
+Version: 1.10.0
 Architecture: all
 Maintainer: Henge <henge@localhost>
 Section: admin
@@ -13,5 +13,6 @@ Description: Henge guest tools
  clock, time zone and screen brightness, tells the device when the
  focused program wants text, keeps windows above the device keyboard
  in Plasma, keeps the wallet (Secret Service and
- KWallet) in the device's Keychain, and mounts the folders from the
- device's Files app at /media/henge.
+ KWallet) in the device's Keychain, mounts the folders from the
+ device's Files app at /media/henge, and adds the Henge apt
+ repository, off until it is turned on.

@@ -16,6 +16,7 @@
 #include "virtio_blk.h"
 #include "virtio_fs.h"
 #include "virtio_gpu.h"
+#include "virtio_hvcodec.h"
 #include "virtio_input.h"
 #include "virtio_net.h"
 #include "virtio_rng.h"
@@ -75,6 +76,7 @@ typedef struct HvVirt {
     HvVirtioInput *touch;     /* before the balloon, so HV_BALLOON does not move it */
     HvVirtioBalloon *balloon; /* HV_BALLOON=MB, as on vmapple */
     HvVirtioFs *fs;           /* the Files folders; last, so a machine with folders keeps every other slot */
+    HvVirtioHvcodec *codec;   /* only when asked for (hengevm --vcodec-dma): last, so no other device moves */
     uint8_t *flash0, *flash1;
     HvGuestRam mem;
     void (*poll)(void);       /* host device work on CPU 0 each tick */
@@ -97,6 +99,8 @@ int hv_virt_place_fdt(HvVirt *b, const uint8_t *fdt, uint32_t size);
 void hv_virt_set_battery(HvVirt *b, int level, int state, int current_ma, int to_empty_min, int to_full_min);
 /* The backlight's level at boot (the tree's init-brt), 0 to 255. Before hv_virt_build_fdt. */
 void hv_virt_set_backlight(HvVirt *b, uint8_t level);
+/* The hvcodec DMA device, after every other device. Before the guest runs. 0, or -1. */
+int hv_virt_add_hvcodec(HvVirt *b, const HvHvcodecOps *ops, void *opaque);
 /* No CPU or host device callback may be using the board. */
 void hv_virt_destroy(HvVirt *b);
 

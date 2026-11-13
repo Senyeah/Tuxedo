@@ -26,7 +26,7 @@ CORE = $(B)/classify.o $(B)/operands.o $(B)/translate.o $(B)/dispatch.o $(B)/mmu
        $(B)/exception.o $(B)/sysreg.o $(B)/machine.o
 HOST = $(B)/jit_region.o $(B)/enter.o $(B)/disk.o
 DEV = $(B)/pvg_lite.o $(B)/pvg_metal.o $(B)/vgpu_metal.o $(B)/gicv3.o $(B)/timer.o $(B)/pl011.o $(B)/pl031.o $(B)/cfg.o $(B)/bdif.o $(B)/pcie.o \
-      $(B)/virtio.o $(B)/virtio_blk.o $(B)/virtio_net.o $(B)/virtio_rng.o $(B)/virtio_input.o $(B)/virtio_gpu.o $(B)/virtio_snd.o $(B)/virtio_usb.o $(B)/virtio_balloon.o $(B)/xhci.o $(B)/vmapple.o $(B)/aes.o $(B)/pl061.o $(B)/metallib.o $(B)/fdt.o $(B)/guest_ram.o $(B)/virt.o $(B)/virt_fdt.o $(B)/ocores_i2c.o $(B)/devstatus.o \
+      $(B)/virtio.o $(B)/virtio_blk.o $(B)/virtio_net.o $(B)/virtio_rng.o $(B)/virtio_input.o $(B)/virtio_gpu.o $(B)/virtio_snd.o $(B)/virtio_usb.o $(B)/virtio_balloon.o $(B)/virtio_hvcodec.o $(B)/xhci.o $(B)/vmapple.o $(B)/aes.o $(B)/pl061.o $(B)/metallib.o $(B)/fdt.o $(B)/guest_ram.o $(B)/virt.o $(B)/virt_fdt.o $(B)/ocores_i2c.o $(B)/devstatus.o \
       $(B)/virtio_fs.o $(B)/fs_server.o $(B)/safe_path.o $(GFX_OBJ)
 ENGINE = $(CORE) $(HOST)
 VM = $(B)/vm.o $(B)/linux_boot.o $(B)/status.o
@@ -37,7 +37,7 @@ VCODEC_OBJ = $(B)/vcodec.o $(VT_OBJ)
 METAL_LIBS = -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers $(GFX_LDLIBS)
 
 TESTS = $(B)/test_classify $(B)/test_jit_region $(B)/test_operands $(B)/test_jit $(B)/test_mem $(B)/test_share_keyboard \
-        $(B)/test_mmu $(B)/test_exc $(B)/test_devices $(B)/test_shutdown $(B)/test_pause $(B)/test_big_lock $(B)/test_machine_rebuild $(B)/test_fdt $(B)/test_console $(B)/test_virt \
+        $(B)/test_mmu $(B)/test_exc $(B)/test_devices $(B)/test_virtio_hvcodec $(B)/test_shutdown $(B)/test_pause $(B)/test_big_lock $(B)/test_machine_rebuild $(B)/test_fdt $(B)/test_console $(B)/test_virt \
         $(B)/test_status $(B)/test_secrets $(B)/test_share_paths $(B)/test_fs_server $(B)/test_virtio_fs $(B)/test_vgpu_metal $(B)/test_vcodec $(if $(GFX),$(B)/test_vgpu_virgl)
 
 all: $(TESTS) $(B)/hengevm $(B)/hengevm-ref $(B)/hvsparse
@@ -280,6 +280,35 @@ test-linux-vcodec: $(B)/hengevm
 	uv run tools/linux/vcodec-check.py --hengevm $(B)/hengevm $(VCODEC_ARGS)
 .PHONY: test-linux-vcodec
 
+# VE2: the patched ffmpeg (tools/linux/build-ffmpeg.sh, in the arm64 container) and the plan's main command in the
+# guest, checked on the Mac against henge-xcode on the same clips.
+LINUX_OUT ?= $(dir $(shell git rev-parse --path-format=absolute --git-common-dir))build/linux
+linux-ffmpeg:
+	HENGE_LINUX_OUT=$(LINUX_OUT) tools/linux/build-ffmpeg.sh
+test-linux-ffmpeg: $(B)/hengevm
+	uv run tools/linux/vcodec-check.py --hengevm $(B)/hengevm --ffmpeg $(LINUX_OUT)/ffmpeg/bin --no-software $(VCODEC_ARGS)
+.PHONY: linux-ffmpeg test-linux-ffmpeg
+
+# VE3: the henge-ffmpeg package, then the signed apt repository and the source offer in $(LINUX_OUT)/apt and /source
+# (publish-apt.sh; nothing leaves the Mac without its --rsync), then both packages from it in a clone of the desktop image.
+linux-ffmpeg-pkg:
+	HENGE_LINUX_OUT=$(LINUX_OUT) tools/linux/build-ffmpeg-pkg.sh
+linux-apt:
+	HENGE_LINUX_OUT=$(LINUX_OUT) tools/linux/publish-apt.sh
+test-linux-ffmpeg-pkg: $(B)/hengevm
+	uv run tools/linux/vcodec-check.py --hengevm $(B)/hengevm --apt $(LINUX_OUT)/apt --sizes 4k,1080p --codecs hevc8,h264 --no-software $(VCODEC_ARGS)
+.PHONY: linux-ffmpeg-pkg linux-apt test-linux-ffmpeg-pkg
+
+# VE4: the henge-codec-dkms package (the module is built against the pinned 16 KB kernel's headers with -Werror, and
+# installed by DKMS in the container), then the DMA channel in a clone of the desktop image booted through U-Boot with
+# --vcodec-dma: DKMS, /dev/hvcodec, 4K NV12 and P010 transfers in fps on it and on TCP, the ffmpeg chain, the fallback
+# and a kernel update. It takes the ffmpeg build from $(LINUX_OUT). CODEC_ARGS="--clips DIR --results FILE".
+linux-codec-dkms:
+	HENGE_LINUX_OUT=$(LINUX_OUT) tools/linux/build-codec-dkms-pkg.sh
+test-linux-codec-dma: $(B)/hengevm
+	uv run tools/linux/codec-dma-check.py --hengevm $(B)/hengevm --out $(LINUX_OUT) --kernel-update $(CODEC_ARGS)
+.PHONY: linux-codec-dkms test-linux-codec-dma
+
 # P6: the shared folder (~/Henge, davfs2) against --share. SHARE_ARGS="--image FILE" for an image that has davfs2.
 test-linux-share: $(B)/hengevm
 	uv run tools/linux/share-check.py $(SHARE_ARGS)
@@ -362,6 +391,10 @@ $(B)/hvsparse: tools/hvsparse_main.c host/hvsparse.c host/hvsparse.h | $(B)
 	$(CC) $(CFLAGS) tools/hvsparse_main.c host/hvsparse.c -o $@
 
 # Block-level tests: test_X.c plus X_programs.S, run natively and through the JIT.
+# The hvcodec DMA device with a test backend: chains past HV_VIRTQ_MAX_SEGS, indirect tables, REST, contexts, refusals.
+$(B)/test_virtio_hvcodec: tests/test_virtio_hvcodec.c $(ENGINE) $(DEV)
+	$(CC) $(CFLAGS) $^ $(METAL_LIBS) -o $@
+
 $(B)/test_devices: tests/test_devices.c tests/devices_programs.S tests/harness.S tests/harness.h $(ENGINE) $(DEV)
 	$(CC) $(CFLAGS) -Itests tests/test_devices.c tests/devices_programs.S tests/harness.S $(ENGINE) $(DEV) $(METAL_LIBS) -o $@
 $(B)/test_%: tests/test_%.c tests/%_programs.S tests/harness.S tests/harness.h $(ENGINE)
@@ -585,7 +618,7 @@ test-vt-crafted:
 
 # Guest video codecs (hvcodec, docs/guest-video-encode-plan.md): VideoToolbox on the host. vt_decode.m is the
 # decode code that the virgl video back end can share; vt_caps.m is the run-time codec table.
-$(VCODEC_OBJ): $(B)/%.o: host/%.m host/*.h | $(B)
+$(VCODEC_OBJ): $(B)/%.o: host/%.m host/*.h devices/virtio_hvcodec.h | $(B)
 	$(CC) $(CFLAGS) -fobjc-arc -c $< -o $@
 
 # VE0.1 and VE0.2: the transcode limit with no guest, and the codec table. VT_BENCH_ARGS: clips, --probe-only, --write DIR.
@@ -604,7 +637,7 @@ ios-vt-bench: | $(B)
 $(B)/test_vcodec: tests/test_vcodec.m $(VCODEC_OBJ)
 	$(CC) $(CFLAGS) -fobjc-arc $^ $(VT_FRAMEWORKS) -o $@
 # And under ThreadSanitizer, for hv_vcodec_lose_sessions against the connection threads.
-$(B)/test_vcodec_tsan: tests/test_vcodec.m host/vcodec.m host/vt_decode.m host/vt_caps.m host/*.h | $(B)
+$(B)/test_vcodec_tsan: tests/test_vcodec.m host/vcodec.m host/vt_decode.m host/vt_caps.m host/*.h devices/virtio_hvcodec.h | $(B)
 	$(CC) $(CFLAGS) -O1 -fsanitize=thread -fobjc-arc tests/test_vcodec.m host/vcodec.m host/vt_decode.m host/vt_caps.m $(VT_FRAMEWORKS) -o $@
 test-vcodec: $(B)/test_vcodec $(B)/test_vcodec_tsan
 	$(B)/test_vcodec

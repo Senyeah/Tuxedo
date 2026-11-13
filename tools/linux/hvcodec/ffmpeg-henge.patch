@@ -1,0 +1,3018 @@
+diff --git a/configure b/configure
+index 374bd5c1..40a448fc 100755
+--- a/configure
++++ b/configure
+@@ -359,6 +359,7 @@ External library support:
+   --disable-libdrm         disable DRM code (Linux) [autodetect]
+   --enable-libmfx          enable Intel MediaSDK (AKA Quick Sync Video) code via libmfx [no]
+   --enable-libvpl          enable Intel oneVPL code via libvpl if libmfx is not used [no]
++  --enable-henge           enable the video codecs of a Henge virtual machine's device via libhvcodec [no]
+   --enable-mmal            enable Broadcom Multi-Media Abstraction Layer (Raspberry Pi) via MMAL [no]
+   --disable-nvdec          disable Nvidia video decoding acceleration (via hwaccel) [autodetect]
+   --disable-nvenc          disable Nvidia video encoding code [autodetect]
+@@ -2196,6 +2197,7 @@ HWACCEL_LIBRARY_NONFREE_LIST="
+ 
+ HWACCEL_LIBRARY_LIST="
+     $HWACCEL_LIBRARY_NONFREE_LIST
++    henge
+     libmfx
+     libvpl
+     mmal
+@@ -3400,6 +3402,7 @@ mediacodec_deps="android mediandk pthreads"
+ nvdec_deps="ffnvcodec"
+ vaapi_x11_deps="xlib_x11"
+ videotoolbox_hwaccel_deps="videotoolbox pthreads"
++henge_deps="pthreads"
+ videotoolbox_hwaccel_extralibs="-framework QuartzCore"
+ vulkan_deps="threads"
+ vulkan_deps_any="libdl LoadLibrary"
+@@ -3420,6 +3423,8 @@ av1_vaapi_hwaccel_deps="vaapi VADecPictureParameterBufferAV1_bit_depth_idx"
+ av1_vaapi_hwaccel_select="av1_decoder"
+ av1_vdpau_hwaccel_deps="vdpau VdpPictureInfoAV1"
+ av1_vdpau_hwaccel_select="av1_decoder"
++av1_henge_hwaccel_deps="henge"
++av1_henge_hwaccel_select="av1_decoder"
+ av1_videotoolbox_hwaccel_deps="videotoolbox"
+ av1_videotoolbox_hwaccel_select="av1_decoder"
+ av1_vulkan_hwaccel_deps="vulkan"
+@@ -3446,6 +3451,8 @@ h264_vaapi_hwaccel_deps="vaapi"
+ h264_vaapi_hwaccel_select="h264_decoder"
+ h264_vdpau_hwaccel_deps="vdpau"
+ h264_vdpau_hwaccel_select="h264_decoder"
++h264_henge_hwaccel_deps="henge"
++h264_henge_hwaccel_select="h264_decoder"
+ h264_videotoolbox_hwaccel_deps="videotoolbox"
+ h264_videotoolbox_hwaccel_select="h264_decoder"
+ h264_vulkan_hwaccel_deps="vulkan"
+@@ -3464,6 +3471,8 @@ hevc_vaapi_hwaccel_deps="vaapi VAPictureParameterBufferHEVC"
+ hevc_vaapi_hwaccel_select="hevc_decoder"
+ hevc_vdpau_hwaccel_deps="vdpau VdpPictureInfoHEVC"
+ hevc_vdpau_hwaccel_select="hevc_decoder"
++hevc_henge_hwaccel_deps="henge"
++hevc_henge_hwaccel_select="hevc_decoder"
+ hevc_videotoolbox_hwaccel_deps="videotoolbox"
+ hevc_videotoolbox_hwaccel_select="hevc_decoder"
+ hevc_vulkan_hwaccel_deps="vulkan"
+@@ -3542,6 +3551,8 @@ vp9_vaapi_hwaccel_deps="vaapi VADecPictureParameterBufferVP9_bit_depth"
+ vp9_vaapi_hwaccel_select="vp9_decoder"
+ vp9_vdpau_hwaccel_deps="vdpau VdpPictureInfoVP9"
+ vp9_vdpau_hwaccel_select="vp9_decoder"
++vp9_henge_hwaccel_deps="henge"
++vp9_henge_hwaccel_select="vp9_decoder"
+ vp9_videotoolbox_hwaccel_deps="videotoolbox"
+ vp9_videotoolbox_hwaccel_select="vp9_decoder"
+ vp9_vulkan_hwaccel_deps="vulkan vulkan_1_4"
+@@ -3807,6 +3818,10 @@ pcm_alaw_at_encoder_select="audio_frame_queue"
+ pcm_mulaw_at_encoder_deps="audiotoolbox"
+ pcm_mulaw_at_encoder_select="audio_frame_queue"
+ chromaprint_muxer_deps="chromaprint"
++h264_henge_encoder_deps="henge"
++hevc_henge_encoder_deps="henge"
++av1_henge_encoder_deps="henge"
++mjpeg_henge_encoder_deps="henge"
+ h264_videotoolbox_encoder_deps="pthreads"
+ h264_videotoolbox_encoder_select="atsc_a53 videotoolbox_encoder"
+ hevc_videotoolbox_encoder_deps="pthreads"
+@@ -4301,6 +4316,7 @@ zoompan_filter_deps="swscale"
+ zscale_filter_deps="libzimg const_nan"
+ scale_vaapi_filter_deps="vaapi"
+ scale_vt_filter_deps="videotoolbox VTPixelTransferSessionCreate"
++scale_henge_filter_deps="henge"
+ scale_vulkan_filter_deps="vulkan spirv_compiler swscale"
+ vpp_qsv_filter_deps="libmfx"
+ vpp_qsv_filter_select="qsvvpp"
+@@ -4362,7 +4378,7 @@ avfilter_deps="avutil"
+ avfilter_suggest="libm stdatomic zlib"
+ avformat_deps="avcodec avutil"
+ avformat_suggest="libm network zlib stdatomic"
+-avutil_suggest="amf clock_gettime ffnvcodec gcrypt libm zlib libdrm libmfx opencl openssl user32 vaapi vulkan videotoolbox corefoundation corevideo coremedia bcrypt stdatomic"
++avutil_suggest="amf clock_gettime ffnvcodec gcrypt henge libm zlib libdrm libmfx opencl openssl user32 vaapi vulkan videotoolbox corefoundation corevideo coremedia bcrypt stdatomic"
+ swresample_deps="avutil"
+ swresample_suggest="libm libsoxr stdatomic"
+ swscale_deps="avutil"
+@@ -7524,6 +7540,8 @@ enabled mmal              && { check_lib mmal interface/mmal/mmal.h mmal_port_co
+                                  check_lib mmal interface/mmal/mmal.h mmal_port_connect -lmmal_core -lmmal_util -lmmal_vc_client -lbcm_host; } ||
+                                die "ERROR: mmal not found" &&
+                                check_func_headers interface/mmal/mmal.h "MMAL_PARAMETER_VIDEO_MAX_NUM_CALLBACKS"; }
++enabled henge             && { check_lib henge hvcodec.h hv_client_open -lhvcodec ||
++                               die "ERROR: libhvcodec not found (tools/linux/hvcodec/libhvcodec in the Henge repository)"; }
+ enabled ohcodec           && { check_lib ohcodec "multimedia/player_framework/native_avcodec_videodecoder.h multimedia/player_framework/native_avcodec_videoencoder.h" \
+                                     "OH_VideoDecoder_CreateByName OH_VideoEncoder_CreateByName" \
+                                     -lnative_media_vdec -lnative_media_venc -lnative_media_codecbase -lnative_media_core -lnative_window ||
+diff --git a/libavcodec/Makefile b/libavcodec/Makefile
+index 95ba3085..915dd211 100644
+--- a/libavcodec/Makefile
++++ b/libavcodec/Makefile
+@@ -451,6 +451,7 @@ OBJS-$(CONFIG_H264_VAAPI_ENCODER)      += vaapi_encode_h264.o h264_levels.o \
+ OBJS-$(CONFIG_H264_VULKAN_ENCODER)     += vulkan_encode.o vulkan_encode_h264.o \
+                                           hw_base_encode.o hw_base_encode_h264.o \
+                                           h264_levels.o h2645data.o
++OBJS-$(CONFIG_H264_HENGE_ENCODER)       += hengeenc.o
+ OBJS-$(CONFIG_H264_VIDEOTOOLBOX_ENCODER) += videotoolboxenc.o
+ OBJS-$(CONFIG_H264_V4L2M2M_DECODER)    += v4l2_m2m_dec.o
+ OBJS-$(CONFIG_H264_V4L2M2M_ENCODER)    += v4l2_m2m_enc.o
+@@ -483,6 +484,7 @@ OBJS-$(CONFIG_HEVC_VULKAN_ENCODER)     += vulkan_encode.o vulkan_encode_h265.o \
+                                           h265_profile_level.o h2645data.o
+ OBJS-$(CONFIG_HEVC_V4L2M2M_DECODER)    += v4l2_m2m_dec.o
+ OBJS-$(CONFIG_HEVC_V4L2M2M_ENCODER)    += v4l2_m2m_enc.o
++OBJS-$(CONFIG_HEVC_HENGE_ENCODER)       += hengeenc.o
+ OBJS-$(CONFIG_HEVC_VIDEOTOOLBOX_ENCODER) += videotoolboxenc.o
+ OBJS-$(CONFIG_HNM4_VIDEO_DECODER)      += hnm4video.o
+ OBJS-$(CONFIG_HQ_HQA_DECODER)          += hq_hqa.o hq_hqadsp.o hq_common.o canopus.o
+@@ -650,6 +652,8 @@ OBJS-$(CONFIG_PRORES_KS_ENCODER)       += proresenc_kostya.o proresdata.o prores
+ OBJS-$(CONFIG_PRORES_KS_VULKAN_ENCODER) += proresenc_kostya_vulkan.o proresdata.o proresenc_kostya_common.o
+ OBJS-$(CONFIG_PRORES_RAW_DECODER)      += prores_raw.o proresdsp.o proresdata.o
+ OBJS-$(CONFIG_PRORES_VIDEOTOOLBOX_ENCODER) += videotoolboxenc.o
++OBJS-$(CONFIG_AV1_HENGE_ENCODER)        += hengeenc.o
++OBJS-$(CONFIG_MJPEG_HENGE_ENCODER)      += hengeenc.o
+ OBJS-$(CONFIG_PROSUMER_DECODER)        += prosumer.o
+ OBJS-$(CONFIG_PSD_DECODER)             += psd.o
+ OBJS-$(CONFIG_PTX_DECODER)             += ptx.o
+@@ -1049,6 +1053,7 @@ OBJS-$(CONFIG_AV1_DXVA2_HWACCEL)          += dxva2_av1.o
+ OBJS-$(CONFIG_AV1_D3D12VA_HWACCEL)        += dxva2_av1.o d3d12va_av1.o
+ OBJS-$(CONFIG_AV1_NVDEC_HWACCEL)          += nvdec_av1.o
+ OBJS-$(CONFIG_AV1_VAAPI_HWACCEL)          += vaapi_av1.o
++OBJS-$(CONFIG_AV1_HENGE_HWACCEL)        += henge.o henge_av1.o
+ OBJS-$(CONFIG_AV1_VDPAU_HWACCEL)          += vdpau_av1.o
+ OBJS-$(CONFIG_AV1_VIDEOTOOLBOX_HWACCEL)   += videotoolbox_av1.o
+ OBJS-$(CONFIG_AV1_VULKAN_HWACCEL)         += vulkan_decode.o vulkan_av1.o
+@@ -1062,6 +1067,7 @@ OBJS-$(CONFIG_H264_D3D12VA_HWACCEL)       += dxva2_h264.o d3d12va_h264.o
+ OBJS-$(CONFIG_H264_NVDEC_HWACCEL)         += nvdec_h264.o
+ OBJS-$(CONFIG_H264_QSV_HWACCEL)           += qsvdec.o
+ OBJS-$(CONFIG_H264_VAAPI_HWACCEL)         += vaapi_h264.o
++OBJS-$(CONFIG_H264_HENGE_HWACCEL)        += henge.o
+ OBJS-$(CONFIG_H264_VDPAU_HWACCEL)         += vdpau_h264.o
+ OBJS-$(CONFIG_H264_VIDEOTOOLBOX_HWACCEL)  += videotoolbox.o
+ OBJS-$(CONFIG_H264_VULKAN_HWACCEL)        += vulkan_decode.o vulkan_h264.o
+@@ -1071,6 +1077,7 @@ OBJS-$(CONFIG_HEVC_D3D12VA_HWACCEL)       += dxva2_hevc.o d3d12va_hevc.o
+ OBJS-$(CONFIG_HEVC_NVDEC_HWACCEL)         += nvdec_hevc.o
+ OBJS-$(CONFIG_HEVC_QSV_HWACCEL)           += qsvdec.o
+ OBJS-$(CONFIG_HEVC_VAAPI_HWACCEL)         += vaapi_hevc.o h265_profile_level.o
++OBJS-$(CONFIG_HEVC_HENGE_HWACCEL)        += henge.o
+ OBJS-$(CONFIG_HEVC_VDPAU_HWACCEL)         += vdpau_hevc.o h265_profile_level.o
+ OBJS-$(CONFIG_HEVC_VULKAN_HWACCEL)        += vulkan_decode.o vulkan_hevc.o
+ OBJS-$(CONFIG_MJPEG_NVDEC_HWACCEL)        += nvdec_mjpeg.o
+@@ -1104,6 +1111,7 @@ OBJS-$(CONFIG_VP9_DXVA2_HWACCEL)          += dxva2_vp9.o
+ OBJS-$(CONFIG_VP9_D3D12VA_HWACCEL)        += dxva2_vp9.o d3d12va_vp9.o
+ OBJS-$(CONFIG_VP9_NVDEC_HWACCEL)          += nvdec_vp9.o
+ OBJS-$(CONFIG_VP9_VAAPI_HWACCEL)          += vaapi_vp9.o
++OBJS-$(CONFIG_VP9_HENGE_HWACCEL)        += henge.o henge_vp9.o
+ OBJS-$(CONFIG_VP9_VDPAU_HWACCEL)          += vdpau_vp9.o
+ OBJS-$(CONFIG_VP9_VIDEOTOOLBOX_HWACCEL)   += videotoolbox_vp9.o
+ OBJS-$(CONFIG_VP9_VULKAN_HWACCEL)         += vulkan_decode.o vulkan_vp9.o
+@@ -1354,6 +1362,7 @@ SKIPHEADERS-$(CONFIG_QSVENC)           += qsvenc.h
+ SKIPHEADERS-$(CONFIG_VAAPI)            += vaapi_decode.h vaapi_hevc.h vaapi_encode.h
+ SKIPHEADERS-$(CONFIG_VDPAU)            += vdpau.h vdpau_internal.h
+ SKIPHEADERS-$(CONFIG_VIDEOTOOLBOX)     += videotoolbox.h vt_internal.h
++SKIPHEADERS-$(CONFIG_HENGE)            += henge.h
+ SKIPHEADERS-$(CONFIG_VULKAN)           += ffv1_vulkan.h prores_vulkan.h vulkan_video.h \
+                                           vulkan_encode.h vulkan_decode.h
+ SKIPHEADERS-$(CONFIG_V4L2_M2M)         += v4l2_buffers.h v4l2_context.h v4l2_m2m.h
+diff --git a/libavcodec/allcodecs.c b/libavcodec/allcodecs.c
+index 47eded26..86fa1326 100644
+--- a/libavcodec/allcodecs.c
++++ b/libavcodec/allcodecs.c
+@@ -857,6 +857,7 @@ extern const FFCodec ff_av1_qsv_encoder;
+ extern const FFCodec ff_av1_amf_encoder;
+ extern const FFCodec ff_av1_amf_decoder;
+ extern const FFCodec ff_av1_mf_encoder;
++extern const FFCodec ff_av1_henge_encoder;
+ extern const FFCodec ff_av1_vaapi_encoder;
+ extern const FFCodec ff_av1_vulkan_encoder;
+ extern const FFCodec ff_libopenh264_encoder;
+@@ -872,6 +873,7 @@ extern const FFCodec ff_h264_oh_encoder;
+ extern const FFCodec ff_h264_qsv_encoder;
+ extern const FFCodec ff_h264_v4l2m2m_encoder;
+ extern const FFCodec ff_h264_vaapi_encoder;
++extern const FFCodec ff_h264_henge_encoder;
+ extern const FFCodec ff_h264_videotoolbox_encoder;
+ extern const FFCodec ff_h264_vulkan_encoder;
+ extern const FFCodec ff_hevc_amf_encoder;
+@@ -887,6 +889,7 @@ extern const FFCodec ff_hevc_oh_encoder;
+ extern const FFCodec ff_hevc_qsv_encoder;
+ extern const FFCodec ff_hevc_v4l2m2m_encoder;
+ extern const FFCodec ff_hevc_vaapi_encoder;
++extern const FFCodec ff_hevc_henge_encoder;
+ extern const FFCodec ff_hevc_videotoolbox_encoder;
+ extern const FFCodec ff_hevc_vulkan_encoder;
+ extern const FFCodec ff_libkvazaar_encoder;
+@@ -905,6 +908,7 @@ extern const FFCodec ff_mpeg4_mediacodec_decoder;
+ extern const FFCodec ff_mpeg4_mediacodec_encoder;
+ extern const FFCodec ff_mpeg4_v4l2m2m_encoder;
+ extern const FFCodec ff_prores_videotoolbox_encoder;
++extern const FFCodec ff_mjpeg_henge_encoder;
+ extern const FFCodec ff_vc1_cuvid_decoder;
+ extern const FFCodec ff_vp8_cuvid_decoder;
+ extern const FFCodec ff_vp8_mediacodec_decoder;
+diff --git a/libavcodec/av1dec.c b/libavcodec/av1dec.c
+index d614c8d6..b49f772a 100644
+--- a/libavcodec/av1dec.c
++++ b/libavcodec/av1dec.c
+@@ -546,6 +546,7 @@ static int get_pixel_format(AVCodecContext *avctx)
+                      CONFIG_AV1_VAAPI_HWACCEL + \
+                      CONFIG_AV1_VDPAU_HWACCEL + \
+                      CONFIG_AV1_VIDEOTOOLBOX_HWACCEL + \
++                     CONFIG_AV1_HENGE_HWACCEL + \
+                      CONFIG_AV1_VULKAN_HWACCEL)
+     enum AVPixelFormat pix_fmts[HWACCEL_MAX + 2], *fmtp = pix_fmts;
+ 
+@@ -576,6 +577,9 @@ static int get_pixel_format(AVCodecContext *avctx)
+ #if CONFIG_AV1_VIDEOTOOLBOX_HWACCEL
+         *fmtp++ = AV_PIX_FMT_VIDEOTOOLBOX;
+ #endif
++#if CONFIG_AV1_HENGE_HWACCEL
++        *fmtp++ = AV_PIX_FMT_HENGE;
++#endif
+ #if CONFIG_AV1_VULKAN_HWACCEL
+         *fmtp++ = AV_PIX_FMT_VULKAN;
+ #endif
+@@ -603,6 +607,9 @@ static int get_pixel_format(AVCodecContext *avctx)
+ #if CONFIG_AV1_VIDEOTOOLBOX_HWACCEL
+         *fmtp++ = AV_PIX_FMT_VIDEOTOOLBOX;
+ #endif
++#if CONFIG_AV1_HENGE_HWACCEL
++        *fmtp++ = AV_PIX_FMT_HENGE;
++#endif
+ #if CONFIG_AV1_VULKAN_HWACCEL
+         *fmtp++ = AV_PIX_FMT_VULKAN;
+ #endif
+@@ -1564,6 +1571,9 @@ const FFCodec ff_av1_decoder = {
+ #if CONFIG_AV1_VIDEOTOOLBOX_HWACCEL
+         HWACCEL_VIDEOTOOLBOX(av1),
+ #endif
++#if CONFIG_AV1_HENGE_HWACCEL
++        HWACCEL_HENGE(av1),
++#endif
+ #if CONFIG_AV1_VULKAN_HWACCEL
+         HWACCEL_VULKAN(av1),
+ #endif
+diff --git a/libavcodec/h264_slice.c b/libavcodec/h264_slice.c
+index d6b4424e..c24dc64d 100644
+--- a/libavcodec/h264_slice.c
++++ b/libavcodec/h264_slice.c
+@@ -792,6 +792,7 @@ static enum AVPixelFormat get_pixel_format(H264Context *h, int force_callback)
+                      CONFIG_H264_NVDEC_HWACCEL + \
+                      CONFIG_H264_VAAPI_HWACCEL + \
+                      CONFIG_H264_VIDEOTOOLBOX_HWACCEL + \
++                     CONFIG_H264_HENGE_HWACCEL + \
+                      CONFIG_H264_VDPAU_HWACCEL + \
+                      CONFIG_H264_VULKAN_HWACCEL)
+     enum AVPixelFormat pix_fmts[HWACCEL_MAX + 2], *fmt = pix_fmts;
+@@ -813,6 +814,10 @@ static enum AVPixelFormat get_pixel_format(H264Context *h, int force_callback)
+         if (h->avctx->colorspace != AVCOL_SPC_RGB)
+             *fmt++ = AV_PIX_FMT_VIDEOTOOLBOX;
+ #endif
++#if CONFIG_H264_HENGE_HWACCEL
++        if (h->avctx->colorspace != AVCOL_SPC_RGB)
++            *fmt++ = AV_PIX_FMT_HENGE;
++#endif
+ #if CONFIG_H264_VULKAN_HWACCEL
+         *fmt++ = AV_PIX_FMT_VULKAN;
+ #endif
+@@ -874,6 +879,10 @@ static enum AVPixelFormat get_pixel_format(H264Context *h, int force_callback)
+ #if CONFIG_H264_VIDEOTOOLBOX_HWACCEL
+         if (h->avctx->colorspace != AVCOL_SPC_RGB)
+             *fmt++ = AV_PIX_FMT_VIDEOTOOLBOX;
++#endif
++#if CONFIG_H264_HENGE_HWACCEL
++        if (h->avctx->colorspace != AVCOL_SPC_RGB)
++            *fmt++ = AV_PIX_FMT_HENGE;
+ #endif
+         if (CHROMA444(h)) {
+             if (h->avctx->colorspace == AVCOL_SPC_RGB)
+diff --git a/libavcodec/h264dec.c b/libavcodec/h264dec.c
+index ca65df2b..47e563c1 100644
+--- a/libavcodec/h264dec.c
++++ b/libavcodec/h264dec.c
+@@ -1143,6 +1143,9 @@ const FFCodec ff_h264_decoder = {
+ #if CONFIG_H264_VIDEOTOOLBOX_HWACCEL
+                                HWACCEL_VIDEOTOOLBOX(h264),
+ #endif
++#if CONFIG_H264_HENGE_HWACCEL
++                               HWACCEL_HENGE(h264),
++#endif
+ #if CONFIG_H264_VULKAN_HWACCEL
+                                HWACCEL_VULKAN(h264),
+ #endif
+diff --git a/libavcodec/henge.c b/libavcodec/henge.c
+new file mode 100644
+index 00000000..df6f5231
+--- /dev/null
++++ b/libavcodec/henge.c
+@@ -0,0 +1,508 @@
++/*
++ * Henge hardware decoding: -hwaccel henge for H.264, HEVC, AV1 and VP9
++ *
++ * FFmpeg parses the stream and keeps the frame order; the device under the
++ * Henge virtual machine decodes each frame, and the picture stays there as a
++ * host frame. The parameter set code follows videotoolbox.c.
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include "config_components.h"
++
++#include <hvcodec.h>
++
++#include "libavutil/hwcontext.h"
++#include "libavutil/hwcontext_henge.h"
++#include "libavutil/intreadwrite.h"
++#include "libavutil/mem.h"
++#include "libavutil/pixdesc.h"
++
++#include "avcodec.h"
++#include "decode.h"
++#include "hwaccel_internal.h"
++#include "internal.h"
++#if CONFIG_H264_HENGE_HWACCEL
++#include "h264dec.h"
++#endif
++#if CONFIG_HEVC_HENGE_HWACCEL
++#include "hevc/hevcdec.h"
++#endif
++#include "henge.h"
++
++int ff_henge_bitstream_append(HengeDecContext *ctx, const uint8_t *buf, uint32_t size, int length_prefix)
++{
++    uint64_t need = (uint64_t)ctx->bitstream_size + size + (length_prefix ? 4 : 0);
++    uint8_t *tmp;
++    if (need > HV_VC_MAX_BITSTREAM)
++        return AVERROR(ENOMEM);
++    tmp = av_fast_realloc(ctx->bitstream, &ctx->allocated_size, need);
++    if (!tmp)
++        return AVERROR(ENOMEM);
++    ctx->bitstream = tmp;
++    if (length_prefix) {
++        AV_WB32(ctx->bitstream + ctx->bitstream_size, size);
++        ctx->bitstream_size += 4;
++    }
++    memcpy(ctx->bitstream + ctx->bitstream_size, buf, size);
++    ctx->bitstream_size += size;
++    return 0;
++}
++
++static enum AVPixelFormat henge_sw_format(AVCodecContext *avctx)
++{
++    const AVPixFmtDescriptor *d = av_pix_fmt_desc_get(avctx->sw_pix_fmt);
++    int depth;
++    if (!d)
++        return AV_PIX_FMT_NV12;
++    depth = d->comp[0].depth;
++    if (d->log2_chroma_w == 0)
++        return depth > 8 ? AV_PIX_FMT_P410LE : AV_PIX_FMT_NV24;
++    if (d->log2_chroma_h == 0)
++        return depth > 8 ? AV_PIX_FMT_P210LE : AV_PIX_FMT_NV16;
++    return depth > 8 ? AV_PIX_FMT_P010LE : AV_PIX_FMT_NV12;
++}
++
++int ff_henge_frame_params(AVCodecContext *avctx, AVBufferRef *hw_frames_ctx)
++{
++    AVHWFramesContext *frames = (AVHWFramesContext *)hw_frames_ctx->data;
++    /* the host gives display-size frames: the decoder crops them */
++    frames->format    = AV_PIX_FMT_HENGE;
++    frames->width     = avctx->width;
++    frames->height    = avctx->height;
++    frames->sw_format = henge_sw_format(avctx);
++    ((AVHengeFramesContext *)frames->hwctx)->color_range = avctx->color_range;
++    return 0;
++}
++
++static int henge_postproc(void *logctx, AVFrame *frame)
++{
++    AVHengeFrame *hf = (AVHengeFrame *)frame->buf[0]->data;
++    if (!hf->handle) {
++        av_log(logctx, AV_LOG_ERROR, "The device gave no picture for this frame.\n");
++        av_frame_unref(frame);
++        return AVERROR_EXTERNAL;
++    }
++    frame->crop_left = frame->crop_right = frame->crop_top = frame->crop_bottom = 0;
++    frame->data[3] = (uint8_t *)(uintptr_t)hf->handle;
++    if (hf->hw_frames_ref) {
++        av_buffer_unref(&frame->hw_frames_ctx);
++        frame->hw_frames_ctx = av_buffer_ref(hf->hw_frames_ref);
++        if (!frame->hw_frames_ctx)
++            return AVERROR(ENOMEM);
++    }
++    return 0;
++}
++
++int ff_henge_alloc_frame(AVCodecContext *avctx, AVFrame *frame)
++{
++    HengeDecContext *ctx = avctx->internal->hwaccel_priv_data;
++    AVHWFramesContext *frames = (AVHWFramesContext *)ctx->frames_ref->data;
++    FrameDecodeData *fdd;
++    AVHengeFrame *hf;
++    int ret = ff_attach_decode_data(avctx, frame);
++    if (ret < 0)
++        return ret;
++    frame->buf[0] = av_henge_frame_ref_alloc(frames->device_ref);
++    if (!frame->buf[0])
++        return AVERROR(ENOMEM);
++    hf = (AVHengeFrame *)frame->buf[0]->data;
++    hf->hw_frames_ref = av_buffer_ref(ctx->frames_ref);
++    if (!hf->hw_frames_ref)
++        return AVERROR(ENOMEM);
++    fdd = frame->private_ref;
++    fdd->hwaccel_priv_post_process = henge_postproc;
++    frame->width  = avctx->width;
++    frame->height = avctx->height;
++    frame->format = avctx->pix_fmt;
++    return 0;
++}
++
++/* ---- parameter sets, as videotoolbox.c ---- */
++
++static int escape_ps(uint8_t *dst, const uint8_t *src, int src_size)
++{
++    int size = src_size;
++    uint8_t *p = dst;
++    for (int i = 0; i < src_size; i++) {
++        if (i + 2 < src_size && src[i] == 0x00 && src[i + 1] == 0x00 && src[i + 2] <= 0x03) {
++            if (dst) {
++                *p++ = src[i++];
++                *p++ = src[i];
++                *p++ = 0x03;
++            } else {
++                i++;
++            }
++            size++;
++        } else if (dst) {
++            *p++ = src[i];
++        }
++    }
++    return size;
++}
++
++#if CONFIG_H264_HENGE_HWACCEL
++static uint8_t *avcc_create(AVCodecContext *avctx, int *size)
++{
++    H264Context *h = avctx->priv_data;
++    int sps_size, pps_size;
++    uint8_t *buf, *p;
++    if (!h->ps.sps || !h->ps.pps)
++        return NULL;
++    sps_size = escape_ps(NULL, h->ps.sps->data, h->ps.sps->data_size);
++    pps_size = escape_ps(NULL, h->ps.pps->data, h->ps.pps->data_size);
++    *size = 6 + 2 + sps_size + 3 + pps_size;
++    buf = av_malloc(*size);
++    if (!buf)
++        return NULL;
++    p = buf;
++    p[0] = 1;
++    p[1] = h->ps.sps->data[1];
++    p[2] = h->ps.sps->data[2];
++    p[3] = h->ps.sps->data[3];
++    p[4] = 0xff; /* 4-byte lengths */
++    p[5] = 0xe1;
++    AV_WB16(p + 6, sps_size);
++    p += 8;
++    p += escape_ps(p, h->ps.sps->data, h->ps.sps->data_size);
++    p[0] = 1;
++    AV_WB16(p + 1, pps_size);
++    p += 3;
++    escape_ps(p, h->ps.pps->data, h->ps.pps->data_size);
++    return buf;
++}
++#endif
++
++#if CONFIG_HEVC_HENGE_HWACCEL
++static uint8_t *hvcc_create(AVCodecContext *avctx, int *out_size)
++{
++    HEVCContext *h = avctx->priv_data;
++    int num_vps = 0, num_sps = 0, num_pps = 0;
++    const HEVCPPS *pps = h->pps;
++    const HEVCSPS *sps;
++    const HEVCVPS *vps;
++    PTLCommon ptlc;
++    VUI vui;
++    uint8_t parallelismType;
++    uint8_t *buf, *p;
++    int size = 23 + 3 + 3 + 3;
++
++    if (!pps)
++        return NULL;
++    sps = pps->sps;
++    vps = sps->vps;
++    ptlc = vps->ptl.general_ptl;
++    vui = sps->vui;
++
++#define COUNT_SIZE_PS(T, t) \
++    for (int i = 0; i < HEVC_MAX_##T##PS_COUNT; i++) { \
++        if (h->ps.t##ps_list[i]) { \
++            const HEVC##T##PS *lps = h->ps.t##ps_list[i]; \
++            size += 2 + escape_ps(NULL, lps->data, lps->data_size); \
++            num_##t##ps++; \
++        } \
++    }
++    COUNT_SIZE_PS(V, v)
++    COUNT_SIZE_PS(S, s)
++    COUNT_SIZE_PS(P, p)
++
++    buf = av_malloc(size);
++    if (!buf)
++        return NULL;
++    p = buf;
++    p[0] = 1;
++    p[1] = ptlc.profile_space << 6 | ptlc.tier_flag << 5 | ptlc.profile_idc;
++    for (int i = 0; i < 4; i++)
++        p[2 + i] = ptlc.profile_compatibility_flag[i * 8] << 7 |
++                   ptlc.profile_compatibility_flag[i * 8 + 1] << 6 |
++                   ptlc.profile_compatibility_flag[i * 8 + 2] << 5 |
++                   ptlc.profile_compatibility_flag[i * 8 + 3] << 4 |
++                   ptlc.profile_compatibility_flag[i * 8 + 4] << 3 |
++                   ptlc.profile_compatibility_flag[i * 8 + 5] << 2 |
++                   ptlc.profile_compatibility_flag[i * 8 + 6] << 1 |
++                   ptlc.profile_compatibility_flag[i * 8 + 7];
++    p[6] = ptlc.progressive_source_flag << 7 | ptlc.interlaced_source_flag << 6 |
++           ptlc.non_packed_constraint_flag << 5 | ptlc.frame_only_constraint_flag << 4;
++    p[7] = 0;
++    AV_WN32(p + 8, 0);
++    p[12] = ptlc.level_idc;
++    p[13] = 0xf0 | (vui.min_spatial_segmentation_idc >> 4);
++    p[14] = vui.min_spatial_segmentation_idc & 0xff;
++    if (!vui.min_spatial_segmentation_idc)
++        parallelismType = 0;
++    else if (pps->entropy_coding_sync_enabled_flag && pps->tiles_enabled_flag)
++        parallelismType = 0;
++    else if (pps->entropy_coding_sync_enabled_flag)
++        parallelismType = 3;
++    else if (pps->tiles_enabled_flag)
++        parallelismType = 2;
++    else
++        parallelismType = 1;
++    p[15] = 0xfc | parallelismType;
++    p[16] = sps->chroma_format_idc | 0xfc;
++    p[17] = (sps->bit_depth - 8) | 0xf8;
++    p[18] = (sps->bit_depth_chroma - 8) | 0xf8;
++    AV_WB16(p + 19, 0);
++    p[21] = sps->max_sub_layers << 3 | sps->temporal_id_nesting << 2 | 3;
++    p[22] = 3;
++    p += 23;
++
++#define APPEND_PS(T, t) \
++    p[0] = 1 << 7 | (HEVC_NAL_##T##PS & 0x3f); \
++    AV_WB16(p + 1, num_##t##ps); \
++    p += 3; \
++    for (int i = 0; i < HEVC_MAX_##T##PS_COUNT; i++) { \
++        if (h->ps.t##ps_list[i]) { \
++            const HEVC##T##PS *lps = h->ps.t##ps_list[i]; \
++            int n = escape_ps(p + 2, lps->data, lps->data_size); \
++            AV_WB16(p, n); \
++            p += 2 + n; \
++        } \
++    }
++    APPEND_PS(V, v)
++    APPEND_PS(S, s)
++    APPEND_PS(P, p)
++
++    *out_size = size;
++    return buf;
++}
++#endif
++
++
++
++/* ---- the session ---- */
++
++static uint32_t henge_codec(enum AVCodecID id)
++{
++    switch (id) {
++    case AV_CODEC_ID_H264: return HV_VC_H264;
++    case AV_CODEC_ID_HEVC: return HV_VC_HEVC;
++    case AV_CODEC_ID_AV1:  return HV_VC_AV1;
++    case AV_CODEC_ID_VP9:  return HV_VC_VP9;
++    default:               return 0;
++    }
++}
++
++int ff_henge_uninit(AVCodecContext *avctx)
++{
++    HengeDecContext *ctx = avctx->internal->hwaccel_priv_data;
++    if (!ctx)
++        return 0;
++    if (ctx->open && ctx->client) {
++        HvVcSession m = { ctx->session, 0 };
++        hv_call(ctx->client, HV_VC_DEC_CLOSE, &m, sizeof(m), NULL, 0, NULL);
++    }
++    ctx->open = 0;
++    hv_reply_free(&ctx->reply);
++    av_freep(&ctx->bitstream);
++    ctx->allocated_size = ctx->bitstream_size = 0;
++    av_buffer_unref(&ctx->frames_ref);
++    return 0;
++}
++
++int ff_henge_init(AVCodecContext *avctx)
++{
++    HengeDecContext *ctx = avctx->internal->hwaccel_priv_data;
++    AVHWFramesContext *frames;
++    AVHengeDeviceContext *dev;
++    const HvVcDecoderInfo *info;
++    uint32_t codec = henge_codec(avctx->codec_id);
++    uint8_t *extra = NULL;
++    int extra_size = 0, st, err;
++    HvVcDecOpen o;
++    HvVcOpenReply r;
++    char cc[5];
++
++    if (!avctx->hw_frames_ctx && !avctx->hw_device_ctx) {
++        av_log(avctx, AV_LOG_ERROR, "Either hw_frames_ctx or hw_device_ctx must be set.\n");
++        return AVERROR(EINVAL);
++    }
++    if (!avctx->hw_frames_ctx) {
++        avctx->hw_frames_ctx = av_hwframe_ctx_alloc(avctx->hw_device_ctx);
++        if (!avctx->hw_frames_ctx)
++            return AVERROR(ENOMEM);
++        ff_henge_frame_params(avctx, avctx->hw_frames_ctx);
++        err = av_hwframe_ctx_init(avctx->hw_frames_ctx);
++        if (err < 0) {
++            av_buffer_unref(&avctx->hw_frames_ctx);
++            return err;
++        }
++    }
++    frames = (AVHWFramesContext *)avctx->hw_frames_ctx->data;
++    if (frames->device_ctx->type != AV_HWDEVICE_TYPE_HENGE || frames->format != AV_PIX_FMT_HENGE)
++        return AVERROR(EINVAL);
++    ctx->frames_ref = av_buffer_ref(avctx->hw_frames_ctx);
++    if (!ctx->frames_ref)
++        return AVERROR(ENOMEM);
++    dev = frames->device_ctx->hwctx;
++    ctx->client = dev->client;
++
++    hv_fourcc_str(codec, cc);
++    info = codec ? hv_query_decoder(dev->query, codec) : NULL;
++    if (!info) {
++        av_log(avctx, AV_LOG_WARNING, "The device has no %s decoder: decoding in software.\n", cc);
++        ff_henge_uninit(avctx);
++        return AVERROR(ENOSYS);
++    }
++
++    switch (avctx->codec_id) {
++#if CONFIG_H264_HENGE_HWACCEL
++    case AV_CODEC_ID_H264: extra = avcc_create(avctx, &extra_size); break;
++#endif
++#if CONFIG_HEVC_HENGE_HWACCEL
++    case AV_CODEC_ID_HEVC: extra = hvcc_create(avctx, &extra_size); break;
++#endif
++#if CONFIG_AV1_HENGE_HWACCEL
++    case AV_CODEC_ID_AV1:  extra = ff_henge_av1c_create(avctx, &extra_size); break;
++#endif
++#if CONFIG_VP9_HENGE_HWACCEL
++    case AV_CODEC_ID_VP9:  extra = ff_henge_vpcc_create(avctx, &extra_size); break;
++#endif
++    default: break;
++    }
++    if (!extra || extra_size > HV_VC_MAX_EXTRADATA) {
++        av_free(extra);
++        av_log(avctx, AV_LOG_WARNING, "No %s parameter sets for the device: decoding in software.\n", cc);
++        ff_henge_uninit(avctx);
++        return AVERROR(ENOSYS);
++    }
++
++    memset(&o, 0, sizeof(o));
++    o.codec         = codec;
++    o.width         = avctx->width;
++    o.height        = avctx->height;
++    o.format        = av_henge_format_from_pix_fmt(frames->sw_format);
++    o.range         = avctx->color_range == AVCOL_RANGE_JPEG ? HV_VC_RANGE_FULL : HV_VC_RANGE_VIDEO;
++    o.extradata_len = extra_size;
++    st = hv_call(ctx->client, HV_VC_DEC_OPEN, &o, sizeof(o), extra, extra_size, &ctx->reply);
++    av_free(extra);
++    if (st || ctx->reply.len < sizeof(r)) {
++        av_log(avctx, AV_LOG_WARNING, "The device refused this %s stream (%s): decoding in software.\n",
++               cc, st ? ctx->reply.err : "short reply");
++        ff_henge_uninit(avctx);
++        return st == HV_CLIENT_E_IO ? AVERROR(EIO) : AVERROR(ENOSYS);
++    }
++    memcpy(&r, ctx->reply.data, sizeof(r));
++    ctx->session = r.session;
++    ctx->open = 1;
++    ctx->bitstream_size = 0;
++    av_log(avctx, AV_LOG_VERBOSE, "Henge %s decoder %ux%u %s (%s)\n", cc, o.width, o.height,
++           av_get_pix_fmt_name(frames->sw_format), r.flags & HV_VC_DEC_HW ? "hardware" : "software");
++    return 0;
++}
++
++int ff_henge_end_frame(AVCodecContext *avctx, AVFrame *frame)
++{
++    HengeDecContext *ctx = avctx->internal->hwaccel_priv_data;
++    AVHengeFrame *hf;
++    HvVcDecFrame d;
++    HvVcFrameReply fr;
++    int st;
++
++    if (!ctx->open || !ctx->bitstream_size || !frame || !frame->buf[0] || frame->buf[0]->size != sizeof(AVHengeFrame))
++        return AVERROR_INVALIDDATA;
++    hf = (AVHengeFrame *)frame->buf[0]->data;
++    /* the host matches each picture to its request by this number */
++    d.session  = ctx->session;
++    d.flags    = 0;
++    d.pts      = ctx->counter++;
++    d.duration = 0;
++    st = hv_call(ctx->client, HV_VC_DEC_FRAME, &d, sizeof(d), ctx->bitstream, ctx->bitstream_size, &ctx->reply);
++    ctx->bitstream_size = 0;
++    if (st) {
++        av_log(avctx, AV_LOG_ERROR, "DEC_FRAME: %s%s\n", ctx->reply.err,
++               st == HV_VC_E_LIMIT ? " (too many frames are live on the device; fewer decoder threads, -threads 1, keep fewer)" : "");
++        return st == HV_CLIENT_E_IO ? AVERROR(EIO) : AVERROR_EXTERNAL;
++    }
++    if (ctx->reply.len < sizeof(fr))
++        return AVERROR_EXTERNAL;
++    memcpy(&fr, ctx->reply.data, sizeof(fr));
++    if (!fr.handle)
++        return 0; /* no picture: postproc refuses the frame if it is ever shown */
++    if (hf->handle) /* a second field */
++        hv_frame_free(ctx->client, hf->handle);
++    hf->handle = fr.handle;
++    hf->width  = fr.width;
++    hf->height = fr.height;
++    return 0;
++}
++
++/* NAL units with 4-byte lengths, as the avcC and hvcC above declare. */
++static int henge_nal_decode_slice(AVCodecContext *avctx, const uint8_t *buf, uint32_t size)
++{
++    return ff_henge_bitstream_append(avctx->internal->hwaccel_priv_data, buf, size, 1);
++}
++
++static int henge_nal_decode_params(AVCodecContext *avctx, int type, const uint8_t *buf, uint32_t size)
++{
++    return ff_henge_bitstream_append(avctx->internal->hwaccel_priv_data, buf, size, 1);
++}
++
++int ff_henge_start_frame_noop(AVCodecContext *avctx, const AVBufferRef *buf_ref,
++                                  const uint8_t *buf, uint32_t size)
++{
++    return 0;
++}
++
++#if CONFIG_H264_HENGE_HWACCEL
++static int henge_h264_end_frame(AVCodecContext *avctx)
++{
++    H264Context *h = avctx->priv_data;
++    return ff_henge_end_frame(avctx, h->cur_pic_ptr->f);
++}
++
++const FFHWAccel ff_h264_henge_hwaccel = {
++    .p.name         = "h264_henge",
++    .p.type         = AVMEDIA_TYPE_VIDEO,
++    .p.id           = AV_CODEC_ID_H264,
++    .p.pix_fmt      = AV_PIX_FMT_HENGE,
++    .alloc_frame    = ff_henge_alloc_frame,
++    .start_frame    = ff_henge_start_frame_noop,
++    .decode_slice   = henge_nal_decode_slice,
++    .decode_params  = henge_nal_decode_params,
++    .end_frame      = henge_h264_end_frame,
++    .frame_params   = ff_henge_frame_params,
++    .init           = ff_henge_init,
++    .uninit         = ff_henge_uninit,
++    .priv_data_size = sizeof(HengeDecContext),
++};
++#endif
++
++#if CONFIG_HEVC_HENGE_HWACCEL
++static int henge_hevc_end_frame(AVCodecContext *avctx)
++{
++    HEVCContext *h = avctx->priv_data;
++    return ff_henge_end_frame(avctx, h->cur_frame->f);
++}
++
++const FFHWAccel ff_hevc_henge_hwaccel = {
++    .p.name         = "hevc_henge",
++    .p.type         = AVMEDIA_TYPE_VIDEO,
++    .p.id           = AV_CODEC_ID_HEVC,
++    .p.pix_fmt      = AV_PIX_FMT_HENGE,
++    .alloc_frame    = ff_henge_alloc_frame,
++    .start_frame    = ff_henge_start_frame_noop,
++    .decode_slice   = henge_nal_decode_slice,
++    .decode_params  = henge_nal_decode_params,
++    .end_frame      = henge_hevc_end_frame,
++    .frame_params   = ff_henge_frame_params,
++    .init           = ff_henge_init,
++    .uninit         = ff_henge_uninit,
++    .priv_data_size = sizeof(HengeDecContext),
++};
++#endif
++
+diff --git a/libavcodec/henge.h b/libavcodec/henge.h
+new file mode 100644
+index 00000000..65c01440
+--- /dev/null
++++ b/libavcodec/henge.h
+@@ -0,0 +1,47 @@
++/*
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#ifndef AVCODEC_HENGE_H
++#define AVCODEC_HENGE_H
++
++#include <hvcodec.h>
++
++#include "avcodec.h"
++
++typedef struct HengeDecContext {
++    AVBufferRef *frames_ref;
++    HvClient *client;
++    uint32_t session;
++    int open;
++    uint8_t *bitstream;
++    unsigned bitstream_size, allocated_size;
++    int64_t counter;
++    HvReply reply;
++} HengeDecContext;
++
++int ff_henge_bitstream_append(HengeDecContext *ctx, const uint8_t *buf, uint32_t size, int length_prefix);
++int ff_henge_frame_params(AVCodecContext *avctx, AVBufferRef *hw_frames_ctx);
++int ff_henge_alloc_frame(AVCodecContext *avctx, AVFrame *frame);
++int ff_henge_init(AVCodecContext *avctx);
++int ff_henge_uninit(AVCodecContext *avctx);
++int ff_henge_end_frame(AVCodecContext *avctx, AVFrame *frame);
++int ff_henge_start_frame_noop(AVCodecContext *avctx, const AVBufferRef *buf_ref, const uint8_t *buf, uint32_t size);
++uint8_t *ff_henge_av1c_create(AVCodecContext *avctx, int *size);
++uint8_t *ff_henge_vpcc_create(AVCodecContext *avctx, int *size);
++
++#endif /* AVCODEC_HENGE_H */
+diff --git a/libavcodec/henge_av1.c b/libavcodec/henge_av1.c
+new file mode 100644
+index 00000000..8d3fc8ac
+--- /dev/null
++++ b/libavcodec/henge_av1.c
+@@ -0,0 +1,88 @@
++/*
++ * Henge hardware decoding: AV1
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include "av1dec.h"
++#include "libavutil/hwcontext_henge.h"
++#include "libavutil/intreadwrite.h"
++#include "libavutil/mem.h"
++#include "libavutil/pixdesc.h"
++
++#include "hwaccel_internal.h"
++#include "internal.h"
++#include "henge.h"
++
++uint8_t *ff_henge_av1c_create(AVCodecContext *avctx, int *size)
++{
++    AV1DecContext *s = avctx->priv_data;
++    uint8_t *buf;
++    if (!s->raw_seq || !s->seq_data_ref)
++        return NULL;
++    *size = s->seq_data_ref->size + 4;
++    buf = av_malloc(*size);
++    if (!buf)
++        return NULL;
++    buf[0] = 0x81;
++    buf[1] = s->raw_seq->seq_profile << 5 | s->raw_seq->seq_level_idx[0];
++    buf[2] = s->raw_seq->seq_tier[0] << 7 |
++             s->raw_seq->color_config.high_bitdepth << 6 |
++             s->raw_seq->color_config.twelve_bit << 5 |
++             s->raw_seq->color_config.mono_chrome << 4 |
++             s->raw_seq->color_config.subsampling_x << 3 |
++             s->raw_seq->color_config.subsampling_y << 2 |
++             s->raw_seq->color_config.chroma_sample_position;
++    buf[3] = s->raw_seq->initial_display_delay_present_flag ?
++             1 << 4 | s->raw_seq->initial_display_delay_minus_1[0] : 0;
++    memcpy(buf + 4, s->seq_data_ref->data, s->seq_data_ref->size);
++    return buf;
++}
++
++static int henge_av1_decode_slice(AVCodecContext *avctx, const uint8_t *buf, uint32_t size)
++{
++    return 0;
++}
++
++static int henge_av1_end_frame(AVCodecContext *avctx)
++{
++    const AV1DecContext *s = avctx->priv_data;
++    HengeDecContext *ctx = avctx->internal->hwaccel_priv_data;
++    int ret;
++    ctx->bitstream_size = 0;
++    for (int i = s->start_unit; i < s->nb_unit; i++) {
++        ret = ff_henge_bitstream_append(ctx, s->current_obu.units[i].data, s->current_obu.units[i].data_size, 0);
++        if (ret < 0)
++            return ret;
++    }
++    return ff_henge_end_frame(avctx, s->cur_frame.f);
++}
++
++const FFHWAccel ff_av1_henge_hwaccel = {
++    .p.name         = "av1_henge",
++    .p.type         = AVMEDIA_TYPE_VIDEO,
++    .p.id           = AV_CODEC_ID_AV1,
++    .p.pix_fmt      = AV_PIX_FMT_HENGE,
++    .alloc_frame    = ff_henge_alloc_frame,
++    .start_frame    = ff_henge_start_frame_noop,
++    .decode_slice   = henge_av1_decode_slice,
++    .end_frame      = henge_av1_end_frame,
++    .frame_params   = ff_henge_frame_params,
++    .init           = ff_henge_init,
++    .uninit         = ff_henge_uninit,
++    .priv_data_size = sizeof(HengeDecContext),
++};
+diff --git a/libavcodec/henge_vp9.c b/libavcodec/henge_vp9.c
+new file mode 100644
+index 00000000..de57a7ba
+--- /dev/null
++++ b/libavcodec/henge_vp9.c
+@@ -0,0 +1,90 @@
++/*
++ * Henge hardware decoding: VP9
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include "vp9shared.h"
++#include "libavutil/hwcontext_henge.h"
++#include "libavutil/intreadwrite.h"
++#include "libavutil/mem.h"
++#include "libavutil/pixdesc.h"
++
++#include "hwaccel_internal.h"
++#include "internal.h"
++#include "henge.h"
++
++uint8_t *ff_henge_vpcc_create(AVCodecContext *avctx, int *size)
++{
++    const VP9SharedContext *h = avctx->priv_data;
++    int cw, ch, sub;
++    uint8_t *buf, *p;
++    if (av_pix_fmt_get_chroma_sub_sample(avctx->sw_pix_fmt, &cw, &ch) < 0)
++        return NULL;
++    if (cw == 1 && ch == 1)
++        sub = avctx->chroma_sample_location == AVCHROMA_LOC_LEFT ? 0 : 1;
++    else if (cw == 1 && ch == 0)
++        sub = 2;
++    else if (cw == 0 && ch == 0)
++        sub = 3;
++    else
++        return NULL;
++    *size = 12;
++    buf = av_malloc(*size);
++    if (!buf)
++        return NULL;
++    p = buf;
++    *p++ = 1;
++    AV_WB24(p, 0);
++    p += 3;
++    *p++ = h->h.profile;
++    *p++ = avctx->level;
++    *p++ = (h->h.bpp << 4) | (sub << 1) | (avctx->color_range == AVCOL_RANGE_JPEG);
++    *p++ = avctx->color_primaries;
++    *p++ = avctx->color_trc;
++    *p++ = avctx->colorspace;
++    AV_WB16(p, 0);
++    return buf;
++}
++
++static int henge_vp9_decode_slice(AVCodecContext *avctx, const uint8_t *buf, uint32_t size)
++{
++    HengeDecContext *ctx = avctx->internal->hwaccel_priv_data;
++    ctx->bitstream_size = 0;
++    return ff_henge_bitstream_append(ctx, buf, size, 0);
++}
++
++static int henge_vp9_end_frame(AVCodecContext *avctx)
++{
++    const VP9SharedContext *h = avctx->priv_data;
++    return ff_henge_end_frame(avctx, h->frames[CUR_FRAME].tf.f);
++}
++
++const FFHWAccel ff_vp9_henge_hwaccel = {
++    .p.name         = "vp9_henge",
++    .p.type         = AVMEDIA_TYPE_VIDEO,
++    .p.id           = AV_CODEC_ID_VP9,
++    .p.pix_fmt      = AV_PIX_FMT_HENGE,
++    .alloc_frame    = ff_henge_alloc_frame,
++    .start_frame    = ff_henge_start_frame_noop,
++    .decode_slice   = henge_vp9_decode_slice,
++    .end_frame      = henge_vp9_end_frame,
++    .frame_params   = ff_henge_frame_params,
++    .init           = ff_henge_init,
++    .uninit         = ff_henge_uninit,
++    .priv_data_size = sizeof(HengeDecContext),
++};
+diff --git a/libavcodec/hengeenc.c b/libavcodec/hengeenc.c
+new file mode 100644
+index 00000000..6447c878
+--- /dev/null
++++ b/libavcodec/hengeenc.c
+@@ -0,0 +1,923 @@
++/*
++ * Henge hardware encoders: h264_henge, hevc_henge, av1_henge, mjpeg_henge
++ *
++ * The device under the Henge virtual machine encodes host frames: henge
++ * frames from -hwaccel henge or scale_henge stay on the device, and software
++ * frames are uploaded first. The option names follow videotoolboxenc.c.
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include "config_components.h"
++
++#include <hvcodec.h>
++
++#include "libavutil/avstring.h"
++#include "libavutil/hwcontext.h"
++#include "libavutil/hwcontext_henge.h"
++#include "libavutil/intreadwrite.h"
++#include "libavutil/mastering_display_metadata.h"
++#include "libavutil/mem.h"
++#include "libavutil/opt.h"
++#include "libavutil/pixdesc.h"
++#include "libavutil/time.h"
++
++#include "avcodec.h"
++#include "codec_internal.h"
++#include "encode.h"
++#include "hwconfig.h"
++#include "packet_internal.h"
++
++/* frames in the device's encoder before a wait for a packet: bounds the frames it holds */
++#define MAX_PENDING 8
++/* a deep lookahead can need more: the bound doubles up to this after STALL_MS at it with no packet */
++#define MAX_PENDING_HARD 32
++#define STALL_MS 1000
++/* one ENC_PACKET wait: the other threads on the connection wait behind it */
++#define WAIT_SLICE_MS 20
++/* no packet and no frame taken for this long: the device is stuck */
++#define GIVE_UP_MS 20000
++
++enum { PROFILE_AUTO = -99 };
++
++typedef struct HengeEncContext {
++    const AVClass *class;
++    AVBufferRef *device_ref;
++    AVBufferRef *upload_ref; /* frames context for software input */
++    HvClient *client;
++    const HvVcEncoderInfo *info;
++    uint32_t codec, format, session, timescale;
++    int open, eof_sent, annexb, length_size, oversize;
++    uint32_t ready;
++    int32_t pending, max_pending;
++    int held;            /* s->frame is taken from the queue but not yet in the device */
++    int at_limit;        /* the host refused s->frame at a limit: wait, then give it again */
++    int64_t idle_since;  /* no packet and no frame given since then; 0 after progress */
++    char limit_err[256];
++    AVFrame *frame;
++    HvReply reply;
++    uint8_t *ps;      /* Annex B parameter sets, for key frames when there is no global header */
++    int ps_size;
++    HvVcEncOpen o;
++
++    int profile, level, allow_sw, realtime, prio_speed, constant_bit_rate;
++    double alpha_quality;
++} HengeEncContext;
++
++static int status_err(int st)
++{
++    switch (st) {
++    case HV_VC_E_INVAL:   return AVERROR(EINVAL);
++    case HV_VC_E_NOSUP:   return AVERROR(ENOSYS);
++    case HV_VC_E_LIMIT:   return AVERROR(ENOBUFS);
++    case HV_VC_E_NOMEM:   return AVERROR(ENOMEM);
++    case HV_CLIENT_E_IO:  return AVERROR(EIO);
++    default:              return AVERROR_EXTERNAL;
++    }
++}
++
++/* ---- profiles ---- */
++
++static const char *h264_profile_name(int profile)
++{
++    switch (profile) {
++    case AV_PROFILE_H264_BASELINE:             return "Baseline";
++    case AV_PROFILE_H264_CONSTRAINED_BASELINE: return "ConstrainedBaseline";
++    case AV_PROFILE_H264_MAIN:                 return "Main";
++    case AV_PROFILE_H264_HIGH:                 return "High";
++    case AV_PROFILE_H264_HIGH | AV_PROFILE_H264_CONSTRAINED: return "ConstrainedHigh";
++    case AV_PROFILE_H264_HIGH_10:              return "High10";
++    case AV_PROFILE_H264_HIGH_422:             return "High422";
++    case AV_PROFILE_H264_HIGH_444_PREDICTIVE:  return "High444Predictive";
++    default:                                   return NULL;
++    }
++}
++
++/* The profile when -profile is not set, from the input format (vcodec-check.py PROFILE_RULE tests it).
++   HEVC has no 8-bit 4:2:2 profile, so nv16 gets Main 4:2:2 10. H.264 10-bit 4:2:0 is High 10 where the
++   device lists it; else High, and the output is 8 bit. bgra is the encoder's own conversion to 4:2:0. */
++static const struct {
++    enum AVPixelFormat fmt;
++    const char *h264, *h264_alt, *hevc;
++} auto_profiles[] = {
++    { AV_PIX_FMT_NV12,   "High",              NULL,   "HEVC_Main_AutoLevel" },
++    { AV_PIX_FMT_P010LE, "High10",            "High", "HEVC_Main10_AutoLevel" },
++    { AV_PIX_FMT_NV16,   "High422",           NULL,   "HEVC_Main42210_AutoLevel" },
++    { AV_PIX_FMT_P210LE, "High422",           NULL,   "HEVC_Main42210_AutoLevel" },
++    { AV_PIX_FMT_NV24,   "High444Predictive", NULL,   "HEVC_Main444_AutoLevel" },
++    { AV_PIX_FMT_P410LE, "High444Predictive", NULL,   "HEVC_Main44410_AutoLevel" },
++    { AV_PIX_FMT_BGRA,   "High",              NULL,   "HEVC_Main_AutoLevel" },
++};
++
++static int has_profile(const HvVcEncoderInfo *e, const char *name)
++{
++    for (uint32_t i = 0; i < e->n_profiles; i++)
++        if (!strcmp(e->profiles[i].name, name))
++            return 1;
++    return 0;
++}
++
++static void h264_name(char *buf, size_t size, const char *base, int level)
++{
++    if (level > 0)
++        snprintf(buf, size, "H264_%s_%d_%d", base, level / 10, level % 10);
++    else
++        snprintf(buf, size, "H264_%s_AutoLevel", base);
++}
++
++/* The device's profile name for the options, or "" for the encoder's own choice. */
++static int pick_profile(AVCodecContext *avctx, HengeEncContext *s, enum AVPixelFormat sw, char out[56])
++{
++    const HvVcEncoderInfo *e = s->info;
++    const AVPixFmtDescriptor *d = av_pix_fmt_desc_get(sw);
++    int ten = d && d->comp[0].depth > 8;
++    int c444 = d && d->log2_chroma_w == 0 && !(d->flags & AV_PIX_FMT_FLAG_RGB);
++    int profile = s->profile != PROFILE_AUTO ? s->profile : avctx->profile;
++    int automatic = profile == AV_PROFILE_UNKNOWN || profile == PROFILE_AUTO;
++    const char *name = NULL;
++    char buf[56];
++    int i;
++
++    out[0] = 0;
++    for (i = 0; i < FF_ARRAY_ELEMS(auto_profiles) && auto_profiles[i].fmt != sw; i++)
++        ;
++    if (i == FF_ARRAY_ELEMS(auto_profiles))
++        return AVERROR(EINVAL);
++    if (s->codec == HV_VC_H264) {
++        const char *base = automatic ? auto_profiles[i].h264 : h264_profile_name(profile);
++        if (!base) {
++            av_log(avctx, AV_LOG_ERROR, "The device has no such H.264 profile.\n");
++            return AVERROR(EINVAL);
++        }
++        h264_name(buf, sizeof(buf), base, s->level);
++        if (automatic && !has_profile(e, buf) && auto_profiles[i].h264_alt) {
++            av_log(avctx, AV_LOG_WARNING, "The device has no H.264 profile %s for %s input: High, with 8-bit output.\n",
++                   buf, av_get_pix_fmt_name(sw));
++            h264_name(buf, sizeof(buf), auto_profiles[i].h264_alt, s->level);
++        }
++        name = buf;
++    } else if (s->codec == HV_VC_HEVC) {
++        if (automatic)
++            name = auto_profiles[i].hevc;
++        else if (profile == AV_PROFILE_HEVC_REXT)
++            name = c444 ? (ten ? "HEVC_Main44410_AutoLevel" : "HEVC_Main444_AutoLevel") : "HEVC_Main42210_AutoLevel";
++        else if (profile == AV_PROFILE_HEVC_MAIN)
++            name = "HEVC_Main_AutoLevel";
++        else if (profile == AV_PROFILE_HEVC_MAIN_10)
++            name = "HEVC_Main10_AutoLevel";
++        else if (profile == AV_PROFILE_HEVC_MAIN_STILL_PICTURE)
++            name = "HEVC_MainStill_AutoLevel";
++        if (!name) {
++            av_log(avctx, AV_LOG_ERROR, "The device has no such HEVC profile.\n");
++            return AVERROR(EINVAL);
++        }
++    } else {
++        av_log(avctx, AV_LOG_VERBOSE, "The profile is the device's choice for this codec.\n");
++        return 0;
++    }
++    if (!has_profile(e, name)) {
++        if (automatic) {
++            av_log(avctx, AV_LOG_WARNING, "The device's encoder has no profile %s for %s input: it picks one, and can "
++                   "convert the input. henge-codec-info lists its profiles.\n", name, av_get_pix_fmt_name(sw));
++            return 0;
++        }
++        av_log(avctx, AV_LOG_ERROR, "The device's encoder has no profile %s. henge-codec-info lists its profiles.\n", name);
++        return AVERROR(ENOSYS);
++    }
++    av_strlcpy(out, name, 56);
++    return 0;
++}
++
++/* ---- HDR10 ---- */
++
++static void put16(uint8_t *p, double v)
++{
++    uint32_t x = v < 0 ? 0 : v > 65535 ? 65535 : (uint32_t)(v + 0.5);
++    AV_WB16(p, x);
++}
++
++static void put32(uint8_t *p, double v)
++{
++    uint32_t x = v < 0 ? 0 : v > 4294967295.0 ? 0xffffffffu : (uint32_t)(v + 0.5);
++    AV_WB32(p, x);
++}
++
++static void hdr10(AVCodecContext *avctx, HvVcEncOpen *o)
++{
++    const AVFrameSideData *sd = av_frame_side_data_get(avctx->decoded_side_data, avctx->nb_decoded_side_data,
++                                                       AV_FRAME_DATA_MASTERING_DISPLAY_METADATA);
++    if (sd && sd->size >= sizeof(AVMasteringDisplayMetadata)) {
++        const AVMasteringDisplayMetadata *m = (const void *)sd->data;
++        if (m->has_primaries && m->has_luminance) {
++            static const int order[3] = { 1, 2, 0 }; /* the SEI is G, B, R */
++            for (int i = 0; i < 3; i++) {
++                put16(o->mastering + i * 4,     av_q2d(m->display_primaries[order[i]][0]) * 50000);
++                put16(o->mastering + i * 4 + 2, av_q2d(m->display_primaries[order[i]][1]) * 50000);
++            }
++            put16(o->mastering + 12, av_q2d(m->white_point[0]) * 50000);
++            put16(o->mastering + 14, av_q2d(m->white_point[1]) * 50000);
++            put32(o->mastering + 16, av_q2d(m->max_luminance) * 10000);
++            put32(o->mastering + 20, av_q2d(m->min_luminance) * 10000);
++            o->hdr_flags |= 1;
++        }
++    }
++    sd = av_frame_side_data_get(avctx->decoded_side_data, avctx->nb_decoded_side_data,
++                                AV_FRAME_DATA_CONTENT_LIGHT_LEVEL);
++    if (sd && sd->size >= sizeof(AVContentLightMetadata)) {
++        const AVContentLightMetadata *l = (const void *)sd->data;
++        put16(o->light, l->MaxCLL);
++        put16(o->light + 2, l->MaxFALL);
++        o->hdr_flags |= 2;
++    }
++}
++
++/* ---- parameter sets: avcC or hvcC from the host, to Annex B ---- */
++
++static int ps_append(uint8_t **buf, int *size, const uint8_t *nal, int len)
++{
++    uint8_t *n = av_realloc(*buf, *size + 4 + len + AV_INPUT_BUFFER_PADDING_SIZE);
++    if (!n)
++        return AVERROR(ENOMEM);
++    AV_WB32(n + *size, 1);
++    memcpy(n + *size + 4, nal, len);
++    memset(n + *size + 4 + len, 0, AV_INPUT_BUFFER_PADDING_SIZE);
++    *buf = n;
++    *size += 4 + len;
++    return 0;
++}
++
++static int config_to_annexb(uint32_t codec, const uint8_t *p, int len, uint8_t **out, int *out_size, int *length_size)
++{
++    const uint8_t *end = p + len;
++    int ret;
++    *out = NULL;
++    *out_size = 0;
++    if (codec == HV_VC_H264) {
++        int n;
++        if (len < 7 || p[0] != 1)
++            return AVERROR_INVALIDDATA;
++        *length_size = (p[4] & 3) + 1;
++        n = p[5] & 0x1f;
++        p += 6;
++        for (int list = 0; list < 2; list++) {
++            for (int i = 0; i < n; i++) {
++                int l;
++                if (end - p < 2)
++                    return AVERROR_INVALIDDATA;
++                l = AV_RB16(p);
++                p += 2;
++                if (end - p < l)
++                    return AVERROR_INVALIDDATA;
++                if ((ret = ps_append(out, out_size, p, l)) < 0)
++                    return ret;
++                p += l;
++            }
++            if (list == 0) {
++                if (end - p < 1)
++                    return AVERROR_INVALIDDATA;
++                n = *p++;
++            }
++        }
++        return 0;
++    }
++    if (codec == HV_VC_HEVC || codec == HV_VC_HEVC_ALPHA) {
++        int arrays;
++        if (len < 23)
++            return AVERROR_INVALIDDATA;
++        *length_size = (p[21] & 3) + 1;
++        arrays = p[22];
++        p += 23;
++        for (int a = 0; a < arrays; a++) {
++            int n;
++            if (end - p < 3)
++                return AVERROR_INVALIDDATA;
++            n = AV_RB16(p + 1);
++            p += 3;
++            for (int i = 0; i < n; i++) {
++                int l;
++                if (end - p < 2)
++                    return AVERROR_INVALIDDATA;
++                l = AV_RB16(p);
++                p += 2;
++                if (end - p < l)
++                    return AVERROR_INVALIDDATA;
++                if ((ret = ps_append(out, out_size, p, l)) < 0)
++                    return ret;
++                p += l;
++            }
++        }
++        return 0;
++    }
++    return AVERROR(ENOSYS);
++}
++
++/* Length-prefixed NAL units to Annex B, with the parameter sets before a key frame's. */
++static int packet_to_annexb(AVCodecContext *avctx, HengeEncContext *s, const uint8_t *src, size_t len, int key, AVPacket *pkt)
++{
++    const uint8_t *p = src, *end = src + len;
++    size_t out = key && s->ps_size ? s->ps_size : 0;
++    uint8_t *dst;
++    int ret;
++    /* first pass: the size */
++    while (end - p >= s->length_size) {
++        uint32_t l = 0;
++        for (int i = 0; i < s->length_size; i++)
++            l = l << 8 | p[i];
++        p += s->length_size;
++        if (l > (size_t)(end - p))
++            return AVERROR_INVALIDDATA;
++        out += 4 + l;
++        p += l;
++    }
++    if (p != end || out > INT_MAX - AV_INPUT_BUFFER_PADDING_SIZE)
++        return AVERROR_INVALIDDATA;
++    if ((ret = ff_get_encode_buffer(avctx, pkt, out, 0)) < 0)
++        return ret;
++    dst = pkt->data;
++    if (key && s->ps_size) {
++        memcpy(dst, s->ps, s->ps_size);
++        dst += s->ps_size;
++    }
++    for (p = src; p < end;) {
++        uint32_t l = 0;
++        for (int i = 0; i < s->length_size; i++)
++            l = l << 8 | p[i];
++        p += s->length_size;
++        AV_WB32(dst, 1);
++        memcpy(dst + 4, p, l);
++        dst += 4 + l;
++        p += l;
++    }
++    return 0;
++}
++
++/* ---- the session ---- */
++
++static int session_open(AVCodecContext *avctx, HengeEncContext *s)
++{
++    HvVcOpenReply r;
++    int st = hv_call(s->client, HV_VC_ENC_OPEN, &s->o, sizeof(s->o), NULL, 0, &s->reply);
++    if (st || s->reply.len < sizeof(r)) {
++        av_log(avctx, AV_LOG_ERROR, "The device refused the encoder: %s\n", st ? s->reply.err : "short reply");
++        if (st && s->oversize)
++            av_log(avctx, AV_LOG_ERROR, "The likely cause is the size: %dx%d is larger than the %ux%u the device lists.\n",
++                   avctx->width, avctx->height, s->info->max_width, s->info->max_height);
++        return st ? status_err(st) : AVERROR_EXTERNAL;
++    }
++    memcpy(&r, s->reply.data, sizeof(r));
++    s->session = r.session;
++    s->open = 1;
++    s->ready = 0;
++    s->pending = 0;
++    s->max_pending = MAX_PENDING;
++    s->at_limit = 0;
++    s->idle_since = 0;
++    if (!(r.flags & HV_VC_ENC_HW))
++        av_log(avctx, AV_LOG_WARNING, "The device encodes this stream in software.\n");
++    return 0;
++}
++
++static void session_close(HengeEncContext *s)
++{
++    if (s->open) {
++        HvVcSession m = { s->session, 0 };
++        hv_call(s->client, HV_VC_ENC_CLOSE, &m, sizeof(m), NULL, 0, NULL);
++    }
++    s->open = 0;
++}
++
++/* The packet in s->reply: its config to extradata or the parameter sets, its data to pkt (if pkt). */
++static int take_packet(AVCodecContext *avctx, HengeEncContext *s, AVPacket *pkt)
++{
++    HvVcPacket hp;
++    const uint8_t *extra, *data;
++    size_t len;
++    int ret, key;
++    AVRational tb = { 1, s->timescale };
++
++    if (s->reply.len < sizeof(hp))
++        return AVERROR_EXTERNAL;
++    memcpy(&hp, s->reply.data, sizeof(hp));
++    if (hp.extradata_len > s->reply.len - sizeof(hp))
++        return AVERROR_EXTERNAL;
++    extra = s->reply.data + sizeof(hp);
++    data = extra + hp.extradata_len;
++    len = s->reply.len - sizeof(hp) - hp.extradata_len;
++    key = !!(hp.flags & HV_VC_PACKET_KEY);
++
++    if (hp.extradata_len) {
++        if (s->annexb) {
++            av_freep(&s->ps);
++            ret = config_to_annexb(s->codec, extra, hp.extradata_len, &s->ps, &s->ps_size, &s->length_size);
++            if (ret < 0) {
++                av_log(avctx, AV_LOG_ERROR, "The device's parameter sets do not parse.\n");
++                return ret;
++            }
++        } else if (s->codec == HV_VC_AV1 && !s->ps) {
++            s->ps = av_mallocz(hp.extradata_len + AV_INPUT_BUFFER_PADDING_SIZE);
++            if (!s->ps)
++                return AVERROR(ENOMEM);
++            memcpy(s->ps, extra, hp.extradata_len);
++            s->ps_size = hp.extradata_len;
++        }
++    }
++    if (!pkt)
++        return 0;
++
++    if (s->annexb)
++        ret = packet_to_annexb(avctx, s, data, len, key && !(avctx->flags & AV_CODEC_FLAG_GLOBAL_HEADER), pkt);
++    else if ((ret = ff_get_encode_buffer(avctx, pkt, len, 0)) >= 0)
++        memcpy(pkt->data, data, len);
++    if (ret < 0)
++        return ret;
++    pkt->pts      = av_rescale_q(hp.pts, tb, avctx->time_base);
++    pkt->dts      = av_rescale_q(hp.dts, tb, avctx->time_base);
++    pkt->duration = av_rescale_q(hp.duration, tb, avctx->time_base);
++    if (key)
++        pkt->flags |= AV_PKT_FLAG_KEY;
++    return 0;
++}
++
++/* A global header: encode one blank frame in a session of its own, as videotoolboxenc does. */
++static int fetch_extradata(AVCodecContext *avctx, HengeEncContext *s)
++{
++    HvVcFrameAlloc a = { .width = s->o.width, .height = s->o.height, .format = s->o.format, .range = s->o.range };
++    HvVcFrameReply fr;
++    HvVcEncFrame f;
++    HvVcEncPacketReq q;
++    int64_t start;
++    int st, ret;
++
++    if ((ret = session_open(avctx, s)) < 0)
++        return ret;
++    st = hv_call(s->client, HV_VC_FRAME_ALLOC, &a, sizeof(a), NULL, 0, &s->reply);
++    if (st || s->reply.len < sizeof(fr)) {
++        av_log(avctx, AV_LOG_ERROR, "FRAME_ALLOC: %s\n", st ? s->reply.err : "short reply");
++        session_close(s);
++        return st ? status_err(st) : AVERROR_EXTERNAL;
++    }
++    memcpy(&fr, s->reply.data, sizeof(fr));
++    f = (HvVcEncFrame){ s->session, fr.handle, 0, 1, HV_VC_ENC_FRAME_FREE, 0 };
++    st = hv_call(s->client, HV_VC_ENC_FRAME, &f, sizeof(f), NULL, 0, &s->reply);
++    if (st) {
++        hv_frame_free(s->client, fr.handle);
++    } else {
++        f = (HvVcEncFrame){ s->session, 0, 0, 0, HV_VC_ENC_FRAME_EOS, 0 };
++        st = hv_call(s->client, HV_VC_ENC_FRAME, &f, sizeof(f), NULL, 0, &s->reply);
++    }
++    q = (HvVcEncPacketReq){ s->session, HV_VC_PACKET_WAIT, WAIT_SLICE_MS, 0 };
++    start = av_gettime_relative();
++    while (!st) {
++        st = hv_call(s->client, HV_VC_ENC_PACKET, &q, sizeof(q), NULL, 0, &s->reply);
++        if (st != HV_VC_E_TIMEOUT && st != HV_VC_E_AGAIN)
++            break;
++        if (av_gettime_relative() - start > GIVE_UP_MS * 1000LL) {
++            av_log(avctx, AV_LOG_ERROR, "No parameter sets from the device in %d s: its encoder gave no packet for a blank frame.\n",
++                   GIVE_UP_MS / 1000);
++            session_close(s);
++            return AVERROR_EXTERNAL;
++        }
++        if (st == HV_VC_E_AGAIN)
++            av_usleep(WAIT_SLICE_MS * 1000);
++        st = 0;
++    }
++    if (st) {
++        av_log(avctx, AV_LOG_ERROR, "No parameter sets from the device: %s\n", s->reply.err);
++        session_close(s);
++        return status_err(st);
++    }
++    ret = take_packet(avctx, s, NULL);
++    session_close(s);
++    if (ret < 0)
++        return ret;
++    if (!s->ps_size) {
++        av_log(avctx, AV_LOG_ERROR, "The device gave no parameter sets.\n");
++        return AVERROR_EXTERNAL;
++    }
++    avctx->extradata = av_mallocz(s->ps_size + AV_INPUT_BUFFER_PADDING_SIZE);
++    if (!avctx->extradata)
++        return AVERROR(ENOMEM);
++    memcpy(avctx->extradata, s->ps, s->ps_size);
++    avctx->extradata_size = s->ps_size;
++    return 0;
++}
++
++static uint32_t enc_codec(AVCodecContext *avctx, HengeEncContext *s, enum AVPixelFormat sw)
++{
++    switch (avctx->codec_id) {
++    case AV_CODEC_ID_H264:  return HV_VC_H264;
++    case AV_CODEC_ID_HEVC:  return sw == AV_PIX_FMT_BGRA && s->alpha_quality > 0 ? HV_VC_HEVC_ALPHA : HV_VC_HEVC;
++    case AV_CODEC_ID_AV1:   return HV_VC_AV1;
++    case AV_CODEC_ID_MJPEG: return HV_VC_JPEG;
++    default:                return 0;
++    }
++}
++
++static av_cold int henge_enc_init(AVCodecContext *avctx)
++{
++    HengeEncContext *s = avctx->priv_data;
++    AVHWFramesContext *frames = NULL;
++    AVHengeDeviceContext *dev;
++    enum AVPixelFormat sw;
++    HvVcEncOpen *o = &s->o;
++    char cc[5];
++    int ret;
++
++    if (avctx->pix_fmt == AV_PIX_FMT_HENGE) {
++        if (!avctx->hw_frames_ctx) {
++            av_log(avctx, AV_LOG_ERROR, "henge frames need a hw_frames_ctx.\n");
++            return AVERROR(EINVAL);
++        }
++        frames = (AVHWFramesContext *)avctx->hw_frames_ctx->data;
++        if (frames->device_ctx->type != AV_HWDEVICE_TYPE_HENGE)
++            return AVERROR(EINVAL);
++        s->device_ref = av_buffer_ref(frames->device_ref);
++        sw = frames->sw_format;
++    } else {
++        sw = avctx->pix_fmt;
++        if (avctx->hw_device_ctx && ((AVHWDeviceContext *)avctx->hw_device_ctx->data)->type == AV_HWDEVICE_TYPE_HENGE)
++            s->device_ref = av_buffer_ref(avctx->hw_device_ctx);
++        else if ((ret = av_hwdevice_ctx_create(&s->device_ref, AV_HWDEVICE_TYPE_HENGE, NULL, NULL, 0)) < 0)
++            return ret;
++    }
++    if (!s->device_ref)
++        return AVERROR(ENOMEM);
++    dev = ((AVHWDeviceContext *)s->device_ref->data)->hwctx;
++    s->client = dev->client;
++    s->format = av_henge_format_from_pix_fmt(sw);
++    if (!s->format) {
++        av_log(avctx, AV_LOG_ERROR, "The device takes no %s frames.\n", av_get_pix_fmt_name(sw));
++        return AVERROR(EINVAL);
++    }
++
++    s->codec = enc_codec(avctx, s, sw);
++    hv_fourcc_str(s->codec, cc);
++    s->info = hv_query_encoder(dev->query, s->codec);
++    if (!s->info || (!(s->info->flags & HV_VC_ENC_HW) && !s->allow_sw)) {
++        av_log(avctx, AV_LOG_ERROR, "This device has no %s hardware encoder (%s). henge-codec-info lists what it has.\n",
++               avcodec_get_name(avctx->codec_id), cc);
++        return AVERROR(ENOSYS);
++    }
++    /* The listed size is the largest of three test sizes that answered, not a true limit (the Mac's H.264 encoder
++       takes 4096x4096 and lists 3840x2160), so a larger size is no error here: ENC_OPEN decides. */
++    s->oversize = s->info->max_width && s->info->max_height &&
++                  (avctx->width > (int)s->info->max_width || avctx->height > (int)s->info->max_height);
++    if (s->oversize)
++        av_log(avctx, AV_LOG_VERBOSE, "%dx%d is larger than the %ux%u the device lists for this encoder: the device decides.\n",
++               avctx->width, avctx->height, s->info->max_width, s->info->max_height);
++    s->annexb = s->codec == HV_VC_H264 || s->codec == HV_VC_HEVC || s->codec == HV_VC_HEVC_ALPHA;
++    s->length_size = 4;
++
++    if (!avctx->time_base.num || !avctx->time_base.den)
++        return AVERROR(EINVAL);
++    s->timescale = avctx->time_base.den <= 1000000000 ? avctx->time_base.den : 1000000;
++
++    memset(o, 0, sizeof(*o));
++    o->codec     = s->codec;
++    o->width     = avctx->width;
++    o->height    = avctx->height;
++    o->format    = s->format;
++    o->range     = avctx->color_range == AVCOL_RANGE_JPEG ? HV_VC_RANGE_FULL : HV_VC_RANGE_VIDEO;
++    o->timescale = s->timescale;
++    if (avctx->framerate.num > 0 && avctx->framerate.den > 0 && av_q2d(avctx->framerate) <= 1000) {
++        o->fps_num = avctx->framerate.num;
++        o->fps_den = avctx->framerate.den;
++    }
++    if (s->codec != HV_VC_JPEG && avctx->max_b_frames != 0 && (s->info->flags & HV_VC_ENC_REORDER))
++        o->flags |= HV_VC_ENC_F_BFRAMES;
++    if (s->realtime > 0)
++        o->flags |= HV_VC_ENC_F_REALTIME;
++    if (s->prio_speed > 0)
++        o->flags |= HV_VC_ENC_F_SPEED;
++    if (s->allow_sw)
++        o->flags |= HV_VC_ENC_F_SOFTWARE_OK;
++    if (avctx->flags & AV_CODEC_FLAG_QSCALE) {
++        int q = avctx->global_quality / FF_QP2LAMBDA;
++        o->quality = av_clip(q, 1, 100);
++    } else if (avctx->bit_rate > 0) {
++        o->bitrate = FFMIN(avctx->bit_rate, 2000000000);
++        if (s->constant_bit_rate)
++            o->flags |= HV_VC_ENC_F_CBR;
++    }
++    if (avctx->rc_max_rate > 0 && !(o->flags & HV_VC_ENC_F_CBR)) {
++        o->max_bytes     = FFMIN(avctx->rc_max_rate / 8, (int64_t)1 << 32);
++        o->max_window_ms = 1000;
++    }
++    if (avctx->gop_size > 0)
++        o->keyint = FFMIN(avctx->gop_size, 100000);
++    else if (s->codec != HV_VC_JPEG)
++        o->keyint_ms = 2000;
++    if (avctx->color_primaries != AVCOL_PRI_UNSPECIFIED && avctx->color_primaries <= 255)
++        o->primaries = avctx->color_primaries;
++    if (avctx->color_trc != AVCOL_TRC_UNSPECIFIED && avctx->color_trc <= 255)
++        o->transfer = avctx->color_trc;
++    if (avctx->colorspace != AVCOL_SPC_UNSPECIFIED && avctx->colorspace != AVCOL_SPC_RGB && avctx->colorspace <= 255)
++        o->matrix = avctx->colorspace;
++    if (s->codec == HV_VC_HEVC)
++        hdr10(avctx, o);
++    if ((ret = pick_profile(avctx, s, sw, o->profile)) < 0)
++        return ret;
++
++    if ((s->annexb || s->codec == HV_VC_AV1) && (avctx->flags & AV_CODEC_FLAG_GLOBAL_HEADER) &&
++        (ret = fetch_extradata(avctx, s)) < 0)
++        return ret;
++    if ((ret = session_open(avctx, s)) < 0)
++        return ret;
++
++    if (avctx->pix_fmt != AV_PIX_FMT_HENGE) {
++        AVHWFramesContext *up;
++        s->upload_ref = av_hwframe_ctx_alloc(s->device_ref);
++        if (!s->upload_ref)
++            return AVERROR(ENOMEM);
++        up = (AVHWFramesContext *)s->upload_ref->data;
++        up->format    = AV_PIX_FMT_HENGE;
++        up->sw_format = sw;
++        up->width     = avctx->width;
++        up->height    = avctx->height;
++        ((AVHengeFramesContext *)up->hwctx)->color_range = avctx->color_range;
++        if ((ret = av_hwframe_ctx_init(s->upload_ref)) < 0)
++            return ret;
++    }
++    s->frame = av_frame_alloc();
++    if (!s->frame)
++        return AVERROR(ENOMEM);
++    avctx->has_b_frames = (o->flags & HV_VC_ENC_F_BFRAMES) ? 2 : 0;
++    av_log(avctx, AV_LOG_VERBOSE, "Henge %s encoder %ux%u from %s, profile %s, %s\n", cc, o->width, o->height,
++           av_get_pix_fmt_name(sw), o->profile[0] ? o->profile : "default", s->info->encoder_id);
++    return 0;
++}
++
++/* 0: the frame is in the device. 1: the host is at a limit (s->limit_err says which) and the caller keeps the frame
++   to give it again. Or an error. */
++static int submit(AVCodecContext *avctx, HengeEncContext *s, AVFrame *frame)
++{
++    AVFrame *hw = frame;
++    HvVcEncFrame f;
++    HvVcEncFrameReply r = { 0, 0 };
++    int64_t pts;
++    int ret, st;
++
++    if (frame->format != AV_PIX_FMT_HENGE) {
++        hw = av_frame_alloc();
++        if (!hw)
++            return AVERROR(ENOMEM);
++        if ((ret = av_hwframe_get_buffer(s->upload_ref, hw, 0)) < 0 ||
++            (ret = av_hwframe_transfer_data(hw, frame, 0)) < 0) {
++            av_frame_free(&hw);
++            if (ret == AVERROR(ENOBUFS)) {
++                av_strlcpy(s->limit_err, "no room on the device to upload a frame (live frames or message memory)",
++                           sizeof(s->limit_err));
++                return 1;
++            }
++            return ret;
++        }
++    }
++    pts = frame->pts != AV_NOPTS_VALUE ? av_rescale_q(frame->pts, avctx->time_base, (AVRational){ 1, s->timescale }) : 0;
++    f.session  = s->session;
++    f.handle   = av_henge_frame_handle(hw);
++    f.pts      = pts;
++    f.duration = frame->duration > 0 ? av_rescale_q(frame->duration, avctx->time_base, (AVRational){ 1, s->timescale }) : 0;
++    f.flags    = frame->pict_type == AV_PICTURE_TYPE_I ? HV_VC_ENC_FRAME_KEY : 0;
++    f.reserved = 0;
++    st = hv_call(s->client, HV_VC_ENC_FRAME, &f, sizeof(f), NULL, 0, &s->reply);
++    if (hw != frame)
++        av_frame_free(&hw);
++    if (st == HV_VC_E_LIMIT) {
++        av_strlcpy(s->limit_err, s->reply.err, sizeof(s->limit_err));
++        return 1;
++    }
++    if (st) {
++        av_log(avctx, AV_LOG_ERROR, "ENC_FRAME: %s\n", s->reply.err);
++        return status_err(st);
++    }
++    if (s->reply.len >= sizeof(r))
++        memcpy(&r, s->reply.data, sizeof(r));
++    s->ready = r.ready;
++    s->pending = r.pending;
++    return 0;
++}
++
++/* An error once nothing has moved for GIVE_UP_MS. */
++static int check_stall(AVCodecContext *avctx, HengeEncContext *s, int64_t now)
++{
++    if (!s->idle_since)
++        s->idle_since = now;
++    if (now - s->idle_since <= GIVE_UP_MS * 1000LL)
++        return 0;
++    if (s->at_limit)
++        av_log(avctx, AV_LOG_ERROR, "The device stayed at a limit for %d s: %s\n", GIVE_UP_MS / 1000, s->limit_err);
++    else
++        av_log(avctx, AV_LOG_ERROR, "No packet from the device's encoder in %d s, with %d frames in it.\n",
++               GIVE_UP_MS / 1000, s->pending);
++    return AVERROR_EXTERNAL;
++}
++
++static int henge_receive_packet(AVCodecContext *avctx, AVPacket *pkt)
++{
++    HengeEncContext *s = avctx->priv_data;
++    int ret, st;
++
++    for (;;) {
++        int must_wait = s->eof_sent || s->at_limit || s->pending >= s->max_pending;
++        if (s->ready || must_wait) {
++            HvVcEncPacketReq q = { s->session, s->ready ? 0 : HV_VC_PACKET_WAIT, WAIT_SLICE_MS, 0 };
++            int64_t now;
++            st = hv_call(s->client, HV_VC_ENC_PACKET, &q, sizeof(q), NULL, 0, &s->reply);
++            if (!st) {
++                if (s->ready)
++                    s->ready--;
++                if (s->pending > 0)
++                    s->pending--;
++                s->at_limit = 0; /* a packet out can make room: give the frame again */
++                s->idle_since = 0;
++                return take_packet(avctx, s, pkt);
++            }
++            if (st == HV_VC_E_EOF)
++                return AVERROR_EOF;
++            if (st != HV_VC_E_AGAIN && st != HV_VC_E_TIMEOUT) {
++                av_log(avctx, AV_LOG_ERROR, "ENC_PACKET: %s\n", s->reply.err);
++                return status_err(st);
++            }
++            s->ready = 0;
++            if (must_wait) {
++                now = av_gettime_relative();
++                if ((ret = check_stall(avctx, s, now)) < 0)
++                    return ret;
++                if (st == HV_VC_E_AGAIN) /* no wait on the host: nothing in its encoder */
++                    av_usleep(WAIT_SLICE_MS * 1000);
++                if (s->at_limit) {
++                    s->at_limit = 0;
++                } else if (!s->eof_sent && now - s->idle_since >= STALL_MS * 1000LL && s->max_pending < MAX_PENDING_HARD) {
++                    s->max_pending = FFMIN(s->max_pending * 2, MAX_PENDING_HARD);
++                    av_log(avctx, AV_LOG_VERBOSE, "No packet with %d frames in the device's encoder: it can now hold %d.\n",
++                           s->pending, s->max_pending);
++                } else {
++                    continue;
++                }
++            }
++        }
++        if (!s->held) {
++            ret = ff_encode_get_frame(avctx, s->frame);
++            if (ret == AVERROR_EOF) {
++                HvVcEncFrame f = { s->session, 0, 0, 0, HV_VC_ENC_FRAME_EOS, 0 };
++                st = hv_call(s->client, HV_VC_ENC_FRAME, &f, sizeof(f), NULL, 0, &s->reply);
++                if (st) {
++                    av_log(avctx, AV_LOG_ERROR, "flush: %s\n", s->reply.err);
++                    return status_err(st);
++                }
++                s->eof_sent = 1;
++                continue;
++            }
++            if (ret < 0)
++                return ret;
++            s->held = 1;
++        }
++        ret = submit(avctx, s, s->frame);
++        if (ret > 0) {
++            if (!s->idle_since)
++                av_log(avctx, AV_LOG_VERBOSE, "The device is at a limit, so the frame waits: %s\n", s->limit_err);
++            s->at_limit = 1;
++            continue;
++        }
++        av_frame_unref(s->frame);
++        s->held = 0;
++        if (ret < 0)
++            return ret;
++        s->idle_since = 0;
++    }
++}
++
++static av_cold int henge_enc_close(AVCodecContext *avctx)
++{
++    HengeEncContext *s = avctx->priv_data;
++    if (s->client)
++        session_close(s);
++    av_frame_free(&s->frame);
++    hv_reply_free(&s->reply);
++    av_freep(&s->ps);
++    av_buffer_unref(&s->upload_ref);
++    av_buffer_unref(&s->device_ref);
++    return 0;
++}
++
++static const enum AVPixelFormat henge_pix_fmts[] = {
++    AV_PIX_FMT_HENGE, AV_PIX_FMT_NV12, AV_PIX_FMT_P010LE, AV_PIX_FMT_NV16, AV_PIX_FMT_P210LE,
++    AV_PIX_FMT_NV24, AV_PIX_FMT_P410LE, AV_PIX_FMT_BGRA, AV_PIX_FMT_NONE,
++};
++
++static const AVCodecHWConfigInternal *const henge_hw_configs[] = {
++    HW_CONFIG_ENCODER_FRAMES(HENGE, HENGE),
++    HW_CONFIG_ENCODER_DEVICE(NV12, HENGE),
++    NULL,
++};
++
++static const FFCodecDefault henge_defaults[] = {
++    { "b",  "0" },
++    { "g",  "0" },
++    { "bf", "-1" },
++    { NULL },
++};
++
++#define OFFSET(x) offsetof(HengeEncContext, x)
++#define VE AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_ENCODING_PARAM
++#define COMMON_OPTIONS \
++    { "allow_sw", "Allow a software encoder on the device", OFFSET(allow_sw), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, VE }, \
++    { "realtime", "Hint that encoding should happen in real time", OFFSET(realtime), AV_OPT_TYPE_BOOL, { .i64 = 0 }, -1, 1, VE }, \
++    { "prio_speed", "Prioritise encoding speed over quality", OFFSET(prio_speed), AV_OPT_TYPE_BOOL, { .i64 = -1 }, -1, 1, VE },
++
++static const AVOption h264_options[] = {
++    { "profile", "Profile", OFFSET(profile), AV_OPT_TYPE_INT, { .i64 = PROFILE_AUTO }, PROFILE_AUTO, INT_MAX, VE, .unit = "profile" },
++    { "baseline",             "Baseline Profile",             0, AV_OPT_TYPE_CONST, { .i64 = AV_PROFILE_H264_BASELINE },             INT_MIN, INT_MAX, VE, .unit = "profile" },
++    { "constrained_baseline", "Constrained Baseline Profile", 0, AV_OPT_TYPE_CONST, { .i64 = AV_PROFILE_H264_CONSTRAINED_BASELINE }, INT_MIN, INT_MAX, VE, .unit = "profile" },
++    { "main",                 "Main Profile",                 0, AV_OPT_TYPE_CONST, { .i64 = AV_PROFILE_H264_MAIN },                 INT_MIN, INT_MAX, VE, .unit = "profile" },
++    { "high",                 "High Profile",                 0, AV_OPT_TYPE_CONST, { .i64 = AV_PROFILE_H264_HIGH },                 INT_MIN, INT_MAX, VE, .unit = "profile" },
++    { "constrained_high",     "Constrained High Profile",     0, AV_OPT_TYPE_CONST, { .i64 = AV_PROFILE_H264_HIGH | AV_PROFILE_H264_CONSTRAINED }, INT_MIN, INT_MAX, VE, .unit = "profile" },
++    { "high10",               "High 10 Profile",              0, AV_OPT_TYPE_CONST, { .i64 = AV_PROFILE_H264_HIGH_10 },              INT_MIN, INT_MAX, VE, .unit = "profile" },
++    { "high422",              "High 4:2:2 Profile",           0, AV_OPT_TYPE_CONST, { .i64 = AV_PROFILE_H264_HIGH_422 },             INT_MIN, INT_MAX, VE, .unit = "profile" },
++    { "high444",              "High 4:4:4 Predictive Profile", 0, AV_OPT_TYPE_CONST, { .i64 = AV_PROFILE_H264_HIGH_444_PREDICTIVE }, INT_MIN, INT_MAX, VE, .unit = "profile" },
++    { "level", "Level (0 for the encoder's choice)", OFFSET(level), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 52, VE, .unit = "level" },
++    { "1.3", "Level 1.3, only available with Baseline Profile", 0, AV_OPT_TYPE_CONST, { .i64 = 13 }, INT_MIN, INT_MAX, VE, .unit = "level" },
++    { "3.0", "Level 3.0", 0, AV_OPT_TYPE_CONST, { .i64 = 30 }, INT_MIN, INT_MAX, VE, .unit = "level" },
++    { "3.1", "Level 3.1", 0, AV_OPT_TYPE_CONST, { .i64 = 31 }, INT_MIN, INT_MAX, VE, .unit = "level" },
++    { "3.2", "Level 3.2", 0, AV_OPT_TYPE_CONST, { .i64 = 32 }, INT_MIN, INT_MAX, VE, .unit = "level" },
++    { "4.0", "Level 4.0", 0, AV_OPT_TYPE_CONST, { .i64 = 40 }, INT_MIN, INT_MAX, VE, .unit = "level" },
++    { "4.1", "Level 4.1", 0, AV_OPT_TYPE_CONST, { .i64 = 41 }, INT_MIN, INT_MAX, VE, .unit = "level" },
++    { "4.2", "Level 4.2", 0, AV_OPT_TYPE_CONST, { .i64 = 42 }, INT_MIN, INT_MAX, VE, .unit = "level" },
++    { "5.0", "Level 5.0", 0, AV_OPT_TYPE_CONST, { .i64 = 50 }, INT_MIN, INT_MAX, VE, .unit = "level" },
++    { "5.1", "Level 5.1", 0, AV_OPT_TYPE_CONST, { .i64 = 51 }, INT_MIN, INT_MAX, VE, .unit = "level" },
++    { "5.2", "Level 5.2", 0, AV_OPT_TYPE_CONST, { .i64 = 52 }, INT_MIN, INT_MAX, VE, .unit = "level" },
++    { "constant_bit_rate", "Require a constant bit rate", OFFSET(constant_bit_rate), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, VE },
++    COMMON_OPTIONS
++    { NULL },
++};
++
++static const AVOption hevc_options[] = {
++    { "profile", "Profile", OFFSET(profile), AV_OPT_TYPE_INT, { .i64 = PROFILE_AUTO }, PROFILE_AUTO, INT_MAX, VE, .unit = "profile" },
++    { "main",      "Main Profile",                0, AV_OPT_TYPE_CONST, { .i64 = AV_PROFILE_HEVC_MAIN },    INT_MIN, INT_MAX, VE, .unit = "profile" },
++    { "main10",    "Main10 Profile",              0, AV_OPT_TYPE_CONST, { .i64 = AV_PROFILE_HEVC_MAIN_10 }, INT_MIN, INT_MAX, VE, .unit = "profile" },
++    { "mainstill", "Main Still Picture Profile",  0, AV_OPT_TYPE_CONST, { .i64 = AV_PROFILE_HEVC_MAIN_STILL_PICTURE }, INT_MIN, INT_MAX, VE, .unit = "profile" },
++    { "main42210", "Main 4:2:2 10 Profile (or 4:4:4 from 4:4:4 input)", 0, AV_OPT_TYPE_CONST, { .i64 = AV_PROFILE_HEVC_REXT }, INT_MIN, INT_MAX, VE, .unit = "profile" },
++    { "rext",      "Range extensions: 4:2:2 or 4:4:4 from the input", 0, AV_OPT_TYPE_CONST, { .i64 = AV_PROFILE_HEVC_REXT }, INT_MIN, INT_MAX, VE, .unit = "profile" },
++    { "alpha_quality", "Compression quality for the alpha channel (bgra input)", OFFSET(alpha_quality), AV_OPT_TYPE_DOUBLE, { .dbl = 0.0 }, 0.0, 1.0, VE },
++    { "constant_bit_rate", "Require a constant bit rate", OFFSET(constant_bit_rate), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, VE },
++    COMMON_OPTIONS
++    { NULL },
++};
++
++static const AVOption plain_options[] = {
++    COMMON_OPTIONS
++    { NULL },
++};
++
++#define HENGE_ENCODER(short_name, long_name, codec_id, opts) \
++    static const AVClass short_name##_henge_class = { \
++        .class_name = #short_name "_henge", \
++        .item_name  = av_default_item_name, \
++        .option     = opts, \
++        .version    = LIBAVUTIL_VERSION_INT, \
++    }; \
++    const FFCodec ff_##short_name##_henge_encoder = { \
++        .p.name         = #short_name "_henge", \
++        CODEC_LONG_NAME(long_name), \
++        .p.type         = AVMEDIA_TYPE_VIDEO, \
++        .p.id           = codec_id, \
++        .p.capabilities = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_HARDWARE | AV_CODEC_CAP_DR1, \
++        .priv_data_size = sizeof(HengeEncContext), \
++        CODEC_PIXFMTS_ARRAY(henge_pix_fmts), \
++        .color_ranges   = AVCOL_RANGE_MPEG | AVCOL_RANGE_JPEG, \
++        .defaults       = henge_defaults, \
++        .init           = henge_enc_init, \
++        FF_CODEC_RECEIVE_PACKET_CB(henge_receive_packet), \
++        .close          = henge_enc_close, \
++        .p.priv_class   = &short_name##_henge_class, \
++        .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP, \
++        .p.wrapper_name = "henge", \
++        .hw_configs     = henge_hw_configs, \
++    };
++
++#if CONFIG_H264_HENGE_ENCODER
++HENGE_ENCODER(h264, "Henge H.264 (the device's hardware encoder)", AV_CODEC_ID_H264, h264_options)
++#endif
++#if CONFIG_HEVC_HENGE_ENCODER
++HENGE_ENCODER(hevc, "Henge HEVC (the device's hardware encoder)", AV_CODEC_ID_HEVC, hevc_options)
++#endif
++#if CONFIG_AV1_HENGE_ENCODER
++HENGE_ENCODER(av1, "Henge AV1 (the device's hardware encoder, where it has one)", AV_CODEC_ID_AV1, plain_options)
++#endif
++#if CONFIG_MJPEG_HENGE_ENCODER
++HENGE_ENCODER(mjpeg, "Henge JPEG (the device's hardware encoder)", AV_CODEC_ID_MJPEG, plain_options)
++#endif
+diff --git a/libavcodec/hevc/hevcdec.c b/libavcodec/hevc/hevcdec.c
+index a3be41a4..c77815cb 100644
+--- a/libavcodec/hevc/hevcdec.c
++++ b/libavcodec/hevc/hevcdec.c
+@@ -568,6 +568,7 @@ static enum AVPixelFormat get_format(HEVCContext *s, const HEVCSPS *sps)
+                      CONFIG_HEVC_NVDEC_HWACCEL + \
+                      CONFIG_HEVC_VAAPI_HWACCEL + \
+                      CONFIG_HEVC_VIDEOTOOLBOX_HWACCEL + \
++                     CONFIG_HEVC_HENGE_HWACCEL + \
+                      CONFIG_HEVC_VDPAU_HWACCEL + \
+                      CONFIG_HEVC_VULKAN_HWACCEL)
+     enum AVPixelFormat pix_fmts[HWACCEL_MAX + 3], *fmt = pix_fmts;
+@@ -602,6 +603,9 @@ static enum AVPixelFormat get_format(HEVCContext *s, const HEVCSPS *sps)
+ #if CONFIG_HEVC_VIDEOTOOLBOX_HWACCEL
+         *fmt++ = AV_PIX_FMT_VIDEOTOOLBOX;
+ #endif
++#if CONFIG_HEVC_HENGE_HWACCEL
++        *fmt++ = AV_PIX_FMT_HENGE;
++#endif
+ #if CONFIG_HEVC_VULKAN_HWACCEL
+         *fmt++ = AV_PIX_FMT_VULKAN;
+ #endif
+@@ -623,6 +627,9 @@ static enum AVPixelFormat get_format(HEVCContext *s, const HEVCSPS *sps)
+ #if CONFIG_HEVC_VIDEOTOOLBOX_HWACCEL
+         *fmt++ = AV_PIX_FMT_VIDEOTOOLBOX;
+ #endif
++#if CONFIG_HEVC_HENGE_HWACCEL
++        *fmt++ = AV_PIX_FMT_HENGE;
++#endif
+ #if CONFIG_HEVC_VULKAN_HWACCEL
+         *fmt++ = AV_PIX_FMT_VULKAN;
+ #endif
+@@ -646,6 +653,9 @@ static enum AVPixelFormat get_format(HEVCContext *s, const HEVCSPS *sps)
+ #if CONFIG_HEVC_VIDEOTOOLBOX_HWACCEL
+         *fmt++ = AV_PIX_FMT_VIDEOTOOLBOX;
+ #endif
++#if CONFIG_HEVC_HENGE_HWACCEL
++        *fmt++ = AV_PIX_FMT_HENGE;
++#endif
+ #if CONFIG_HEVC_VULKAN_HWACCEL
+         *fmt++ = AV_PIX_FMT_VULKAN;
+ #endif
+@@ -658,6 +668,9 @@ static enum AVPixelFormat get_format(HEVCContext *s, const HEVCSPS *sps)
+ #if CONFIG_HEVC_VIDEOTOOLBOX_HWACCEL
+         *fmt++ = AV_PIX_FMT_VIDEOTOOLBOX;
+ #endif
++#if CONFIG_HEVC_HENGE_HWACCEL
++        *fmt++ = AV_PIX_FMT_HENGE;
++#endif
+ #if CONFIG_HEVC_VULKAN_HWACCEL
+         *fmt++ = AV_PIX_FMT_VULKAN;
+ #endif
+@@ -668,6 +681,9 @@ static enum AVPixelFormat get_format(HEVCContext *s, const HEVCSPS *sps)
+     case AV_PIX_FMT_YUV444P10:
+ #if CONFIG_HEVC_VIDEOTOOLBOX_HWACCEL
+         *fmt++ = AV_PIX_FMT_VIDEOTOOLBOX;
++#endif
++#if CONFIG_HEVC_HENGE_HWACCEL
++        *fmt++ = AV_PIX_FMT_HENGE;
+ #endif
+         av_fallthrough;
+     case AV_PIX_FMT_YUV420P12:
+@@ -4282,6 +4298,9 @@ const FFCodec ff_hevc_decoder = {
+ #if CONFIG_HEVC_VIDEOTOOLBOX_HWACCEL
+                                HWACCEL_VIDEOTOOLBOX(hevc),
+ #endif
++#if CONFIG_HEVC_HENGE_HWACCEL
++                               HWACCEL_HENGE(hevc),
++#endif
+ #if CONFIG_HEVC_VULKAN_HWACCEL
+                                HWACCEL_VULKAN(hevc),
+ #endif
+diff --git a/libavcodec/hwaccels.h b/libavcodec/hwaccels.h
+index 4f8da46c..30b314bb 100644
+--- a/libavcodec/hwaccels.h
++++ b/libavcodec/hwaccels.h
+@@ -27,6 +27,7 @@ extern const struct FFHWAccel ff_av1_dxva2_hwaccel;
+ extern const struct FFHWAccel ff_av1_nvdec_hwaccel;
+ extern const struct FFHWAccel ff_av1_vaapi_hwaccel;
+ extern const struct FFHWAccel ff_av1_vdpau_hwaccel;
++extern const struct FFHWAccel ff_av1_henge_hwaccel;
+ extern const struct FFHWAccel ff_av1_videotoolbox_hwaccel;
+ extern const struct FFHWAccel ff_av1_vulkan_hwaccel;
+ extern const struct FFHWAccel ff_dpx_vulkan_hwaccel;
+@@ -40,6 +41,7 @@ extern const struct FFHWAccel ff_h264_dxva2_hwaccel;
+ extern const struct FFHWAccel ff_h264_nvdec_hwaccel;
+ extern const struct FFHWAccel ff_h264_vaapi_hwaccel;
+ extern const struct FFHWAccel ff_h264_vdpau_hwaccel;
++extern const struct FFHWAccel ff_h264_henge_hwaccel;
+ extern const struct FFHWAccel ff_h264_videotoolbox_hwaccel;
+ extern const struct FFHWAccel ff_h264_vulkan_hwaccel;
+ extern const struct FFHWAccel ff_hevc_d3d11va_hwaccel;
+@@ -49,6 +51,7 @@ extern const struct FFHWAccel ff_hevc_dxva2_hwaccel;
+ extern const struct FFHWAccel ff_hevc_nvdec_hwaccel;
+ extern const struct FFHWAccel ff_hevc_vaapi_hwaccel;
+ extern const struct FFHWAccel ff_hevc_vdpau_hwaccel;
++extern const struct FFHWAccel ff_hevc_henge_hwaccel;
+ extern const struct FFHWAccel ff_hevc_videotoolbox_hwaccel;
+ extern const struct FFHWAccel ff_hevc_vulkan_hwaccel;
+ extern const struct FFHWAccel ff_mjpeg_nvdec_hwaccel;
+@@ -88,6 +91,7 @@ extern const struct FFHWAccel ff_vp9_dxva2_hwaccel;
+ extern const struct FFHWAccel ff_vp9_nvdec_hwaccel;
+ extern const struct FFHWAccel ff_vp9_vaapi_hwaccel;
+ extern const struct FFHWAccel ff_vp9_vdpau_hwaccel;
++extern const struct FFHWAccel ff_vp9_henge_hwaccel;
+ extern const struct FFHWAccel ff_vp9_videotoolbox_hwaccel;
+ extern const struct FFHWAccel ff_vp9_vulkan_hwaccel;
+ extern const struct FFHWAccel ff_vvc_vaapi_hwaccel;
+diff --git a/libavcodec/hwconfig.h b/libavcodec/hwconfig.h
+index ee29ca63..f9e67b2b 100644
+--- a/libavcodec/hwconfig.h
++++ b/libavcodec/hwconfig.h
+@@ -71,6 +71,8 @@ void ff_hwaccel_uninit(AVCodecContext *avctx);
+     HW_CONFIG_HWACCEL(1, 1, 1, VAAPI,        VAAPI,        ff_ ## codec ## _vaapi_hwaccel)
+ #define HWACCEL_VDPAU(codec) \
+     HW_CONFIG_HWACCEL(1, 1, 1, VDPAU,        VDPAU,        ff_ ## codec ## _vdpau_hwaccel)
++#define HWACCEL_HENGE(codec) \
++    HW_CONFIG_HWACCEL(1, 1, 0, HENGE,        HENGE,        ff_ ## codec ## _henge_hwaccel)
+ #define HWACCEL_VIDEOTOOLBOX(codec) \
+     HW_CONFIG_HWACCEL(1, 1, 1, VIDEOTOOLBOX, VIDEOTOOLBOX, ff_ ## codec ## _videotoolbox_hwaccel)
+ #define HWACCEL_VULKAN(codec) \
+diff --git a/libavcodec/vp9.c b/libavcodec/vp9.c
+index 50a49842..cd46e481 100644
+--- a/libavcodec/vp9.c
++++ b/libavcodec/vp9.c
+@@ -171,6 +171,7 @@ static int update_size(AVCodecContext *avctx, int w, int h)
+                      CONFIG_VP9_VAAPI_HWACCEL + \
+                      CONFIG_VP9_VDPAU_HWACCEL + \
+                      CONFIG_VP9_VIDEOTOOLBOX_HWACCEL + \
++                     CONFIG_VP9_HENGE_HWACCEL + \
+                      CONFIG_VP9_VULKAN_HWACCEL)
+     enum AVPixelFormat pix_fmts[HWACCEL_MAX + 2], *fmtp = pix_fmts;
+     VP9Context *s = avctx->priv_data;
+@@ -211,6 +212,9 @@ static int update_size(AVCodecContext *avctx, int w, int h)
+ #if CONFIG_VP9_VIDEOTOOLBOX_HWACCEL
+             *fmtp++ = AV_PIX_FMT_VIDEOTOOLBOX;
+ #endif
++#if CONFIG_VP9_HENGE_HWACCEL
++            *fmtp++ = AV_PIX_FMT_HENGE;
++#endif
+ #if CONFIG_VP9_VULKAN_HWACCEL
+             *fmtp++ = AV_PIX_FMT_VULKAN;
+ #endif
+@@ -1957,6 +1961,9 @@ const FFCodec ff_vp9_decoder = {
+ #if CONFIG_VP9_VIDEOTOOLBOX_HWACCEL
+                                HWACCEL_VIDEOTOOLBOX(vp9),
+ #endif
++#if CONFIG_VP9_HENGE_HWACCEL
++                               HWACCEL_HENGE(vp9),
++#endif
+ #if CONFIG_VP9_VULKAN_HWACCEL
+                                HWACCEL_VULKAN(vp9),
+ #endif
+diff --git a/libavfilter/Makefile b/libavfilter/Makefile
+index ce40cf3e..e9b642b1 100644
+--- a/libavfilter/Makefile
++++ b/libavfilter/Makefile
+@@ -478,6 +478,7 @@ OBJS-$(CONFIG_SCALE_CUDA_FILTER)             += vf_scale_cuda.o scale_eval.o sca
+ OBJS-$(CONFIG_SCALE_QSV_FILTER)              += vf_vpp_qsv.o
+ OBJS-$(CONFIG_SCALE_VAAPI_FILTER)            += vf_scale_vaapi.o scale_eval.o vaapi_vpp.o
+ OBJS-$(CONFIG_SCALE_VT_FILTER)               += vf_scale_vt.o scale_eval.o
++OBJS-$(CONFIG_SCALE_HENGE_FILTER)            += vf_scale_henge.o scale_eval.o
+ OBJS-$(CONFIG_SCALE_VULKAN_FILTER)           += vf_scale_vulkan.o vulkan.o vulkan_filter.o
+ OBJS-$(CONFIG_SCALE2REF_FILTER)              += vf_scale.o scale_eval.o framesync.o
+ OBJS-$(CONFIG_SCDET_FILTER)                  += vf_scdet.o
+diff --git a/libavfilter/allfilters.c b/libavfilter/allfilters.c
+index 402b8436..634f8f38 100644
+--- a/libavfilter/allfilters.c
++++ b/libavfilter/allfilters.c
+@@ -450,6 +450,7 @@ extern const FFFilter ff_vf_scale_d3d12;
+ extern const FFFilter ff_vf_scale_qsv;
+ extern const FFFilter ff_vf_scale_vaapi;
+ extern const FFFilter ff_vf_scale_vt;
++extern const FFFilter ff_vf_scale_henge;
+ extern const FFFilter ff_vf_scale_vulkan;
+ extern const FFFilter ff_vf_scale2ref;
+ extern const FFFilter ff_vf_scdet;
+diff --git a/libavfilter/vf_scale_henge.c b/libavfilter/vf_scale_henge.c
+new file mode 100644
+index 00000000..daadba35
+--- /dev/null
++++ b/libavfilter/vf_scale_henge.c
+@@ -0,0 +1,244 @@
++/*
++ * scale_henge: scale and convert henge frames on the device (VTPixelTransferSession there)
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include <hvcodec.h>
++
++#include "libavutil/hwcontext.h"
++#include "libavutil/hwcontext_henge.h"
++#include "libavutil/opt.h"
++#include "libavutil/pixdesc.h"
++
++#include "filters.h"
++#include "scale_eval.h"
++#include "video.h"
++
++typedef struct ScaleHengeContext {
++    AVClass *class;
++    char *w_expr, *h_expr;
++    int output_width, output_height;
++    enum AVPixelFormat format;
++    int letterbox;
++    char *primaries_string, *transfer_string, *matrix_string;
++    enum AVColorPrimaries primaries;
++    enum AVColorTransferCharacteristic transfer;
++    enum AVColorSpace matrix;
++    enum AVColorRange range;
++    HvReply reply;
++} ScaleHengeContext;
++
++static av_cold int scale_henge_init(AVFilterContext *avctx)
++{
++    ScaleHengeContext *s = avctx->priv;
++
++#define STRING_OPTION(var, func)                                        \
++    do {                                                                \
++        s->var = 0;                                                     \
++        if (s->var##_string) {                                          \
++            int v = av_##func##_from_name(s->var##_string);             \
++            if (v < 0) {                                                \
++                av_log(avctx, AV_LOG_ERROR, "Invalid %s.\n", #var);     \
++                return AVERROR(EINVAL);                                 \
++            }                                                           \
++            s->var = v;                                                 \
++        }                                                               \
++    } while (0)
++    STRING_OPTION(primaries, color_primaries);
++    STRING_OPTION(transfer,  color_transfer);
++    STRING_OPTION(matrix,    color_space);
++    if (s->format != AV_PIX_FMT_NONE && !av_henge_format_from_pix_fmt(s->format)) {
++        av_log(avctx, AV_LOG_ERROR, "The device has no %s frames.\n", av_get_pix_fmt_name(s->format));
++        return AVERROR(EINVAL);
++    }
++    return 0;
++}
++
++static av_cold void scale_henge_uninit(AVFilterContext *avctx)
++{
++    ScaleHengeContext *s = avctx->priv;
++    hv_reply_free(&s->reply);
++}
++
++static uint32_t code_point(int v)
++{
++    return v > 0 && v <= 255 && v != 2 ? (uint32_t)v : 0;
++}
++
++static int scale_henge_filter_frame(AVFilterLink *link, AVFrame *in)
++{
++    AVFilterContext *ctx = link->dst;
++    ScaleHengeContext *s = ctx->priv;
++    AVFilterLink *outlink = ctx->outputs[0];
++    FilterLink *outl = ff_filter_link(outlink);
++    AVHWFramesContext *out_frames = (AVHWFramesContext *)outl->hw_frames_ctx->data;
++    AVHengeDeviceContext *dev = out_frames->device_ctx->hwctx;
++    HvVcXfer x;
++    HvVcFrameReply fr;
++    AVFrame *out = NULL;
++    int ret, st;
++
++    memset(&x, 0, sizeof(x));
++    x.src       = av_henge_frame_handle(in);
++    x.width     = outlink->w;
++    x.height    = outlink->h;
++    x.format    = av_henge_format_from_pix_fmt(out_frames->sw_format);
++    x.range     = s->range == AVCOL_RANGE_JPEG ? HV_VC_RANGE_FULL : HV_VC_RANGE_VIDEO;
++    x.primaries = code_point(s->primaries);
++    x.transfer  = code_point(s->transfer);
++    x.matrix    = code_point(s->matrix);
++    x.flags     = s->letterbox ? 1 : 0;
++    st = hv_call(dev->client, HV_VC_XFER, &x, sizeof(x), NULL, 0, &s->reply);
++    if (st || s->reply.len < sizeof(fr)) {
++        av_log(ctx, AV_LOG_ERROR, "XFER: %s\n", st ? s->reply.err : "short reply");
++        ret = st == HV_VC_E_LIMIT ? AVERROR(ENOBUFS) : AVERROR(EIO);
++        goto fail;
++    }
++    memcpy(&fr, s->reply.data, sizeof(fr));
++    out = av_frame_alloc();
++    if (!out) {
++        hv_frame_free(dev->client, fr.handle);
++        ret = AVERROR(ENOMEM);
++        goto fail;
++    }
++    if ((ret = av_henge_frame_wrap(outl->hw_frames_ctx, fr.handle, fr.width, fr.height, out)) < 0)
++        goto fail;
++    if ((ret = av_frame_copy_props(out, in)) < 0)
++        goto fail;
++    out->crop_left = out->crop_top = out->crop_right = out->crop_bottom = 0;
++    if (out->width != in->width || out->height != in->height)
++        av_frame_side_data_remove_by_props(&out->side_data, &out->nb_side_data, AV_SIDE_DATA_PROP_SIZE_DEPENDENT);
++    av_reduce(&out->sample_aspect_ratio.num, &out->sample_aspect_ratio.den,
++              (int64_t)in->sample_aspect_ratio.num * outlink->h * link->w,
++              (int64_t)in->sample_aspect_ratio.den * outlink->w * link->h, INT_MAX);
++    if (s->primaries)
++        out->color_primaries = s->primaries;
++    if (s->transfer)
++        out->color_trc = s->transfer;
++    if (s->matrix)
++        out->colorspace = s->matrix;
++    out->color_range = s->range == AVCOL_RANGE_JPEG ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
++    av_frame_free(&in);
++    return ff_filter_frame(outlink, out);
++
++fail:
++    av_frame_free(&in);
++    av_frame_free(&out);
++    return ret;
++}
++
++static int scale_henge_config_output(AVFilterLink *outlink)
++{
++    AVFilterContext *avctx = outlink->src;
++    ScaleHengeContext *s = avctx->priv;
++    AVFilterLink *inlink = avctx->inputs[0];
++    FilterLink *inl = ff_filter_link(inlink);
++    FilterLink *outl = ff_filter_link(outlink);
++    AVHWFramesContext *in_frames, *out_frames;
++    int err;
++
++    if (!inl->hw_frames_ctx) {
++        av_log(avctx, AV_LOG_ERROR, "scale_henge needs henge frames: use -hwaccel henge -hwaccel_output_format henge, or hwupload.\n");
++        return AVERROR(EINVAL);
++    }
++    in_frames = (AVHWFramesContext *)inl->hw_frames_ctx->data;
++    if (in_frames->device_ctx->type != AV_HWDEVICE_TYPE_HENGE)
++        return AVERROR(EINVAL);
++
++    err = ff_scale_eval_dimensions(s, s->w_expr, s->h_expr, inlink, outlink, &s->output_width, &s->output_height);
++    if (err < 0)
++        return err;
++    err = ff_scale_adjust_dimensions(inlink, &s->output_width, &s->output_height, SCALE_FORCE_OAR_DISABLE, 2, 1.f);
++    if (err < 0)
++        return err;
++    outlink->w = s->output_width;
++    outlink->h = s->output_height;
++    if (inlink->sample_aspect_ratio.num) {
++        AVRational r = { outlink->h * inlink->w, outlink->w * inlink->h };
++        outlink->sample_aspect_ratio = av_mul_q(r, inlink->sample_aspect_ratio);
++    } else {
++        outlink->sample_aspect_ratio = inlink->sample_aspect_ratio;
++    }
++    s->range = inlink->color_range == AVCOL_RANGE_JPEG ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
++
++    av_buffer_unref(&outl->hw_frames_ctx);
++    outl->hw_frames_ctx = av_hwframe_ctx_alloc(in_frames->device_ref);
++    if (!outl->hw_frames_ctx)
++        return AVERROR(ENOMEM);
++    out_frames = (AVHWFramesContext *)outl->hw_frames_ctx->data;
++    out_frames->format    = AV_PIX_FMT_HENGE;
++    out_frames->sw_format = s->format != AV_PIX_FMT_NONE ? s->format : in_frames->sw_format;
++    out_frames->width     = outlink->w;
++    out_frames->height    = outlink->h;
++    ((AVHengeFramesContext *)out_frames->hwctx)->color_range = s->range;
++    err = ff_filter_init_hw_frames(avctx, outlink, 1);
++    if (err < 0)
++        return err;
++    err = av_hwframe_ctx_init(outl->hw_frames_ctx);
++    if (err < 0) {
++        av_log(avctx, AV_LOG_ERROR, "Cannot make the henge frames context: %s\n", av_err2str(err));
++        return err;
++    }
++    return 0;
++}
++
++#define OFFSET(x) offsetof(ScaleHengeContext, x)
++#define FLAGS (AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_VIDEO_PARAM)
++static const AVOption scale_henge_options[] = {
++    { "w", "Output video width", OFFSET(w_expr), AV_OPT_TYPE_STRING, { .str = "iw" }, .flags = FLAGS },
++    { "h", "Output video height", OFFSET(h_expr), AV_OPT_TYPE_STRING, { .str = "ih" }, .flags = FLAGS },
++    { "format", "Output pixel format (nv12, p010le, nv16, p210le, nv24, p410le, bgra)", OFFSET(format),
++      AV_OPT_TYPE_PIXEL_FMT, { .i64 = AV_PIX_FMT_NONE }, -1, INT_MAX, .flags = FLAGS },
++    { "letterbox", "Keep the aspect ratio inside the output size", OFFSET(letterbox), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, FLAGS },
++    { "color_matrix", "Output colour matrix", OFFSET(matrix_string), AV_OPT_TYPE_STRING, { .str = NULL }, .flags = FLAGS },
++    { "color_primaries", "Output colour primaries", OFFSET(primaries_string), AV_OPT_TYPE_STRING, { .str = NULL }, .flags = FLAGS },
++    { "color_transfer", "Output transfer characteristics", OFFSET(transfer_string), AV_OPT_TYPE_STRING, { .str = NULL }, .flags = FLAGS },
++    { NULL },
++};
++
++AVFILTER_DEFINE_CLASS(scale_henge);
++
++static const AVFilterPad scale_henge_inputs[] = {
++    {
++        .name         = "default",
++        .type         = AVMEDIA_TYPE_VIDEO,
++        .filter_frame = &scale_henge_filter_frame,
++    },
++};
++
++static const AVFilterPad scale_henge_outputs[] = {
++    {
++        .name         = "default",
++        .type         = AVMEDIA_TYPE_VIDEO,
++        .config_props = &scale_henge_config_output,
++    },
++};
++
++const FFFilter ff_vf_scale_henge = {
++    .p.name         = "scale_henge",
++    .p.description  = NULL_IF_CONFIG_SMALL("Scale and convert henge frames on the device"),
++    .p.priv_class   = &scale_henge_class,
++    .p.flags        = AVFILTER_FLAG_HWDEVICE,
++    .priv_size      = sizeof(ScaleHengeContext),
++    .init           = scale_henge_init,
++    .uninit         = scale_henge_uninit,
++    FILTER_INPUTS(scale_henge_inputs),
++    FILTER_OUTPUTS(scale_henge_outputs),
++    FILTER_SINGLE_PIXFMT(AV_PIX_FMT_HENGE),
++    .flags_internal = FF_FILTER_FLAG_HWFRAME_AWARE,
++};
+diff --git a/libavutil/Makefile b/libavutil/Makefile
+index 39481226..6d2c5392 100644
+--- a/libavutil/Makefile
++++ b/libavutil/Makefile
+@@ -47,6 +47,7 @@ HEADERS = adler32.h                                                     \
+           hwcontext_d3d12va.h                                           \
+           hwcontext_drm.h                                               \
+           hwcontext_dxva2.h                                             \
++          hwcontext_henge.h                                             \
+           hwcontext_amf.h                                               \
+           hwcontext_qsv.h                                               \
+           hwcontext_mediacodec.h                                        \
+@@ -209,6 +210,7 @@ OBJS-$(CONFIG_CUDA)                     += hwcontext_cuda.o
+ OBJS-$(CONFIG_D3D11VA)                  += hwcontext_d3d11va.o
+ OBJS-$(CONFIG_D3D12VA)                  += hwcontext_d3d12va.o
+ OBJS-$(CONFIG_DXVA2)                    += hwcontext_dxva2.o
++OBJS-$(CONFIG_HENGE)                    += hwcontext_henge.o
+ OBJS-$(CONFIG_AMF)                      += hwcontext_amf.o
+ OBJS-$(CONFIG_LIBDRM)                   += hwcontext_drm.o
+ OBJS-$(CONFIG_MACOS_KPERF)              += macos_kperf.o
+@@ -243,6 +245,7 @@ SKIPHEADERS-$(CONFIG_CUDA)             += hwcontext_cuda_internal.h     \
+ SKIPHEADERS-$(CONFIG_D3D11VA)          += hwcontext_d3d11va.h
+ SKIPHEADERS-$(CONFIG_D3D12VA)          += hwcontext_d3d12va.h
+ SKIPHEADERS-$(CONFIG_DXVA2)            += hwcontext_dxva2.h
++SKIPHEADERS-$(CONFIG_HENGE)            += hwcontext_henge.h
+ SKIPHEADERS-$(CONFIG_AMF)              += hwcontext_amf.h               \
+                                           hwcontext_amf_internal.h
+ SKIPHEADERS-$(CONFIG_QSV)              += hwcontext_qsv.h
+diff --git a/libavutil/hwcontext.c b/libavutil/hwcontext.c
+index 83bd7457..9e768b66 100644
+--- a/libavutil/hwcontext.c
++++ b/libavutil/hwcontext.c
+@@ -71,6 +71,9 @@ static const HWContextType * const hw_table[] = {
+ #endif
+ #if CONFIG_OHCODEC
+     &ff_hwcontext_type_oh,
++#endif
++#if CONFIG_HENGE
++    &ff_hwcontext_type_henge,
+ #endif
+     NULL,
+ };
+@@ -90,6 +93,7 @@ static const char *const hw_type_names[] = {
+     [AV_HWDEVICE_TYPE_VULKAN] = "vulkan",
+     [AV_HWDEVICE_TYPE_AMF] = "amf",
+     [AV_HWDEVICE_TYPE_OHCODEC] = "ohcodec",
++    [AV_HWDEVICE_TYPE_HENGE] = "henge",
+ };
+ 
+ typedef struct FFHWDeviceContext {
+diff --git a/libavutil/hwcontext.h b/libavutil/hwcontext.h
+index 29374cf0..cb1944a7 100644
+--- a/libavutil/hwcontext.h
++++ b/libavutil/hwcontext.h
+@@ -41,6 +41,7 @@ enum AVHWDeviceType {
+     AV_HWDEVICE_TYPE_AMF,
+     /* OpenHarmony Codec device */
+     AV_HWDEVICE_TYPE_OHCODEC,
++    AV_HWDEVICE_TYPE_HENGE,
+ };
+ 
+ /**
+diff --git a/libavutil/hwcontext_henge.c b/libavutil/hwcontext_henge.c
+new file mode 100644
+index 00000000..4ed0e8ea
+--- /dev/null
++++ b/libavutil/hwcontext_henge.c
+@@ -0,0 +1,405 @@
++/*
++ * Henge: the video codecs of the device under a Henge virtual machine
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include <string.h>
++
++#include <hvcodec.h>
++
++#include "buffer.h"
++#include "common.h"
++#include "hwcontext.h"
++#include "hwcontext_henge.h"
++#include "hwcontext_internal.h"
++#include "mem.h"
++#include "pixdesc.h"
++#include "pixfmt.h"
++
++typedef struct HengeDevicePriv {
++    AVHengeDeviceContext p;
++    HvQuery query;
++    int warned_tcp;
++} HengeDevicePriv;
++
++static const struct {
++    enum AVPixelFormat pix_fmt;
++    uint32_t fmt;
++} formats[] = {
++    { AV_PIX_FMT_NV12,   HV_VC_FMT_NV12 },
++    { AV_PIX_FMT_P010LE, HV_VC_FMT_P010 },
++    { AV_PIX_FMT_NV16,   HV_VC_FMT_NV16 },
++    { AV_PIX_FMT_P210LE, HV_VC_FMT_P210 },
++    { AV_PIX_FMT_NV24,   HV_VC_FMT_NV24 },
++    { AV_PIX_FMT_P410LE, HV_VC_FMT_P410 },
++    { AV_PIX_FMT_BGRA,   HV_VC_FMT_BGRA },
++};
++
++static const enum AVPixelFormat supported_formats[] = {
++    AV_PIX_FMT_NV12, AV_PIX_FMT_P010LE, AV_PIX_FMT_NV16, AV_PIX_FMT_P210LE,
++    AV_PIX_FMT_NV24, AV_PIX_FMT_P410LE, AV_PIX_FMT_BGRA, AV_PIX_FMT_NONE,
++};
++
++uint32_t av_henge_format_from_pix_fmt(enum AVPixelFormat pix_fmt)
++{
++    for (int i = 0; i < FF_ARRAY_ELEMS(formats); i++)
++        if (formats[i].pix_fmt == pix_fmt)
++            return formats[i].fmt;
++    return 0;
++}
++
++enum AVPixelFormat av_henge_format_to_pix_fmt(uint32_t fmt)
++{
++    for (int i = 0; i < FF_ARRAY_ELEMS(formats); i++)
++        if (formats[i].fmt == fmt)
++            return formats[i].pix_fmt;
++    return AV_PIX_FMT_NONE;
++}
++
++static HvClient *client_of(AVBufferRef *device_ref)
++{
++    AVHWDeviceContext *dev = (AVHWDeviceContext *)device_ref->data;
++    return ((AVHengeDeviceContext *)dev->hwctx)->client;
++}
++
++static void henge_frame_release(void *opaque, uint8_t *data)
++{
++    AVHengeFrame *f = (AVHengeFrame *)data;
++    if (f->handle && f->device_ref)
++        hv_frame_free(client_of(f->device_ref), f->handle);
++    av_buffer_unref(&f->device_ref);
++    av_buffer_unref(&f->hw_frames_ref);
++    av_free(f);
++}
++
++AVBufferRef *av_henge_frame_ref_alloc(AVBufferRef *device_ref)
++{
++    AVHengeFrame *f = av_mallocz(sizeof(*f));
++    AVBufferRef *buf;
++    if (!f)
++        return NULL;
++    f->device_ref = av_buffer_ref(device_ref);
++    buf = av_buffer_create((uint8_t *)f, sizeof(*f), henge_frame_release, NULL, 0);
++    if (!f->device_ref || !buf) {
++        av_buffer_unref(&f->device_ref);
++        if (buf)
++            av_buffer_unref(&buf);
++        else
++            av_free(f);
++        return NULL;
++    }
++    return buf;
++}
++
++static int fill_frame(AVBufferRef *device_ref, uint32_t handle, uint32_t w, uint32_t h, AVFrame *frame)
++{
++    AVBufferRef *buf = av_henge_frame_ref_alloc(device_ref);
++    AVHengeFrame *f;
++    if (!buf) {
++        hv_frame_free(client_of(device_ref), handle);
++        return AVERROR(ENOMEM);
++    }
++    f = (AVHengeFrame *)buf->data;
++    f->handle = handle;
++    f->width  = w;
++    f->height = h;
++    frame->buf[0]  = buf;
++    frame->data[3] = (uint8_t *)(uintptr_t)handle;
++    frame->format  = AV_PIX_FMT_HENGE;
++    frame->width   = w;
++    frame->height  = h;
++    return 0;
++}
++
++int av_henge_frame_wrap(AVBufferRef *hw_frames_ref, uint32_t handle,
++                        uint32_t width, uint32_t height, AVFrame *frame)
++{
++    AVHWFramesContext *ctx = (AVHWFramesContext *)hw_frames_ref->data;
++    int ret;
++    av_frame_unref(frame);
++    ret = fill_frame(ctx->device_ref, handle, width, height, frame);
++    if (ret < 0)
++        return ret;
++    frame->hw_frames_ctx = av_buffer_ref(hw_frames_ref);
++    if (!frame->hw_frames_ctx) {
++        av_frame_unref(frame);
++        return AVERROR(ENOMEM);
++    }
++    return 0;
++}
++
++static int henge_device_create(AVHWDeviceContext *ctx, const char *device,
++                               AVDictionary *opts, int flags)
++{
++    HengeDevicePriv *priv = ctx->hwctx;
++    char err[256];
++    int st;
++
++    priv->p.client = hv_client_open(device, err, sizeof(err));
++    if (!priv->p.client) {
++        av_log(ctx, AV_LOG_ERROR, "%s\n", err);
++        return AVERROR(EIO);
++    }
++    st = hv_query(priv->p.client, &priv->query, err, sizeof(err));
++    if (st) {
++        av_log(ctx, AV_LOG_ERROR, "%s\n", err);
++        hv_client_close(priv->p.client);
++        priv->p.client = NULL;
++        return AVERROR(EIO);
++    }
++    priv->p.query = &priv->query;
++    av_log(ctx, AV_LOG_VERBOSE, "Henge codec service at %s: %u encoders, %u decoders%s%s\n",
++           hv_client_addr(priv->p.client), priv->query.head.n_encoders, priv->query.head.n_decoders,
++           *hv_client_note(priv->p.client) ? "; " : "", hv_client_note(priv->p.client));
++    return 0;
++}
++
++static void henge_device_uninit(AVHWDeviceContext *ctx)
++{
++    HengeDevicePriv *priv = ctx->hwctx;
++    hv_query_free(&priv->query);
++    priv->p.query = NULL;
++    if (priv->p.client)
++        hv_client_close(priv->p.client);
++    priv->p.client = NULL;
++}
++
++static int henge_frames_get_constraints(AVHWDeviceContext *ctx, const void *hwconfig,
++                                        AVHWFramesConstraints *constraints)
++{
++    constraints->valid_sw_formats = av_malloc_array(FF_ARRAY_ELEMS(supported_formats),
++                                                    sizeof(*constraints->valid_sw_formats));
++    constraints->valid_hw_formats = av_malloc_array(2, sizeof(*constraints->valid_hw_formats));
++    if (!constraints->valid_sw_formats || !constraints->valid_hw_formats)
++        return AVERROR(ENOMEM);
++    memcpy(constraints->valid_sw_formats, supported_formats, sizeof(supported_formats));
++    constraints->valid_hw_formats[0] = AV_PIX_FMT_HENGE;
++    constraints->valid_hw_formats[1] = AV_PIX_FMT_NONE;
++    constraints->min_width  = HV_VC_MIN_DIM;
++    constraints->min_height = HV_VC_MIN_DIM;
++    constraints->max_width  = HV_VC_MAX_DIM;
++    constraints->max_height = HV_VC_MAX_DIM;
++    return 0;
++}
++
++static int henge_frames_init(AVHWFramesContext *ctx)
++{
++    FFHWFramesContext *ctxi = ffhwframesctx(ctx);
++    uint32_t fmt = av_henge_format_from_pix_fmt(ctx->sw_format);
++
++    if (!fmt) {
++        av_log(ctx, AV_LOG_ERROR, "The Henge device has no %s frames.\n",
++               av_get_pix_fmt_name(ctx->sw_format));
++        return AVERROR(ENOSYS);
++    }
++    if (!hv_vc_frame_bytes(fmt, ctx->width, ctx->height)) {
++        av_log(ctx, AV_LOG_ERROR, "The Henge device has no %dx%d frames.\n", ctx->width, ctx->height);
++        return AVERROR(EINVAL);
++    }
++    /* av_hwframe_get_buffer needs a pool, but get_buffer below makes a new host frame each
++       time: a pooled one could be filled again while an encoder still reads it. */
++    if (!ctx->pool) {
++        ctxi->pool_internal = av_buffer_pool_init(1, NULL);
++        if (!ctxi->pool_internal)
++            return AVERROR(ENOMEM);
++    }
++    return 0;
++}
++
++static int henge_frames_get_buffer(AVHWFramesContext *ctx, AVFrame *frame)
++{
++    AVHengeFramesContext *hwctx = ctx->hwctx;
++    HvClient *client = client_of(ctx->device_ref);
++    HvVcFrameAlloc a = {
++        .width  = ctx->width,
++        .height = ctx->height,
++        .format = av_henge_format_from_pix_fmt(ctx->sw_format),
++        .range  = hwctx->color_range == AVCOL_RANGE_JPEG ? HV_VC_RANGE_FULL : HV_VC_RANGE_VIDEO,
++    };
++    HvVcFrameReply fr;
++    HvReply r = { 0 };
++    int st = hv_call(client, HV_VC_FRAME_ALLOC, &a, sizeof(a), NULL, 0, &r);
++
++    if (st || r.len < sizeof(fr)) {
++        /* a host limit is ENOBUFS, not EAGAIN: a caller can wait for frames to be freed and try again */
++        av_log(ctx, st == HV_VC_E_LIMIT ? AV_LOG_VERBOSE : AV_LOG_ERROR, "FRAME_ALLOC: %s\n", st ? r.err : "short reply");
++        hv_reply_free(&r);
++        return st == HV_VC_E_LIMIT ? AVERROR(ENOBUFS) : AVERROR(EIO);
++    }
++    memcpy(&fr, r.data, sizeof(fr));
++    hv_reply_free(&r);
++    return fill_frame(ctx->device_ref, fr.handle, fr.width, fr.height, frame);
++}
++
++static int henge_transfer_get_formats(AVHWFramesContext *ctx,
++                                      enum AVHWFrameTransferDirection dir,
++                                      enum AVPixelFormat **formats)
++{
++    enum AVPixelFormat *fmts = av_malloc_array(2, sizeof(*fmts));
++    if (!fmts)
++        return AVERROR(ENOMEM);
++    fmts[0] = ctx->sw_format;
++    fmts[1] = AV_PIX_FMT_NONE;
++    *formats = fmts;
++    return 0;
++}
++
++static const AVHengeFrame *henge_frame_of(const AVFrame *f)
++{
++    return f->buf[0] && f->buf[0]->size == sizeof(AVHengeFrame) ? (const AVHengeFrame *)f->buf[0]->data : NULL;
++}
++
++static int plane_rows(const AVFrame *f, int plane)
++{
++    const AVPixFmtDescriptor *d = av_pix_fmt_desc_get(f->format);
++    return plane && d ? AV_CEIL_RSHIFT(f->height, d->log2_chroma_h) : f->height;
++}
++
++/* Raw frames on TCP are packed into messages: say so once, as a 4K chain is then far slower. */
++static void warn_tcp(AVHWFramesContext *ctx)
++{
++    HengeDevicePriv *priv = ctx->device_ctx->hwctx;
++    const char *why = hv_client_note(priv->p.client);
++
++    if (hv_client_dma(priv->p.client) || priv->warned_tcp)
++        return;
++    priv->warned_tcp = 1;
++    av_log(ctx, AV_LOG_WARNING, "Raw frames cross to the Henge device over TCP (%s), which is slow at 4K. "
++           "For /dev/hvcodec: install henge-codec-dkms and run the machine with the codec device.\n",
++           *why ? why : hv_client_addr(priv->p.client));
++}
++
++/* The frame's planes reach every row and column of the host frame, so the host can copy them in place. */
++static int covers(const AVFrame *f, int n, const uint32_t row[2], const uint32_t rows[2])
++{
++    for (int i = 0; i < n; i++)
++        if (!f->data[i] || f->linesize[i] < 0 || (uint32_t)f->linesize[i] < row[i] || (uint32_t)plane_rows(f, i) < rows[i])
++            return 0;
++    return 1;
++}
++
++static int henge_transfer_data_to(AVHWFramesContext *ctx, AVFrame *dst, const AVFrame *src)
++{
++    HvClient *client = client_of(ctx->device_ref);
++    const AVHengeFrame *hf = henge_frame_of(dst);
++    uint32_t fmt = av_henge_format_from_pix_fmt(ctx->sw_format), row[2], rows[2];
++    uint8_t *data[2] = { NULL, NULL }, *packed = NULL;
++    int linesize[2] = { 0, 0 };
++    int n, st;
++    HvReply r = { 0 };
++
++    if (!hf || !hf->handle || src->format != ctx->sw_format)
++        return AVERROR(EINVAL);
++    n = hv_vc_planes(fmt, hf->width, hf->height, row, rows);
++    if (!n)
++        return AVERROR(EINVAL);
++    warn_tcp(ctx);
++    if (covers(src, n, row, rows)) {
++        for (int i = 0; i < n; i++)
++            data[i] = src->data[i], linesize[i] = src->linesize[i];
++    } else {
++        /* the source is smaller than the host frame: pad with zeros */
++        uint8_t *p = packed = av_malloc(hv_vc_frame_bytes(fmt, hf->width, hf->height));
++        if (!packed)
++            return AVERROR(ENOMEM);
++        for (int i = 0; i < n; i++) {
++            int src_rows = plane_rows(src, i);
++            size_t copy = FFMIN((size_t)row[i], (size_t)FFABS(src->linesize[i]));
++            data[i] = p, linesize[i] = row[i];
++            for (uint32_t y = 0; y < rows[i]; y++, p += row[i]) {
++                if ((int)y < src_rows && src->data[i]) {
++                    memcpy(p, src->data[i] + (ptrdiff_t)y * src->linesize[i], copy);
++                    if (copy < row[i])
++                        memset(p + copy, 0, row[i] - copy);
++                } else {
++                    memset(p, 0, row[i]);
++                }
++            }
++        }
++    }
++    st = hv_frame_upload(client, hf->handle, fmt, hf->width, hf->height, data, linesize, &r);
++    av_free(packed);
++    if (st)
++        av_log(ctx, st == HV_VC_E_LIMIT ? AV_LOG_VERBOSE : AV_LOG_ERROR, "FRAME_UPLOAD: %s\n", r.err);
++    hv_reply_free(&r);
++    return !st ? 0 : st == HV_VC_E_LIMIT ? AVERROR(ENOBUFS) : AVERROR(EIO);
++}
++
++static int henge_transfer_data_from(AVHWFramesContext *ctx, AVFrame *dst, const AVFrame *src)
++{
++    HvClient *client = client_of(ctx->device_ref);
++    const AVHengeFrame *hf = henge_frame_of(src);
++    uint32_t fmt = av_henge_format_from_pix_fmt(ctx->sw_format), row[2], rows[2];
++    uint8_t *data[2] = { NULL, NULL }, *packed = NULL;
++    int linesize[2] = { 0, 0 };
++    int n, st, direct;
++    HvReply r = { 0 };
++
++    if (!hf || !hf->handle || dst->format != ctx->sw_format)
++        return AVERROR(EINVAL);
++    n = hv_vc_planes(fmt, hf->width, hf->height, row, rows);
++    if (!n)
++        return AVERROR(EINVAL);
++    warn_tcp(ctx);
++    direct = covers(dst, n, row, rows);
++    if (direct) {
++        for (int i = 0; i < n; i++)
++            data[i] = dst->data[i], linesize[i] = dst->linesize[i];
++    } else {
++        uint8_t *p = packed = av_malloc(hv_vc_frame_bytes(fmt, hf->width, hf->height));
++        if (!packed)
++            return AVERROR(ENOMEM);
++        for (int i = 0; i < n; i++)
++            data[i] = p, linesize[i] = row[i], p += (size_t)row[i] * rows[i];
++    }
++    st = hv_frame_download(client, hf->handle, fmt, hf->width, hf->height, data, linesize, &r);
++    if (st) {
++        av_log(ctx, AV_LOG_ERROR, "FRAME_DOWNLOAD: %s\n", r.err);
++    } else if (!direct) {
++        /* the destination is smaller than the host frame: clip */
++        for (int i = 0; i < n; i++) {
++            int dst_rows = plane_rows(dst, i);
++            size_t copy = FFMIN((size_t)row[i], (size_t)FFABS(dst->linesize[i]));
++            for (uint32_t y = 0; y < rows[i]; y++)
++                if ((int)y < dst_rows && dst->data[i])
++                    memcpy(dst->data[i] + (ptrdiff_t)y * dst->linesize[i], data[i] + (size_t)y * row[i], copy);
++        }
++    }
++    av_free(packed);
++    hv_reply_free(&r);
++    return st ? AVERROR(EIO) : 0;
++}
++
++const HWContextType ff_hwcontext_type_henge = {
++    .type                   = AV_HWDEVICE_TYPE_HENGE,
++    .name                   = "Henge",
++
++    .device_hwctx_size      = sizeof(HengeDevicePriv),
++    .frames_hwctx_size      = sizeof(AVHengeFramesContext),
++
++    .device_create          = henge_device_create,
++    .device_uninit          = henge_device_uninit,
++    .frames_get_constraints = henge_frames_get_constraints,
++    .frames_init            = henge_frames_init,
++    .frames_get_buffer      = henge_frames_get_buffer,
++    .transfer_get_formats   = henge_transfer_get_formats,
++    .transfer_data_to       = henge_transfer_data_to,
++    .transfer_data_from     = henge_transfer_data_from,
++
++    .pix_fmts = (const enum AVPixelFormat[]){ AV_PIX_FMT_HENGE, AV_PIX_FMT_NONE },
++};
+diff --git a/libavutil/hwcontext_henge.h b/libavutil/hwcontext_henge.h
+new file mode 100644
+index 00000000..0be3995e
+--- /dev/null
++++ b/libavutil/hwcontext_henge.h
+@@ -0,0 +1,87 @@
++/*
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#ifndef AVUTIL_HWCONTEXT_HENGE_H
++#define AVUTIL_HWCONTEXT_HENGE_H
++
++/**
++ * @file
++ * An API-specific header for AV_HWDEVICE_TYPE_HENGE: the video codecs of the
++ * device that runs a Henge virtual machine, reached through libhvcodec.
++ *
++ * Frames of AV_PIX_FMT_HENGE stay on the device. data[3] holds the frame's
++ * handle (a uint32_t cast to a pointer); buf[0] holds an AVHengeFrame and
++ * frees the handle when the last reference goes. A handle is good only on
++ * the connection of the device context that made it.
++ *
++ * The device string is "unix:PATH", "HOST:PORT" or "HOST"; an empty one
++ * takes $HENGE_VCODEC, then 10.0.2.4:8470.
++ */
++
++#include <stdint.h>
++
++#include "buffer.h"
++#include "frame.h"
++#include "pixfmt.h"
++
++struct HvClient;
++struct HvQuery;
++
++typedef struct AVHengeDeviceContext {
++    /** The connection. All calls on it are thread-safe. */
++    struct HvClient *client;
++    /** The device's codec table, read when the device was made. */
++    const struct HvQuery *query;
++} AVHengeDeviceContext;
++
++/** AVHWFramesContext.hwctx: the range of frames that are uploaded. */
++typedef struct AVHengeFramesContext {
++    enum AVColorRange color_range;
++} AVHengeFramesContext;
++
++/** The data of a henge frame's buf[0]. */
++typedef struct AVHengeFrame {
++    uint32_t handle;   ///< 0 until a decoder fills it
++    uint32_t width, height;
++    AVBufferRef *device_ref;
++    AVBufferRef *hw_frames_ref; ///< optional; a decoder keeps its frames context here
++} AVHengeFrame;
++
++/**
++ * A buffer that holds an AVHengeFrame with no handle yet, and frees the
++ * handle when the last reference goes.
++ */
++AVBufferRef *av_henge_frame_ref_alloc(AVBufferRef *device_ref);
++
++/**
++ * Makes frame a henge frame of hw_frames_ref for an existing handle. On
++ * failure the handle is freed.
++ */
++int av_henge_frame_wrap(AVBufferRef *hw_frames_ref, uint32_t handle,
++                        uint32_t width, uint32_t height, AVFrame *frame);
++
++static inline uint32_t av_henge_frame_handle(const AVFrame *frame)
++{
++    return (uint32_t)(uintptr_t)frame->data[3];
++}
++
++/** The libhvcodec format for a software pixel format, or 0. */
++uint32_t av_henge_format_from_pix_fmt(enum AVPixelFormat fmt);
++enum AVPixelFormat av_henge_format_to_pix_fmt(uint32_t fmt);
++
++#endif /* AVUTIL_HWCONTEXT_HENGE_H */
+diff --git a/libavutil/hwcontext_internal.h b/libavutil/hwcontext_internal.h
+index dcfdc201..062e193b 100644
+--- a/libavutil/hwcontext_internal.h
++++ b/libavutil/hwcontext_internal.h
+@@ -165,5 +165,6 @@ extern const HWContextType ff_hwcontext_type_mediacodec;
+ extern const HWContextType ff_hwcontext_type_vulkan;
+ extern const HWContextType ff_hwcontext_type_amf;
+ extern const HWContextType ff_hwcontext_type_oh;
++extern const HWContextType ff_hwcontext_type_henge;
+ 
+ #endif /* AVUTIL_HWCONTEXT_INTERNAL_H */
+diff --git a/libavutil/pixdesc.c b/libavutil/pixdesc.c
+index ba25a256..ca71dad9 100644
+--- a/libavutil/pixdesc.c
++++ b/libavutil/pixdesc.c
+@@ -3267,6 +3267,10 @@ static const AVPixFmtDescriptor av_pix_fmt_descriptors[AV_PIX_FMT_NB] = {
+         .name = "ohcodec",
+         .flags = AV_PIX_FMT_FLAG_HWACCEL,
+     },
++    [AV_PIX_FMT_HENGE] = {
++        .name = "henge",
++        .flags = AV_PIX_FMT_FLAG_HWACCEL,
++    },
+ };
+ 
+ static const char * const color_range_names[] = {
+diff --git a/libavutil/pixfmt.h b/libavutil/pixfmt.h
+index 2e7b6457..25cb8d92 100644
+--- a/libavutil/pixfmt.h
++++ b/libavutil/pixfmt.h
+@@ -499,6 +499,12 @@ enum AVPixelFormat {
+ 
+     AV_PIX_FMT_OHCODEC, /// hardware decoding through openharmony
+ 
++    /**
++     * Frames on the device under a Henge virtual machine.
++     * data[3] holds the frame's handle (hwcontext_henge.h).
++     */
++    AV_PIX_FMT_HENGE,
++
+     AV_PIX_FMT_NB         ///< number of pixel formats, DO NOT USE THIS if you want to link with shared libav* because the number of formats might differ between versions
+ };
+ 

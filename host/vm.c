@@ -501,6 +501,8 @@ static int create_virt(const HvVmConfig *c, uint64_t ram_size, char *err, size_t
                          .balloon = virt.balloon, .blk = {virt.blk, NULL},
                          .ram = virt.mem.host, .ram_pa = VIRT_MEM, .ram_size = virt.mem.size};
     virt.poll = board_poll;
+    if (c->codec_ops && hv_virt_add_hvcodec(&virt, c->codec_ops, NULL) != 0)
+        return fail(err, errlen, "Cannot add the video codec device.");
     if (virt.gpu) {
         vgpu = (VgpuDisplay){.gpu = virt.gpu, .presenter = hv_vgpu_metal_create(virt.gpu)};
         pthread_mutex_lock(&pause_mu);

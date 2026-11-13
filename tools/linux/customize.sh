@@ -10,7 +10,7 @@ grep -q '^COMPRESS=zstd' /etc/initramfs-tools/initramfs.conf
 grep -q '^MODULES=list' /etc/initramfs-tools/initramfs.conf
 printf '%s\n' virtio_pci virtio_blk virtio_net virtio_rng ext4 >> /etc/initramfs-tools/modules
 
-useradd --create-home --shell /bin/bash --groups sudo,audio henge
+useradd --create-home --shell /bin/bash --groups sudo,audio,video henge
 passwd -d henge
 install -d -o henge -g henge /home/henge/Henge
 

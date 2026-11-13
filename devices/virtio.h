@@ -13,6 +13,7 @@
 #define HV_VIRTQ_MAX_SEGS 128 /* a 1 MB virtio-gpu SUBMIT_3D from a 16 KB kernel is 66 (a 4 KB one would need 258) */
 
 #define HV_VIRTIO_F_VERSION_1 (1ull << 32)
+#define HV_VIRTIO_F_INDIRECT_DESC (1ull << 28)
 
 typedef struct HvVirtq {
     uint16_t size, enabled, last_avail;
@@ -55,6 +56,10 @@ void hv_virtio_init(HvVirtio *v, HvMachine *m, int device_id, uint32_t class_cod
 /* 1 and an element if the driver made one available, 0 if not, -1 if the ring is broken. */
 int hv_virtq_pop(HvVirtio *v, int q, HvVirtqElem *e);
 void hv_virtq_push(HvVirtio *v, int q, const HvVirtqElem *e, uint32_t written);
+void hv_virtq_push_head(HvVirtio *v, int q, uint16_t head, uint32_t written);
+/* As hv_virtq_pop, for a device with chains longer than HV_VIRTQ_MAX_SEGS: *seg grows (realloc, *cap entries) up to
+   max segments. One indirect table, from the ring only, of at most max entries. */
+int hv_virtq_pop_long(HvVirtio *v, int q, uint16_t *head, HvVirtqSeg **seg, int *cap, int max, int *nseg);
 void hv_virtio_interrupt(HvVirtio *v);
 /* The device's config changed (a new value the driver should read): ISR bit 1 and a new generation. */
 void hv_virtio_config_changed(HvVirtio *v);

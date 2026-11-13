@@ -32,6 +32,7 @@ static uint64_t tick_locked(HvMachine *m, HvCpu *cpu) {
     hv_virtio_gpu_poll(b->gpu);
     hv_virtio_snd_poll(b->snd);
     hv_virtio_balloon_poll(b->balloon);
+    hv_virtio_hvcodec_poll(b->codec);
     return deadline;
 }
 
@@ -90,6 +91,12 @@ int hv_virt_create(HvVirt *b, HvMachine *m, HvCpu *cpus, int ncpus, uint64_t ram
     m->id.mmfr2 = 1ull << 60; /* E0PD: with it, a KASLR kernel does not force page-table isolation (a flush per syscall) */
     cpus->m = m;
     return 0;
+}
+
+int hv_virt_add_hvcodec(HvVirt *b, const HvHvcodecOps *ops, void *opaque) {
+    if (b->codec || !ops) return -1;
+    b->codec = hv_virtio_hvcodec_create(b->m, b->pcie, ops, opaque);
+    return b->codec ? 0 : -1;
 }
 
 /* 64 MB of 0xff from one shared block, so erased flash costs 1 MB of footprint. */
@@ -166,6 +173,7 @@ void hv_virt_set_backlight(HvVirt *b, uint8_t level) { b->backlight.reg[0] = lev
 void hv_virt_destroy(HvVirt *b) {
     /* Device workers can still touch RAM and the GIC. */
     hv_virtio_blk_destroy(b->blk);
+    hv_virtio_hvcodec_destroy(b->codec);
     if (!hv_virtio_fs_destroy(b->fs)) hv_guest_ram_leak(&b->mem); /* a stuck worker's host read can still land */
     if (b->snd) { free(b->snd->ring); free(b->snd); }
     free(b->balloon);

@@ -5,6 +5,7 @@
    The guest is untrusted: every length, count, size, format and handle is checked here before use, plane sizes
    come from the format and the dimensions, and a handle is an index and a generation in this context's table. */
 #include "vcodec.h"
+#include "virtio_hvcodec.h"
 #include "vt_caps.h"
 #include "vt_decode.h"
 
@@ -103,7 +104,8 @@ typedef struct Session {
 } Session;
 
 typedef struct {
-    int fd;
+    int fd; /* -1 for a device context */
+    HvHvcodecIo *io; /* the device's message being served */
     uint8_t *buf;
     size_t cap;
     Frame frames[HV_VC_MAX_FRAMES];
@@ -199,6 +201,10 @@ static int reply(Ctx *c, const HvVcHeader *req, int32_t status, const void *a, s
                  const void *d, size_t dlen) {
     HvVcHeader h = {req->type | HV_VC_REPLY, (uint32_t)(alen + blen + dlen), req->seq, status};
     struct iovec iov[4] = {{&h, sizeof h}, {(void *)a, alen}, {(void *)b, blen}, {(void *)d, dlen}};
+    if (c->io) {
+        c->bytes_out += sizeof h + alen + blen + dlen;
+        return c->io->reply(c->io, iov, 4);
+    }
     return write_iov(c, iov, 4);
 }
 
@@ -619,8 +625,11 @@ static int do_enc_open(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
         return vt_fail(c, req, "encoder", st);
     }
     const char *what = NULL;
-    set_prop(v, kVTCompressionPropertyKey_AllowFrameReordering, o.flags & HV_VC_ENC_F_BFRAMES ? kCFBooleanTrue : kCFBooleanFalse, &what, "B-frames");
-    set_prop(v, kVTCompressionPropertyKey_RealTime, o.flags & HV_VC_ENC_F_REALTIME ? kCFBooleanTrue : kCFBooleanFalse, &what, "real time");
+    /* only a refusal of what the guest asked for fails: the JPEG encoder refuses "no B-frames" */
+    if (o.flags & HV_VC_ENC_F_BFRAMES) set_prop(v, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanTrue, &what, "B-frames");
+    else VTSessionSetProperty(v, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
+    if (o.flags & HV_VC_ENC_F_REALTIME) set_prop(v, kVTCompressionPropertyKey_RealTime, kCFBooleanTrue, &what, "real time");
+    else VTSessionSetProperty(v, kVTCompressionPropertyKey_RealTime, kCFBooleanFalse);
     if (o.profile[0]) {
         CFStringRef pn = CFStringCreateWithCString(NULL, o.profile, kCFStringEncodingUTF8);
         set_prop(v, kVTCompressionPropertyKey_ProfileLevel, pn, &what, "profile");
@@ -703,7 +712,9 @@ static int do_enc_frame(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     if (!s) return fail(c, req, HV_VC_E_HANDLE, "no such encoder");
     pthread_mutex_lock(&s->mu);
     OSStatus aerr = s->async_err;
-    int eos = s->eos, full = s->npk >= MAX_PACKETS || s->pk_bytes >= MAX_PACKET_BYTES || atomic_load(&all_packet_bytes) >= max_all_packet_bytes;
+    /* no packet can be read before the third frame, so a full queue must not refuse one of the first three */
+    int eos = s->eos, full = dts_known(s) && (s->npk >= MAX_PACKETS || s->pk_bytes >= MAX_PACKET_BYTES ||
+                                              atomic_load(&all_packet_bytes) >= max_all_packet_bytes);
     pthread_mutex_unlock(&s->mu);
     if (aerr != noErr) return vt_fail(c, req, "encode", aerr);
     if (eos) return fail(c, req, HV_VC_E_INVAL, "the stream is finished");
@@ -901,6 +912,69 @@ static int do_frame_download(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     return rc;
 }
 
+/* The frame and the plane layout of a DMA transfer, checked against the frame and the data's length. */
+static Frame *dma_layout(Ctx *c, const HvVcHeader *req, const uint8_t *p, uint64_t data_len, HvVcPlanesDma *d, int *err) {
+    *err = 0;
+    if (!c->io) return *err = fail(c, req, HV_VC_E_NOSUP, "DMA transfers need /dev/hvcodec (the henge_codec module)"), NULL;
+    if (req->len != sizeof *d) return *err = fail(c, req, HV_VC_E_INVAL, "the DMA transfer has the wrong length"), NULL;
+    memcpy(d, p, sizeof *d);
+    Frame *f = frame_get(c, d->handle);
+    if (!f) return *err = fail(c, req, HV_VC_E_HANDLE, "no such frame"), NULL;
+    if (d->format != f->fmt || d->width != f->w || d->height != f->h)
+        return *err = fail(c, req, HV_VC_E_INVAL, "the frame is %ux%u format %u", f->w, f->h, f->fmt), NULL;
+    uint32_t row[2], rows[2];
+    int n = hv_vc_planes(f->fmt, f->w, f->h, row, rows);
+    for (int i = 0; i < n; i++) /* rows <= 8192 and stride < 2^32: no overflow in 64 bits */
+        if (d->stride[i] < row[i] || d->offset[i] > data_len || data_len - d->offset[i] < (uint64_t)(rows[i] - 1) * d->stride[i] + row[i])
+            return *err = fail(c, req, HV_VC_E_INVAL, "plane %d does not fit the data (%llu bytes)", i, (unsigned long long)data_len), NULL;
+    return f;
+}
+
+/* Rows between the frame and the guest's buffers, in place: the one copy of a DMA transfer. */
+static int planes_copy_dma(const Frame *f, const HvVcPlanesDma *d, const struct iovec *v, int nv, int to_guest) {
+    uint32_t row[2], rows[2];
+    int n = hv_vc_planes(f->fmt, f->w, f->h, row, rows);
+    if (!n || CVPixelBufferLockBaseAddress(f->pb, to_guest ? kCVPixelBufferLock_ReadOnly : 0) != kCVReturnSuccess) return -1;
+    size_t planes = CVPixelBufferGetPlaneCount(f->pb);
+    int bad = (n == 1) != (planes == 0) || (n == 2 && planes != 2);
+    HvIovCursor cur;
+    hv_iov_cursor(&cur, v, nv);
+    for (int i = 0; i < n && !bad; i++) {
+        uint8_t *base = n == 1 ? CVPixelBufferGetBaseAddress(f->pb) : CVPixelBufferGetBaseAddressOfPlane(f->pb, (size_t)i);
+        size_t stride = n == 1 ? CVPixelBufferGetBytesPerRow(f->pb) : CVPixelBufferGetBytesPerRowOfPlane(f->pb, (size_t)i);
+        size_t height = n == 1 ? CVPixelBufferGetHeight(f->pb) : CVPixelBufferGetHeightOfPlane(f->pb, (size_t)i);
+        if (!base || stride < row[i] || height < rows[i]) {
+            bad = 1;
+            break;
+        }
+        for (uint32_t y = 0; y < rows[i] && !bad; y++)
+            bad = hv_iov_copy(&cur, d->offset[i] + (uint64_t)y * d->stride[i], base + y * stride, row[i], to_guest) != row[i];
+    }
+    CVPixelBufferUnlockBaseAddress(f->pb, to_guest ? kCVPixelBufferLock_ReadOnly : 0);
+    return bad ? -1 : 0;
+}
+
+static int do_frame_upload_dma(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
+    HvVcPlanesDma d;
+    int err;
+    Frame *f = dma_layout(c, req, p, c->io ? c->io->in_len : 0, &d, &err);
+    if (!f) return err;
+    /* the guest can change its pages during the copy: it damages its own picture, nothing more */
+    if (planes_copy_dma(f, &d, c->io->in, c->io->nin, 0)) return fail(c, req, HV_VC_E_CODEC, "the frame's planes do not match its format");
+    return ok(c, req, NULL, 0);
+}
+
+static int do_frame_download_dma(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
+    HvVcPlanesDma d;
+    int err;
+    Frame *f = dma_layout(c, req, p, c->io ? c->io->out_len : 0, &d, &err);
+    if (!f) return err;
+    if (planes_copy_dma(f, &d, c->io->out, c->io->nout, 1)) return fail(c, req, HV_VC_E_CODEC, "the frame's planes do not match its format");
+    c->bytes_out += f->bytes;
+    HvVcFrameReply r = frame_reply(f, d.handle);
+    return ok(c, req, &r, sizeof r);
+}
+
 static int do_xfer(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
     HvVcXfer x;
     if (req->len != sizeof x) return fail(c, req, HV_VC_E_INVAL, "XFER has the wrong length");
@@ -972,27 +1046,24 @@ static int dispatch(Ctx *c, const HvVcHeader *h, uint8_t *p) {
     case HV_VC_FRAME_UPLOAD: return do_frame_upload(c, h, p);
     case HV_VC_FRAME_DOWNLOAD: return do_frame_download(c, h, p);
     case HV_VC_XFER: return do_xfer(c, h, p);
+    case HV_VC_FRAME_UPLOAD_DMA: return do_frame_upload_dma(c, h, p);
+    case HV_VC_FRAME_DOWNLOAD_DMA: return do_frame_download_dma(c, h, p);
     default: return fail(c, h, HV_VC_E_NOSUP, "message %u is not supported", h->type);
     }
 }
 
-void hv_vcodec_serve(int fd) {
+/* A new context, or NULL at the limit. fd is -1 for the device's. */
+static Ctx *ctx_new(int fd) {
     if (atomic_fetch_add(&open_contexts, 1) >= MAX_CONTEXTS) {
         atomic_fetch_sub(&open_contexts, 1);
-        close(fd);
-        return;
+        return NULL;
     }
-    atomic_fetch_add(&total_contexts, 1);
-    int one = 1;
-    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
-    struct timeval tv = {message_timeout_ms / 1000, (message_timeout_ms % 1000) * 1000};
-    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv); /* a guest that stops reading closes its context */
     Ctx *c = calloc(1, sizeof *c);
     if (!c) {
-        close(fd);
         atomic_fetch_sub(&open_contexts, 1);
-        return;
+        return NULL;
     }
+    atomic_fetch_add(&total_contexts, 1);
     c->fd = fd;
     pthread_mutex_init(&c->mu, NULL);
     clock_gettime(CLOCK_MONOTONIC, &c->started);
@@ -1003,31 +1074,10 @@ void hv_vcodec_serve(int fd) {
             break;
         }
     pthread_mutex_unlock(&registry_mu);
-    for (;;) {
-        HvVcHeader h;
-        if (read_full(c, &h, sizeof h, 1)) break;
-        if (h.type < HV_VC_QUERY || h.type > HV_VC_XFER || h.len > HV_VC_MAX_PAYLOAD) {
-            atomic_fetch_add(&total_proto_errors, 1);
-            break;
-        }
-        if (h.len > c->cap) {
-            buf_free(c);
-            if (!budget_take(&all_wire_bytes, h.len, max_all_wire_bytes)) {
-                atomic_fetch_add(&total_messages, 1);
-                if (skip(c, h.len) || fail(c, &h, HV_VC_E_LIMIT, "message memory at the limit: try again")) break;
-                continue;
-            }
-            if (!(c->buf = malloc(h.len))) {
-                budget_give(&all_wire_bytes, h.len);
-                break;
-            }
-            c->cap = h.len;
-        }
-        if (h.len && read_full(c, c->buf, h.len, 0)) break;
-        atomic_fetch_add(&total_messages, 1);
-        if (dispatch(c, &h, c->buf)) break;
-        if (c->cap > (16u << 20)) buf_free(c); /* keep no frame-sized buffer while idle */
-    }
+    return c;
+}
+
+static void ctx_free(Ctx *c) {
     pthread_mutex_lock(&registry_mu);
     for (int i = 0; i < MAX_CONTEXTS; i++)
         if (registry[i] == c) registry[i] = NULL;
@@ -1041,14 +1091,99 @@ void hv_vcodec_serve(int fd) {
     }
     double secs = ms_since(&c->started) / 1e3;
     if (c->bytes_in > 4096 || getenv("HV_VCODEC_LOG"))
-        fprintf(stderr, "hengevm: vcodec: context closed after %.1f s: in %.1f MB, out %.1f MB (%.2f MB/s), %llu frames decoded, %llu packets\n", secs,
-                c->bytes_in / 1e6, c->bytes_out / 1e6, secs > 0 ? (c->bytes_in + c->bytes_out) / 1e6 / secs : 0, (unsigned long long)c->decoded,
-                (unsigned long long)c->packets);
+        fprintf(stderr, "hengevm: vcodec: %s context closed after %.1f s: in %.1f MB, out %.1f MB (%.2f MB/s), %llu frames decoded, %llu packets\n",
+                c->fd < 0 ? "device" : "socket", secs, c->bytes_in / 1e6, c->bytes_out / 1e6, secs > 0 ? (c->bytes_in + c->bytes_out) / 1e6 / secs : 0,
+                (unsigned long long)c->decoded, (unsigned long long)c->packets);
     buf_free(c);
     pthread_mutex_destroy(&c->mu);
-    close(fd);
     free(c);
     atomic_fetch_sub(&open_contexts, 1);
+}
+
+/* Room in c->buf for len bytes, within the process-wide message budget. 0, or -1 at the limit. */
+static int buf_room(Ctx *c, size_t len) {
+    if (len <= c->cap) return 0;
+    buf_free(c);
+    if (!budget_take(&all_wire_bytes, len, max_all_wire_bytes)) return -1;
+    if (!(c->buf = malloc(len))) {
+        budget_give(&all_wire_bytes, len);
+        return -1;
+    }
+    c->cap = len;
+    return 0;
+}
+
+void hv_vcodec_serve(int fd) {
+    Ctx *c = ctx_new(fd);
+    if (!c) {
+        close(fd);
+        return;
+    }
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+    struct timeval tv = {message_timeout_ms / 1000, (message_timeout_ms % 1000) * 1000};
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv); /* a guest that stops reading closes its context */
+    for (;;) {
+        HvVcHeader h;
+        if (read_full(c, &h, sizeof h, 1)) break;
+        if (h.type < HV_VC_QUERY || h.type > HV_VC_LAST || h.len > HV_VC_MAX_PAYLOAD) {
+            atomic_fetch_add(&total_proto_errors, 1);
+            break;
+        }
+        if (buf_room(c, h.len)) {
+            atomic_fetch_add(&total_messages, 1);
+            if (skip(c, h.len) || fail(c, &h, HV_VC_E_LIMIT, "message memory at the limit: try again")) break;
+            continue;
+        }
+        if (h.len && read_full(c, c->buf, h.len, 0)) break;
+        atomic_fetch_add(&total_messages, 1);
+        if (dispatch(c, &h, c->buf)) break;
+        if (c->cap > (16u << 20)) buf_free(c); /* keep no frame-sized buffer while idle */
+    }
+    ctx_free(c);
+    close(fd);
+}
+
+/* ---- the device's contexts (devices/virtio_hvcodec.c) ---- */
+
+static void *dev_open(void *opaque) {
+    (void)opaque;
+    return ctx_new(-1);
+}
+
+static void dev_close(void *opaque, void *ctx) {
+    (void)opaque;
+    ctx_free(ctx);
+}
+
+static int dev_message(void *opaque, void *ctx, HvHvcodecIo *io) {
+    (void)opaque;
+    Ctx *c = ctx;
+    HvVcHeader h;
+    if (io->msg_len < sizeof h || io->read(io, 0, &h, sizeof h) != sizeof h || h.type < HV_VC_QUERY || h.type > HV_VC_LAST ||
+        h.len > HV_VC_MAX_PAYLOAD || h.len != io->msg_len - sizeof h) {
+        atomic_fetch_add(&total_proto_errors, 1);
+        return -1;
+    }
+    c->io = io;
+    c->bytes_in += io->msg_len + io->in_len;
+    atomic_fetch_add(&total_messages, 1);
+    int rc;
+    if (buf_room(c, h.len)) rc = fail(c, &h, HV_VC_E_LIMIT, "message memory at the limit: try again");
+    else if (h.len && io->read(io, sizeof h, c->buf, h.len) != h.len) rc = -1;
+    else rc = dispatch(c, &h, c->buf);
+    if (c->cap > (16u << 20)) buf_free(c);
+    c->io = NULL;
+    return rc;
+}
+
+static void probe_start(void);
+static const HvHvcodecOps dev_ops = {dev_open, dev_close, dev_message};
+
+const HvHvcodecOps *hv_vcodec_device_ops(void) {
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, probe_start);
+    return &dev_ops;
 }
 
 /* registry_mu keeps each context alive and c->mu each session; the connection threads take only c->mu. */
@@ -1095,6 +1230,11 @@ static void *probe(void *arg) {
     (void)arg;
     hv_vt_caps(); /* so the first QUERY does not wait for the probe */
     return NULL;
+}
+
+static void probe_start(void) {
+    pthread_t t;
+    if (pthread_create(&t, NULL, probe, NULL) == 0) pthread_detach(t);
 }
 
 int hv_vcodec_start(const char *socket_path) {

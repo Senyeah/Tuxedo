@@ -1,0 +1,20 @@
+#!/bin/sh
+# DKMS builds and installs the module for the running kernel and each kernel with headers; then it is loaded,
+# so /dev/hvcodec is there at once on a machine with the device.
+set -e
+NAME=henge-codec
+VER=@VERSION@
+if [ "$1" = configure ]; then
+    dkms status -m "$NAME" -v "$VER" | grep -q . || dkms add -m "$NAME" -v "$VER"
+    # every kernel with headers; one without headers is skipped with a message
+    for k in /lib/modules/*; do
+        k=${k##*/}
+        [ -e "/lib/modules/$k/build" ] || { echo "henge-codec-dkms: no headers for $k: install linux-headers-$k for /dev/hvcodec on it"; continue; }
+        dkms install -m "$NAME" -v "$VER" -k "$k" || echo "henge-codec-dkms: the module did not build for $k"
+    done
+    udevadm control --reload-rules 2>/dev/null || true
+    if modprobe henge_codec 2>/dev/null; then
+        udevadm trigger --subsystem-match=misc --action=add 2>/dev/null || true
+    fi
+fi
+exit 0
