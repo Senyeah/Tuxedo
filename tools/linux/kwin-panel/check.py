@@ -89,16 +89,27 @@ def start_kwin(show_always):
     return p, env
 
 
-def x11_height(env):
-    """The height of the xterm window, or None."""
+def x11_env(env):
     names = [n for n in os.listdir("/tmp/.X11-unix") if n.startswith("X")]
-    if not names:
+    return dict(env, DISPLAY=":" + names[0][1:]) if names else None
+
+
+def x11_size(env):
+    """The width and height of the xterm window, or None."""
+    if not x11_env(env):
         return None
-    r = subprocess.run(["xwininfo", "-name", "xterm"], env=dict(env, DISPLAY=":" + names[0][1:]), capture_output=True, text=True)
+    r = subprocess.run(["xwininfo", "-name", "xterm"], env=x11_env(env), capture_output=True, text=True)
+    found = {}
     for line in r.stdout.split("\n"):
-        if line.strip().startswith("Height:"):
-            return int(line.split()[1])
-    return None
+        words = line.split()
+        if len(words) == 2 and words[0] in ("Width:", "Height:"):
+            found[words[0]] = int(words[1])
+    return (found["Width:"], found["Height:"]) if len(found) == 2 else None
+
+
+def x11_height(env):
+    size = x11_size(env)
+    return size[1] if size else None
 
 
 def x11_is(env, h, what):
@@ -197,6 +208,40 @@ def main():
         x11_is(env, H - 200, "the X11 window is the active one again")
         set_height(0)
         x11_is(env, H, "the keyboard goes down")
+        # Up and down again, with nothing else between
+        set_height(0.4)
+        x11_is(env, H - 320, "the keyboard comes up again")
+        set_height(0)
+        x11_is(env, H, "and goes down again")
+
+        # A wrong area on the bus (any program can send one) must not stay
+        set_height(0.4)
+        x11_is(env, H - 320, "the keyboard covers 0.4")
+        def false_area(bottom):
+            subprocess.run(["busctl", "--user", "call", "org.freedesktop.DBus", "/Henge", "dev.henge.Keyboard", "area",
+                            "ii", "0", str(bottom)], capture_output=True)
+
+        false_area(99999)  # more than the screen: not used
+        time.sleep(3)
+        x11_is(env, H - 320, "a false area of 99999 changes nothing")
+        false_area(300)
+        x11_is(env, H - 20, "a false area of 300 at the bottom makes the panel 20 high")
+        wait(f"the true area did not come back: the X11 window's height is {x11_height(env)}", lambda: x11_height(env) == H - 320, 25)
+        print("ok: the script sends the true area again", flush=True)
+
+        # The person takes the window out of the maximized state while the keyboard is up: it stays as they left it
+        subprocess.run(["wmctrl", "-r", "xterm", "-b", "remove,maximized_vert,maximized_horz"], env=x11_env(env), capture_output=True)
+        wait("the X11 window is still maximized", lambda: x11_size(env) and x11_size(env)[0] != W)
+        size = x11_size(env)
+        time.sleep(3)
+        if x11_size(env) != size:
+            raise Fail(f"the X11 window was {size} after the person changed it, and is {x11_size(env)} 3 s later")
+        print(f"ok: an X11 window that the person changed keeps its place: {size[0]}x{size[1]}", flush=True)
+        set_height(0)
+        time.sleep(3)
+        if x11_size(env) != size:
+            raise Fail(f"the keyboard went down and the X11 window went from {size} to {x11_size(env)}")
+        print("ok: and keeps it when the keyboard goes down", flush=True)
         stop(xterm)
         time.sleep(1)  # the last hide waits 0.3 s in the helper
 
