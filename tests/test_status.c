@@ -1,4 +1,5 @@
 #include "devstatus.h"
+#include "fs_server.h"
 #include "share.h"
 #include "status.h"
 
@@ -250,6 +251,12 @@ static void *later_tz(void *arg) {
     return NULL;
 }
 
+static void *later_folder(void *dir) {
+    usleep(200000);
+    hv_fs_folder_set(0, "id-docs", "docs", dir, HV_FS_COW);
+    return NULL;
+}
+
 static void test_endpoint(void) {
     char dir[] = "/tmp/henge-status-XXXXXX";
     if (!mkdtemp(dir)) return;
@@ -284,6 +291,23 @@ static void test_endpoint(void) {
     check("endpoint: soon after it", since_ms(t0) > 150 && since_ms(t0) < 2000, 1);
     check("endpoint: with the new seq", strstr(resp, "X-Henge-Seq: 4\r\n") != NULL, 1);
     pthread_join(th, NULL);
+    /* The Files folders' table and its long poll (fs_server.h). */
+    hv_fs_folders_clear();
+    http_get("/.henge/folders", resp, sizeof resp);
+    check("folders: 200", strncmp(resp, "HTTP/1.1 200", 12) == 0, 1);
+    check("folders: JSON", strstr(resp, "Content-Type: application/json\r\n") != NULL, 1);
+    check("folders: none", strstr(resp, "\"folders\":[]") != NULL, 1);
+    const char *sq = strstr(resp, "X-Henge-Seq: ");
+    unsigned long fseq = sq ? strtoul(sq + 13, NULL, 10) : 0;
+    char q[64];
+    snprintf(q, sizeof q, "/.henge/folders?since=%lu", fseq);
+    pthread_create(&th, NULL, later_folder, dir);
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    http_get(q, resp, sizeof resp);
+    check("folders: a long poll answers on news", strstr(resp, "\"name\":\"docs\",\"mode\":\"cow\",\"state\":\"ready\"") != NULL, 1);
+    check("folders: soon after it", since_ms(t0) > 150 && since_ms(t0) < 2000, 1);
+    pthread_join(th, NULL);
+    hv_fs_folders_clear();
     http_get("/.henge/nothing", resp, sizeof resp);
     check("endpoint: other names are 404", strncmp(resp, "HTTP/1.1 404", 12) == 0, 1);
     unlink(sock_path);

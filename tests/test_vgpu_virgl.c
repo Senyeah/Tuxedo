@@ -666,7 +666,7 @@ int main(void) {
     close(fd);
     static const uint8_t mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
     if (hv_disk_open(&root, path, 0, 0) != 0 || hv_machine_init(&m, 4 << 20) != 0 ||
-        hv_virt_create(&b, &m, cpus, 1, 64ull << 20, &root, mac) != 0) {
+        hv_virt_create(&b, &m, cpus, 1, 64ull << 20, &root, mac, 0) != 0) {
         printf("cannot build the board\n");
         return 1;
     }

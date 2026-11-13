@@ -25,7 +25,8 @@ CORE = $(B)/classify.o $(B)/operands.o $(B)/translate.o $(B)/dispatch.o $(B)/mmu
        $(B)/exception.o $(B)/sysreg.o $(B)/machine.o
 HOST = $(B)/jit_region.o $(B)/enter.o $(B)/disk.o
 DEV = $(B)/pvg_lite.o $(B)/pvg_metal.o $(B)/vgpu_metal.o $(B)/gicv3.o $(B)/timer.o $(B)/pl011.o $(B)/pl031.o $(B)/cfg.o $(B)/bdif.o $(B)/pcie.o \
-      $(B)/virtio.o $(B)/virtio_blk.o $(B)/virtio_net.o $(B)/virtio_rng.o $(B)/virtio_input.o $(B)/virtio_gpu.o $(B)/virtio_snd.o $(B)/virtio_usb.o $(B)/virtio_balloon.o $(B)/xhci.o $(B)/vmapple.o $(B)/aes.o $(B)/pl061.o $(B)/metallib.o $(B)/fdt.o $(B)/guest_ram.o $(B)/virt.o $(B)/virt_fdt.o $(B)/ocores_i2c.o $(B)/devstatus.o $(GFX_OBJ)
+      $(B)/virtio.o $(B)/virtio_blk.o $(B)/virtio_net.o $(B)/virtio_rng.o $(B)/virtio_input.o $(B)/virtio_gpu.o $(B)/virtio_snd.o $(B)/virtio_usb.o $(B)/virtio_balloon.o $(B)/xhci.o $(B)/vmapple.o $(B)/aes.o $(B)/pl061.o $(B)/metallib.o $(B)/fdt.o $(B)/guest_ram.o $(B)/virt.o $(B)/virt_fdt.o $(B)/ocores_i2c.o $(B)/devstatus.o \
+      $(B)/virtio_fs.o $(B)/fs_server.o $(B)/safe_path.o $(GFX_OBJ)
 ENGINE = $(CORE) $(HOST)
 VM = $(B)/vm.o $(B)/linux_boot.o $(B)/status.o
 METAL_LIBS = -framework Foundation -framework QuartzCore -framework Metal -framework IOSurface -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers $(GFX_LDLIBS)
@@ -89,8 +90,8 @@ $(B)/henge-agent.gz: $(B)/henge-agent
 $(B)/share.o: host/share.c host/*.h devices/*.h core/*.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(B)/hengevm: host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/safe_path.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(B)/mac-restore/libhengerestore.a
-	$(CC) $(CFLAGS) host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/safe_path.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(B)/mac-restore/libhengerestore.a -lz -framework Foundation -framework CFNetwork -framework Security -framework SystemConfiguration -framework IOKit $(SLIRP_LIBS) -framework AudioToolbox -framework ParavirtualizedGraphics -framework Metal -framework IOSurface \
+$(B)/hengevm: host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(B)/mac-restore/libhengerestore.a
+	$(CC) $(CFLAGS) host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(B)/mac-restore/libhengerestore.a -lz -framework Foundation -framework CFNetwork -framework Security -framework SystemConfiguration -framework IOKit $(SLIRP_LIBS) -framework AudioToolbox -framework ParavirtualizedGraphics -framework Metal -framework IOSurface \
 	    -framework Foundation -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers -framework CoreFoundation \
 	    -framework AppKit -framework QuartzCore $(GFX_LDLIBS) -o $@
 
@@ -135,14 +136,14 @@ $(B)/test_machine_rebuild: tests/test_machine_rebuild.c $(ENGINE)
 $(B)/test_fdt: tests/test_fdt.c $(B)/fdt.o
 	$(CC) $(CFLAGS) $^ -o $@
 
-$(B)/test_status: tests/test_status.c $(B)/status.o $(B)/share.o $(B)/safe_path.o $(B)/secrets.o
+$(B)/test_status: tests/test_status.c $(B)/status.o $(B)/share.o $(B)/safe_path.o $(B)/fs_server.o $(B)/secrets.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 # Native app lifecycle with real devices and networking; no restore assets.
 $(B)/test_dns_lifecycle: tests/test_dns_lifecycle.c $(B)/dns_proxy.o
 	$(CC) $(CFLAGS) $^ -o $@
 
-$(B)/test_vm_lifecycle: tests/test_vm_lifecycle.c ios/Henge/Native/henge-vm.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/safe_path.o $(B)/secrets.o $(B)/usb_host.o
+$(B)/test_vm_lifecycle: tests/test_vm_lifecycle.c ios/Henge/Native/henge-vm.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/usb_host.o
 	$(CC) $(CFLAGS) -Iios/Henge/Native $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -o $@
 
 $(B)/test_console: tests/test_console.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(B)/net_slirp.o $(B)/dns_proxy.o $(B)/usb_host.o
@@ -152,11 +153,11 @@ $(B)/test_virt: tests/test_virt.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(B)/n
 	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -o $@
 
 # PUT /.henge/keyboard: what henge-keyboard in a Linux desktop asks of the device.
-$(B)/test_share_keyboard: tests/test_share_keyboard.c $(B)/share.o $(B)/safe_path.o $(B)/secrets.o $(B)/status.o
+$(B)/test_share_keyboard: tests/test_share_keyboard.c $(B)/share.o $(B)/safe_path.o $(B)/fs_server.o $(B)/secrets.o $(B)/status.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 # The folder's paths: no link or ".." leaves it (host/safe_path.c), through the server and directly.
-$(B)/test_share_paths: tests/test_share_paths.c $(B)/share.o $(B)/safe_path.o $(B)/secrets.o $(B)/status.o
+$(B)/test_share_paths: tests/test_share_paths.c $(B)/share.o $(B)/safe_path.o $(B)/fs_server.o $(B)/secrets.o $(B)/status.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 # The Files folder server through FUSE requests: confinement, modes, case and Unicode, folders that move or go.
@@ -167,7 +168,7 @@ $(B)/test_fs_server: tests/test_fs_server.c $(B)/fs_server.o $(B)/safe_path.o
 $(B)/test_virtio_fs: tests/test_virtio_fs.c $(B)/virtio_fs.o $(B)/virtio.o $(B)/pcie.o $(B)/gicv3.o $(B)/timer.o $(B)/fs_server.o $(B)/safe_path.o $(ENGINE)
 	$(CC) $(CFLAGS) $^ -o $@
 
-$(B)/test_secrets: tests/test_secrets.c $(B)/share.o $(B)/safe_path.o $(B)/secrets.o $(B)/status.o
+$(B)/test_secrets: tests/test_secrets.c $(B)/share.o $(B)/safe_path.o $(B)/fs_server.o $(B)/secrets.o $(B)/status.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 # Henge's virt device tree against QEMU's (needs qemu-system-aarch64, dtc and uv).

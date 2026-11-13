@@ -6,11 +6,13 @@
 
    /.henge/ is not part of the folder. It has the clipboard, where the helper inside macOS (tools/henge-agent.m)
    waits for the device's clipboard and sends the guest's, and what it takes to install that helper.
-   It also serves the Linux display follower: GET /.henge/display is "W H SCALE"; and henge-status:
-   GET /.henge/status is the device's time, time zone and brightness.
+   It also serves the Linux display follower: GET /.henge/display is "W H SCALE"; henge-status:
+   GET /.henge/status is the device's time, time zone and brightness; and henge-files: GET /.henge/folders is the
+   Files folders' table (fs_server.h).
 
    Locks are accepted but not enforced: macOS only writes to a server that offers them, and there is one client. */
 #include "share.h"
+#include "fs_server.h"
 #include "safe_path.h"
 #include "secrets.h"
 #include "status.h"
@@ -825,6 +827,21 @@ static int status_get(Conn *c, Request *r) {
     return respond(c, r, 200, "OK", headers, body, (size_t)n);
 }
 
+/* The Files folders, as .henge-folders has them. ?since=N waits up to 120 s for news after N (a folder added,
+   removed, renamed, a new mode, offline or online); with no since the answer comes at once. */
+static int folders_get(Conn *c, Request *r) {
+    if (body_discard(c, r) != 0) return -1;
+    const char *q = strstr(r->query, "since=");
+    if (q) hv_fs_folders_wait(strtoul(q + 6, NULL, 10), 120 * 1000);
+    unsigned long seq = 0;
+    char *body = hv_fs_folders_json(&seq), headers[128];
+    if (!body) return respond_empty(c, r, 500, "Internal Server Error");
+    snprintf(headers, sizeof headers, "Content-Type: application/json\r\nCache-Control: no-store\r\nX-Henge-Seq: %lu\r\n", seq);
+    int rc = respond(c, r, 200, "OK", headers, body, strlen(body));
+    free(body);
+    return rc;
+}
+
 /* A Linux guest's wallet (secrets.c). */
 static int secrets_route(Conn *c, Request *r, const char *path) {
     char *body = NULL;
@@ -867,6 +884,7 @@ static int serve_henge(Conn *c, Request *r) {
         return respond(c, r, 200, "OK", "Content-Type: text/plain\r\nCache-Control: no-store\r\n", line, (size_t)n);
     }
     if (!strcmp(what, "status") && !strcmp(r->method, "GET")) return status_get(c, r);
+    if (!strcmp(what, "folders") && !strcmp(r->method, "GET")) return folders_get(c, r);
     if (!strcmp(what, "agent") && !strcmp(r->method, "GET")) return serve_agent(c, r);
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "GET")) return clipboard_get(c, r);
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "PUT")) return clipboard_put(c, r);

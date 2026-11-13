@@ -13,6 +13,12 @@
    graphics are the host's own business (Mac: hv_pvg_attach before starting). */
 enum { HV_BOARD_VMAPPLE = 0, HV_BOARD_VIRT = 1 };
 
+/* A folder from the Files app (fs_server.h). The guest's helper mounts it at /media/henge/<name>. */
+typedef struct HvVmFolder {
+    const char *id, *name, *path; /* id: the app's, for the guest's changes; NULL is the name */
+    int mode;                     /* HV_FS_RO, HV_FS_COW or HV_FS_RW */
+} HvVmFolder;
+
 typedef struct HvVmConfig {
     int board;                /* HV_BOARD_*; 0 is the virtual Mac */
     const char *rom;          /* vmapple: AVPBooter.vmapple2.bin. virt: u-boot.bin, or NULL (a kernel boot, or no firmware and no tree) */
@@ -26,6 +32,11 @@ typedef struct HvVmConfig {
     int no_net, no_sound;
     int accel;                /* virt: the virtio GPU draws with virgl (needs a GFX=1 build) */
     int installer;            /* boot the ROM in DFU mode with the USB device port (installing macOS) */
+    /* virt: the Files folders, at most HV_FS_MAX_FOLDERS, each at its own index (one with no name is left out).
+       They replace the folder table (none clears it); with none the board has no virtio-fs device, as before.
+       Changes while it runs go to hv_fs_folder_set and the others in fs_server.h. */
+    const HvVmFolder *folders;
+    int nfolders;
     /* JIT memory the host already has (iOS: granted by a debugger), or NULL to map it here. */
     void *jit_rx, *jit_rw;
     size_t jit_bytes;         /* 0: 768 MB */

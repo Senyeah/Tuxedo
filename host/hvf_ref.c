@@ -144,7 +144,7 @@ static void console_out(void *opaque, uint8_t c) {
 static int create_virt(const char *firmware, const char *kernel, const char *initrd, const char *append,
                        HvDisk *disk, int have_disk, uint64_t ram_mb) {
     static const uint8_t mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
-    if (hv_virt_create(&vboard, &m, &cpu, 1, ram_mb << 20, have_disk ? disk : NULL, mac) != 0) {
+    if (hv_virt_create(&vboard, &m, &cpu, 1, ram_mb << 20, have_disk ? disk : NULL, mac, 0) != 0) {
         fprintf(stderr, "hengevm-ref: cannot build the virt board\n");
         return -1;
     }
