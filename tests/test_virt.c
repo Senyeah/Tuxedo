@@ -291,6 +291,21 @@ static void check_nodes(const char *dts, int ncpus) {
     check("GPIO has 2 cells", strstr(dts, "#gpio-cells = <0x02>;") != NULL, 1);
     check("power key on GPIO pin 3", strstr(dts, "gpios = <0x03 0x03 0x00>;") != NULL, 1);
     check("power key code", strstr(dts, "linux,code = <0x74>;") != NULL, 1);
+    check("I2C node", strstr(dts, "i2c@90c0000 {") != NULL, 1);
+    check("I2C compatible", strstr(dts, "compatible = \"opencores,i2c-ocores\";") != NULL, 1);
+    check("I2C interrupt is SPI 10", strstr(dts, "interrupts = <0x00 0x0a 0x04>;") != NULL, 1);
+    check("I2C registers 4 bytes apart", strstr(dts, "reg-shift = <0x02>;") != NULL, 1);
+    check("battery node", strstr(dts, "battery@b {") != NULL, 1);
+    check("battery compatible", strstr(dts, "compatible = \"sbs,sbs-battery\";") != NULL, 1);
+    check("battery detect on GPIO pin 5", strstr(dts, "sbs,battery-detect-gpios = <0x03 0x05 0x00>;") != NULL, 1);
+    check("battery supplied by the mains", strstr(dts, "power-supplies = <0x04>;") != NULL, 1);
+    check("backlight node", strstr(dts, "backlight@2c {") != NULL, 1);
+    check("backlight compatible", strstr(dts, "compatible = \"ti,lp8556\";") != NULL, 1);
+    check("backlight name", strstr(dts, "bl-name = \"henge-backlight\";") != NULL, 1);
+    check("backlight level at boot is one byte", strstr(dts, "init-brt = [") != NULL, 1);
+    check("mains node", strstr(dts, "ac-power {") != NULL, 1);
+    check("mains on GPIO pin 4", strstr(dts, "gpios = <0x03 0x04 0x00>;") != NULL, 1);
+    check("mains charger type", strstr(dts, "charger-type = \"mains\";") != NULL, 1);
     check("clock node", strstr(dts, "apb-pclk {") != NULL, 1);
     check("clock: 24 MHz", strstr(dts, "clock-frequency = <0x16e3600>;") != NULL, 1);
     check("PCIe node", strstr(dts, "pcie@10000000 {") != NULL, 1);
@@ -1281,6 +1296,313 @@ static int all_zero(const uint8_t *p, uint32_t n) {
 }
 
 /* The entropy device (E9): one queue, every writable byte filled, nothing written past the buffers. */
+/* The I2C bus as Linux's i2c-ocores drives it (interrupt mode), and the battery, backlight and mains pin on it. */
+#define I2C_PRER_LO (VIRT_I2C + 0x00)
+#define I2C_PRER_HI (VIRT_I2C + 0x04)
+#define I2C_CTR (VIRT_I2C + 0x08)
+#define I2C_DATA (VIRT_I2C + 0x0c)
+#define I2C_CMD (VIRT_I2C + 0x10) /* the status register when read */
+#define I2C_LINE (32 + VIRT_IRQ_I2C)
+static int i2c_bad_irq; /* commands after which IF and the line disagreed */
+
+static void i2c_cmd(uint8_t cmd) {
+    wr8(I2C_CMD, cmd);
+    if (!(rd8(I2C_CMD) & 1) || b.gic->level[I2C_LINE] != ((rd8(I2C_CTR) & 0x40) != 0)) i2c_bad_irq++;
+}
+
+typedef struct { uint8_t addr; int rd; uint8_t *buf; int len; } I2cMsg;
+
+/* One combined transfer, as ocores_process steps through it; -1 on a NACK. */
+static int i2c_xfer(I2cMsg *msg, int n) {
+    int rc = 0;
+    wr8(I2C_CTR, rd8(I2C_CTR) | 0x40);
+    for (int k = 0; k < n && !rc; k++) {
+        wr8(I2C_DATA, (uint8_t)(msg[k].addr << 1 | msg[k].rd));
+        i2c_cmd(0x91);
+        if (rd8(I2C_CMD) & 0x80) rc = -1;
+        for (int i = 0; i < msg[k].len && !rc; i++) {
+            if (msg[k].rd) {
+                i2c_cmd(i == msg[k].len - 1 ? 0x29 : 0x21);
+                msg[k].buf[i] = rd8(I2C_DATA);
+            } else {
+                wr8(I2C_DATA, msg[k].buf[i]);
+                i2c_cmd(0x11);
+                if (rd8(I2C_CMD) & 0x80) rc = -1;
+            }
+        }
+    }
+    i2c_cmd(0x41);
+    if (rd8(I2C_CMD) & 0x40) i2c_bad_irq++; /* still busy after the stop */
+    wr8(I2C_CMD, 0x01);
+    if ((rd8(I2C_CMD) & 1) || b.gic->level[I2C_LINE]) i2c_bad_irq++;
+    return rc;
+}
+
+static int smbus_read_word(uint8_t addr, uint8_t cmd) {
+    uint8_t w[2] = {0};
+    I2cMsg msg[2] = {{addr, 0, &cmd, 1}, {addr, 1, w, 2}};
+    return i2c_xfer(msg, 2) ? -1 : w[0] | w[1] << 8;
+}
+
+static int smbus_write_word(uint8_t addr, uint8_t cmd, uint16_t v) {
+    uint8_t buf[3] = {cmd, (uint8_t)v, (uint8_t)(v >> 8)};
+    I2cMsg msg = {addr, 0, buf, 3};
+    return i2c_xfer(&msg, 1);
+}
+
+static int smbus_read_block(uint8_t addr, uint8_t cmd, uint8_t *buf, int len) {
+    I2cMsg msg[2] = {{addr, 0, &cmd, 1}, {addr, 1, buf, len}};
+    return i2c_xfer(msg, 2);
+}
+
+static uint8_t backlight_seen[4];
+static int backlight_writes;
+static void on_backlight(void *opaque, uint8_t value) {
+    (void)opaque;
+    if (backlight_writes < 4) backlight_seen[backlight_writes] = value;
+    backlight_writes++;
+}
+
+static void test_devstatus(void) {
+    check("i2c: prescale resets to 0xffff", rd8(I2C_PRER_LO) | rd8(I2C_PRER_HI) << 8, 0xffff);
+    check("i2c: control resets to 0", rd8(I2C_CTR), 0);
+    check("i2c: status resets to 0", rd8(I2C_CMD), 0);
+    /* ocores_init: 24 MHz core, 100 kHz bus */
+    wr8(I2C_CTR, 0);
+    wr8(I2C_PRER_LO, 47);
+    wr8(I2C_PRER_HI, 0);
+    wr8(I2C_CTR, 0x80);
+    wr8(I2C_CMD, 0x01);
+    check("i2c: prescale reads back", rd8(I2C_PRER_LO), 47);
+    check("i2c: enabled, interrupts off", rd8(I2C_CTR), 0x80);
+    wr8(I2C_DATA, VIRT_I2C_BATTERY << 1);
+    wr8(I2C_CMD, 0x91);
+    check("i2c: a command sets IF at once", rd8(I2C_CMD) & 0x03, 0x01);
+    check("i2c: no line without IEN", b.gic->level[I2C_LINE], 0);
+    wr8(I2C_CTR, 0xc0);
+    check("i2c: IEN raises the line for IF", b.gic->level[I2C_LINE], 1);
+    wr8(I2C_CMD, 0x41);
+    wr8(I2C_CMD, 0x01);
+    check("i2c: IACK drops it", b.gic->level[I2C_LINE], 0);
+    wr8(I2C_CTR, 0x80);
+
+    check("battery: NACK while the state is unknown", (uint64_t)smbus_read_word(VIRT_I2C_BATTERY, 0x16), (uint64_t)-1);
+    check("i2c: nothing at 0x0c", (uint64_t)smbus_read_word(0x0c, 0x16), (uint64_t)-1);
+    check("battery: detect pin low while unknown", rd32(&m, VIRT_GPIO + (1u << VIRT_GPIO_BATTERY << 2)), 0);
+
+    /* The guest's interrupts on both pins, both edges (gpio-charger and sbs-battery ask for that). */
+    uint32_t ac = 1u << VIRT_GPIO_AC, bat = 1u << VIRT_GPIO_BATTERY;
+    wr32(&m, VIRT_GPIO + 0x400, 0);
+    wr32(&m, VIRT_GPIO + 0x404, 0);
+    wr32(&m, VIRT_GPIO + 0x408, ac | bat);
+    wr32(&m, VIRT_GPIO + 0x410, ac | bat);
+    wr32(&m, VIRT_GPIO + 0x41c, 0xff);
+    hv_virt_set_battery(&b, 87, HV_BATTERY_UNPLUGGED, 0, -1, -1);
+    check("battery: detect pin high once known", rd32(&m, VIRT_GPIO + (bat << 2)), bat);
+    check("battery: mains low when unplugged", rd32(&m, VIRT_GPIO + (ac << 2)), 0);
+    check("battery: the detect edge interrupts", rd32(&m, VIRT_GPIO + 0x418), bat);
+    wr32(&m, VIRT_GPIO + 0x41c, 0xff);
+    check("battery: state of charge", smbus_read_word(VIRT_I2C_BATTERY, 0x0d), 87);
+    check("battery: status discharging", smbus_read_word(VIRT_I2C_BATTERY, 0x16), 0xc0);
+    check("battery: current never 0 while discharging", smbus_read_word(VIRT_I2C_BATTERY, 0x0a), 0xffff);
+    check("battery: no run time yet", smbus_read_word(VIRT_I2C_BATTERY, 0x11), 65535);
+    check("battery: spec info without PEC", smbus_read_word(VIRT_I2C_BATTERY, 0x1a), 0x21);
+    check("battery: full in mAh", smbus_read_word(VIRT_I2C_BATTERY, 0x10), 4000);
+    check("battery: remaining in mAh", smbus_read_word(VIRT_I2C_BATTERY, 0x0f), 3480);
+    check("battery: mode write", (uint64_t)smbus_write_word(VIRT_I2C_BATTERY, 0x03, 0x8000), 0);
+    check("battery: mode reads back", smbus_read_word(VIRT_I2C_BATTERY, 0x03), 0x8000);
+    check("battery: full in 10 mWh", smbus_read_word(VIRT_I2C_BATTERY, 0x10), 1540);
+    check("battery: remaining in 10 mWh", smbus_read_word(VIRT_I2C_BATTERY, 0x0f), 1340);
+    check("battery: design capacity follows the mode", smbus_read_word(VIRT_I2C_BATTERY, 0x18), 1540);
+    smbus_write_word(VIRT_I2C_BATTERY, 0x03, 0);
+    check("battery: back to mAh", smbus_read_word(VIRT_I2C_BATTERY, 0x10), 4000);
+
+    /* sbs_read_string_data_fallback: the length as a byte, then length + 1 bytes */
+    uint8_t len = 0, blk[34] = {0}, model = 0x21;
+    I2cMsg byte[2] = {{VIRT_I2C_BATTERY, 0, &model, 1}, {VIRT_I2C_BATTERY, 1, &len, 1}};
+    check("battery: model length", i2c_xfer(byte, 2) == 0 && len == 14, 1);
+    check("battery: model block", (uint64_t)smbus_read_block(VIRT_I2C_BATTERY, 0x21, blk, len + 1), 0);
+    check("battery: model name", blk[0] == 14 && !memcmp(blk + 1, "Device battery", 14), 1);
+    smbus_read_block(VIRT_I2C_BATTERY, 0x22, blk, 5);
+    check("battery: chemistry", blk[0] == 4 && !memcmp(blk + 1, "LION", 4), 1);
+
+    hv_virt_set_battery(&b, 87, HV_BATTERY_CHARGING, 0, -1, -1);
+    check("battery: mains high when charging", rd32(&m, VIRT_GPIO + (ac << 2)), ac);
+    check("battery: the mains edge and the detect pulse interrupt", rd32(&m, VIRT_GPIO + 0x418), ac | bat);
+    check("battery: detect pin stays high", rd32(&m, VIRT_GPIO + (bat << 2)), bat);
+    check("battery: status charging", smbus_read_word(VIRT_I2C_BATTERY, 0x16), 0x80);
+    check("battery: current positive while charging", smbus_read_word(VIRT_I2C_BATTERY, 0x0a), 1);
+    wr32(&m, VIRT_GPIO + 0x41c, 0xff);
+    hv_virt_set_battery(&b, 87, HV_BATTERY_CHARGING, 900, -1, 40);
+    check("battery: a new current alone does not interrupt", rd32(&m, VIRT_GPIO + 0x414), 0);
+    check("battery: the current", smbus_read_word(VIRT_I2C_BATTERY, 0x0a), 900);
+    check("battery: time to full", smbus_read_word(VIRT_I2C_BATTERY, 0x13), 40);
+    hv_virt_set_battery(&b, 100, HV_BATTERY_FULL, 900, -1, -1);
+    check("battery: status full", smbus_read_word(VIRT_I2C_BATTERY, 0x16), 0xa0);
+    check("battery: no current when full", smbus_read_word(VIRT_I2C_BATTERY, 0x0a), 0);
+    check("battery: mains high when full", rd32(&m, VIRT_GPIO + (ac << 2)), ac);
+    hv_virt_set_battery(&b, 100, HV_BATTERY_UNKNOWN, 0, -1, -1);
+    check("battery: gone again", (uint64_t)smbus_read_word(VIRT_I2C_BATTERY, 0x0d), (uint64_t)-1);
+    check("battery: detect pin low again", rd32(&m, VIRT_GPIO + (bat << 2)), 0);
+    check("battery: mains low without a battery", rd32(&m, VIRT_GPIO + (ac << 2)), 0);
+
+    /* lp855x: init-brt then dev-ctrl as byte writes, then each brightness as a write to register 0 */
+    b.backlight.on_brightness = on_backlight;
+    uint8_t w0[2] = {0x00, 0x80}, w1[2] = {0x01, 0x01}, r = 0, ctl = 0x01;
+    I2cMsg bl0 = {VIRT_I2C_BACKLIGHT, 0, w0, 2}, bl1 = {VIRT_I2C_BACKLIGHT, 0, w1, 2};
+    check("backlight: brightness write", (uint64_t)i2c_xfer(&bl0, 1), 0);
+    check("backlight: device control write", (uint64_t)i2c_xfer(&bl1, 1), 0);
+    check("backlight: one brightness reported", backlight_writes, 1);
+    check("backlight: its value", backlight_seen[0], 0x80);
+    I2cMsg rd[2] = {{VIRT_I2C_BACKLIGHT, 0, &ctl, 1}, {VIRT_I2C_BACKLIGHT, 1, &r, 1}};
+    check("backlight: read byte", i2c_xfer(rd, 2) == 0 && r == 0x01, 1);
+    b.backlight.on_brightness = NULL;
+    check("i2c: IF and the line agree after every command", i2c_bad_irq, 0);
+    wr32(&m, VIRT_GPIO + 0x408, 0);
+    wr32(&m, VIRT_GPIO + 0x410, 0);
+    wr32(&m, VIRT_GPIO + 0x41c, 0xff);
+}
+
+/* virtio-snd's control elements on the virt board, as sound/virtio/virtio_kctl.c uses them. */
+#define SND_SLOT 8
+#define SND_REQ (VD_BUF + 0x4000)
+#define SND_RESP (VD_BUF + 0x5000)
+static int snd_calls, snd_percent, snd_muted;
+static void on_snd(void *opaque, int percent, int muted) {
+    (void)opaque;
+    snd_calls++, snd_percent = percent, snd_muted = muted;
+}
+
+/* A control request: header and value out, then the status (and value) back. */
+static uint32_t snd_ctl_req(Vdev *d, uint32_t code, uint32_t a, uint32_t b2, uint32_t c, const int32_t *value, uint32_t extra) {
+    uint8_t *req = ram(SND_REQ), *resp = ram(SND_RESP);
+    memset(req, 0, 8 + 512);
+    memset(resp, 0xee, 4 + 512);
+    memcpy(req, &code, 4);
+    memcpy(req + 4, &a, 4);
+    memcpy(req + 8, &b2, 4);
+    memcpy(req + 12, &c, 4);
+    uint32_t req_len = code == 0x0300 ? 16 : 8;
+    if (value) memcpy(req + 8, value, 8), req_len = 8 + 512;
+    Seg seg[3] = {{SND_REQ, req_len, 0}, {SND_RESP, 4, 1}, {SND_RESP + 4, extra, 1}};
+    vdev_send(d, 0, seg, extra ? 3 : 2);
+    uint32_t st;
+    memcpy(&st, resp, 4);
+    return st;
+}
+
+static int32_t snd_read(Vdev *d, uint32_t cid, int ch) {
+    snd_ctl_req(d, 0x0302, cid, 0, 0, NULL, 512);
+    int32_t v;
+    memcpy(&v, ram(SND_RESP + 4 + 4 * (uint32_t)ch), 4);
+    return v;
+}
+
+static void test_snd_controls(void) {
+    HvVirtioSnd *s = b.snd;
+    Vdev d;
+    uint64_t bar = VIRT_PCIE_MMIO + 0x1300000;
+    vdev_init(&d, SND_SLOT, 2, bar);
+    s->on_control = on_snd;
+    wr32(&m, bar + 0x00, 0);
+    check("snd: offers the control elements", rd32(&m, bar + 0x04), 1);
+    check("snd: two controls in config space", rd32(&m, bar + 0x2000 + 12), 2);
+
+    check("snd: CTL_INFO", snd_ctl_req(&d, 0x0300, 0, 2, 96, NULL, 192), 0x8000);
+    const uint8_t *info = ram(SND_RESP + 4);
+    uint32_t w[6];
+    memcpy(w, info, sizeof w);
+    check("snd: volume role", w[1], 1);
+    check("snd: volume is an integer", w[2], 1);
+    check("snd: read and write, no dB scale", w[3], 3);
+    check("snd: two channels", w[4], 2);
+    check("snd: volume name", !strcmp((const char *)info + 24, "Master Playback Volume"), 1);
+    memcpy(w, info + 72, 12);
+    check("snd: 0 to 100 in steps of 1", w[0] == 0 && w[1] == 100 && w[2] == 1, 1);
+    memcpy(w, info + 96, sizeof w);
+    check("snd: switch role", w[1], 2);
+    check("snd: switch is a boolean", w[2], 0);
+    check("snd: switch name", !strcmp((const char *)info + 96 + 24, "Master Playback Switch"), 1);
+    check("snd: CTL_INFO past the last control", snd_ctl_req(&d, 0x0300, 1, 2, 96, NULL, 192), 0x8001);
+    check("snd: CTL_INFO with a short size", snd_ctl_req(&d, 0x0300, 0, 1, 64, NULL, 64), 0x8001);
+    check("snd: CTL_INFO whose count times size wraps", snd_ctl_req(&d, 0x0300, 0, 2, 0x80000060u, NULL, 192), 0x8001);
+    check("snd: CTL_INFO whose start plus count wraps", snd_ctl_req(&d, 0x0300, 0xffffffffu, 2, 96, NULL, 192), 0x8001);
+    check("snd: CTL_READ of a control past the last", snd_ctl_req(&d, 0x0302, 0xffffffffu, 0, 0, NULL, 512), 0x8001);
+    check("snd: enum items not supported", snd_ctl_req(&d, 0x0301, 0, 0, 0, NULL, 0), 0x8002);
+    check("snd: TLV not supported", snd_ctl_req(&d, 0x0304, 0, 0, 0, NULL, 64), 0x8002);
+    check("snd: full volume at first", snd_read(&d, 0, 0), 100);
+    check("snd: unmuted at first", snd_read(&d, 1, 1), 1);
+
+    /* Events: the driver's buffers wait in the ring until a change needs one. */
+    uint16_t *used = (uint16_t *)ram(d.ring[1] + 0x2000);
+    hv_virtio_snd_set_volume(s, 30);
+    check("snd: a host change without a buffer waits", s->notify_pending[0], 1);
+    check("snd: the guest reads the new volume", snd_read(&d, 0, 1), 30);
+    memset(ram(VD_BUF + 0x6000), 0, 16);
+    Seg ev = {VD_BUF + 0x6000, 8, 1};
+    check("snd: the first buffer takes the waiting event", (uint64_t)vdev_send(&d, 1, &ev, 1), 8);
+    uint32_t code;
+    uint16_t cid, mask;
+    memcpy(&code, ram(VD_BUF + 0x6000), 4);
+    memcpy(&cid, ram(VD_BUF + 0x6004), 2);
+    memcpy(&mask, ram(VD_BUF + 0x6006), 2);
+    check("snd: CTL_NOTIFY", code, 0x1200);
+    check("snd: for the volume", cid, 0);
+    check("snd: its value changed", mask, 1);
+    Seg ev2 = {VD_BUF + 0x6010, 8, 1};
+    check("snd: a buffer with no news is kept", (uint64_t)vdev_send(&d, 1, &ev2, 1), (uint64_t)-1);
+    uint16_t before = used[1];
+    hv_virtio_snd_set_volume(s, 30);
+    check("snd: the same volume sends nothing", used[1], before);
+    hv_virtio_snd_set_volume(s, 45);
+    check("snd: a host change uses the kept buffer", used[1], (uint16_t)(before + 1));
+    memcpy(&code, ram(VD_BUF + 0x6010), 4);
+    check("snd: CTL_NOTIFY in it", code, 0x1200);
+    check("snd: the host's volume is no guest request", snd_calls, 0);
+
+    int32_t v70[2] = {70, 70}, same[2] = {70, 70}, off[2] = {0, 0}, on[2] = {1, 1}, wide[2] = {150, -3};
+    check("snd: a guest write", snd_ctl_req(&d, 0x0303, 0, 0, 0, v70, 0), 0x8000);
+    check("snd: reads back", snd_read(&d, 0, 0), 70);
+    check("snd: reaches the host", snd_calls == 1 && snd_percent == 70 && !snd_muted, 1);
+    check("snd: and tells the guest's other clients", s->notify_pending[0], 1);
+    snd_ctl_req(&d, 0x0303, 0, 0, 0, same, 0);
+    check("snd: an unchanged write is not passed on", snd_calls, 1);
+    int32_t one_side[2] = {40, 70};
+    snd_ctl_req(&d, 0x0303, 0, 0, 0, one_side, 0);
+    check("snd: one channel at a time passes on the louder one", snd_percent, 70);
+    snd_ctl_req(&d, 0x0303, 0, 0, 0, v70, 0);
+    snd_ctl_req(&d, 0x0303, 0, 0, 0, wide, 0);
+    check("snd: values are clamped", snd_read(&d, 0, 0) == 100 && snd_read(&d, 0, 1) == 0, 1);
+    snd_ctl_req(&d, 0x0303, 0, 0, 0, v70, 0);
+    check("snd: CTL_WRITE past the last control", snd_ctl_req(&d, 0x0303, 2, 0, 0, v70, 0), 0x8001);
+
+    /* Mute: the ring drains as before, with silence. */
+    snd_calls = 0;
+    snd_ctl_req(&d, 0x0303, 1, 0, 0, off, 0);
+    check("snd: mute reaches the host", snd_calls == 1 && snd_muted == 1 && snd_percent == 70, 1);
+    uint8_t out[64];
+    memset(s->ring, 0x55, 64);
+    uint64_t c0 = atomic_load(&s->consumed);
+    atomic_store(&s->written, c0 + 64);
+    check("snd: a muted pull takes the bytes", hv_virtio_snd_pull(s, out, 64), 64);
+    check("snd: and plays silence", all_zero(out, 64), 1);
+    snd_ctl_req(&d, 0x0303, 1, 0, 0, on, 0);
+    memset(s->ring + 64, 0x55, 64);
+    atomic_store(&s->written, c0 + 128);
+    hv_virtio_snd_pull(s, out, 64);
+    check("snd: unmuted plays the sound", out[0] == 0x55 && out[63] == 0x55, 1);
+
+    /* A reset: no event waits, and a new driver starts unmuted. */
+    snd_ctl_req(&d, 0x0303, 1, 0, 0, off, 0);
+    snd_calls = 0;
+    wr8(bar + 0x14, 0);
+    check("snd: reset drops a waiting event", s->notify_pending[0] + s->notify_pending[1], 0);
+    check("snd: reset unmutes", atomic_load(&s->muted), 0);
+    check("snd: and says so", snd_calls == 1 && snd_muted == 0, 1);
+    check("snd: reset keeps the volume", s->volume[0], 70);
+    s->on_control = NULL;
+}
+
 static void test_rng(void) {
     Vdev d;
     uint64_t bar = VIRT_PCIE_MMIO + 0x1000000;
@@ -1565,6 +1887,9 @@ static void test_primecell(void) {
     check("RTC: a write to DR changes nothing", rd32(&m, VIRT_RTC) >= t - 5, 1);
     check("RTC: control reads enabled", rd32(&m, VIRT_RTC + 0x0c), 1);
     wr32(&m, VIRT_RTC + 0x08, 1000000000);
+    check("RTC: the virt board ignores a load", rd32(&m, VIRT_RTC) >= t - 5, 1);
+    b.rtc->host_time = 0;
+    wr32(&m, VIRT_RTC + 0x08, 1000000000);
     dr = rd32(&m, VIRT_RTC);
     check("RTC: load sets the time", dr >= 1000000000 && dr <= 1000000030, 1);
     wr32(&m, VIRT_RTC + 0x10, 0xff);
@@ -1588,6 +1913,7 @@ static void test_primecell(void) {
     wr32(&m, VIRT_RTC + 0x04, 0);
     hv_pl031_tick(b.rtc);
     check("RTC: match 0 means off", rd32(&m, VIRT_RTC + 0x14), 0);
+    b.rtc->offset = 0, b.rtc->host_time = 1;
 
     /* PL061 on pins 5 and 6; pin 3 is the power key. */
     uint32_t p5 = 1u << 5, p6 = 1u << 6;
@@ -3259,6 +3585,8 @@ int main(void) {
     test_pci_config();
     test_primecell();
     test_rng();
+    test_devstatus();
+    test_snd_controls();
     test_blk(disk_path);
     test_gpu3d(b.gpu);
     hv_virt_destroy(&b);

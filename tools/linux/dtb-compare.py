@@ -22,6 +22,8 @@ QEMU_MAX_MB = 3072  # highmem=off keeps RAM below 4 GB, so QEMU refuses -m 4096
 # Top-level nodes only QEMU has (devices Henge leaves out by design).
 QEMU_ONLY_NODES = {"platform-bus@c000000", "fw-cfg@9020000", "pmu", "flash@0"}
 QEMU_ONLY_PREFIXES = ("virtio_mmio@",)
+# Top-level nodes only Henge has: the device's battery, mains and backlight (LINUX-PLAN-13).
+HENGE_ONLY_NODES = {"i2c@90c0000", "ac-power"}
 # Subtrees only QEMU has: the ITS (no MSI) and the CPU topology.
 QEMU_ONLY_PATHS = {"/intc@8000000/its@8080000", "/cpus/cpu-map"}
 # Properties that differ by design: path -> names.
@@ -128,7 +130,7 @@ def compare(q, h, ncpus, ram_mb):
             (allowed if is_qemu_only(path) else errors).append(f"{path}: only in QEMU")
             continue
         if path not in q:
-            errors.append(f"{path}: only in Henge")
+            (allowed if path.split("/")[1] in HENGE_ONLY_NODES else errors).append(f"{path}: only in Henge")
             continue
         ignored = set(IGNORED_PROPS.get(path, ()))
         if re.fullmatch(r"/cpus/cpu@\d+", path):

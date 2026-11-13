@@ -1,0 +1,14 @@
+# Plasma's power settings for every user (Plasma 6.3 names). The backlight is the device's screen:
+# an idle or low guest must not dim it. At a critical battery the guest only shows its notice.
+[BatteryManagement]
+BatteryCriticalAction=0
+
+[AC][Display]
+DimDisplayWhenIdle=false
+
+[Battery][Display]
+DimDisplayWhenIdle=false
+
+[LowBattery][Display]
+DimDisplayWhenIdle=false
+UseProfileSpecificDisplayBrightness=false

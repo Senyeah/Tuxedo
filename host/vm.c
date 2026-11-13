@@ -10,6 +10,7 @@
 #include <TargetConditionals.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <dispatch/dispatch.h>
+#include <math.h>
 #include <os/lock.h>
 #include <stdatomic.h>
 #include <pthread.h>
@@ -27,6 +28,7 @@
 #include "audio_mac.h"
 #include "dispatch.h"
 #include "net_slirp.h"
+#include "status.h"
 
 static HvMachine m;
 static HvCpu cpus[HV_MAX_CPUS]; /* the board takes them as an array */
@@ -249,7 +251,27 @@ static void console_reset(void) {
 }
 
 /* Host-side device work on CPU 0's thread each tick. */
+/* Under the device lock (or before the guest runs): the device's status into the virt board. */
+static unsigned status_gen;
+static void status_apply(void) {
+    HvStatusView v;
+    hv_status_get(&v);
+    hv_virt_set_battery(&virt, v.battery_level, v.battery_state, v.current_ma, v.to_empty_min, v.to_full_min);
+    if (v.volume >= 0) hv_virtio_snd_set_volume(virt.snd, (int)lround(v.volume * 100));
+}
+
+static void guest_backlight(void *opaque, uint8_t value) {
+    (void)opaque;
+    hv_status_guest_brightness(value);
+}
+
+static void guest_volume(void *opaque, int percent, int muted) {
+    (void)opaque;
+    hv_status_guest_volume(percent, muted);
+}
+
 static void board_poll(void) {
+    if (board_kind == HV_BOARD_VIRT && hv_status_devices_changed(&status_gen)) status_apply();
     if (extra_poll) extra_poll();
     if (net_on) hv_net_poll();
     console_pump();
@@ -439,6 +461,14 @@ static int create_virt(const HvVmConfig *c, uint64_t ram_size, char *err, size_t
     static const uint8_t mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56}; /* QEMU's default */
     if (hv_virt_create(&virt, &m, cpus, ncpus, ram_size, c->disk ? &disk : NULL, mac) != 0)
         return fail(err, errlen, "Cannot build the machine (not enough memory for the guest's RAM?).");
+    /* Before the tree: it holds the backlight's level at boot. */
+    HvStatusView st;
+    hv_status_get(&st);
+    hv_status_devices_changed(&status_gen);
+    status_apply();
+    hv_virt_set_backlight(&virt, st.brightness >= 0 ? (uint8_t)lround(st.brightness * 255) : 255);
+    virt.backlight.on_brightness = guest_backlight;
+    if (virt.snd) virt.snd->on_control = guest_volume;
     if (c->rom) {
         if (hv_virt_load_firmware(&virt, c->rom) != 0) return fail(err, errlen, "Cannot read the firmware (at most 64 MB).");
         uint32_t size = 0;
@@ -645,6 +675,7 @@ double hv_vm_resume(void) {
         gap = hv_machine_resume(&m); /* 0 if a stop released it already */
         atomic_store(&vm_paused, 0);
         pthread_cond_broadcast(&pause_cv);
+        hv_status_touch(); /* the guest's wall clock is behind by the pause */
     }
     pthread_mutex_unlock(&pause_mu);
     return gap / 24e6;
@@ -994,3 +1025,25 @@ int hv_vm_snapshot(uint8_t *bgra, int width, int height) {
     if (!shown || !shown->display || width <= 0 || height <= 0) return -1;
     return shown->display->snapshot(shown->display_opaque, bgra, (uint32_t)width, (uint32_t)height);
 }
+
+/* CPU 0's next tick takes the battery and volume (board_poll). */
+static void status_wake(void) {
+    if (!atomic_load(&input_stopping)) hv_machine_wake(&m);
+}
+
+void hv_vm_set_battery(int level, int state) {
+    hv_status_set_battery(level, state);
+    status_wake();
+}
+
+void hv_vm_set_brightness(double level) { hv_status_set_brightness(level); }
+
+void hv_vm_set_volume(double level) {
+    hv_status_set_volume(level);
+    status_wake();
+}
+
+int hv_vm_set_timezone(const char *name) { return hv_status_set_timezone(name); }
+void hv_vm_status_touch(void) { hv_status_touch(); }
+int hv_vm_take_brightness_request(double *level) { return hv_status_take_brightness(level); }
+int hv_vm_take_volume_request(double *level, int *muted) { return hv_status_take_volume(level, muted); }

@@ -152,6 +152,17 @@ int hv_vm_pointer(int *x, int *y);
 /* A small picture of the display, BGRA, width * height * 4 bytes. 0, or -1 before anything shows. */
 int hv_vm_snapshot(uint8_t *bgra, int width, int height);
 
+/* The device's status for a Linux guest (host/status.h). Any thread; kept for later machines.
+   state: 0 unknown, 1 unplugged, 2 charging, 3 full (UIDeviceBatteryState); level 0-100 or -1. */
+void hv_vm_set_battery(int level, int state);
+void hv_vm_set_brightness(double level); /* 0 to 1 */
+void hv_vm_set_volume(double level);     /* 0 to 1 */
+int hv_vm_set_timezone(const char *name); /* -1: not a zone name */
+void hv_vm_status_touch(void);           /* the wall clock changed */
+/* What the guest asked for with its own sliders: 1 once per new request. */
+int hv_vm_take_brightness_request(double *level);
+int hv_vm_take_volume_request(double *level, int *muted);
+
 /* The serial console (the PL011). Set the output before hv_vm_start; hv_vm_destroy clears it.
    NULL gives the UART's own output (stdout). */
 void hv_vm_console_set_output(void (*out)(void *opaque, uint8_t c), void *opaque);

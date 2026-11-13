@@ -254,6 +254,7 @@ struct SessionView: View {
             HardwareKeys.releaseAll()
             HardwareMouse.shared.releaseButtons()
             VolumeClicks.shared.releaseButtons()
+            DeviceStatus.shared.leaveForeground()
             // An external screen's scene may still be up; then the app is not in the background.
             if phase == .background && UIApplication.shared.applicationState == .background { setBackground(true) }
             else if phase == .inactive { setBackground(false) }
@@ -285,6 +286,7 @@ struct SessionView: View {
             HardwareKeys.releaseAll()
             HardwareMouse.shared.stop()
             VolumeClicks.shared.stop()
+            DeviceStatus.shared.stop()
         }
         .modifier(ExternalMacDisplayModifier(presentation: MacPresentation(display: display, aspect: layoutAspect, isLinux: mac.guest == .linux)))
         .task(id: bootAttempt) { await run() }
@@ -909,6 +911,7 @@ struct SessionView: View {
         var buffer = [CChar](repeating: 0, count: 256)
         JITBootstrap.releaseLingeringDebugger()
         Sharing.prepare()
+        if mac.guest == .linux { DeviceStatus.shared.start { [display] in !display.isExternal } }
         EngineTuning.apply()
         let saved = current
         var macMM: (width: Int, height: Int) = saved.isRetina ? Device.retinaMM : (0, 0)

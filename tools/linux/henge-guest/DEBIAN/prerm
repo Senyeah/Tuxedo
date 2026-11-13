@@ -2,5 +2,5 @@
 set -e
 
 if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
-    deb-systemd-invoke stop home-henge-Henge.automount home-henge-Henge.mount henge-grow.service henge-firstboot.service >/dev/null || true
+    deb-systemd-invoke stop henge-status.service home-henge-Henge.automount home-henge-Henge.mount henge-grow.service henge-firstboot.service >/dev/null || true
 fi
