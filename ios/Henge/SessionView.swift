@@ -1,5 +1,6 @@
 import SwiftUI
 import GameController
+import LocalAuthentication
 
 /// A running Mac. Upright, its screen sits above a trackpad; on its side the screen fills the device
 /// and is its own trackpad. Zoomed in, the screen fills the device either way and follows the pointer.
@@ -11,6 +12,9 @@ struct SessionView: View {
     @ObservedObject private var machines = Machines.shared
     @StateObject private var display = DisplayRouter()
     @State private var error: String?
+    @State private var gate = SessionGate() // Face ID before the machine runs or comes back
+    @State private var gateMessage: String?
+    @State private var gateContext: LAContext?
     @State private var state: Int32 = 0
     @State private var bootAttempt = 0
     @State private var cpusOn: Int32 = 0
@@ -216,6 +220,7 @@ struct SessionView: View {
                 }
                 if let error { errorCard(error, layout) }
                 if shutdownAsked != nil && state != 2 { shutdownCard(layout) }
+                if gate.covered && gate.phase != .closed { lockCover(layout, full) }
                 KeyboardCatcher(active: $typing, suspended: consoleShown, linux: mac.guest == .linux).frame(width: 0, height: 0)
             }
             .frame(width: full.width, height: full.height)
@@ -309,6 +314,9 @@ struct SessionView: View {
             HardwareMouse.shared.stop()
             VolumeClicks.shared.stop()
             DeviceStatus.shared.stop()
+            gate.end()
+            gateContext = nil
+            KeychainStore.shared.setUnlocked(false, context: nil)
         }
         .modifier(ExternalMacDisplayModifier(presentation: MacPresentation(display: display, aspect: layoutAspect, isLinux: mac.guest == .linux)))
         .task(id: bootAttempt) { await run() }
@@ -995,6 +1003,11 @@ struct SessionView: View {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         guard !Task.isCancelled else { return }
+        askToOpen()
+        while gate.phase != .open { // a refusal waits here for Try Again or Close
+            guard !Task.isCancelled else { return }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
         UIApplication.shared.isIdleTimerDisabled = true
         HardwareMouse.shared.start()
         let ram = GuestMemory.prepare(mac)
@@ -1006,6 +1019,8 @@ struct SessionView: View {
         var buffer = [CChar](repeating: 0, count: 256)
         JITBootstrap.releaseLingeringDebugger()
         Sharing.prepare()
+        KeychainStore.shared.attach(mac)
+        KeychainStore.shared.setUnlocked(gate.secretsUnlocked, context: gateContext)
         if mac.guest == .linux { DeviceStatus.shared.start { [display] in !display.isExternal } }
         EngineTuning.apply()
         let saved = current
@@ -1143,12 +1158,74 @@ struct SessionView: View {
     /// Linux pauses while the app is away, so iOS freezing it does not jump the guest's clock (RCU stalls).
     /// A Mac keeps running as before: the pause is not checked with macOS yet (T4).
     /// A machine with graphics acceleration always pauses, even while it plays sound: iOS allows no Metal work in the background.
+    /// Every machine locks in the background and asks for Face ID when the app comes back (SessionGate).
     private func setBackground(_ away: Bool) {
+        if away {
+            gate.leave()
+            typing = false
+            gateContext = nil
+            KeychainStore.shared.setUnlocked(false, context: nil)
+        } else if gate.phase == .away {
+            askToOpen() // resumes when it passes
+            return
+        } else if gate.covered {
+            return
+        }
         guard mac.guest == .linux else { return }
         let was = henge_vm_paused() != 0
         henge_vm_set_background(away ? 1 : 0) // sound keeps only a machine without acceleration running; it pauses when the sound stops
         let now = henge_vm_paused() != 0
         if now != was { HengeLog.log("session", now ? "paused in the background" : "resumed") }
+    }
+
+    private func askToOpen() {
+        guard let ticket = gate.ask() else { return }
+        gateMessage = nil
+        Task { @MainActor in
+            let outcome = await SessionAuth.check(mac.name)
+            switch outcome {
+            case .passed(let context):
+                gate.checked(ticket, passed: true)
+                guard gate.secretsUnlocked else { return } // the app left during the check
+                gateContext = context
+                KeychainStore.shared.setUnlocked(true, context: context)
+                setBackground(false)
+            case .failed(let message):
+                gate.checked(ticket, passed: false)
+                gateMessage = message
+            }
+        }
+    }
+
+    /// Hides the guest until the check passes. A refusal offers the check again, or leaves.
+    private func lockCover(_ layout: Layout, _ full: CGSize) -> some View {
+        ZStack {
+            Color.black.frame(width: full.width, height: full.height)
+            if gate.phase == .refused {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("\(mac.name) is locked").font(.system(size: 17, weight: .semibold))
+                    Text(gateMessage ?? "Face ID did not pass.").font(.system(size: 14)).foregroundStyle(Desk.dim)
+                    if state == 1 {
+                        Text("Turn Off stops it at once: anything not saved on it is lost.").font(.system(size: 14)).foregroundStyle(Desk.dim)
+                    }
+                    HStack(spacing: 24) {
+                        Button("Try Again") { askToOpen() }.foregroundStyle(Desk.accentLight)
+                        Button(state == 1 ? "Turn Off" : "Close") {
+                            if state == 1 { henge_vm_stop() }
+                            close()
+                        }
+                        .foregroundStyle(state == 1 ? Desk.bad : Desk.accentLight)
+                    }
+                    .font(.system(size: 15, weight: .semibold))
+                }
+                .padding(18)
+                .frame(width: min(layout.touch.width, 390) - 32, alignment: .leading)
+                .background(Desk.raised, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            } else {
+                Image(systemName: "faceid").font(.system(size: 44)).foregroundStyle(Desk.dim)
+            }
+        }
+        .frame(width: full.width, height: full.height)
     }
 
     private func finish() {

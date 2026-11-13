@@ -68,6 +68,8 @@
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>Henge can use the volume buttons as the trackpad's mouse buttons. Receiving those presses needs the camera active; no video is recorded, saved or shown.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Henge asks for Face ID before a machine opens or comes back, and to unlock the passwords a Linux machine keeps in the Keychain.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Henge uses the local network to pair with this iPhone for JIT, and to download Linux images from a computer on your network.</string>
 	<key>UIApplicationSceneManifest</key>

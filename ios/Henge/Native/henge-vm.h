@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "secrets.h"
+
 /* Builds the machine from imported files, on the JIT region the app holds
    (henge_ios_jit_prewarm), and starts it. 0, or -1 with a reason in err. */
 int henge_vm_boot(const char *rom, const char *disk, const char *aux, uint64_t ecid, uint64_t seed, uint64_t ram_mb,
@@ -79,6 +81,10 @@ char *henge_share_take_clipboard(void);
 long henge_share_agent_seen(void);
 /* 1 when the focused program in a Linux desktop wants text; *seq changes with each request from the guest. */
 int henge_share_keyboard_wanted(unsigned long *seq);
+/* A Linux machine's wallet (host/secrets.h): the store (KeychainStore.swift) and the machine it is for, or NULL for
+   none (a Mac). Locked until the session's Face ID check passes. Any time. */
+void henge_vm_secrets(const HvSecretStore *store, const char *machine_id);
+void henge_vm_secrets_set_locked(int locked);
 
 /* The phone's status for a Linux guest (host/status.h). Any time, before boot too; kept for the next machine.
    state: UIDeviceBatteryState (0 unknown, 1 unplugged, 2 charging, 3 full); level 0-100, or -1. */

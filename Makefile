@@ -518,6 +518,14 @@ test-keyboard-follow: $(B)/test_keyboard_follow
 	$(B)/test_keyboard_follow
 .PHONY: test-keyboard-follow
 
+# When a session asks for Face ID and when a Linux wallet is open, and the wallet's Keychain names: pure policy.
+$(B)/test_session_gate: ios/Henge/SessionGate.swift ios/Henge/WalletScope.swift tests/test_session_gate.swift | $(B)
+	xcrun --sdk macosx swiftc $^ -o $@
+
+test-session-gate: $(B)/test_session_gate
+	$(B)/test_session_gate
+.PHONY: test-session-gate
+
 test-linux-catalogue: $(B)/test_linux_catalogue
 	$(B)/test_linux_catalogue
 .PHONY: test-linux-catalogue
