@@ -1,0 +1,15 @@
+[
+    {
+        "name": "outputs",
+        "data": [
+            {
+                "connectorName": "Virtual-1",
+                "allowSdrSoftwareBrightness": false
+            }
+        ]
+    },
+    {
+        "name": "setups",
+        "data": []
+    }
+]
