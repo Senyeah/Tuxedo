@@ -676,13 +676,16 @@ def main():
     ap.add_argument("--fsx-seconds", type=int, default=600)
     ap.add_argument("--pjdfstest", action="store_true", help="FM7: pjdfstest on the Read-write folder, no FM6 checks")
     ap.add_argument("--json", help="write the times here")
-    ap.add_argument("--work-dir", help="where the clone goes (the image's APFS volume; default TMPDIR)")
+    ap.add_argument("--work-dir", help="where the clone goes (the image's APFS volume; default build/ in this checkout)")
     args = ap.parse_args()
     d = linux_dir()
     image = args.image or os.path.join(d, "debian-console.img")
     args.firmware = args.firmware or os.path.join(d, "u-boot.bin")
 
-    tmp = tempfile.mkdtemp(prefix="files-check-", dir=args.work_dir)
+    # Docker Desktop shares the checkout but not TMPDIR (/var/folders): build-guest-pkg.sh's /out must be in reach.
+    work = args.work_dir or os.path.join(os.path.dirname(os.path.dirname(HERE)), "build")
+    os.makedirs(work, exist_ok=True)
+    tmp = tempfile.mkdtemp(prefix="files-check-", dir=work)
     disk = os.path.join(tmp, "disk.img")
     # hengevm listens on "<share>.sock", and a unix socket path is limited to 103 characters
     share = tempfile.mkdtemp(prefix="fcs-", dir="/tmp")

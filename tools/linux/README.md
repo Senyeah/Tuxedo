@@ -315,6 +315,8 @@ To turn it off: `kwriteconfig6 --file kwinrc --group Wayland --key InputMethod "
 
 A Linux machine with graphics acceleration can decode video on the host's hardware decoder (VideoToolbox) through VA-API. It is off by default. Turn it on with the machine's "Video decode" switch in the iOS app (under "Graphics acceleration"), or with `hengevm --gpu-accel --gpu-video` on the Mac. The host's decoder then parses video data that the guest controls. Details and measurements: `docs/guest-video-decode-research.md`.
 
+The images have `henge-ffmpeg`, so a plain `ffmpeg` is the Henge build, which has no VA-API (it decodes with `-hwaccel henge`). For VA-API, use Debian's `/usr/bin/ffmpeg`, or a player such as mpv, which uses Debian's libraries.
+
 In the guest:
 
 ```sh
@@ -325,7 +327,7 @@ vainfo --display drm --device /dev/dri/renderD128
 `vainfo` names `Mesa Gallium driver ... for virgl` and lists the profiles with `VAEntrypointVLD` that the host has in hardware: `VAProfileH264Main` and `VAProfileH264High`, `VAProfileVP9Profile0` and `VAProfileVP9Profile2` (10 bits), and `VAProfileAV1Profile0` (8 and 10 bits). Without the switch it lists none.
 
 - mpv: `mpv --hwdec=vaapi --vo=gpu FILE`. The decoded frames stay on the host GPU. `hwdec-current` in mpv's statistics (`i`) says `vaapi`.
-- FFmpeg: `ffmpeg -hwaccel vaapi -hwaccel_device /dev/dri/renderD128 -hwaccel_output_format vaapi -i FILE ...` keeps the frames on the GPU; without `-hwaccel_output_format vaapi` each frame comes back to guest RAM.
+- FFmpeg: `/usr/bin/ffmpeg -hwaccel vaapi -hwaccel_device /dev/dri/renderD128 -hwaccel_output_format vaapi -i FILE ...` keeps the frames on the GPU; without `-hwaccel_output_format vaapi` each frame comes back to guest RAM.
 - GStreamer: the `va` plugin in `gstreamer1.0-plugins-bad` (`vah264dec`, `vavp9dec`, `vaav1dec`; not tested on Henge).
 - Not in hardware: HEVC (VA-API does not carry the reference picture sets that VideoToolbox needs), MPEG-2, VC-1, JPEG, VP9 profiles 1 and 3, AV1 profiles 1 and 2, and AV1 with film grain. Players fall back to software decode for those, except AV1 with film grain: its frames fail, so turn hardware decode off in the player (`--hwdec=no`).
 - A stream that fails on the host gives no error in the guest: the frame keeps its old pixels until the next key frame. `hengevm`'s log (`HV_VIRGL_VERBOSE=1`) has a line for each failure and, when the player closes, a total for each codec.

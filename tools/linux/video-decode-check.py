@@ -40,6 +40,8 @@ MARK = "HENGE_RC_"
 SHELL = r"henge@henge:[^\n]*\$ "
 WAYLAND = "export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0"
 PACKAGES = ["mesa-va-drivers", "vainfo", "ffmpeg", "mpv"]
+# Debian's ffmpeg has VA-API; henge-ffmpeg, first in PATH when installed, does not (it decodes with -hwaccel henge).
+FFMPEG = "/usr/bin/ffmpeg"
 RENDER = "/dev/dri/renderD128"
 # VREND_VIDEO_CPU_COPY=1 in the environment: hengevm copies the planes on the CPU (the spike's path), to measure against
 CPU_COPY = os.environ.get("VREND_VIDEO_CPU_COPY") == "1"
@@ -204,9 +206,9 @@ def framemd5(p, name):
     clip = f"/tmp/{clip_file(name)}"
     pix = CLIPS[name][1]
     # both sides in the clip's format: nv12 to yuv420p (p010 to yuv420p10le) only moves the bytes
-    hw = (f"ffmpeg -hide_banner -v warning -hwaccel vaapi -hwaccel_device {RENDER} -i {clip} "
+    hw = (f"{FFMPEG} -hide_banner -v warning -hwaccel vaapi -hwaccel_device {RENDER} -i {clip} "
           f"-vf format={pix} -f framemd5 /tmp/{name}.hw.md5 2>/tmp/{name}.hw.log")
-    sw = f"ffmpeg -hide_banner -v warning -hwaccel none -i {clip} -vf format={pix} -f framemd5 /tmp/{name}.sw.md5 2>/tmp/{name}.sw.log"
+    sw = f"{FFMPEG} -hide_banner -v warning -hwaccel none -i {clip} -vf format={pix} -f framemd5 /tmp/{name}.sw.md5 2>/tmp/{name}.sw.log"
     out, rc = sh(p, hw, 1800)
     log, _ = sh(p, f"cat /tmp/{name}.hw.log")
     if rc:
@@ -237,7 +239,7 @@ def bench(p, pid, name, hw):
     acc = f"-hwaccel vaapi -hwaccel_device {RENDER} -hwaccel_output_format vaapi" if hw else "-hwaccel none"
     tag = "vaapi" if hw else "software"
     c0, t0 = cpu_secs(pid), time.monotonic()
-    out, rc = sh(p, f"TIMEFORMAT='GUEST_TIME %R %U %S'; time ffmpeg -hide_banner -nostats -benchmark {acc} -i {clip} -f null - 2>&1 "
+    out, rc = sh(p, f"TIMEFORMAT='GUEST_TIME %R %U %S'; time {FFMPEG} -hide_banner -nostats -benchmark {acc} -i {clip} -f null - 2>&1 "
                     "| grep -E 'bench:|frame=|rror|Fail' | tail -5", 3600)
     c1, t1 = cpu_secs(pid), time.monotonic()
     frames = re.findall(r"frame=\s*(\d+)", out)
