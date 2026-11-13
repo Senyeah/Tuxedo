@@ -1,6 +1,16 @@
 #!/bin/sh
 set -e
 
+if [ "$1" = remove ]; then
+    # A reinstall enables it again only if it was enabled now
+    if systemctl --global is-enabled henge-secrets.service >/dev/null 2>&1; then
+        mkdir -p /var/lib/henge && touch /var/lib/henge/secrets-removed
+    fi
+    systemctl --global disable henge-secrets.service >/dev/null 2>&1 || true
+fi
 if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
-    deb-systemd-invoke stop henge-status.service home-henge-Henge.automount home-henge-Henge.mount henge-grow.service henge-firstboot.service >/dev/null || true
+    deb-systemd-invoke stop henge-status.service home-henge-Henge.automount home-henge-Henge.mount henge-grow.service henge-firstboot.service henge-secrets-firewall.service >/dev/null || true
+fi
+if [ "$1" = remove ]; then
+    /usr/lib/henge/henge-secrets-firewall remove # stopping the unit keeps the rule
 fi

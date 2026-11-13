@@ -11,6 +11,7 @@
 
    Locks are accepted but not enforced: macOS only writes to a server that offers them, and there is one client. */
 #include "share.h"
+#include "secrets.h"
 #include "status.h"
 #include "vm.h"
 
@@ -109,6 +110,7 @@ typedef struct Conn {
     int fd;
     char buf[64 * 1024]; /* read ahead */
     size_t at, have;
+    int wallet; /* came in on the wallet's socket */
 } Conn;
 
 typedef struct Request {
@@ -798,6 +800,27 @@ static int status_get(Conn *c, Request *r) {
     return respond(c, r, 200, "OK", headers, body, (size_t)n);
 }
 
+/* A Linux guest's wallet (secrets.c). */
+static int secrets_route(Conn *c, Request *r, const char *path) {
+    char *body = NULL;
+    size_t len = 0;
+    if (!strcmp(r->method, "PUT")) {
+        if (r->length > HV_SECRETS_BODY_MAX) {
+            if (body_discard(c, r) != 0) return -1;
+            return respond_empty(c, r, 413, hv_secrets_reason(413));
+        }
+        if (!(body = body_small(c, r, &len))) return -1;
+    } else if (body_discard(c, r) != 0) {
+        return -1;
+    }
+    HvSecretsReply out;
+    hv_secrets_handle(r->method, path, r->query, body, len, &out);
+    free(body);
+    int rc = respond(c, r, out.status, hv_secrets_reason(out.status), out.headers, out.body, out.len);
+    free(out.body);
+    return rc;
+}
+
 static int serve_henge(Conn *c, Request *r) {
     const char *what = r->path + strlen("/.henge/");
     if (!strcmp(what, "install") && !strcmp(r->method, "GET")) {
@@ -908,6 +931,12 @@ static int read_request(Conn *c, Request *r) {
 }
 
 static int handle(Conn *c, Request *r) {
+    int wallet = !strncmp(r->path, "/.henge/secrets", 15) && (!r->path[15] || r->path[15] == '/');
+    if (wallet != c->wallet) { /* the wallet only on its own port, and nothing else there */
+        if (body_discard(c, r) != 0) return -1;
+        return respond_empty(c, r, 404, "Not Found");
+    }
+    if (wallet) return secrets_route(c, r, r->path + 15);
     if (!strncmp(r->path, "/.henge/", 8)) return serve_henge(c, r);
     const char *m = r->method;
     if (!strcmp(m, "OPTIONS")) {
@@ -956,7 +985,7 @@ static void *connection(void *arg) {
 }
 
 static void *listener(void *arg) {
-    int server = (int)(intptr_t)arg;
+    int server = (int)((intptr_t)arg >> 1), wallet = (int)((intptr_t)arg & 1);
     for (;;) {
         int fd = accept(server, NULL, NULL);
         if (fd < 0) {
@@ -968,6 +997,7 @@ static void *listener(void *arg) {
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof on);
         Conn *c = calloc(1, sizeof *c);
         c->fd = fd;
+        c->wallet = wallet;
         pthread_t t;
         pthread_attr_t a;
         pthread_attr_init(&a);
@@ -981,11 +1011,7 @@ static void *listener(void *arg) {
     return NULL;
 }
 
-int hv_share_start(const char *folder, const char *socket_path, const char *agent) {
-    static int started;
-    if (started) return 0;
-    if (!realpath(folder, root)) return -1;
-    if (agent) snprintf(agent_path, sizeof agent_path, "%s", agent);
+static int listen_on(const char *socket_path, int wallet) {
     struct sockaddr_un addr = {.sun_family = AF_UNIX};
     if (strlen(socket_path) >= sizeof addr.sun_path) {
         fprintf(stderr, "hengevm: share: socket path too long: %s\n", socket_path);
@@ -1001,8 +1027,20 @@ int hv_share_start(const char *folder, const char *socket_path, const char *agen
     }
     chmod(socket_path, 0600);
     pthread_t t;
-    pthread_create(&t, NULL, listener, (void *)(intptr_t)server);
+    pthread_create(&t, NULL, listener, (void *)((intptr_t)server << 1 | wallet));
     pthread_detach(t);
+    return 0;
+}
+
+int hv_share_start(const char *folder, const char *socket_path, const char *agent) {
+    static int started;
+    if (started) return 0;
+    if (!realpath(folder, root)) return -1;
+    if (agent) snprintf(agent_path, sizeof agent_path, "%s", agent);
+    char wallet[PATH_MAX];
+    if (listen_on(socket_path, 0) != 0) return -1;
+    if (hv_share_secrets_socket(socket_path, wallet, sizeof wallet) != 0 || listen_on(wallet, 1) != 0)
+        fprintf(stderr, "hengevm: share: no socket for the wallet\n");
     started = 1;
     return 0;
 }

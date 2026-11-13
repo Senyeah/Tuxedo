@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "secrets.h"
+
 /* Builds the machine from imported files, on the JIT region the app holds
    (henge_ios_jit_prewarm), and starts it. 0, or -1 with a reason in err. */
 int henge_vm_boot(const char *rom, const char *disk, const char *aux, uint64_t ecid, uint64_t seed, uint64_t ram_mb,
@@ -92,6 +94,11 @@ void henge_vm_status_touch(void);           /* the wall clock changed */
 /* The guest's own brightness and volume sliders: 1 once per new request, 0 when none or no machine runs. */
 int henge_vm_take_brightness_request(double *level);
 int henge_vm_take_volume_request(double *level, int *muted);
+
+/* A Linux machine's wallet (host/secrets.h): the store (KeychainStore.swift) and the machine it is for, or NULL for
+   none (a Mac). Locked until the session's Face ID check passes. Any time. */
+void henge_vm_secrets(const HvSecretStore *store, const char *machine_id);
+void henge_vm_secrets_set_locked(int locked);
 
 /* The size macOS is told its screen is. Before henge_vm_boot. */
 void henge_vm_set_display(uint32_t width, uint32_t height);

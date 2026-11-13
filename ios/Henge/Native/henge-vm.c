@@ -376,6 +376,12 @@ void henge_vm_set_volume(double level) { hv_vm_set_volume(level); }
 int henge_vm_set_timezone(const char *name) { return hv_vm_set_timezone(name); }
 void henge_vm_status_touch(void) { hv_vm_status_touch(); }
 
+void henge_vm_secrets(const HvSecretStore *store, const char *machine_id) {
+    hv_secrets_set_store(store);
+    hv_secrets_set_scope(machine_id);
+}
+void henge_vm_secrets_set_locked(int locked) { hv_secrets_set_locked(locked); }
+
 int henge_vm_take_brightness_request(double *level) {
     if (!lock_running()) return 0;
     int got = hv_vm_take_brightness_request(level);

@@ -1,5 +1,6 @@
 import SwiftUI
 import GameController
+import LocalAuthentication
 
 /// A running Mac. Upright, its screen sits above a trackpad; on its side the screen fills the device
 /// and is its own trackpad. Zoomed in, the screen fills the device either way and follows the pointer.
@@ -8,9 +9,22 @@ struct SessionView: View {
     let mac: VirtualMac
     let close: () -> Void
 
+    init(mac: VirtualMac, close: @escaping () -> Void) {
+        self.mac = mac
+        self.close = close
+        let check = SessionGate.Check.for(linux: mac.guest == .linux, environment: ProcessInfo.processInfo.environment)
+        var gate = SessionGate(check: check)
+        if SessionGate.testUnlock(environment: ProcessInfo.processInfo.environment) { gate.unlockForTest() }
+        _gate = State(initialValue: gate)
+    }
+
     @ObservedObject private var machines = Machines.shared
     @StateObject private var display = DisplayRouter()
     @State private var error: String?
+    @State private var gate: SessionGate // Face ID before a Linux machine runs or comes back
+    @State private var gateMessage: String?
+    @State private var inactive = false // the app switcher's picture is taken while inactive
+    private var hidesGuest: Bool { gate.hidesGuest(inactive: inactive) }
     @State private var state: Int32 = 0
     @State private var bootAttempt = 0
     @State private var cpusOn: Int32 = 0
@@ -222,6 +236,7 @@ struct SessionView: View {
                 }
                 if let error { errorCard(error, layout) }
                 if shutdownAsked != nil && state != 2 { shutdownCard(layout) }
+                if hidesGuest { lockCover(layout, full) }
                 KeyboardCatcher(active: $typing, suspended: consoleShown, linux: mac.guest == .linux).frame(width: 0, height: 0)
                 if mac.guest == .linux && state == 1 && !consoleShown && !display.isExternal {
                     // Plasma keeps the active window above the keyboard (KeyboardPanel)
@@ -276,7 +291,10 @@ struct SessionView: View {
         }
         .onChange(of: pointerNeeded) { PointerLock.set(!$0) }
         .onChange(of: touchActive) { touchModeChanged($0) }
+        .onChange(of: gate.blanksExternal(inactive: inactive)) { display.guestHidden = $0 }
+        .onAppear { display.guestHidden = gate.blanksExternal(inactive: inactive) }
         .onChange(of: scenePhase) { phase in
+            inactive = phase != .active
             guard phase != .active else {
                 display.refresh()
                 setBackground(false)
@@ -287,9 +305,19 @@ struct SessionView: View {
             HardwareMouse.shared.releaseButtons()
             VolumeClicks.shared.releaseButtons()
             DeviceStatus.shared.leaveForeground()
-            // An external screen's scene may still be up; then the app is not in the background.
-            if phase == .background && UIApplication.shared.applicationState == .background { setBackground(true) }
+            // An external screen's scene may still be up; then the app is not in the background: the machine runs on,
+            // but the wallet locks and the return asks again.
+            let away = SessionGate.away(scene: phase == .background ? .background : .inactive,
+                                        appInBackground: UIApplication.shared.applicationState == .background, deviceLocking: false)
+            if away.pause { setBackground(true) }
+            else if away.lock { leaveGate() }
             else if phase == .inactive { setBackground(false) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataWillBecomeUnavailableNotification)) { _ in
+            if SessionGate.away(scene: .active, appInBackground: false, deviceLocking: true).lock { leaveGate() } // the device locks
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
+            if scenePhase == .active { setBackground(false) } // asks again if the lock left the session away
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
             setBackground(true)
@@ -322,6 +350,8 @@ struct SessionView: View {
             HardwareMouse.shared.stop()
             VolumeClicks.shared.stop()
             DeviceStatus.shared.stop()
+            gate.end()
+            KeychainStore.shared.setUnlocked(false)
         }
         .modifier(ExternalMacDisplayModifier(presentation: MacPresentation(display: display, aspect: layoutAspect, isLinux: mac.guest == .linux)))
         .task(id: bootAttempt) { await run() }
@@ -1008,6 +1038,13 @@ struct SessionView: View {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         guard !Task.isCancelled else { return }
+        gate.end() // a restart asks again
+        KeychainStore.shared.setUnlocked(false)
+        askToOpen()
+        while gate.phase != .open { // a refusal waits here for Try Again or Close
+            guard !Task.isCancelled else { return }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
         UIApplication.shared.isIdleTimerDisabled = true
         HardwareMouse.shared.start()
         let ram = GuestMemory.prepare(mac)
@@ -1019,6 +1056,8 @@ struct SessionView: View {
         var buffer = [CChar](repeating: 0, count: 256)
         JITBootstrap.releaseLingeringDebugger()
         Sharing.prepare()
+        KeychainStore.shared.attach(mac)
+        KeychainStore.shared.setUnlocked(gate.secretsUnlocked)
         if mac.guest == .linux { DeviceStatus.shared.start { [display] in !display.isExternal } }
         EngineTuning.apply()
         let saved = current
@@ -1118,6 +1157,8 @@ struct SessionView: View {
                 HardwareKeys.releaseAll()
                 HardwareMouse.shared.stop()
                 UIApplication.shared.isIdleTimerDisabled = false
+                gate.end() // no machine runs: the wallet locks
+                KeychainStore.shared.setUnlocked(false)
                 let outcome = henge_vm_exit_outcome()
                 if shutdownAsked != nil && outcome == Int32(HENGE_VM_OUTCOME_SHUTDOWN.rawValue) {
                     close() // the person asked for it: no stopped card
@@ -1156,12 +1197,87 @@ struct SessionView: View {
     /// Linux pauses while the app is away, so iOS freezing it does not jump the guest's clock (RCU stalls).
     /// A Mac keeps running as before: the pause is not checked with macOS yet (T4).
     /// A machine with graphics acceleration always pauses, even while it plays sound: iOS allows no Metal work in the background.
+    /// Every machine locks in the background and asks for Face ID when the app comes back (SessionGate).
     private func setBackground(_ away: Bool) {
+        if away {
+            leaveGate()
+        } else if gate.phase == .away {
+            askToOpen() // resumes when it passes
+            return
+        } else if gate.covered {
+            return
+        }
         guard mac.guest == .linux else { return }
         let was = henge_vm_paused() != 0
         henge_vm_set_background(away ? 1 : 0) // sound keeps only a machine without acceleration running; it pauses when the sound stops
         let now = henge_vm_paused() != 0
         if now != was { HengeLog.log("session", now ? "paused in the background" : "resumed") }
+    }
+
+    /// The wallet locks and the next return asks again (SessionGate.away).
+    private func leaveGate() {
+        gate.leave()
+        typing = false
+        KeychainStore.shared.setUnlocked(false)
+    }
+
+    private func askToOpen() {
+        switch gate.ask() {
+        case .nothing:
+            return
+        case .opened: // a Mac, or HENGE_AUTOPILOT
+            if gate.check == .skippedForTest {
+                HengeLog.log("session", "face id: skipped (HENGE_AUTOPILOT); wallet \(gate.secretsUnlocked ? "unlocked by the test" : "locked")")
+            }
+            KeychainStore.shared.setUnlocked(gate.secretsUnlocked)
+            setBackground(false)
+        case .check(let ticket):
+            gateMessage = nil
+            Task { @MainActor in
+                let outcome = await SessionAuth.check(mac.name)
+                switch outcome {
+                case .passed:
+                    gate.checked(ticket, passed: true)
+                    guard gate.secretsUnlocked else { return } // the app left during the check
+                    KeychainStore.shared.setUnlocked(true)
+                    setBackground(false)
+                case .failed(let message):
+                    gate.checked(ticket, passed: false)
+                    gateMessage = message
+                }
+            }
+        }
+    }
+
+    /// Hides the guest until the check passes. A refusal offers the check again, or leaves.
+    private func lockCover(_ layout: Layout, _ full: CGSize) -> some View {
+        ZStack {
+            Color.black.frame(width: full.width, height: full.height)
+            if gate.phase == .refused {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("\(mac.name) is locked").font(.system(size: 17, weight: .semibold))
+                    Text(gateMessage ?? "Face ID did not pass.").font(.system(size: 14)).foregroundStyle(Desk.dim)
+                    if state == 1 {
+                        Text("Turn Off stops it at once: anything not saved on it is lost.").font(.system(size: 14)).foregroundStyle(Desk.dim)
+                    }
+                    HStack(spacing: 24) {
+                        Button("Try Again") { askToOpen() }.foregroundStyle(Desk.accentLight)
+                        Button(state == 1 ? "Turn Off" : "Close") {
+                            if state == 1 { henge_vm_stop() }
+                            close()
+                        }
+                        .foregroundStyle(state == 1 ? Desk.bad : Desk.accentLight)
+                    }
+                    .font(.system(size: 15, weight: .semibold))
+                }
+                .padding(18)
+                .frame(width: min(layout.touch.width, 390) - 32, alignment: .leading)
+                .background(Desk.raised, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            } else {
+                Image(systemName: "faceid").font(.system(size: 44)).foregroundStyle(Desk.dim)
+            }
+        }
+        .frame(width: full.width, height: full.height)
     }
 
     private func finish() {

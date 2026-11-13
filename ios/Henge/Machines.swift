@@ -255,6 +255,7 @@ final class Machines: ObservableObject {
 
     func delete(_ id: UUID) {
         try? FileManager.default.removeItem(at: Self.directory(for: id))
+        KeychainStore.removeAll(machine: id)
         all.removeAll { $0.id == id }
         save()
     }
