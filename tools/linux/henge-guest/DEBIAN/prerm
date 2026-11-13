@@ -11,3 +11,6 @@ fi
 if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
     deb-systemd-invoke stop henge-status.service home-henge-Henge.automount home-henge-Henge.mount henge-grow.service henge-firstboot.service henge-secrets-firewall.service >/dev/null || true
 fi
+if [ "$1" = remove ]; then
+    /usr/lib/henge/henge-secrets-firewall remove # stopping the unit keeps the rule
+fi

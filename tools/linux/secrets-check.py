@@ -285,6 +285,67 @@ def import_check(env, daemon_bin, dump):
     print("ok: import: the .kwl file stays, and a second import needs --force", flush=True)
 
 
+def firewall():
+    """henge-secrets-firewall: only root and henge reach 10.0.2.4:81, and the rule comes back after anything that
+    flushes nftables (nftables.service's start, reload and stop, nft flush ruleset). Stopping the follower keeps it."""
+    script = "/t/henge-guest/usr/lib/henge/henge-secrets-firewall"
+    sh = lambda cmd: subprocess.run(cmd, shell=True, capture_output=True, text=True)  # noqa: E731
+    import socketserver
+    import threading
+    sh("id henge || useradd -M henge; ip addr add 10.0.2.4/32 dev lo")
+
+    class Answer(socketserver.BaseRequestHandler):
+        def handle(self):
+            self.request.recv(4096)
+            self.request.sendall(b"HTTP/1.0 200 OK\r\nContent-Length: 0\r\n\r\n")
+
+    socketserver.ThreadingTCPServer.allow_reuse_address = True
+    server = socketserver.ThreadingTCPServer(("10.0.2.4", 81), Answer)  # http.server's bind looks the name up, and hangs here
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    get = "python3 -c \"import http.client as h; c=h.HTTPConnection('10.0.2.4', 81, timeout=3); c.request('GET','/'); print(c.getresponse().status)\""
+
+    def reach(user):
+        prefix = "" if user == "root" else f"setpriv --reuid={user} --regid={user if user == 'henge' else 'nogroup'} --clear-groups "
+        return sh(prefix + get).stdout.strip() == "200"
+
+    def guarded(what, wait=5.0):
+        end = time.monotonic() + wait
+        while time.monotonic() < end:
+            if not reach("nobody") and reach("henge") and reach("root"):
+                return
+            time.sleep(0.2)
+        raise Fail(f"firewall {what}: nobody {reach('nobody')}, henge {reach('henge')}, root {reach('root')}")
+
+    try:
+        time.sleep(0.5)
+        if not reach("nobody"):
+            raise Fail("firewall: nobody cannot reach the port before the rule (the test is wrong)")
+        follower = subprocess.Popen([script, "start"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        guarded("after start")
+        for what, cmd in (("nft flush ruleset", "nft flush ruleset"),
+                          ("nftables.service's start and reload (nft -f /etc/nftables.conf)", "nft -f /etc/nftables.conf"),
+                          ("a flush of its own table", "nft flush table inet henge_secrets"),
+                          ("a delete of its own table", "nft delete table inet henge_secrets")):
+            sh(cmd)
+            time.sleep(0.3)
+            guarded(f"after {what}")
+            print(f"ok: firewall: nobody is refused again after {what}", flush=True)
+        os.killpg(follower.pid, 15)  # the unit stops or restarts (systemd ends the whole group): the rule stays
+        follower.wait(timeout=5)
+        guarded("with the follower stopped", wait=1)
+        follower = subprocess.Popen([script, "start"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        guarded("after a second start")
+        print("ok: firewall: the rule stays while the follower stops and starts again", flush=True)
+        os.killpg(follower.pid, 15)
+        time.sleep(0.5)
+        sh(f"{script} remove")
+        if not reach("nobody"):
+            raise Fail("firewall: remove left the rule")
+        print("ok: firewall: remove takes the rule away", flush=True)
+    finally:
+        server.shutdown()
+
+
 def package():
     """henge-guest's scripts: the diversions, and the wallet's unit enabled on install and on a reinstall after a
     remove, but an admin's disable kept over an upgrade."""
@@ -327,12 +388,12 @@ def package():
 def container(args):
     dockerfile = ("FROM debian:trixie\nRUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y -q "
                   "python3-jeepney python3-cryptography libsecret-tools dbus dbus-bin systemd kwallet6 "
-                  "davfs2 cloud-guest-utils gdisk e2fsprogs tzdata nftables && rm -rf /var/lib/apt/lists/*\n")
+                  "davfs2 cloud-guest-utils gdisk e2fsprogs tzdata nftables iproute2 && rm -rf /var/lib/apt/lists/*\n")
     env = dict(os.environ, PATH="/opt/homebrew/bin:" + os.environ.get("PATH", ""))
     r = subprocess.run(["docker", "build", "-q", "-t", "henge-secrets-test", "-"], input=dockerfile.encode(), capture_output=True, env=env)
     if r.returncode:
         raise Fail("docker build: " + r.stderr.decode()[-800:])
-    r = subprocess.run(["docker", "run", "--rm", "-v", f"{HERE}:/t:ro", "henge-secrets-test",
+    r = subprocess.run(["docker", "run", "--rm", "--cap-add", "NET_ADMIN", "-v", f"{HERE}:/t:ro", "henge-secrets-test",
                         "dbus-run-session", "--", "python3", "/t/secrets-check.py", "--inner"], env=env)
     if r.returncode:
         raise Fail("in the container")
@@ -476,6 +537,21 @@ def vm(args):
                 raise Fail(f"port rule: henge {mine!r}, nobody {other!r}, root {root!r}, port 80 {port80!r}")
             print(f"ok: henge and root reach the wallet's port, nobody is refused ({other.split(':')[0]}), port 80 has no wallet", flush=True)
 
+            # The rule comes back after whatever flushes nftables, and a restart of its own unit leaves no gap
+            for what in ("systemctl restart nftables", "systemctl reload nftables", "systemctl stop nftables",
+                         "nft flush ruleset", "systemctl restart henge-secrets-firewall"):
+                need(f"sudo {what}", what)
+                end = time.monotonic() + 10
+                while True:
+                    other, mine = need("sudo -u nobody " + get.format(port=81)), need(get.format(port=81))
+                    if "status" not in other and mine == "status 200":
+                        break
+                    if time.monotonic() > end:
+                        raise Fail(f"after {what}: nobody {other!r}, henge {mine!r}")
+                    time.sleep(0.5)
+                need("systemctl is-active henge-secrets-firewall", f"the firewall unit after {what}")
+                print(f"ok: after {what}, nobody is refused and henge reaches the port", flush=True)
+
             host.line("secrets lock")
             end = time.monotonic() + 60
             while True:  # the guest hears of it through its long poll
@@ -539,6 +615,7 @@ def vm(args):
 def main():
     if "--inner" in sys.argv:
         inner()
+        firewall()
         package()
         print("secrets-check (container): all checks passed")
         return

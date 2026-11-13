@@ -22,6 +22,7 @@ case "$1" in
         rm -f /var/lib/henge/secrets-removed
         if [ -d /run/systemd/system ]; then
             systemctl --system daemon-reload >/dev/null || true
+            # No gap: a stop keeps the rule, and the start replaces it in one transaction
             deb-systemd-invoke restart henge-secrets-firewall.service >/dev/null || true
         fi
         ;;
