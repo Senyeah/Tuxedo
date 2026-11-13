@@ -109,6 +109,19 @@ struct KeyboardFollowTests {
         precondition(!f.raised)
         precondition(f.poll(wanted: false, seq: 4, typing: true, allowed: true) == nil)
 
+        // A button is down (a drag): the guest's hide waits, then closes the keyboard it raised.
+        f = KeyboardFollow()
+        precondition(f.poll(wanted: true, seq: 1, typing: false, allowed: true) == true)
+        precondition(f.poll(wanted: true, seq: 1, typing: true, allowed: true, held: true) == nil)
+        precondition(f.raised)
+        precondition(f.poll(wanted: false, seq: 2, typing: true, allowed: true, held: true) == nil)
+        precondition(f.raised)
+        precondition(f.poll(wanted: false, seq: 2, typing: true, allowed: true) == false)
+        // A raise during the drag comes when it ends.
+        f = KeyboardFollow()
+        precondition(f.poll(wanted: true, seq: 1, typing: false, allowed: true, held: true) == nil)
+        precondition(f.poll(wanted: true, seq: 1, typing: false, allowed: true) == true)
+
         // The count wraps or starts again: any change is news.
         f = KeyboardFollow(seq: 100)
         precondition(f.poll(wanted: true, seq: 1, typing: false, allowed: true) == true)

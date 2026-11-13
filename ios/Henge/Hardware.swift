@@ -199,7 +199,7 @@ final class HardwareMouse {
             guard let self, let mouse = note.object as? GCMouse else { return }
             HengeLog.log("input", "mouse gone: \(mouse.vendorName ?? "?")")
             // Only this device's buttons: another device may be in a drag.
-            for button in self.buttons.releaseAll(for: Self.key(mouse)) { henge_vm_mouse_button(button, 0) }
+            for button in self.buttons.releaseAll(for: Self.key(mouse)) { Self.send(button, false) }
             self.mice.removeAll { $0 === mouse }
         })
         observers.append(NotificationCenter.default.addObserver(forName: UIPointerLockState.didChangeNotification, object: nil, queue: .main) { note in
@@ -238,7 +238,13 @@ final class HardwareMouse {
     }
 
     func releaseButtons() {
-        for button in buttons.releaseAll() { henge_vm_mouse_button(button, 0) }
+        for button in buttons.releaseAll() { Self.send(button, false) }
+    }
+
+    /// Left and right share the pad's owners, so a pad tap or key during a mouse drag cannot end it.
+    private static func send(_ button: Int32, _ down: Bool) {
+        guard button < 2 else { return henge_vm_mouse_button(button, down ? 1 : 0) }
+        if down { PointerButtons.guest.press(Int(button), by: .mouse) } else { PointerButtons.guest.release(Int(button), by: .mouse) }
     }
 
     private static func key(_ mouse: GCMouse) -> Int { ObjectIdentifier(mouse).hashValue }
@@ -315,7 +321,7 @@ final class HardwareMouse {
             let h = Trackpad.Surface.lastHover
             HengeLog.log("input", "physical mouse button: raw=\(physicalButton) guest=\(guestButton) \(pressed ? "down" : "up") from \(from), hover \(Int(h.x)),\(Int(h.y))")
         }
-        henge_vm_mouse_button(guestButton, pressed ? 1 : 0)
+        Self.send(guestButton, pressed)
         if !pressed { StickyKeys.shared.releaseAll() }
     }
 

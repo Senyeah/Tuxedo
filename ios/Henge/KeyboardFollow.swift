@@ -16,12 +16,13 @@ struct KeyboardFollow {
 
     /// A look at the host. Returns the new value for the keyboard, or nil to leave it.
     /// `allowed` is false when this must not move the keyboard (the setting is off, the console has the keys).
-    mutating func poll(wanted: Bool, seq: UInt, typing: Bool, allowed: Bool) -> Bool? {
+    /// `held`: a mouse button is down. The request waits, and a keyboard the guest raised stays the guest's.
+    mutating func poll(wanted: Bool, seq: UInt, typing: Bool, allowed: Bool, held: Bool = false) -> Bool? {
         guard allowed else {
             raised = false // the request waits: it is news when this is allowed again
             return nil
         }
-        guard seq != self.seq else { return nil }
+        guard !held, seq != self.seq else { return nil }
         self.seq = seq
         if wanted {
             guard !typing else { return nil } // the person opened it: it stays theirs

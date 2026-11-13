@@ -268,7 +268,9 @@ struct SessionView: View {
             .onAppear {
                 shown = layout.shown
                 windowChanged(window)
+                externalPad.visible = padShown && !hidesGuest
             }
+            .onChange(of: padShown && !hidesGuest) { externalPad.visible = $0 }
             .onChange(of: layout.shown) { shown = $0 }
             .onChange(of: window) { windowChanged($0) } // the new value: the closure's captures are from the old body
             .onChange(of: display.externalPixels) { externalChanged($0) }
@@ -630,9 +632,10 @@ struct SessionView: View {
         while !Task.isCancelled {
             let wanted = henge_share_keyboard_wanted(&seq) != 0
             // The console has the keys while it shows. A hardware keyboard needs no keyboard on the screen.
-            // Nor during a drag: the keyboard would cover the pad's keys under the finger. It comes when the drag ends.
-            let allowed = keyboardFollows && state == 1 && !consoleShown && GCKeyboard.coalesced == nil && !PointerButtons.guest.anyDown
-            if let show = keyboardFollow.poll(wanted: wanted, seq: seq, typing: typing, allowed: allowed) { typing = show }
+            let allowed = keyboardFollows && state == 1 && !consoleShown && GCKeyboard.coalesced == nil
+            // Nor during a drag: the keyboard would cover the pad's keys under the finger. It moves when the drag ends.
+            let held = PointerButtons.guest.anyDown
+            if let show = keyboardFollow.poll(wanted: wanted, seq: seq, typing: typing, allowed: allowed, held: held) { typing = show }
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
     }

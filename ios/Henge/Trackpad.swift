@@ -13,7 +13,7 @@ import UIKit
 ///    nothing, unless the on-screen keyboard is up.
 ///  - In each mode a quick two-finger tap is a right click.
 /// Clicks go through PointerButtons, so a tap during a held key or volume button cannot drop it.
-/// Only fingers count: a real trackpad or mouse goes through HardwareMouse.
+/// Only fingers count: a real trackpad or mouse goes through HardwareMouse, which shares the owners.
 struct Trackpad: UIViewRepresentable {
     /// Four fingers tapped together: the session shows its hidden controls.
     static let revealTap = Notification.Name("henge.trackpad.revealTap")
@@ -250,19 +250,28 @@ struct Trackpad: UIViewRepresentable {
             holdTimer = nil
         }
 
-        /// Forgets every finger, after the session lifted them in the guest.
+        /// Forgets every finger, after the session lifted them in the guest. The pad's look lets go of them too.
         func reset() {
             cancelHold()
+            let time = ProcessInfo.processInfo.systemUptime // the touches' clock
+            for f in fingers { feedback?.padFingerUp(Int(f.id), time: time) }
+            if !fingers.isEmpty { buttons.padLifted() }
             fingers = []
             freeIds = Set(1...5)
             holding = false
+            travelled = 0
+            mostFingers = 0
+            firstPoints = []
         }
     }
 }
 
 extension PointerButtons {
-    /// The guest's mouse buttons: the pad, its keys and the volume buttons share the owners.
-    static let guest = PointerButtons { b, down in henge_vm_mouse_button(Int32(b), down ? 1 : 0) }
+    /// The guest's mouse buttons: the pad, its keys, the volume buttons and a mouse share the owners.
+    static let guest = PointerButtons { b, down in
+        henge_vm_mouse_button(Int32(b), down ? 1 : 0)
+        if !down { StickyKeys.shared.releaseAll() } // a tapped ⌘, ⌥ or ⌃ is for one click
+    }
 }
 
 /// The trackpad's haptic settings (Settings > Trackpad), for every pad.
@@ -293,15 +302,15 @@ final class PadSession: ObservableObject {
     private(set) weak var host: PadHostView?
     /// Counts the first sessions, which show the first-use stroke.
     private let ghostKey: String?
+    private var ghostPlayed = false
+    /// Nothing covers the pad (the Face ID cover, the app switcher): the stroke can be seen.
+    var visible = false { didSet { if visible != oldValue { ghostIfDue() } } }
 
     init(ghostKey: String? = nil) { self.ghostKey = ghostKey }
 
     func attach(_ host: PadHostView) {
         self.host = host
-        if let ghostKey, UserDefaults.standard.integer(forKey: ghostKey) < Int(host.tuning.ghost.sessions) {
-            UserDefaults.standard.set(UserDefaults.standard.integer(forKey: ghostKey) + 1, forKey: ghostKey)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak host] in host?.playGhost() } // after the first layout
-        }
+        ghostIfDue()
         surface.attach(host)
         surface.keyboardUp = { [weak host] in host?.keyboardUp ?? false }
         host.onLayout = { [weak self] l in
@@ -310,6 +319,18 @@ final class PadSession: ObservableObject {
         }
         host.onPillOpacity = { [weak self] o in self?.pillOpacity = o }
         host.haptics.prepare()
+    }
+
+    /// Once a session, and counted only when it plays: the view is made again at each console switch.
+    private func ghostIfDue() {
+        guard visible, !ghostPlayed, let ghostKey, let host,
+              UserDefaults.standard.integer(forKey: ghostKey) < Int(host.tuning.ghost.sessions) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self, weak host] in // after the first layout
+            guard let self, let host, host === self.host, self.visible, !self.ghostPlayed else { return }
+            self.ghostPlayed = true
+            UserDefaults.standard.set(UserDefaults.standard.integer(forKey: ghostKey) + 1, forKey: ghostKey)
+            host.playGhost()
+        }
     }
 }
 

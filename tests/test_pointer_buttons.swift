@@ -121,6 +121,20 @@ struct PointerButtonsTests {
             p.keyUp(1)
             check(sent() == [], "and its own lift sends nothing more")
         }
+        // A mouse holds left: a pad tap and a key neither press again nor end the mouse's drag.
+        do {
+            let (p, sent) = make()
+            p.press(0, by: .mouse)
+            check(sent() == [d0], "the mouse presses")
+            p.padFingers(1)
+            check(!p.tap(0), "a tap during a mouse hold sends nothing")
+            p.padLifted()
+            p.keyDown(0)
+            p.keyUp(0)
+            check(sent() == [] && p.isDown(0), "the mouse still holds after a tap and a key")
+            p.release(0, by: .mouse)
+            check(sent() == [u0], "the mouse lets go")
+        }
         // A two-finger tap is a right click.
         do {
             let (p, sent) = make()

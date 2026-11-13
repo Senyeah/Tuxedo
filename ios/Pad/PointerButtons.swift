@@ -11,6 +11,7 @@ final class PointerButtons {
         case latch          // a held left key that the keyboard covered: it lets go at the last lift
         case accessibility  // VoiceOver's "Hold"
         case volume         // Henge's volume buttons: a physical key, so the keyboard leaves it held
+        case mouse          // a hardware mouse or trackpad
     }
 
     private let send: (Int, Bool) -> Void
