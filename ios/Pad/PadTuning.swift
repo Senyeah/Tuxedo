@@ -206,15 +206,15 @@ struct PadTuning: Codable, Equatable {
         var full = 20000.0
         /// s with no sample: the finger is still, so its speed falls to zero.
         var still = 0.03
-        /// The Taptic Engine plays almost nothing under about 0.2, so the weakest felt haptic is the minimum.
-        var textureMin = 0.30
-        var textureGain = 0.90
+        /// The weakest motion haptic, and the strongest. Set on the phone: half of the first, felt values.
+        var textureMin = 0.15
+        var textureGain = 0.45
         var textureSharpness = 0.5
         var tickStyle = "rigid"
-        var tickGain = 1.0
+        var tickGain = 0.5
         var tickSpacing = 6.0            // pt
         var tickGap = 0.03               // s; the Taptic Engine cannot play much faster
-        var tickMin = 0.35
+        var tickMin = 0.175
     }
 }
 
