@@ -7,7 +7,7 @@
 
 #include "sysreg.h"
 #include "virtio_rng.h"
-#include "vmapple.h"
+#include "virt.h"
 
 DECLARE_PROGRAM(p_timer_irq);
 DECLARE_PROGRAM(p_uart);
@@ -24,7 +24,7 @@ static const char *work_dir(void) {
 
 static HvMachine m;
 static HvCpu cpu;
-static HvVmapple board;
+static HvVirt board;
 static int checks, failures;
 
 static void check(const char *what, uint64_t got, uint64_t want) {
@@ -60,24 +60,24 @@ static uint8_t *ram(uint64_t pa) { return hv_phys_ptr(&m, pa, 1); }
 
 static void test_gic(void) {
     HvGic *g = board.gic;
-    check("GICD_TYPER ITLines", rd32(VMAPPLE_GIC_DIST + 4) & 0x1f, HV_GIC_NUM_IRQS / 32 - 1);
-    check("GICD_PIDR2 arch rev", (rd32(VMAPPLE_GIC_DIST + 0xffe8) >> 4) & 0xf, 3);
-    check("GICR_TYPER Last", (rd32(VMAPPLE_GIC_REDIST + 8) >> 4) & 1, 1);
-    check("GICR_WAKER asleep at reset", rd32(VMAPPLE_GIC_REDIST + 0x14), 6);
-    wr32(VMAPPLE_GIC_DIST, 3);
-    wr32(VMAPPLE_GIC_REDIST + 0x14, 0);
-    check("GICR_WAKER awake", rd32(VMAPPLE_GIC_REDIST + 0x14), 0);
+    check("GICD_TYPER ITLines", rd32(VIRT_GIC_DIST + 4) & 0x1f, HV_GIC_NUM_IRQS / 32 - 1);
+    check("GICD_PIDR2 arch rev", (rd32(VIRT_GIC_DIST + 0xffe8) >> 4) & 0xf, 3);
+    check("GICR_TYPER Last", (rd32(VIRT_GIC_REDIST + 8) >> 4) & 1, 1);
+    check("GICR_WAKER asleep at reset", rd32(VIRT_GIC_REDIST + 0x14), 6);
+    wr32(VIRT_GIC_DIST, 3);
+    wr32(VIRT_GIC_REDIST + 0x14, 0);
+    check("GICR_WAKER awake", rd32(VIRT_GIC_REDIST + 0x14), 0);
     m.icc_write(&m, &cpu, ICC_PMR, 0xff);
     m.icc_write(&m, &cpu, ICC_IGRPEN1, 1);
 
     /* SPI 33 (UART), level, group 1, priority 0x80 */
-    wr32(VMAPPLE_GIC_DIST + 0x84, 1u << 1);
-    wr32(VMAPPLE_GIC_DIST + 0x104, 1u << 1);
-    wr8(VMAPPLE_GIC_DIST + 0x400 + 33, 0x80);
-    check("ISENABLER1 reads back", rd32(VMAPPLE_GIC_DIST + 0x104) & 2, 2);
+    wr32(VIRT_GIC_DIST + 0x84, 1u << 1);
+    wr32(VIRT_GIC_DIST + 0x104, 1u << 1);
+    wr8(VIRT_GIC_DIST + 0x400 + 33, 0x80);
+    check("ISENABLER1 reads back", rd32(VIRT_GIC_DIST + 0x104) & 2, 2);
     hv_gicv3_set_irq(g, 33, 1);
     check("level SPI raises IRQ", m.percpu[0].irq_line, 1);
-    check("ISPENDR1 shows it", (rd32(VMAPPLE_GIC_DIST + 0x204) >> 1) & 1, 1);
+    check("ISPENDR1 shows it", (rd32(VIRT_GIC_DIST + 0x204) >> 1) & 1, 1);
     check("IAR1 = 33", m.icc_read(&m, &cpu, ICC_IAR1), 33);
     check("active: line drops", m.percpu[0].irq_line, 0);
     check("nothing else pending", m.icc_read(&m, &cpu, ICC_IAR1), 1023);
@@ -87,9 +87,9 @@ static void test_gic(void) {
     check("level low: no IRQ", m.percpu[0].irq_line, 0);
 
     /* PMR masks; a higher-priority interrupt preempts a running one. */
-    wr32(VMAPPLE_GIC_DIST + 0x84, 3u << 1);
-    wr32(VMAPPLE_GIC_DIST + 0x104, 1u << 2);
-    wr8(VMAPPLE_GIC_DIST + 0x400 + 34, 0x40);
+    wr32(VIRT_GIC_DIST + 0x84, 3u << 1);
+    wr32(VIRT_GIC_DIST + 0x104, 1u << 2);
+    wr8(VIRT_GIC_DIST + 0x400 + 34, 0x40);
     m.icc_write(&m, &cpu, ICC_PMR, 0x80);
     hv_gicv3_set_irq(g, 33, 1);
     check("priority 0x80 masked by PMR 0x80", m.percpu[0].irq_line, 0);
@@ -104,21 +104,21 @@ static void test_gic(void) {
     hv_gicv3_set_irq(g, 33, 0);
 
     /* Edge SPI: one pulse, one interrupt. */
-    wr32(VMAPPLE_GIC_DIST + 0xc08, 2u << 2);  /* ICFGR2: INTID 33 edge */
+    wr32(VIRT_GIC_DIST + 0xc08, 2u << 2);  /* ICFGR2: INTID 33 edge */
     hv_gicv3_set_irq(g, 33, 1);
     hv_gicv3_set_irq(g, 33, 0);
     check("edge latched", m.icc_read(&m, &cpu, ICC_IAR1), 33);
     m.icc_write(&m, &cpu, ICC_EOIR1, 33);
     check("edge consumed", m.percpu[0].irq_line, 0);
-    wr32(VMAPPLE_GIC_DIST + 0xc08, 0);
+    wr32(VIRT_GIC_DIST + 0xc08, 0);
 
     /* SGI 5 to ourselves (redistributor bank) */
-    wr32(VMAPPLE_GIC_REDIST + 0x10000 + 0x80, 1u << 5);
-    wr32(VMAPPLE_GIC_REDIST + 0x10000 + 0x100, 1u << 5);
+    wr32(VIRT_GIC_REDIST + 0x10000 + 0x80, 1u << 5);
+    wr32(VIRT_GIC_REDIST + 0x10000 + 0x100, 1u << 5);
     m.icc_write(&m, &cpu, ICC_SGI1R, 5ull << 24 | 1);
     check("SGI to self", m.icc_read(&m, &cpu, ICC_IAR1), 5);
     m.icc_write(&m, &cpu, ICC_EOIR1, 5);
-    check("ICENABLER1 clears", (wr32(VMAPPLE_GIC_DIST + 0x184, 6), rd32(VMAPPLE_GIC_DIST + 0x104) & 6), 0);
+    check("ICENABLER1 clears", (wr32(VIRT_GIC_DIST + 0x184, 6), rd32(VIRT_GIC_DIST + 0x104) & 6), 0);
 }
 
 static int make_disk(const char *path, uint64_t size, uint8_t salt) {
@@ -134,113 +134,42 @@ static int make_disk(const char *path, uint64_t size, uint8_t salt) {
 }
 
 static void test_simple_devices(void) {
-    /* cfg region */
-    check("cfg version", rd32(VMAPPLE_CONFIG + 0), 2);
-    check("cfg nr_cpus", rd32(VMAPPLE_CONFIG + 4), 1);
-    uint64_t rs = 0;
-    hv_phys_read(&m, VMAPPLE_CONFIG + 0x20, &rs, 8);
-    check("cfg ram_size", rs, RAM_SIZE);
-    char soc[20];
-    for (int i = 0; i < 19; i++) soc[i] = (char)rd8(VMAPPLE_CONFIG + 0x584 + i);
-    check("cfg soc_name", memcmp(soc, "Apple M1 (Virtual)", 19), 0);
-    check("cfg mac_en0", rd8(VMAPPLE_CONFIG + 0x40 + 5), 0x56);
-    uint32_t r1 = rd32(VMAPPLE_CONFIG + 0x38), r2 = rd32(VMAPPLE_CONFIG + 0x38);
-    check("cfg rnd changes on every read", r1 != r2, 1);
-    wr32(VMAPPLE_CONFIG + 0x3ac, 0x290001);
-    check("cfg scratch is writable", rd32(VMAPPLE_CONFIG + 0x3ac), 0x290001);
-
     /* PL031 */
-    uint32_t t = rd32(VMAPPLE_RTC);
+    uint32_t t = rd32(VIRT_RTC);
     check("RTC within 2 s of host time", (uint64_t)((int64_t)t - (int64_t)time(NULL) + 2) <= 4, 1);
-    wr32(VMAPPLE_RTC + 8, 1000000);
-    check("RTC load", rd32(VMAPPLE_RTC) - 1000000 <= 2, 1);
-    check("RTC PeriphID0", rd32(VMAPPLE_RTC + 0xfe0), 0x31);
-    wr32(VMAPPLE_RTC + 0x10, 1);
-    wr32(VMAPPLE_RTC + 4, rd32(VMAPPLE_RTC)); /* match now */
-    check("RTC alarm on SPI 2", board.gic->level[32 + VMAPPLE_IRQ_RTC], 1);
-    wr32(VMAPPLE_RTC + 0x1c, 1);
-    check("RTC alarm cleared", board.gic->level[32 + VMAPPLE_IRQ_RTC], 0);
+    wr32(VIRT_RTC + 8, 1000000);
+    check("RTC load ignored: the board follows the host clock", rd32(VIRT_RTC) - t <= 2, 1);
+    board.rtc->host_time = 0;
+    wr32(VIRT_RTC + 8, 1000000);
+    check("RTC load", rd32(VIRT_RTC) - 1000000 <= 2, 1);
+    check("RTC PeriphID0", rd32(VIRT_RTC + 0xfe0), 0x31);
+    wr32(VIRT_RTC + 0x10, 1);
+    wr32(VIRT_RTC + 4, rd32(VIRT_RTC)); /* match now */
+    check("RTC alarm on SPI 2", board.gic->level[32 + VIRT_IRQ_RTC], 1);
+    wr32(VIRT_RTC + 0x1c, 1);
+    check("RTC alarm cleared", board.gic->level[32 + VIRT_IRQ_RTC], 0);
 
     /* PL011 receive side */
-    wr32(VMAPPLE_UART + 0x38, 1u << 4);  /* IMSC: RX */
-    check("UART RX empty", (rd32(VMAPPLE_UART + 0x18) >> 4) & 1, 1);
+    wr32(VIRT_UART + 0x38, 1u << 4);  /* IMSC: RX */
+    check("UART RX empty", (rd32(VIRT_UART + 0x18) >> 4) & 1, 1);
     hv_pl011_receive(board.uart, 'Z');
-    check("UART RX line", board.gic->level[32 + VMAPPLE_IRQ_UART], 1);
-    check("UART DR", rd32(VMAPPLE_UART), 'Z');
-    check("UART RX line drops", board.gic->level[32 + VMAPPLE_IRQ_UART], 0);
-    wr32(VMAPPLE_UART + 0x38, 0);
-}
-
-static void test_bdif(HvDisk *root, HvDisk *aux) {
-    /* request at RAM+0x1000: sector cmd, data, retval */
-    uint64_t base = VMAPPLE_MEM;
-    uint64_t req = base + 0x1000, sec = base + 0x2000, data = base + 0x3000, ret = base + 0x4000;
-    uint32_t sector[4] = {0, 0, 3, 0};
-    memcpy(ram(sec), sector, 16);
-    uint8_t r[48] = {0};
-    uint64_t a;
-    uint32_t l, f;
-    a = sec; l = 16; f = 0; memcpy(r, &a, 8); memcpy(r + 8, &l, 4); memcpy(r + 12, &f, 4);
-    a = data; l = 1024; f = 0x00030001; memcpy(r + 16, &a, 8); memcpy(r + 24, &l, 4); memcpy(r + 28, &f, 4);
-    a = ret; l = 1; f = 0; memcpy(r + 32, &a, 8); memcpy(r + 40, &l, 4); memcpy(r + 44, &f, 4);
-    memcpy(ram(req), r, 48);
-    check("bdif status", rd32(VMAPPLE_BDOOR), 1);
-    check("bdif root capacity", rd32(VMAPPLE_BDOOR + 0x420), root->size / 512);
-    check("bdif aux capacity", rd32(VMAPPLE_BDOOR + 0x10000 + 0x420), aux->size / 512);
-    uint64_t original_size = root->size;
-    root->size = 96ull << 30;
-    check("bdif expanded root capacity", rd32(VMAPPLE_BDOOR + 0x420), (96ull << 30) / 512);
-    root->size = original_size;
-    for (int which = 0; which < 2; which++) {
-        HvDisk *d = which ? aux : root;
-        ram(ret)[0] = 0xee;
-        wr64(VMAPPLE_BDOOR + (which ? 0x10000 : 0) + 0x408, req);
-        static uint8_t want[1024];
-        hv_disk_read(d, 3 * 512, want, 1024);
-        check(which ? "bdif aux read ok" : "bdif root read ok", ram(ret)[0], 0);
-        check(which ? "bdif aux data" : "bdif root data", memcmp(ram(data), want, 1024), 0);
-    }
-
-    /* The 27.3 upgrade firmware reads this asset in one request. */
-    const uint32_t large_length = 285216768;
-    const uint64_t disk_offset = 4ull << 20;
-    const uint64_t large_data = base + (32ull << 20);
-    const uint8_t marker = 0xa7;
-    check("large boot disk fixture", ftruncate(root->fd, (off_t)(disk_offset + large_length)), 0);
-    root->size = disk_offset + large_length;
-    check("large boot asset first marker", pwrite(root->fd, &marker, 1, (off_t)disk_offset), 1);
-    check("large boot asset last marker", pwrite(root->fd, &marker, 1, (off_t)(root->size - 1)), 1);
-    sector[2] = (uint32_t)(disk_offset / 512);
-    memcpy(ram(sec), sector, sizeof sector);
-    memcpy(r + 16, &large_data, sizeof large_data);
-    memcpy(r + 24, &large_length, sizeof large_length);
-    memcpy(ram(req), r, sizeof r);
-    ram(ret)[0] = 0xee;
-    wr64(VMAPPLE_BDOOR + 0x408, req);
-    check("bdif large boot asset read", ram(ret)[0], 0);
-    check("bdif large read first byte", ram(large_data)[0], marker);
-    check("bdif large read last byte", ram(large_data)[large_length - 1], marker);
-
-    uint64_t invalid_buffer = base + RAM_SIZE - 1024;
-    memcpy(r + 16, &invalid_buffer, sizeof invalid_buffer);
-    memcpy(ram(req), r, sizeof r);
-    wr64(VMAPPLE_BDOOR + 0x408, req);
-    check("bdif rejects large read outside guest RAM", ram(ret)[0], 1);
-    check("restore boot disk fixture", ftruncate(root->fd, (off_t)original_size), 0);
-    root->size = original_size;
+    check("UART RX line", board.gic->level[32 + VIRT_IRQ_UART], 1);
+    check("UART DR", rd32(VIRT_UART), 'Z');
+    check("UART RX line drops", board.gic->level[32 + VIRT_IRQ_UART], 0);
+    wr32(VIRT_UART + 0x38, 0);
 }
 
 /* A small virtio driver, as a guest would do it. */
 static uint64_t find_slot(uint16_t vendor, uint16_t device, int nth) {
     for (int s = 0; s < 32; s++) {
-        uint32_t id = rd32(VMAPPLE_PCIE_ECAM + ((uint64_t)s << 15));
+        uint32_t id = rd32(VIRT_PCIE_ECAM + ((uint64_t)s << 15));
         if (id == ((uint32_t)device << 16 | vendor) && nth-- == 0) return (uint64_t)s;
     }
     return ~0ull;
 }
 
 static uint64_t setup_virtio(int slot, uint64_t bar, uint64_t ring) {
-    uint64_t cfg = VMAPPLE_PCIE_ECAM + ((uint64_t)slot << 15);
+    uint64_t cfg = VIRT_PCIE_ECAM + ((uint64_t)slot << 15);
     wr32(cfg + 0x20, 0xffffffff);
     check("BAR4 size 16 KB, 64-bit", rd32(cfg + 0x20), 0xffffc004);
     wr32(cfg + 0x20, (uint32_t)bar);
@@ -294,30 +223,17 @@ static uint16_t used_idx(uint64_t ring) {
     return ((uint16_t *)ram(ring + 0x2000))[1];
 }
 
-static void test_virtio_blk(HvDisk *aux) {
-    int slot = (int)find_slot(0x106b, 0x1a00, 0);
-    check("Apple virtio-blk (aux) enumerated", slot != (int)~0u, 1);
+static void test_virtio_blk(HvDisk *disk) {
+    int slot = (int)find_slot(0x1af4, 0x1042, 0);
+    check("virtio-blk enumerated", slot >= 0 && slot < 32, 1);
     if (slot < 0 || slot >= 32) return;
-    check("class: SCSI storage", rd32(VMAPPLE_PCIE_ECAM + ((uint64_t)slot << 15) + 8) >> 8, 0x010000);
-    /* Walk the capabilities as AppleVirtIO's transport does: vendor data, cfg_type 9, vendor 0x106b. */
-    {
-        uint64_t c = VMAPPLE_PCIE_ECAM + ((uint64_t)slot << 15);
-        int found = 0;
-        for (uint8_t at = rd8(c + 0x34); at; at = rd8(c + at + 1)) {
-            if (rd8(c + at) != 0x09 || rd8(c + at + 3) != 9) continue;
-            uint16_t vend = (uint16_t)(rd8(c + at + 4) | rd8(c + at + 5) << 8);
-            if (vend == 0x106b && rd8(c + at + 2) >= 6 + 8 && (rd8(c + at + 6) & 1)) found = 1;
-        }
-        check("Apple vendor data says: not inline-encrypted", found, 1);
-    }
-    uint64_t bar = VMAPPLE_PCIE_MMIO + 0x100000;
-    uint64_t ring = setup_virtio(slot, bar, VMAPPLE_MEM + 0x100000);
-    check("blk capacity", rd32(bar + 0x2000), (uint32_t)(aux->size / 512));
-    check("apple type in max_secure_erase_sectors", rd32(bar + 0x2000 + 60), HV_VBLK_AUX);
-    wr32(bar + 0x00, 0);
-    check("macOS disk does not offer discard", (rd32(bar + 0x04) >> 13) & 1, 0);
+    check("class: SCSI storage", rd32(VIRT_PCIE_ECAM + ((uint64_t)slot << 15) + 8) >> 8, 0x010000);
+    uint64_t bar = VIRT_PCIE_MMIO + 0x100000;
+    uint64_t ring = setup_virtio(slot, bar, VIRT_MEM + 0x100000);
+    check("blk capacity", rd32(bar + 0x2000), (uint32_t)(disk->size / 512));
+    check("plain disk: apple type field is 0", rd32(bar + 0x2000 + 60), 0);
 
-    uint64_t hdr = VMAPPLE_MEM + 0x200000, data = hdr + 0x1000, status = hdr + 0x3000;
+    uint64_t hdr = VIRT_MEM + 0x200000, data = hdr + 0x1000, status = hdr + 0x3000;
     /* read sectors 5-6 */
     uint32_t h[4] = {0, 0, 5, 0};
     memcpy(ram(hdr), h, 16);
@@ -327,13 +243,13 @@ static void test_virtio_blk(HvDisk *aux) {
     ram(status)[0] = 0xff;
     offer(ring, 0);
     wr16(bar + 0x3000, 0);
-    hv_virtio_blk_drain(board.aux_blk); /* requests complete on the worker thread */
+    hv_virtio_blk_drain(board.blk); /* requests complete on the worker thread */
     static uint8_t want[1024];
-    hv_disk_read(aux, 5 * 512, want, 1024);
+    hv_disk_read(disk, 5 * 512, want, 1024);
     check("blk read completed", used_idx(ring), 1);
     check("blk read status", ram(status)[0], 0);
     check("blk read data", memcmp(ram(data), want, 1024), 0);
-    int line = 32 + VMAPPLE_IRQ_PCIE + slot;
+    int line = 32 + VIRT_IRQ_PCIE + slot % 4; /* the board rotates INTx by slot */
     check("INTx raised", board.gic->level[line], 1);
     check("ISR", rd8(bar + 0x1000), 1);
     check("ISR read drops INTx", board.gic->level[line], 0);
@@ -348,28 +264,22 @@ static void test_virtio_blk(HvDisk *aux) {
     put_desc(ring, 5, status, 1, 2, 0);
     offer(ring, 3);
     wr16(bar + 0x3000, 0);
-    hv_virtio_blk_drain(board.aux_blk); /* requests complete on the worker thread */
+    hv_virtio_blk_drain(board.blk); /* requests complete on the worker thread */
     uint8_t back[512];
-    hv_disk_read(aux, 9 * 512, back, 512);
+    hv_disk_read(disk, 9 * 512, back, 512);
     check("blk write status", ram(status)[0], 0);
     check("blk write reached the file", memcmp(back, ram(data), 512), 0);
 
-    /* Apple barrier, then an unknown type */
-    h[0] = 0x10000;
-    memcpy(ram(hdr), h, 16);
+    /* an unknown type */
     put_desc(ring, 6, hdr, 16, 1, 7);
     put_desc(ring, 7, status, 1, 2, 0);
-    offer(ring, 6);
-    wr16(bar + 0x3000, 0);
-    hv_virtio_blk_drain(board.aux_blk); /* requests complete on the worker thread */
-    check("Apple barrier OK", ram(status)[0], 0);
     h[0] = 77;
     memcpy(ram(hdr), h, 16);
     offer(ring, 6);
     wr16(bar + 0x3000, 0);
-    hv_virtio_blk_drain(board.aux_blk); /* requests complete on the worker thread */
+    hv_virtio_blk_drain(board.blk); /* requests complete on the worker thread */
     check("unknown request UNSUPP", ram(status)[0], 2);
-    check("four requests used", used_idx(ring), 4);
+    check("three requests used", used_idx(ring), 3);
     rd8(bar + 0x1000);
 }
 
@@ -385,11 +295,11 @@ static void test_virtio_net(void) {
     int slot = (int)find_slot(0x1af4, 0x1041, 0);
     check("virtio-net enumerated", slot >= 0 && slot < 32, 1);
     if (slot < 0 || slot >= 32) return;
-    uint64_t bar = VMAPPLE_PCIE_MMIO + 0x200000;
-    uint64_t ring = setup_virtio(slot, bar, VMAPPLE_MEM + 0x300000);
+    uint64_t bar = VIRT_PCIE_MMIO + 0x200000;
+    uint64_t ring = setup_virtio(slot, bar, VIRT_MEM + 0x300000);
     check("net MAC in config", rd8(bar + 0x2000 + 5), 0x56);
     board.net->transmit = capture_tx;
-    uint64_t rxq = ring, txq = ring + 0x4000, buf = VMAPPLE_MEM + 0x400000;
+    uint64_t rxq = ring, txq = ring + 0x4000, buf = VIRT_MEM + 0x400000;
     /* transmit: 12-byte header + 60-byte frame */
     memset(ram(buf), 0, 12);
     for (int i = 0; i < 60; i++) ram(buf + 12)[i] = (uint8_t)i;
@@ -423,9 +333,9 @@ static void test_virtio_balloon(void) {
     if (slot < 0 || slot >= 32 || !board.balloon) return;
     HvVirtioBalloon *b = board.balloon;
     check("balloon has the RAM file", b->ram_fd >= 0, 1);
-    uint64_t bar = VMAPPLE_PCIE_MMIO + 0x300000;
-    uint64_t ring = setup_virtio(slot, bar, VMAPPLE_MEM + 0x1000000);
-    uint64_t inq = ring, deq = ring + 0x4000, list = VMAPPLE_MEM + 0x1800000, pages = VMAPPLE_MEM + 0x2000000;
+    uint64_t bar = VIRT_PCIE_MMIO + 0x300000;
+    uint64_t ring = setup_virtio(slot, bar, VIRT_MEM + 0x1000000);
+    uint64_t inq = ring, deq = ring + 0x4000, list = VIRT_MEM + 0x1800000, pages = VIRT_MEM + 0x2000000;
     rd8(bar + 0x1000); /* clear the ISR */
     hv_virtio_balloon_set_target(b, 1 << 20);
     hv_virtio_balloon_poll(b);
@@ -468,10 +378,10 @@ static void test_virtio_balloon(void) {
     check("deflated page taken back", b->taken_back, 1);
     check("page numbers outside RAM ignored", b->out_of_ram, 0);
     /* anonymous RAM (the phone's): pages are marked reusable */
-    HvVirtioBalloon *a = hv_virtio_balloon_create(&m, board.pcie, board.ram, VMAPPLE_MEM, RAM_SIZE, -1);
+    HvVirtioBalloon *a = hv_virtio_balloon_create(&m, board.pcie, board.mem.host, VIRT_MEM, RAM_SIZE, -1);
     int aslot = (int)find_slot(0x1af4, 0x1045, 1);
-    uint64_t abar = VMAPPLE_PCIE_MMIO + 0x380000;
-    uint64_t aring = setup_virtio(aslot, abar, VMAPPLE_MEM + 0x1100000);
+    uint64_t abar = VIRT_PCIE_MMIO + 0x380000;
+    uint64_t aring = setup_virtio(aslot, abar, VIRT_MEM + 0x1100000);
     put_pfns(list + 0x1000, pfn, 4);
     put_desc(aring, 0, list + 0x1000, 16, 0, 0);
     offer(aring, 0);
@@ -487,9 +397,9 @@ static uint64_t reprobe(int slot, uint64_t bar, uint64_t ring) { return setup_vi
 static void test_reset_blk(void) {
     int slot = (int)find_slot(0x106b, 0x1a00, 0);
     if (slot < 0 || slot >= 32) return;
-    HvVirtioBlk *b = board.aux_blk;
-    uint64_t bar = VMAPPLE_PCIE_MMIO + 0x100000, ring = VMAPPLE_MEM + 0x100000;
-    uint64_t hdr = VMAPPLE_MEM + 0x2000000, data = hdr + 0x1000, status = hdr + 0x3000;
+    HvVirtioBlk *b = board.blk;
+    uint64_t bar = VIRT_PCIE_MMIO + 0x100000, ring = VIRT_MEM + 0x100000;
+    uint64_t hdr = VIRT_MEM + 0x2000000, data = hdr + 0x1000, status = hdr + 0x3000;
     reprobe(slot, bar, ring);
     uint32_t h[4] = {0, 0, 1, 0};
     memcpy(ram(hdr), h, 16);
@@ -536,14 +446,14 @@ static void test_reset_blk(void) {
 static void test_reset_net_rng(void) {
     int slot = (int)find_slot(0x1af4, 0x1041, 0);
     if (slot < 0 || slot >= 32) return;
-    uint64_t bar = VMAPPLE_PCIE_MMIO + 0x200000, buf = VMAPPLE_MEM + 0x2100000;
-    uint64_t ring = reprobe(slot, bar, VMAPPLE_MEM + 0x300000);
+    uint64_t bar = VIRT_PCIE_MMIO + 0x200000, buf = VIRT_MEM + 0x2100000;
+    uint64_t ring = reprobe(slot, bar, VIRT_MEM + 0x300000);
     uint8_t frame[64] = {1};
     put_desc(ring, 0, buf, 2048, 2, 0);
     offer(ring, 0);
     wr8(bar + 0x14, 0);
     check("reset: net drops frames while no driver runs", hv_virtio_net_receive(board.net, frame, 64), 0);
-    ring = reprobe(slot, bar, VMAPPLE_MEM + 0x300000);
+    ring = reprobe(slot, bar, VIRT_MEM + 0x300000);
     check("reset: net has no buffer of the old driver", hv_virtio_net_receive(board.net, frame, 64), 0);
     put_desc(ring, 0, buf, 2048, 2, 0);
     offer(ring, 0);
@@ -553,9 +463,9 @@ static void test_reset_net_rng(void) {
 
     int rslot = (int)find_slot(0x1af4, 0x1044, 0);
     if (rslot < 0 || rslot >= 32) return;
-    uint64_t rbar = VMAPPLE_PCIE_MMIO + 0x400000, rb = VMAPPLE_MEM + 0x2200000;
+    uint64_t rbar = VIRT_PCIE_MMIO + 0x400000, rb = VIRT_MEM + 0x2200000;
     for (int i = 0; i < 2; i++) {
-        uint64_t q = reprobe(rslot, rbar, VMAPPLE_MEM + 0x1200000);
+        uint64_t q = reprobe(rslot, rbar, VIRT_MEM + 0x1200000);
         memset(ram(rb), 0, 0x1000);
         put_desc(q, 0, rb, 0x1000, 2, 0);
         offer(q, 0);
@@ -568,7 +478,7 @@ static void test_reset_balloon(void) {
     int slot = (int)find_slot(0x1af4, 0x1045, 0);
     if (slot < 0 || slot >= 32 || !board.balloon) return;
     HvVirtioBalloon *b = board.balloon;
-    uint64_t bar = VMAPPLE_PCIE_MMIO + 0x300000, ring = VMAPPLE_MEM + 0x1000000;
+    uint64_t bar = VIRT_PCIE_MMIO + 0x300000, ring = VIRT_MEM + 0x1000000;
     check("reset: the old actual is set", hv_virtio_balloon_actual(b), 1 << 20);
     reprobe(slot, bar, ring);
     check("reset: actual starts at 0", hv_virtio_balloon_actual(b), 0);
@@ -582,7 +492,7 @@ static void test_reset_balloon(void) {
 
 /* virtio-snd control request: code, then 20 bytes of parameters. Returns the status. */
 static uint32_t snd_ctl(uint64_t ring, int n, uint32_t code, uint32_t buffer, uint32_t period, int ch, int fmt, int rate) {
-    uint64_t req = VMAPPLE_MEM + 0x2300000, resp = req + 0x100;
+    uint64_t req = VIRT_MEM + 0x2300000, resp = req + 0x100;
     uint8_t r[24] = {0};
     memcpy(r, &code, 4);
     memcpy(r + 8, &buffer, 4);
@@ -593,7 +503,7 @@ static uint32_t snd_ctl(uint64_t ring, int n, uint32_t code, uint32_t buffer, ui
     put_desc(ring, 2 * n, req, sizeof r, 1, (uint16_t)(2 * n + 1));
     put_desc(ring, 2 * n + 1, resp, 8, 2, 0);
     offer(ring, (uint16_t)(2 * n));
-    wr16(VMAPPLE_PCIE_MMIO + 0x600000 + 0x3000, 0);
+    wr16(VIRT_PCIE_MMIO + 0x600000 + 0x3000, 0);
     uint32_t st;
     memcpy(&st, ram(resp), 4);
     return st;
@@ -603,12 +513,12 @@ static void test_reset_snd(void) {
     HvVirtioSnd *d = board.snd;
     int slot = (int)find_slot(0x1af4, 0x1059, 0);
     if (!d || slot < 0 || slot >= 32) return;
-    uint64_t bar = VMAPPLE_PCIE_MMIO + 0x600000, ring = VMAPPLE_MEM + 0x2400000;
+    uint64_t bar = VIRT_PCIE_MMIO + 0x600000, ring = VIRT_MEM + 0x2400000;
     d->backend.start = NULL;
-    check("snd: the Mac's device offers no control elements", d->vio.features, HV_VIRTIO_F_VERSION_1);
-    check("snd: and keeps its 12 config bytes", d->vio.config_len, 12);
+    check("snd: offers the control elements", d->vio.features, HV_VIRTIO_F_VERSION_1 | 1);
+    check("snd: 16 config bytes", d->vio.config_len, 16);
     reprobe(slot, bar, ring);
-    check("snd: control requests are refused", snd_ctl(ring, 0, 0x0302, 0, 0, 0, 0, 0), 0x8001);
+    check("snd: control read is served", snd_ctl(ring, 0, 0x0302, 0, 0, 0, 0, 0), 0x8000);
     check("snd: set params", snd_ctl(ring, 0, 0x0101, 16384, 4096, 2, HV_VSND_FMT_S16, HV_VSND_RATE_48000), 0x8000);
     check("snd: prepare", snd_ctl(ring, 1, 0x0102, 0, 0, 0, 0, 0), 0x8000);
     check("snd: start", snd_ctl(ring, 2, 0x0104, 0, 0, 0, 0, 0), 0x8000);
@@ -627,21 +537,21 @@ static void test_reset_snd(void) {
 static void test_reset_input(void) {
     int kslot = (int)find_slot(0x1af4, 0x1052, 0), mslot = (int)find_slot(0x1af4, 0x1052, 1);
     if (!board.keyboard || !board.mouse || kslot < 0 || kslot >= 32 || mslot < 0 || mslot >= 32) return;
-    uint64_t buf = VMAPPLE_MEM + 0x2500000;
+    uint64_t buf = VIRT_MEM + 0x2500000;
     /* events from before the first probe stay for it (macOS types into the guest while it boots) */
-    uint64_t mbar = VMAPPLE_PCIE_MMIO + 0x580000;
+    uint64_t mbar = VIRT_PCIE_MMIO + 0x580000;
     hv_virtio_input_send(board.mouse, HV_EV_REL, HV_REL_X, 5);
-    uint64_t mring = reprobe(mslot, mbar, VMAPPLE_MEM + 0x2600000);
+    uint64_t mring = reprobe(mslot, mbar, VIRT_MEM + 0x2600000);
     put_desc(mring, 0, buf, 8, 2, 0);
     offer(mring, 0);
     hv_virtio_input_poll(board.mouse);
     check("first probe keeps early events", rd32(buf + 4), 5);
     /* a driver has run: what piled up for it is dropped at the next reset */
-    uint64_t kbar = VMAPPLE_PCIE_MMIO + 0x500000;
-    uint64_t kring = reprobe(kslot, kbar, VMAPPLE_MEM + 0x2700000);
+    uint64_t kbar = VIRT_PCIE_MMIO + 0x500000;
+    uint64_t kring = reprobe(kslot, kbar, VIRT_MEM + 0x2700000);
     hv_virtio_input_poll(board.keyboard); /* the driver is up */
     for (int i = 0; i < 3; i++) hv_virtio_input_send(board.keyboard, HV_EV_KEY, 30, 1);
-    kring = reprobe(kslot, kbar, VMAPPLE_MEM + 0x2700000);
+    kring = reprobe(kslot, kbar, VIRT_MEM + 0x2700000);
     check("reset: queued input dropped", board.keyboard->head, board.keyboard->tail);
     put_desc(kring, 0, buf + 0x100, 8, 2, 0);
     offer(kring, 0);
@@ -655,7 +565,7 @@ static void test_reset_input(void) {
 
 /* hv_phys_ptr: a length near 2^64 must not wrap back into RAM. */
 static void test_phys_ptr_bounds(void) {
-    uint64_t base = VMAPPLE_MEM, end = VMAPPLE_MEM + RAM_SIZE;
+    uint64_t base = VIRT_MEM, end = VIRT_MEM + RAM_SIZE;
     check("ptr: start", hv_phys_ptr(&m, base, 1) != NULL, 1);
     check("ptr: whole RAM", hv_phys_ptr(&m, base, RAM_SIZE) != NULL, 1);
     check("ptr: one past the RAM", hv_phys_ptr(&m, base, RAM_SIZE + 1) == NULL, 1);
@@ -677,13 +587,13 @@ static void test_phys_ptr_bounds(void) {
 
 /* virtio-rng: a buffer split over two descriptors is filled whole, and an interrupt follows. */
 static void test_virtio_rng(void) {
-    HvVirtioRng *r = hv_virtio_rng_create(&m, board.pcie);
+    HvVirtioRng *r = board.rng;
     int slot = (int)find_slot(0x1af4, 0x1044, 0);
     check("virtio-rng enumerated", slot >= 0 && slot < 32, 1);
     if (slot < 0 || slot >= 32) return;
-    check("class: unclassified", rd32(VMAPPLE_PCIE_ECAM + ((uint64_t)slot << 15) + 8) >> 8, 0x00ff00);
-    uint64_t bar = VMAPPLE_PCIE_MMIO + 0x400000;
-    uint64_t q = setup_virtio(slot, bar, VMAPPLE_MEM + 0x1200000), buf = VMAPPLE_MEM + 0x1300000;
+    check("class: unclassified", rd32(VIRT_PCIE_ECAM + ((uint64_t)slot << 15) + 8) >> 8, 0x00ff00);
+    uint64_t bar = VIRT_PCIE_MMIO + 0x400000;
+    uint64_t q = setup_virtio(slot, bar, VIRT_MEM + 0x1200000), buf = VIRT_MEM + 0x1300000;
     check("one queue", (wr16(bar + 0x16, 0), rd32(bar + 0x12) & 0xffff), 1);
     memset(ram(buf), 0, 0x3000);
     put_desc(q, 0, buf, 0x1000, 1 | 2, 1);
@@ -700,30 +610,6 @@ static void test_virtio_rng(void) {
     check("rng past the buffer untouched", rd32(buf + 0x2800), 0);
     check("rng bytes counted", r->bytes, 0x2800);
     check("rng ISR", rd8(bar + 0x1000), 1);
-}
-
-/* FIPS-197 appendix C.1: AES-128, key 000102..0f, plaintext 00112233..ff. */
-static void test_aes(void) {
-    const uint64_t fifo = VMAPPLE_AES_1 + 0x200, src = VMAPPLE_MEM + 0x500000, dst = src + 0x100;
-    static const uint8_t pt[16] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
-                                   0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff};
-    static const uint8_t ct[16] = {0x69, 0xc4, 0xe0, 0xd8, 0x6a, 0x7b, 0x04, 0x30,
-                                   0xd8, 0xcd, 0xb7, 0x80, 0x70, 0xb4, 0xc5, 0x5a};
-    memcpy(ram(src), pt, 16);
-    check("aes status at reset", rd32(VMAPPLE_AES_1 + 0x0c), 0x3f80);
-    wr32(fifo, 1u << 28 | 1u << 20); /* KEY: context 0, AES-128, encrypt, ECB */
-    for (int i = 0; i < 4; i++) wr32(fifo, 0x03020100u + 0x04040404u * (uint32_t)i);
-    wr32(fifo, 5u << 28 | 16); /* DATA: 16 bytes */
-    wr32(fifo, 0);
-    wr32(fifo, (uint32_t)src);
-    wr32(fifo, (uint32_t)dst);
-    check("aes-128 ECB known answer", memcmp(ram(dst), ct, 16), 0);
-    wr32(VMAPPLE_AES_1 + 0x1c, 1u << 5);
-    wr32(fifo, 8u << 28 | 1u << 27 | 0x42); /* FLAG with interrupt */
-    check("aes flag raises SPI 0x12", board.gic->level[32 + VMAPPLE_IRQ_AES], 1);
-    check("aes flag info", rd32(VMAPPLE_AES_1 + 0x30), 0x42);
-    wr32(VMAPPLE_AES_1 + 0x18, 1u << 5);
-    check("aes interrupt cleared", board.gic->level[32 + VMAPPLE_IRQ_AES], 0);
 }
 
 static char uart_out[128];
@@ -747,7 +633,7 @@ static void test_guest_programs(void) {
     g->cpu[0].igrpen1 = 0;
     g->cpu[0].waker = 6;
     memset(&init, 0, sizeof init);
-    seed_cpu(&init, 3, VMAPPLE_MEM + 0x10000);
+    seed_cpu(&init, 3, VIRT_MEM + 0x10000);
     uint64_t t0 = hv_counter();
     if (run_jit(&m, &timer, &init, &cpu, NULL) == 0) {
         check("timer IRQ INTID", cpu.x[20], 27);
@@ -762,7 +648,7 @@ static void test_guest_programs(void) {
 
     board.uart->output = capture_uart;
     memset(&init, 0, sizeof init);
-    seed_cpu(&init, 4, VMAPPLE_MEM + 0x10000);
+    seed_cpu(&init, 4, VIRT_MEM + 0x10000);
     if (run_jit(&m, &uart, &init, &cpu, NULL) == 0) {
         check("UART output", strcmp(uart_out, "hello from the guest\n"), 0);
         check("PL011 PeriphID0", cpu.x[4], 0x11);
@@ -771,9 +657,9 @@ static void test_guest_programs(void) {
     }
 }
 
-/* Rotating INTx routing (QEMU virt): slots 1 and 5 share a line. */
+/* Rotating INTx routing (QEMU virt): slots 1 and 5 share a line. A second bus, as the board itself rotates. */
 static void test_pcie_rotate(void) {
-    enum { BASE = 32 + 200 }; /* clear of vmapple SPIs */
+    enum { BASE = 32 + 200 }; /* clear of the virt SPIs */
     HvPcie *p = hv_pcie_create(&m, board.gic, 0x7c000000, 0x100000, 0x7d000000, 0x100000, BASE, 1);
     static HvPciDev d[5];
     for (int i = 0; i < 5; i++) {
@@ -797,17 +683,14 @@ static void test_pcie_rotate(void) {
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     if (hv_machine_init(&m, 4 << 20) != 0) return 1;
-    char root_path[1024], aux_path[1024];
+    char root_path[1024];
     snprintf(root_path, sizeof root_path, "%s/hv-test-root.img", work_dir());
-    snprintf(aux_path, sizeof aux_path, "%s/hv-test-aux.img", work_dir());
-    if (make_disk(root_path, 1 << 20, 1) || make_disk(aux_path, 256 << 10, 2)) {
-        printf("cannot create test disks in %s\n", work_dir());
+    if (make_disk(root_path, 1 << 20, 1)) {
+        printf("cannot create test disk in %s\n", work_dir());
         return 1;
     }
-    static HvDisk root, aux;
+    static HvDisk root;
     hv_disk_open(&root, root_path, 0, 0);
-    hv_disk_open(&aux, aux_path, 16384, 0); /* as with auxiliary.bin: skip the 16 KB header */
-    HvCfgParams cfg = {.nr_cpus = 1, .ecid = 0x1234, .mac_en0 = {2, 0, 0, 0x12, 0x34, 0x56}};
     /* The balloon, over guest RAM in a file (holes read as zero at once) */
     char ram_path[1024];
     snprintf(ram_path, sizeof ram_path, "%s/hv-test-ram", work_dir());
@@ -816,15 +699,13 @@ int main(void) {
     setenv("HV_RAM_NO_LEDGER", "1", 1);
     setenv("HV_RAM_NO_PREFAULT", "1", 1);
     static const uint8_t mac[6] = {2, 0, 0, 0x12, 0x34, 0x56};
-    if (hv_vmapple_create(&board, &m, &cpu, RAM_SIZE, &root, &aux, &cfg, mac) != 0) return 1;
-    hv_vmapple_reset_cpu(&board);
-    check("reset pc", cpu.pc, VMAPPLE_FIRMWARE);
-    check("aux disk skips its 16 KB header", aux.size, (256 << 10) - 16384);
+    if (hv_virt_create(&board, &m, &cpu, 1, RAM_SIZE, &root, mac, 0) != 0) return 1;
+    hv_virt_reset(&board);
+    check("reset pc", cpu.pc, VIRT_FLASH0);
 
     test_gic();
     test_simple_devices();
-    test_bdif(&root, &aux);
-    test_virtio_blk(&aux);
+    test_virtio_blk(&root);
     test_virtio_net();
     test_virtio_balloon();
     test_virtio_rng();
@@ -834,28 +715,20 @@ int main(void) {
     test_reset_balloon();
     test_reset_snd();
     test_reset_input();
-    test_aes();
-    /* MSI frame: valid type register, doorbell pends the INTID */
-    check("msi type valid", rd32(VMAPPLE_GIC_MSI + 8) >> 31, 1);
-    check("msi base", (rd32(VMAPPLE_GIC_MSI + 8) >> 16) & 0x1fff, VMAPPLE_MSI_BASE);
-    wr32(VMAPPLE_GIC_MSI + 0x40, VMAPPLE_MSI_BASE + 3);
-    check("msi doorbell pends the INTID", board.gic->latch[VMAPPLE_MSI_BASE + 3], 1);
     /* PL061: power button on pin 3, rising edge */
-    wr32(VMAPPLE_GPIO + 0x40c, 1u << 3); /* IEV: rising edge */
-    wr32(VMAPPLE_GPIO + 0x410, 1u << 3);
-    check("gpio PeriphID0", rd32(VMAPPLE_GPIO + 0xfe0), 0x61);
+    wr32(VIRT_GPIO + 0x40c, 1u << 3); /* IEV: rising edge */
+    wr32(VIRT_GPIO + 0x410, 1u << 3);
+    check("gpio PeriphID0", rd32(VIRT_GPIO + 0xfe0), 0x61);
     hv_pl061_set_input(board.gpio, 3, 1);
-    check("gpio pin 3 reads high", rd32(VMAPPLE_GPIO + (1u << 3 << 2)), 1u << 3);
-    check("gpio edge raises SPI 5", board.gic->level[32 + VMAPPLE_IRQ_GPIO], 1);
-    wr32(VMAPPLE_GPIO + 0x41c, 1u << 3);
-    check("gpio interrupt cleared", board.gic->level[32 + VMAPPLE_IRQ_GPIO], 0);
+    check("gpio pin 3 reads high", rd32(VIRT_GPIO + (1u << 3 << 2)), 1u << 3);
+    check("gpio edge raises SPI 7", board.gic->level[32 + VIRT_IRQ_GPIO], 1);
+    wr32(VIRT_GPIO + 0x41c, 1u << 3);
+    check("gpio interrupt cleared", board.gic->level[32 + VIRT_IRQ_GPIO], 0);
     test_pcie_rotate();
     test_guest_programs();
 
     hv_disk_close(&root);
-    hv_disk_close(&aux);
     unlink(root_path);
-    unlink(aux_path);
     printf("%d checks, %d failures\n", checks, failures);
     return failures != 0;
 }
