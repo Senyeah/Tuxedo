@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build Henge's unsigned, ad-hoc-signed IPA on a Bitrise macOS/Xcode stack.
+# Build Tuxedo's unsigned, ad-hoc-signed IPA on a Bitrise macOS/Xcode stack.
 # SideStore or AltStore re-signs the IPA when installing it on the iPad.
 set -euo pipefail
 export HOMEBREW_NO_AUTO_UPDATE=1

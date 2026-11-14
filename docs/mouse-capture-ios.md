@@ -1,6 +1,6 @@
 # Mouse capture on iPhone
 
-This file answers one request from the owner: "investigate why iOS doesn't capture mouse input (I have a USB trackpad connected) and whether there is a workaround for Henge to capture it, even if using private APIs."
+This file answers one request from the owner: "investigate why iOS doesn't capture mouse input (I have a USB trackpad connected) and whether there is a workaround for Tuxedo to capture it, even if using private APIs."
 
 It was written on 13/11/2026 against commit `8f97ab2` on `linux/integration`. The device is an iPhone 18 Pro with iOS 27.3. The build is signed with a personal team.
 
@@ -8,11 +8,11 @@ This is an investigation and a plan. No code was changed. Nothing was run on the
 
 ## Verdict
 
-iOS does not let an app capture the pointer on an iPhone. Pointer lock is an iPad feature. Henge asks for the lock, and the iPhone ignores the request.
+iOS does not let an app capture the pointer on an iPhone. Pointer lock is an iPad feature. Tuxedo asks for the lock, and the iPhone ignores the request.
 
-An iPhone also has no pointer of its own. A mouse or trackpad moves a pointer only when AssistiveTouch is on. That pointer belongs to AssistiveTouch, not to Henge. It stops at the screen edge, and Henge cannot hide it.
+An iPhone also has no pointer of its own. A mouse or trackpad moves a pointer only when AssistiveTouch is on. That pointer belongs to AssistiveTouch, not to Tuxedo. It stops at the screen edge, and Tuxedo cannot hide it.
 
-Henge already receives the buttons through GameController. The log does not show if movement arrives, because Henge does not log movement. That is the first thing to measure.
+Tuxedo already receives the buttons through GameController. The log does not show if movement arrives, because Tuxedo does not log movement. That is the first thing to measure.
 
 The best workaround has two parts:
 
@@ -21,7 +21,7 @@ The best workaround has two parts:
 
 No private API is likely to give a true lock with a personal team. Two cheap private tests are worth one hour. They are in the plan.
 
-## What Henge does today
+## What Tuxedo does today
 
 ### The path from the device to the guest
 
@@ -50,11 +50,11 @@ flowchart LR
 | Request for pointer lock. A block replaces `prefersPointerLocked` on the class of the root view controller. | `ios/Henge/Hardware.swift:121-137` |
 | The "refused" hint is for iPad only. The comment says "An iPhone never locks it". | `ios/Henge/Hardware.swift:139-146` |
 | `HardwareMouse.start()` attaches to each `GCMouse` and calls `PointerLock.set(true)`. | `ios/Henge/Hardware.swift:167-194` |
-| Movement: `mouseMovedHandler` gives raw deltas. Henge scales them and calls `henge_vm_mouse_move`. There is no log line. | `ios/Henge/Hardware.swift:220`, `228-236` |
+| Movement: `mouseMovedHandler` gives raw deltas. Tuxedo scales them and calls `henge_vm_mouse_move`. There is no log line. | `ios/Henge/Hardware.swift:220`, `228-236` |
 | Buttons: the first 32 events are logged as `physical mouse button: raw=… guest=…`. | `ios/Henge/Hardware.swift:238-246` |
 | Scroll: the first 24 events are logged as `scroll raw: …`. | `ios/Henge/Hardware.swift:251-275` |
 | The touch surface ignores `.indirectPointer` touches. It hides the pointer with `UIPointerStyle.hidden()`. | `ios/Henge/Trackpad.swift:50-54`, `80`, `115`, `136` |
-| The hint "Make Henge full screen to use the trackpad or mouse" shows only when `PointerLock.refused` is true. | `ios/Henge/SessionView.swift:161-162`, `211-216` |
+| The hint "Make Tuxedo full screen to use the trackpad or mouse" shows only when `PointerLock.refused` is true. | `ios/Henge/SessionView.swift:161-162`, `211-216` |
 | The lock is released when the app has its own controls to show. | `ios/Henge/SessionView.swift:245`, `293` |
 | `UIApplicationSupportsIndirectInputEvents` is true. There is no `UIRequiresFullScreen` key. Multiple scenes are off. | `ios/Henge/Info.plist:79-91` |
 | The entitlements are `get-task-allow` and the increased memory limit. Nothing else. | `ios/Henge/Henge.personal.entitlements` |
@@ -69,7 +69,7 @@ The Info.plist is correct for indirect input. A missing key is not the cause.
 - The SDK header does not mark the API as unavailable on iPhone. `UIViewController.h:703` in the iPhoneOS 27.1 SDK says `API_AVAILABLE(ios(14.0)) API_UNAVAILABLE(watchos, tvos)`. The header also says "This preference may or may not be honored."
 - The system makes the decision, not the app. The iOS 27.1 simulator runtime has `-[UIMutableApplicationSceneClientSettings setPreferredPointerLockStatus:]` (the request from the app) and `-[UIApplicationSceneSettings pointerLockStatus]` (the answer from the system).
 - Apple Developer Forums thread 677631 reports that the iPhone ignores the request. One post says "The prefersPointerLocked method is not called on iPhone." The same post says "The GCMouse events work on iPhone fine". Apple did not reply.
-- Henge commit `dcae4b3` ("an iPhone never locks the pointer") records the same result.
+- Tuxedo commit `dcae4b3` ("an iPhone never locks the pointer") records the same result.
 - CloudGear, a game streaming app, tells its users the same: lock and a hidden pointer work on iPad, not on iPhone.
 
 `UIRequiresFullScreen`, Stage Manager and the scene setup are not the cause. An iPhone app is always full screen. Those conditions apply only to iPad.
@@ -78,15 +78,15 @@ The Info.plist is correct for indirect input. A missing key is not the cause.
 
 - An iPhone has no built-in pointer. A mouse or trackpad shows a pointer only when AssistiveTouch is on (Settings, Accessibility, Touch, AssistiveTouch). Apple Support article 111775 and Moonlight issue 735 (iPhone 16 Pro Max, iOS 26.7.2) agree.
 - AssistiveTouch has a setting "Perform Touch Gestures". The simulator runtime has the matching preference `AssistiveTouchMouseBehavesLikeFinger`. It is on by default.
-- When that setting is on, the pointer is a simulated finger. A click becomes a touch at the pointer position. Henge sees a finger, not a mouse, because the touch type is not `.indirectPointer` (`Trackpad.swift:80`). That finger goes to the Magic Trackpad emulation.
+- When that setting is on, the pointer is a simulated finger. A click becomes a touch at the pointer position. Tuxedo sees a finger, not a mouse, because the touch type is not `.indirectPointer` (`Trackpad.swift:80`). That finger goes to the Magic Trackpad emulation.
 - The same click also arrives as a GameController button. That explains the log lines `physical mouse button: raw=0 guest=0 down/up`.
 
 ### 3. What arrives and what does not
 
-| Input | Arrives in Henge? | Evidence |
+| Input | Arrives in Tuxedo? | Evidence |
 | --- | --- | --- |
 | Buttons | Yes, through `GCMouse`. | The phone log. |
-| Movement deltas | Not known. | Henge has no log line for movement. Forum thread 677631 says GCMouse events work on iPhone. CloudGear says apps get pointer input only when AssistiveTouch is on. |
+| Movement deltas | Not known. | Tuxedo has no log line for movement. Forum thread 677631 says GCMouse events work on iPhone. CloudGear says apps get pointer input only when AssistiveTouch is on. |
 | Deltas when the pointer is at the screen edge | Not known. Probably not. | Moonlight issue 735: "When the pointer reaches the edge of the iPhone screen, movement stops." Moonlight uses GCMouse when one is present. |
 | Scroll | Not known. | No `scroll raw:` line was reported from the phone. |
 | Simulated finger from AssistiveTouch | Probably yes, when "Perform Touch Gestures" is on. | See part 2. |
@@ -94,7 +94,7 @@ The Info.plist is correct for indirect input. A missing key is not the cause.
 ### 4. What the user most likely sees
 
 - With AssistiveTouch off: no pointer on the screen. Clicks reach the guest at the place where the guest pointer already is. The guest pointer possibly does not move.
-- With AssistiveTouch on: the round AssistiveTouch pointer moves above Henge. Henge cannot hide it. The guest pointer is a second pointer. It follows for a time, then stops when the system pointer reaches the screen edge. A click possibly also acts as a finger on the emulated trackpad.
+- With AssistiveTouch on: the round AssistiveTouch pointer moves above Tuxedo. Tuxedo cannot hide it. The guest pointer is a second pointer. It follows for a time, then stops when the system pointer reaches the screen edge. A click possibly also acts as a finger on the emulated trackpad.
 
 ## Options
 
@@ -107,7 +107,7 @@ The Info.plist is correct for indirect input. A missing key is not the cause.
 | 3 | Absolute mode. Read the pointer position (`UIHoverGestureRecognizer`, or the `.indirectPointer` touch location) and send it to the guest as an absolute position. | The system pointer is the guest pointer. Both stop at the same edge. No lock is necessary. | Medium. The guest needs an absolute device. |
 | 4 | Touchscreen mode with the default AssistiveTouch settings. The simulated finger taps the guest at the pointer position. | Clicks and drags work. There is no hover and no right button from the finger. | Small after `LINUX-PLAN-12-touchscreen.md` is built. |
 | 5 | External display. The guest is on the monitor. The system pointer stays on the phone screen. | No double pointer on the guest picture. The edge problem possibly stays. | None |
-| 6 | Do not let iOS see the device as a pointer. For example, a small computer reads the trackpad and sends the deltas to Henge on the network. | A true capture. | Large, and it needs more hardware. |
+| 6 | Do not let iOS see the device as a pointer. For example, a small computer reads the trackpad and sends the deltas to Tuxedo on the network. | A true capture. | Large, and it needs more hardware. |
 
 Notes on option 3:
 
@@ -189,7 +189,7 @@ If P1 gives a lock, the problem is solved for personal builds. Put it behind a f
 
 ## Risks
 
-- AssistiveTouch is a system setting. Henge cannot change it. The user must set it, and it changes the pointer in all apps.
+- AssistiveTouch is a system setting. Tuxedo cannot change it. The user must set it, and it changes the pointer in all apps.
 - Two pointers stay visible in relative mode if iOS does not obey `.hidden()`.
 - In absolute mode, the guest pointer acceleration is not used. The pointer speed is the AssistiveTouch tracking speed.
 - A game or a 3D program in the guest that needs endless relative movement does not work in absolute mode.
@@ -199,7 +199,7 @@ If P1 gives a lock, the problem is solved for personal builds. Put it behind a f
 
 ## What is not verified
 
-- No test was run on the iPhone or in the simulator. Each statement about iPhone behaviour comes from headers, runtime strings, the Henge log line, and public reports.
+- No test was run on the iPhone or in the simulator. Each statement about iPhone behaviour comes from headers, runtime strings, the Tuxedo log line, and public reports.
 - It is not known if AssistiveTouch was on when the log was made.
 - It is not known if `mouseMovedHandler` fires on this phone, in any AssistiveTouch state.
 - It is not known if deltas continue at the screen edge. The one public report (Moonlight 735) has no answer from a maintainer.

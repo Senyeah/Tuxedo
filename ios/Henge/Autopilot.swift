@@ -1,7 +1,7 @@
 import Foundation
 import UIKit
 
-/// Testing a build on a phone nobody is holding. Henge follows Documents/henge-autopilot.txt when it is
+/// Testing a build on a phone nobody is holding. Tuxedo follows Documents/henge-autopilot.txt when it is
 /// launched with HENGE_AUTOPILOT set, as in
 ///   xcrun devicectl device process launch -e '{"HENGE_AUTOPILOT":"1"}' --device ID BUNDLE
 /// or, for a launch by hand (a locked phone driven through iPhone Mirroring), once: at launch
@@ -28,7 +28,7 @@ import UIKit
 ///   log TEXT           a marker in henge.log
 ///   details [forwards] open the session's Details (and its Port Forwards page), for a screenshot
 ///   stop               stop the machine
-///   exit               quit Henge
+///   exit               quit Tuxedo
 /// Each command is written to henge.log as it runs, so the log has the timeline.
 /// HENGE_AUTOPILOT in the launch environment (not the once file) also skips a Linux machine's Face ID check
 /// (SessionGate). The wallet stays locked unless HENGE_AUTOPILOT_WALLET=unlocked is in the launch environment too.

@@ -1,7 +1,7 @@
 #!/bin/zsh
-# Builds Henge for iOS and writes ~/Desktop/Henge.ipa (or ~/Desktop/Henge.tipa with --trollstore).
+# Builds Tuxedo for iOS and writes ~/Desktop/Tuxedo.ipa (or ~/Desktop/Tuxedo.tipa with --trollstore).
 # Unsigned build, then signed ad hoc inside out with the entitlements file named by the
-# HENGE_ENTITLEMENTS environment variable (default Henge/Henge.entitlements), as Husk's
+# HENGE_ENTITLEMENTS environment variable (default Tuxedo/Tuxedo.entitlements), as Husk's
 # package_ipa.sh does: the sideloader (SideStore, AltStore, Impactor) re-signs it
 # with the user's own certificate and keeps the entitlements it can.
 # --trollstore strips the entitlements TrollStore bans under PPL/TXM.
@@ -38,7 +38,7 @@ trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/Payload"
 cp -R "$APP" "$STAGE/Payload/"
 ENT="$STAGE/entitlements.plist"
-# HENGE_ENTITLEMENTS picks another file, as for xcodebuild (Henge/Henge.personal.entitlements for a free team).
+# HENGE_ENTITLEMENTS picks another file, as for xcodebuild (Tuxedo/Tuxedo.personal.entitlements for a free team).
 cp "$IOS/${HENGE_ENTITLEMENTS:-Henge/Henge.entitlements}" "$ENT"
 BANNED_KEYS=("com.apple.private.cs.debugger" "dynamic-codesigning" "com.apple.private.skip-library-validation")
 if [ "$TROLLSTORE" = true ]; then for k in "${BANNED_KEYS[@]}"; do plutil -remove "$k" "$ENT" 2>/dev/null || true; done; fi

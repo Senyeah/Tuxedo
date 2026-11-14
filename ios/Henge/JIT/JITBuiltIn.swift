@@ -2,7 +2,7 @@
 import Foundation
 
 /// The private NSExtension API (ExtensionFoundation) that starts an app
-/// extension of Henge's own: the same calls LiveContainer uses to start its
+/// extension of Tuxedo's own: the same calls LiveContainer uses to start its
 /// LiveProcess.
 @objc private protocol NSExtensionClassShim {
     @objc(extensionWithIdentifier:error:)
@@ -22,18 +22,18 @@ import Foundation
     func setRequestInterruptionBlock(_ block: @escaping (NSUUID?) -> Void)
 }
 
-/// Starts the separate helper process (PlugIns/HengeJITHelper.appex) that debugs Henge.
+/// Starts the separate helper process (PlugIns/HengeJITHelper.appex) that debugs Tuxedo.
 ///
 /// The helper is found by the bundle identifier it has in this installation,
 /// read from its own Info.plist. Sideloaders that sign with the user's own
-/// Apple ID (SideStore, AltStore, Plume, Impactor) append the team ID to Henge's
+/// Apple ID (SideStore, AltStore, Plume, Impactor) append the team ID to Tuxedo's
 /// identifier and the helper's alike, so that lookup survives them. An
 /// ExtensionKit extension point, which the helper used before, is named in
-/// files they do not rewrite, and iOS registered none for a renamed Henge
+/// files they do not rewrite, and iOS registered none for a renamed Tuxedo
 /// ("Failed to add observer").
 ///
 /// One extension request per HengeJITRequest. For `enable` the request lasts
-/// until Henge detaches. Log category "jit-helper".
+/// until Tuxedo detaches. Log category "jit-helper".
 @MainActor
 enum HengeBuiltInJIT {
     static let helperFile = "HengeJITHelper.appex"

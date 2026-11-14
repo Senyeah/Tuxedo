@@ -2,10 +2,10 @@
 import Foundation
 import dnssd
 
-/// Finds the port this device's RemotePairing service listens on, for when Henge could not.
+/// Finds the port this device's RemotePairing service listens on, for when Tuxedo could not.
 ///
 /// Since iOS 26 the device picks that port at boot and advertises it as `_remotepairing._tcp`; the fixed
-/// 49152 StikJIT falls back to is closed then, so every attempt times out at 10.7.0.1:49152. Henge's own lookup
+/// 49152 StikJIT falls back to is closed then, so every attempt times out at 10.7.0.1:49152. Tuxedo's own lookup
 /// (RemotePairingPortDiscovery) connects to the service to learn its port, and on some devices that never
 /// becomes ready. This reads the port from the service's SRV record with DNSServiceResolve instead, which
 /// needs no connection.

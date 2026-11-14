@@ -33,7 +33,7 @@
 #define VIRT_UART            0x09000000ull
 #define VIRT_RTC             0x09010000ull
 #define VIRT_GPIO            0x09030000ull
-#define VIRT_I2C             0x090c0000ull /* Henge only: after QEMU's last device below 0x0a000000 */
+#define VIRT_I2C             0x090c0000ull /* Tuxedo only: after QEMU's last device below 0x0a000000 */
 #define VIRT_PCIE_MMIO       0x10000000ull
 #define VIRT_PCIE_MMIO_SIZE  0x2eff0000ull
 #define VIRT_PCIE_PIO        0x3eff0000ull
@@ -47,7 +47,7 @@
 #define VIRT_IRQ_RTC  2
 #define VIRT_IRQ_PCIE 3 /* INTx lines on SPIs 3 to 6 */
 #define VIRT_IRQ_GPIO 7
-#define VIRT_IRQ_I2C  10 /* Henge only */
+#define VIRT_IRQ_I2C  10 /* Tuxedo only */
 #define VIRT_GPIO_POWER 3   /* the power key's pin */
 #define VIRT_GPIO_AC 4      /* high: on mains */
 #define VIRT_GPIO_BATTERY 5 /* high: the battery is there */

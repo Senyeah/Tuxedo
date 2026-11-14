@@ -4,7 +4,7 @@ import Network
 import SwiftUI
 import UIKit
 
-/// How Henge gets a debugger attached. See docs/06-built-in-jit.md.
+/// How Tuxedo gets a debugger attached. See docs/06-built-in-jit.md.
 enum JITMethod: String, CaseIterable, Identifiable {
     /// TrollStore or jailbreak first, then a paired built-in helper or StikDebug.
     case automatic
@@ -27,7 +27,7 @@ enum JITMethod: String, CaseIterable, Identifiable {
 
 /// Where Built-in StikJIT's pairing file came from.
 enum JITPairingSource: String {
-    /// Made by Henge on this device (iOS 27, OnDevicePairing).
+    /// Made by Tuxedo on this device (iOS 27, OnDevicePairing).
     case onDevice
     /// Imported from a file made on a computer.
     case imported
@@ -35,7 +35,7 @@ enum JITPairingSource: String {
 
 /// The RPPairing file Built-in StikJIT authenticates with. Lives in Documents,
 /// so it is visible through Finder file sharing -- it is device-sensitive and
-/// is only ever sent to Henge's own helper process.
+/// is only ever sent to Tuxedo's own helper process.
 enum JITPairingFileStore {
     static var directory: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -94,7 +94,7 @@ final class JITCoordinator: ObservableObject {
     /// The setup check passed for the current pairing file.
     @Published private(set) var prepared = false
     @Published private(set) var pairingSource = JITPairingFileStore.source
-    /// Bumped each time the built-in helper attaches. Henge stays in the
+    /// Bumped each time the built-in helper attaches. Tuxedo stays in the
     /// foreground for that, so nothing else tells ContentView to claim the region.
     @Published private(set) var attachGeneration = 0
 
@@ -147,14 +147,14 @@ final class JITCoordinator: ObservableObject {
 
     /// Get a debugger attached with whichever method applies, or open the setup
     /// walkthrough when that method is not set up yet.
-    /// "Turn on JIT at launch": when Henge opens without JIT, ask the built-in StikJIT for it straight away, once per launch.
-    /// Only when StikJIT can do it unattended -- it is available here and already paired -- so opening Henge never lands in
+    /// "Turn on JIT at launch": when Tuxedo opens without JIT, ask the built-in StikJIT for it straight away, once per launch.
+    /// Only when StikJIT can do it unattended -- it is available here and already paired -- so opening Tuxedo never lands in
     /// the setup walkthrough by surprise.
     static let autoEnableKey = "henge.jit.autoEnable"
     private var autoTried = false
 
-    /// A Henge TrollStore installed asks TrollStore for JIT each time it opens without it (#135), unless turned off in Settings:
-    /// TrollStore attaches to the running Henge for a moment, with nothing to tap.
+    /// A Tuxedo TrollStore installed asks TrollStore for JIT each time it opens without it (#135), unless turned off in Settings:
+    /// TrollStore attaches to the running Tuxedo for a moment, with nothing to tap.
     static let trollStoreAutoKey = "henge.jit.trollStoreAuto"
     static var trollStoreAuto: Bool { UserDefaults.standard.object(forKey: trollStoreAutoKey) as? Bool ?? true }
 
@@ -201,7 +201,7 @@ final class JITCoordinator: ObservableObject {
     func enable() {
         guard !JITBootstrap.ready else { return }
         // Turn On JIT while JIT is already being turned on (at launch, by itself) started a second helper, which attached
-        // once the first let go and then stayed: with a debugger on, every trap stops Henge until it answers, and the
+        // once the first let go and then stayed: with a debugger on, every trap stops Tuxedo until it answers, and the
         // phone ran process spawns 2x and a shell loop 1.5x slower (2026-11-09).
         guard !busy else {
             log("Turn On JIT: JIT is being turned on already; nothing more to do")
@@ -246,7 +246,7 @@ final class JITCoordinator: ObservableObject {
         }
     }
 
-    /// After TrollStore is asked: it opens Henge again and attaches to it for a moment, which marks the process as debugged. Watch for
+    /// After TrollStore is asked: it opens Tuxedo again and attaches to it for a moment, which marks the process as debugged. Watch for
     /// that, so the Games tab and the Library notice without waiting for another trip to the foreground, and say what to check if
     /// it never comes -- TrollStore only answers enable-jit once its URL Scheme setting is on.
     private func awaitTrollStore() {
@@ -399,7 +399,7 @@ final class JITCoordinator: ObservableObject {
                     }
                 },
                 completion: { [weak self] result in
-                    // The helper replies once Henge detaches, or when attaching failed.
+                    // The helper replies once Tuxedo detaches, or when attaching failed.
                     switch result {
                     case .success(let response):
                         self?.txmPresent = response.txmPresent
@@ -500,7 +500,7 @@ final class JITCoordinator: ObservableObject {
 /// open it to connect when it is installed, otherwise its App Store page.
 enum LocalDevVPN {
     static let appStore = URL(string: "https://apps.apple.com/us/app/localdevvpn/id6755608044")!
-    /// `enable` connects the VPN; `scheme` has LocalDevVPN return to Henge afterwards.
+    /// `enable` connects the VPN; `scheme` has LocalDevVPN return to Tuxedo afterwards.
     static let connect = URL(string: "localdevvpn://enable?scheme=henge")!
 
     static var isInstalled: Bool { UIApplication.shared.canOpenURL(URL(string: "localdevvpn://")!) }

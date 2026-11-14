@@ -93,7 +93,7 @@ uint8_t *hv_virt_build_fdt(const HvVirt *b, const char *bootargs, uint64_t initr
     hv_fdt_end(f);
     hv_fdt_end(f);
 
-    /* Henge only: the device's battery, mains and screen backlight. */
+    /* Tuxedo only: the device's battery, mains and screen backlight. */
     hv_fdt_begin(f, "ac-power");
     hv_fdt_prop_u32(f, "phandle", PH_AC);
     uint32_t ac[3] = {PH_GPIO, VIRT_GPIO_AC, 0};

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Boot the Henge Linux guest on QEMU virt, the reference for Henge's board.
+# Boot the Tuxedo Linux guest on QEMU virt, the reference for Tuxedo's board.
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)

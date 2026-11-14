@@ -192,7 +192,7 @@ enum ByteText {
     }
 }
 
-/// The names the JIT setup screens (from Husk) use, in Henge's colours.
+/// The names the JIT setup screens (from Husk) use, in Tuxedo's colours.
 enum Theme {
     static let accent = Desk.accent
     static let accentSoft = Desk.accent.opacity(0.18)

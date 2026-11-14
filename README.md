@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="docs/icon.png" width="120" height="120" alt="Henge">
+  <img src="docs/icon.png" width="120" height="120" alt="Tuxedo">
 </p>
 
-<h1 align="center">Henge</h1>
+<h1 align="center">Tuxedo</h1>
 
-<p align="center">Debian Linux on your iPhone and iPad.</p>
+<p align="center">Debian Linux on your iPhone and iPad. Tuxedo (formerly Henge).</p>
 
 <p align="center">
   <a href="#install">Install</a>
@@ -23,11 +23,11 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/Leviidev/Henge?style=flat-square&color=2E6BFF&labelColor=111111" alt="GPL-2.0-or-later"></a>
 </p>
 
-Henge is an arm64 JIT emulator. It runs a Debian Linux guest on an iPhone or iPad. Download an image, start the machine, and use it. macOS guest support was removed on 14/11/2026.
+Tuxedo is an arm64 JIT emulator. It runs a Debian Linux guest on an iPhone or iPad. Download an image, start the machine, and use it. macOS guest support was removed on 14/11/2026.
 
-- **Own emulator** — iOS gives apps no hypervisor, so Henge runs the guest's arm64 code through its own JIT, with its own MMU and devices. It doesn't use QEMU or Virtualization.framework.
+- **Own emulator** — iOS gives apps no hypervisor, so Tuxedo runs the guest's arm64 code through its own JIT, with its own MMU and devices. It doesn't use QEMU or Virtualization.framework.
 - **Debian 13** — Debian (arm64) boots through U-Boot on a virtual machine that follows QEMU's `virt` board. A text console, or a desktop with labwc (Wayland).
-- **Accelerated graphics** — Opt-in. Henge replays the guest's virgl 3D commands with ANGLE on Metal, with OpenGL ES 3.0.
+- **Accelerated graphics** — Opt-in. Tuxedo replays the guest's virgl 3D commands with ANGLE on Metal, with OpenGL ES 3.0.
 - **Video decode and encode** — Opt-in. The guest decodes H.264, VP9 and AV1 (VA-API) and encodes with `ffmpeg` on the device's VideoToolbox.
 - **Files folders** — Folders from the Files app appear in the guest at `/media/henge/<name>`. A shared folder and a shared clipboard (desktop image) are there too.
 - **Port forwards** — Another device on the local network can reach a TCP port in the guest, for example SSH, through a port on the phone.
@@ -39,13 +39,13 @@ Henge is an arm64 JIT emulator. It runs a Debian Linux guest on an iPhone or iPa
 
 Sideload `Henge.ipa` from [Releases](https://github.com/Leviidev/Henge/releases) with SideStore or AltStore, or install `Henge.tipa` with TrollStore or TrollStore Lite. To get updates in SideStore or AltStore, add Henge's source, `https://raw.githubusercontent.com/Leviidev/Henge/main/repo.json`, or `https://itslevii.dev/repo.json` for all of Leviidev's apps. iOS or iPadOS 17 or later, on an A14 or M1 chip or newer. So far it's tested only on an iPhone 17 Pro and in the iOS Simulator: iPad support hasn't run on a real iPad yet.
 
-- **JIT** is required: StikDebug, TrollStore (which stops at iOS 17.0), TrollStore Lite (which needs a jailbreak), a jailbreak on its own, or the StikJIT helper built into Henge (iOS 26 or later).
+- **JIT** is required: StikDebug, TrollStore (which stops at iOS 17.0), TrollStore Lite (which needs a jailbreak), a jailbreak on its own, or the StikJIT helper built into Tuxedo (iOS 26 or later).
 - **Storage:** a Linux image downloads at about 0.2 GB (console) or 0.3 GB (desktop). The disk grows to the size you pick (16 GB by default).
-- **Memory:** sign Henge with the increased memory limit entitlement if your certificate has it.
+- **Memory:** sign Tuxedo with the increased memory limit entitlement if your certificate has it.
 
 ## Linux machines
 
-A machine runs Debian 13 (trixie) for arm64, minimal. Henge starts it with U-Boot, on a virtual board that copies QEMU's `virt` machine, and it runs on the same JIT engine. There are two images:
+A machine runs Debian 13 (trixie) for arm64, minimal. Tuxedo starts it with U-Boot, on a virtual board that copies QEMU's `virt` machine, and it runs on the same JIT engine. There are two images:
 
 - **Console**: a text terminal on the serial port. About 0.2 GB to download.
 - **Desktop**: labwc (Wayland) and one terminal, with the screen, pointer and keyboard. About 0.3 GB to download.
@@ -56,8 +56,8 @@ Both are 16 KB-page Debian kernels (`linux-image-arm64-16k`). The disk is 3 GB i
 
 There is no default image host yet, so one of these:
 
-- **A catalogue.** Open Settings, paste the address of a `linux-images.json` under Linux images, then open Install and choose Linux. Henge downloads the firmware and the disk, checks both, and makes the machine. A catalogue on a public host must use `https`. Plain `http` works only to a local address. `tools/linux/package-image.sh` makes a catalogue and `tools/linux/serve.sh` serves it on the LAN.
-- **A folder.** `tools/linux/export-ios.sh DISK FIRMWARE [NAME] [RAM_MB]` makes a folder with `machine.json`, `u-boot.bin` and `disk.img.hvsparse`. Drop it on Henge in Finder or pick it in Files.
+- **A catalogue.** Open Settings, paste the address of a `linux-images.json` under Linux images, then open Install and choose Linux. Tuxedo downloads the firmware and the disk, checks both, and makes the machine. A catalogue on a public host must use `https`. Plain `http` works only to a local address. `tools/linux/package-image.sh` makes a catalogue and `tools/linux/serve.sh` serves it on the LAN.
+- **A folder.** `tools/linux/export-ios.sh DISK FIRMWARE [NAME] [RAM_MB]` makes a folder with `machine.json`, `u-boot.bin` and `disk.img.hvsparse`. Drop it on Tuxedo in Finder or pick it in Files.
 
 [tools/linux/README.md](tools/linux/README.md) builds the firmware and the images from nothing.
 
@@ -99,6 +99,6 @@ That produces `~/Desktop/Henge.ipa`, and `package_ipa.sh --trollstore` writes `H
 
 ## Licence
 
-GPL-2.0-or-later. Henge compiles in code from Husk (GPL-2.0-or-later), so the shipped binary is a combined GPL work. It cannot go on the App Store. See [docs/licensing.md](docs/licensing.md).
+GPL-2.0-or-later. Tuxedo compiles in code from Husk (GPL-2.0-or-later), so the shipped binary is a combined GPL work. It cannot go on the App Store. See [docs/licensing.md](docs/licensing.md).
 
 A Linux image holds Debian packages and, next to it, a U-Boot binary. U-Boot is GPL-2.0, mostly or later, and Debian's packages have their own licences. [docs/licensing.md](docs/licensing.md) says where their source comes from.

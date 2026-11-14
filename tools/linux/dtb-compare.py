@@ -19,10 +19,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 QEMU = os.environ.get("QEMU", "/opt/homebrew/bin/qemu-system-aarch64")
 QEMU_MAX_MB = 3072  # highmem=off keeps RAM below 4 GB, so QEMU refuses -m 4096
 
-# Top-level nodes only QEMU has (devices Henge leaves out by design).
+# Top-level nodes only QEMU has (devices Tuxedo leaves out by design).
 QEMU_ONLY_NODES = {"platform-bus@c000000", "fw-cfg@9020000", "pmu", "flash@0"}
 QEMU_ONLY_PREFIXES = ("virtio_mmio@",)
-# Top-level nodes only Henge has: the device's battery, mains and backlight (LINUX-PLAN-13).
+# Top-level nodes only Tuxedo has: the device's battery, mains and backlight (LINUX-PLAN-13).
 HENGE_ONLY_NODES = {"i2c@90c0000", "ac-power"}
 # Subtrees only QEMU has: the ITS (no MSI) and the CPU topology.
 QEMU_ONLY_PATHS = {"/intc@8000000/its@8080000", "/cpus/cpu-map"}
@@ -33,7 +33,7 @@ IGNORED_PROPS = {
     "/memory@40000000": {"reg"},  # checked against the RAM size instead
     "/intc@8000000": {"reg"},  # checked piecewise
 }
-# Henge says arm,armv8 and has no cache properties.
+# Tuxedo says arm,armv8 and has no cache properties.
 CPU_IGNORED = {"compatible", "next-level-cache", "i-cache-sets", "i-cache-size", "i-cache-block-size",
                "d-cache-sets", "d-cache-size", "d-cache-block-size"}
 

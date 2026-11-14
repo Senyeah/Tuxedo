@@ -2,7 +2,7 @@ import Foundation
 
 @main
 struct LinuxCatalogueTests {
-    // The shape tools/linux/package-image.sh writes (G7), with one entry that needs a newer Henge.
+    // The shape tools/linux/package-image.sh writes (G7), with one entry that needs a newer Tuxedo.
     static let sample = """
     {"images":[
      {"id":"debian-console","name":"Debian 13 (console)","version":"20261112","kind":"console",

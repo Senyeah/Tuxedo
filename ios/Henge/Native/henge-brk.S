@@ -1,13 +1,13 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
- * Henge -- the BreakpointJIT trap sequences, implemented natively.
+ * Tuxedo -- the BreakpointJIT trap sequences, implemented natively.
  *
  * These three routines are the entire request channel to StikDebug. They are
  * reproduced here from the documented wire protocol (brk immediate + x16
  * command number) rather than linked from Stossy11's BreakpointJIT.framework,
  * for three reasons:
  *
- *   1. That framework ships as a bare binary with no stated license. Henge is
+ *   1. That framework ships as a bare binary with no stated license. Tuxedo is
  *      GPL-2.0-or-later and cannot take on an unlicensed dynamic dependency.
  *   2. Embedding ANY framework that carries entitlements into a sideloaded app
  *      trips AMFI at launch ("has entitlements but is not a main binary"), which

@@ -30,7 +30,7 @@ struct InstallView: View {
     }
 }
 
-/// The last lines of Henge's log.
+/// The last lines of Tuxedo's log.
 struct LogTail: View {
     @State private var lines: [String] = []
 

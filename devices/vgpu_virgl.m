@@ -640,7 +640,7 @@ static void blob_prune(NSString *base, NSString *dir) {
     }
 }
 
-// HV_GL_CACHE=off turns it off; a path replaces <Caches>/Henge. The directory carries the ANGLE commit, so a new ANGLE starts empty.
+// HV_GL_CACHE=off turns it off; a path replaces <Caches>/Tuxedo. The directory carries the ANGLE commit, so a new ANGLE starts empty.
 static void blob_init(void) {
     blob_dir[0] = 0;
     const char *env = getenv("HV_GL_CACHE");

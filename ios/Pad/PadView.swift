@@ -311,7 +311,7 @@ final class PadHostView: UIView, PadSurfaceHost, PadFeedback {
     func padReveal() { haptics.fire(.reveal, now: clock()) }
 }
 
-/// The pad for SwiftUI. It takes the touch view (the Lab's copy of the surface, or Henge's
+/// The pad for SwiftUI. It takes the touch view (the Lab's copy of the surface, or Tuxedo's
 /// Trackpad.Surface) and the buttons the surface clicks through.
 struct PadView: UIViewRepresentable {
     let touchView: UIView

@@ -46,7 +46,7 @@ static int request(const char *method, const char *target, const char *body) {
     return status;
 }
 
-/* The body and X-Henge-Seq of the last response. */
+/* The body and X-Tuxedo-Seq of the last response. */
 static const char *body(void) {
     const char *b = strstr(resp, "\r\n\r\n");
     return b ? b + 4 : "";

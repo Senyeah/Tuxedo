@@ -1,6 +1,6 @@
 import Foundation
 
-/// Downloads `url` into the file `part`, appending: a download that stops for any reason (no network, Henge
+/// Downloads `url` into the file `part`, appending: a download that stops for any reason (no network, Tuxedo
 /// closed or killed) goes on from where the file ends the next time, with an HTTP range request (#58).
 /// Apple's CDN answers ranges; a server that ignores one (200) starts the file again.
 final class RangedDownload: NSObject, URLSessionDataDelegate {

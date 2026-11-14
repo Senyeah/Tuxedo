@@ -1,6 +1,6 @@
 import Foundation
 
-// DeviceStatusPolicy (ios/Henge/DeviceStatusPolicy.swift): what the phone gives a Linux guest, and when the guest's
+// DeviceStatusPolicy (ios/Tuxedo/DeviceStatusPolicy.swift): what the phone gives a Linux guest, and when the guest's
 // sliders reach the phone.
 @main
 struct DeviceStatusPolicyTests {

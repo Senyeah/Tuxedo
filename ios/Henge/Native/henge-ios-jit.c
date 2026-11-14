@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
- * Henge -- iOS dual-mapped JIT memory for QEMU's TCG.  See henge-ios-jit.h.
+ * Tuxedo -- iOS dual-mapped JIT memory for QEMU's TCG.  See henge-ios-jit.h.
  *
  * Derived from AetherPS4-iOS's src/core/ios/ios_jit_allocator.cpp
  * (shadPS4 Emulator Project, GPL-2.0-or-later), ported C++ -> C.
@@ -106,7 +106,7 @@ static double henge_now_ms(void)
 /* ------------------------------------------------------------------ symbols */
 /*
  * The trap sequences live in henge-brk.S, compiled straight into this binary.
- * Henge deliberately does NOT link or dlopen Stossy11's BreakpointJIT.framework:
+ * Tuxedo deliberately does NOT link or dlopen Stossy11's BreakpointJIT.framework:
  * it has no stated license, and any embedded framework carrying entitlements is
  * rejected by AMFI at launch on sideloaded builds. See henge-brk.S for the
  * verification that our encoding matches theirs exactly.
@@ -471,7 +471,7 @@ static HengeDualMapping henge_self_dual_mapping(size_t bytes)
 /* ------------------------------------------------------------- allocation */
 
 /*
- * Henge: take the JIT region early, before anything slow happens.
+ * Tuxedo: take the JIT region early, before anything slow happens.
  *
  * StikDebug does not stay attached indefinitely. A first run downloads about
  * 1.1 GB of guest image before QEMU starts, and by the time qemu_init() reached
@@ -887,7 +887,7 @@ static void henge_probe_handler(int sig)
 /*
  * Can this process execute memory it wrote itself?
  *
- * There are two ways to get executable memory on iOS, and Henge only ever tried
+ * There are two ways to get executable memory on iOS, and Tuxedo only ever tried
  * one of them properly. The dual mapping above needs a debugger that services
  * brk traps; the other route is a plain MAP_JIT mapping, which the kernel
  * honours for any process with CS_DEBUGGED set and which is what QEMU falls

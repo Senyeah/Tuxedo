@@ -1,6 +1,6 @@
 import Foundation
 
-// FM8: a Linux machine's folders from Files (ios/Henge/FolderPolicy.swift, SharedFolder in MachineModel.swift):
+// FM8: a Linux machine's folders from Files (ios/Tuxedo/FolderPolicy.swift, SharedFolder in MachineModel.swift):
 // names, slots, bookmarks that are stale or gone, states, modes, the texts, where an export lands, and what an
 // export of the machine leaves out. Pure: no UIKit, no engine.
 @main

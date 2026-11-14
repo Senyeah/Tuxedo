@@ -66,7 +66,7 @@ struct RootView: View {
             guard scenePhase == .active else { return }
             machines.collectImports()
             jit.enableAtLaunchIfAsked()
-            // StikDebug can launch Henge before it attaches. A task also runs
+            // StikDebug can launch Tuxedo before it attaches. A task also runs
             // on the first appearance, when there may be no phase change.
             for _ in 0..<100 {
                 guard !Task.isCancelled else { return }
@@ -97,7 +97,7 @@ struct RootView: View {
 }
 
 extension View {
-    /// Husk's screens are written against an iOS 15 shim; Henge needs iOS 17, so this is the real thing.
+    /// Husk's screens are written against an iOS 15 shim; Tuxedo needs iOS 17, so this is the real thing.
     func hengeDestination<D: Hashable, C: View>(for data: D.Type, @ViewBuilder destination: @escaping (D) -> C) -> some View {
         navigationDestination(for: data, destination: destination)
     }

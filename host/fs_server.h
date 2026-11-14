@@ -52,7 +52,7 @@ int hv_fs_folder_touch(int index);
    number (> 0), 0 for NONE, or -1 with errno. */
 enum { HV_FS_ASK_NONE = 0, HV_FS_ASK_EXPORT = 1, HV_FS_ASK_DISCARD = 2 };
 long hv_fs_folder_ask(int index, int what);
-/* The helper's answer: ok, and text (an export's folder below ~/Henge and what it has, or why not). -1 (ESTALE)
+/* The helper's answer: ok, and text (an export's folder below ~/Tuxedo and what it has, or why not). -1 (ESTALE)
    when ask is not the folder's open ask. */
 int hv_fs_folder_answer(int index, long ask, int ok, const char *text);
 /* 1 when ask has its answer (*text malloc'd, may be NULL), 0 while it waits, -1 when it is gone (taken back, a

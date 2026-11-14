@@ -1,6 +1,6 @@
 # Venus spike (A11)
 
-Throw-away probes for the question in [LINUX-PLAN-10](../../../LINUX-PLAN-10-accelerated-graphics.md), task A11: could Henge give a Linux guest Vulkan through Venus? Nothing here is in the default build. The result is the A11 entry in the findings log of LINUX-PLAN-09.
+Throw-away probes for the question in [LINUX-PLAN-10](../../../LINUX-PLAN-10-accelerated-graphics.md), task A11: could Tuxedo give a Linux guest Vulkan through Venus? Nothing here is in the default build. The result is the A11 entry in the findings log of LINUX-PLAN-09.
 
 | File | What it shows |
 |---|---|

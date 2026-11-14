@@ -8,7 +8,7 @@ extension VirtualMachine {
     var aspect: CGFloat { CGFloat(screen.width) / CGFloat(screen.height) }
 }
 
-/// How much RAM a machine gets. The engine first asks the kernel to leave it out of Henge's footprint,
+/// How much RAM a machine gets. The engine first asks the kernel to leave it out of Tuxedo's footprint,
 /// which is allowed once a debugger has attached (how JIT is turned on). If that is refused it uses
 /// a file beside the disk: iOS's memory limit does not count a mapped file's pages either.
 enum GuestMemory {
@@ -47,7 +47,7 @@ final class Machines: ObservableObject {
     /// While a machine is being exported: its name and how far along.
     @Published private(set) var exporting: String?
     @Published private(set) var exported: Double = 0
-    /// The last finished export, ready to be moved out of Henge.
+    /// The last finished export, ready to be moved out of Tuxedo.
     @Published var lastExport: URL?
 
     private init() {
@@ -56,7 +56,7 @@ final class Machines: ObservableObject {
     }
 
     /// Machine folders nothing refers to (an install cut short by a crash or by quitting): their disks take real space.
-    /// A folder whose install finished (Henge stopped before it was listed) is listed again instead, and nothing is
+    /// A folder whose install finished (Tuxedo stopped before it was listed) is listed again instead, and nothing is
     /// removed when the list itself could not be read: every machine would look unreferenced.
     private func removeLeftovers() {
         if listUnreadable {
@@ -81,10 +81,10 @@ final class Machines: ObservableObject {
 
     nonisolated static var root: URL { MachinePaths.root }
     nonisolated static func directory(for id: UUID) -> URL { MachinePaths.directory(for: id) }
-    /// Where Finder file sharing puts what the user drops on Henge.
+    /// Where Finder file sharing puts what the user drops on Tuxedo.
     nonisolated static var inbox: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] }
 
-    /// Folders dropped into Henge's Documents over Finder (or the Files app) that look like
+    /// Folders dropped into Tuxedo's Documents over Finder (or the Files app) that look like
     /// an exported machine are moved in. A move, not a copy: a disk image is tens of gigabytes.
     func collectImports() {
         Task { await collect() }
@@ -153,8 +153,8 @@ final class Machines: ObservableObject {
     }
 
     /// Makes a folder "Bring in a machine" can read back,
-    /// in Documents/Exports, which the Files app can reach. Deleting Henge deletes that folder too,
-    /// so it has to be moved out of Henge before a reinstall that replaces the app's data.
+    /// in Documents/Exports, which the Files app can reach. Deleting Tuxedo deletes that folder too,
+    /// so it has to be moved out of Tuxedo before a reinstall that replaces the app's data.
     func export(_ machine: VirtualMachine) {
         guard exporting == nil, importing == nil else { return }
         exporting = machine.name
@@ -263,7 +263,7 @@ final class Machines: ObservableObject {
         try? url.setResourceValues(values)
     }
 
-    /// machines.json is there but did not decode (damaged, or written by a newer Henge).
+    /// machines.json is there but did not decode (damaged, or written by a newer Tuxedo).
     private var listUnreadable = false
 
     private func load() {

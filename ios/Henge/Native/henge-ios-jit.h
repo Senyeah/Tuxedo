@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
- * Henge -- iOS dual-mapped JIT memory for QEMU's TCG.
+ * Tuxedo -- iOS dual-mapped JIT memory for QEMU's TCG.
  *
  * Derived from AetherPS4-iOS's src/core/ios/ios_jit_allocator.cpp
  * (shadPS4 Emulator Project, GPL-2.0-or-later), ported from C++ to C and

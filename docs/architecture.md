@@ -1,4 +1,4 @@
-# How Henge works
+# How Tuxedo works
 
 A virtual machine without a hypervisor: arm64 guest code runs through an arm64-to-arm64
 JIT instead of hardware virtualization, so the same engine can run on iOS, where
@@ -95,7 +95,7 @@ The board leaves out QEMU's `fw_cfg`, the virtio-mmio transports, the ITS and th
 PCI devices are created in a fixed order, so each keeps its slot: bridge 0, disk 1, network
 2, entropy 3, xHCI 4 (a USB keyboard and a Magic Trackpad 2), virtio keyboard 5, virtio
 mouse 6, GPU 7, sound 8. The memory balloon is added only when `HV_BALLOON` is set. Every
-device uses INTx, because Henge's virtio has no MSI-X. Slot *s* uses line *s* mod 4, as in
+device uses INTx, because Tuxedo's virtio has no MSI-X. Slot *s* uses line *s* mod 4, as in
 QEMU, so that the device tree's `interrupt-map` is true (`hv_pci_set_intx`).
 
 Flash has no device behind it. Both regions are read-only RAM: a write is dropped, and
@@ -113,7 +113,7 @@ the wanted result, because U-Boot then boots from `extlinux.conf`.
   ASID, so a context switch does not flush the TLB.
 - PSCI 1.0 over `HVC` starts the other CPUs and ends the machine: `SYSTEM_OFF` exits
   `hengevm` with status 0, and `SYSTEM_RESET` builds the machine again in the same process.
-- A Debian 16 KB kernel runs with 47-bit virtual addresses and three table levels. Henge
+- A Debian 16 KB kernel runs with 47-bit virtual addresses and three table levels. Tuxedo
   does not offer LPA2, so the kernel falls back from its 52-bit configuration.
 - The debug registers read as zero and ignore writes, so a guest debugger cannot
   single-step. `BRK` works. There are no performance counters, and the guest has only EL0
@@ -138,7 +138,7 @@ boot is for tests and bring-up. The app always boots through U-Boot.
 1. The host maps RAM, copies `u-boot.bin` into flash 0, writes the tree and starts CPU 0 at
    address 0 in EL1.
 2. U-Boot prints on the PL011, scans PCIe, starts virtio and finds
-   `/boot/extlinux/extlinux.conf` on the disk. Henge's build has no countdown.
+   `/boot/extlinux/extlinux.conf` on the disk. Tuxedo's build has no countdown.
 3. U-Boot loads the kernel and the initrd and jumps to the kernel with the tree in `x0`.
 4. Linux mounts the root from virtio block. `henge-grow.service` then grows the partition
    and the file system when the disk file has grown.

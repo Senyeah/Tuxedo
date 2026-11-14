@@ -1,6 +1,6 @@
-# Henge for iOS
+# Tuxedo for iOS
 
-The Henge app on HengeVM's engine. Build: `ios/scripts/package_ipa.sh` (writes
+The Tuxedo app on HengeVM's engine. Build: `ios/scripts/package_ipa.sh` (writes
 `~/Desktop/Henge.ipa`; `--trollstore` writes `Henge.tipa`, for TrollStore and
 TrollStore Lite, without the entitlements TrollStore bans). Needs Xcode 27 or later, xcodegen,
 and the prebuilt pieces
@@ -13,7 +13,7 @@ libslirp and glib for iOS). `HENGE_ENTITLEMENTS` picks the app's entitlements fi
 the packager as an environment variable (`HENGE_ENTITLEMENTS=... ios/scripts/package_ipa.sh`).
 
 - **JIT**: on iOS 26+ (TXM) only an attached debugger can grant executable
-  memory. Henge uses the same machinery as Husk: StikDebug, TrollStore, a
+  memory. Tuxedo uses the same machinery as Husk: StikDebug, TrollStore, a
   jailbreak, or the built-in StikJIT helper (`HengeJITHelper.appex`, with
   on-device pairing on iOS 27). The app claims one 1 GB region per launch
   (`JITBootstrap.jitBytes`) and the engine writes through a `vm_remap`'d alias
@@ -23,7 +23,7 @@ the packager as an environment variable (`HENGE_ENTITLEMENTS=... ios/scripts/pac
   iOS refuses that it comes from a file on free storage instead.
 - **Machines** are Linux machines (below). One can be installed on the iPhone from
   an image catalogue, exported from the app, or made on a computer (disk packed with its holes left
-  out, see `host/hvsparse.h`), and dropped on Henge in Finder or picked in Files.
+  out, see `host/hvsparse.h`), and dropped on Tuxedo in Finder or picked in Files.
 - **Display**: the guest's virtio GPU commands are drawn into a `CAMetalLayer`
   (`devices/vgpu_*`, [docs/architecture.md](../docs/architecture.md)).
 - **External display**: on iOS 27, `SessionView` registers a SwiftUI
@@ -57,7 +57,7 @@ the packager as an environment variable (`HENGE_ENTITLEMENTS=... ios/scripts/pac
   for an app filling the screen. The first scroll values are logged to
   `henge.log`, to tune scrolling from a real device.
 - **Chips**: the virtual CPU offers Armv8.5 instructions (`core/sysreg.c`), which
-  Linux uses and which run as they are, so Henge needs an A14 or M1 or newer.
+  Linux uses and which run as they are, so Tuxedo needs an A14 or M1 or newer.
 
 ## Linux machines
 
@@ -75,7 +75,7 @@ A machine folder needs `u-boot.bin` and `machine.json` (`MachineFolder.required`
 ## iOS Simulator
 
 `ios/scripts/sim_build.sh [device]` builds the `HengeSim` target, boots a simulator if none is booted
-(default "iPhone 18 Pro"), installs and launches Henge, and prints the path of `henge.log`. It needs no
+(default "iPhone 18 Pro"), installs and launches Tuxedo, and prints the path of `henge.log`. It needs no
 phone, signing, Husk checkout or libslirp: the engine is built for `iphonesimulator` in `build/ios-sim`
 (`make ios-sim-lib`).
 

@@ -16,12 +16,12 @@ private func releaseUnusedCompressedHeap() {}
 private let CS_OPS_STATUS = Int32(0)
 private let CS_DEBUGGED = UInt32(0x10000000)
 
-/// Gets Henge from "launched normally, no executable memory" to "JIT is live".
+/// Gets Tuxedo from "launched normally, no executable memory" to "JIT is live".
 ///
 /// On iOS 27 every supported device enforces TXM, so the app cannot grant itself
 /// executable memory — only an attached debugger can. That debugger is either
-/// StikDebug, which Henge hands the JIT script inline over its URL scheme, or
-/// Henge's own built-in StikJIT helper (JITSetup.swift), which runs the same
+/// StikDebug, which Tuxedo hands the JIT script inline over its URL scheme, or
+/// Tuxedo's own built-in StikJIT helper (JITSetup.swift), which runs the same
 /// script from an app extension.
 enum JITBootstrap {
     private static let log = Logger(subsystem: "com.henge.app", category: "jit")
@@ -95,7 +95,7 @@ enum JITBootstrap {
         lastFailure = "The simulator refused the JIT region; see henge.log."
         return false
         #else
-        // Before iOS 26 Henge can make the region itself where the device allows it (a jailbreak,
+        // Before iOS 26 Tuxedo can make the region itself where the device allows it (a jailbreak,
         // a debugger that attached and let go such as TrollStore's enable-jit, or dynamic-codesigning),
         // so it does not wait for CS_DEBUGGED there if jailbroken: Dopamine hides that flag from apps unless
         // "Allow JIT in Apps" is on, while still letting them run code they wrote.
@@ -105,7 +105,7 @@ enum JITBootstrap {
         }
         if !isDebuggerAttached { selfGrantTried = true }
         // Before iOS 26, unless StikDebug's script is what attached, no brk: TrollStore's enable-jit (and its Open with JIT)
-        // attaches for 100 ms and services nothing, and a brk in that window stops Henge for good (TrollStore then says
+        // attaches for 100 ms and services nothing, and a brk in that window stops Tuxedo for good (TrollStore then says
         // "trollstorehelper returned 3"). A debugged process there makes its own executable memory anyway: QEMU maps its
         // buffer with MAP_JIT and the translation layer makes its region itself.
         if canGrantOwnJIT && !stikDebugMayServiceTraps {
@@ -165,7 +165,7 @@ enum JITBootstrap {
     /// While a debugger is attached, every stop event (a `brk`, a signal, a
     /// Mach exception) halts the whole process until StikDebug answers. iOS
     /// suspends StikDebug soon after it hands the foreground back, so the next
-    /// stop freezes Henge with nothing in the log. On iOS 26 that looks like
+    /// stop freezes Tuxedo with nothing in the log. On iOS 26 that looks like
     /// Android hanging on its boot screen. The RX pages stay valid after detach
     /// (AetherPS4 runs this way on TXM devices), so detaching once the region is
     /// held removes the debugger from the picture.
@@ -183,7 +183,7 @@ enum JITBootstrap {
     /// The one try at making the region without a debugger has been made (it is not repeated: the answer will not change).
     nonisolated(unsafe) static private var selfGrantTried = false
 
-    /// Whether Henge has JIT now: a debugger marked it, or the region is already held. Before iOS 26 this tries, once, to make
+    /// Whether Tuxedo has JIT now: a debugger marked it, or the region is already held. Before iOS 26 this tries, once, to make
     /// the region itself, which is all TrollStore and jailbroken devices need. Cheap after the first call, and logs nothing.
     static var ready: Bool {
         if prewarmed || isLive { return true }
@@ -191,8 +191,8 @@ enum JITBootstrap {
         return !selfGrantTried && prewarm()
         #else
         // On a TXM device the debugger must also answer the brk that claims the region. CS_DEBUGGED alone is what opening
-        // Henge from StikDebug's app list gives (no Henge script) or LiveContainer, and an install then stops at
-        // "Henge has no JIT region" (#23).
+        // Tuxedo from StikDebug's app list gives (no Tuxedo script) or LiveContainer, and an install then stops at
+        // "Tuxedo has no JIT region" (#23).
         if debuggedFlag { return !deviceEnforcesTXM }
         guard canGrantOwnJIT, !selfGrantTried else { return false }
         return prewarm()
@@ -202,12 +202,12 @@ enum JITBootstrap {
     /// True once this process has told StikDebug to let go.
     nonisolated(unsafe) static private(set) var detached = false
 
-    /// Henge's built-in helper (StikJIT's script, which answers the detach brk) was started this launch.
+    /// Tuxedo's built-in helper (StikJIT's script, which answers the detach brk) was started this launch.
     nonisolated(unsafe) static var helperMayBeAttached = false
     nonisolated(unsafe) static private var lingeringTries = 0
 
     /// A debugger still on after the one that gave the region was let go: another helper that attached once the first
-    /// detached. With one attached every trap stops Henge until it answers (a phone run went 1.5-2x slower). Told to let
+    /// detached. With one attached every trap stops Tuxedo until it answers (a phone run went 1.5-2x slower). Told to let
     /// go too, if it is the built-in helper's (StikJIT's script answers the detach brk; a debugger that does not, Xcode's
     /// say, would stop at it). Cheap: one sysctl. Called before a machine starts and every 10 s while one runs; three tries.
     static func releaseLingeringDebugger() {
@@ -247,7 +247,7 @@ enum JITBootstrap {
     ///
     /// CS_DEBUGGED being set is not the same as the debugger servicing traps.
     /// A build running inside LiveContainer reports itself debugged, answers no
-    /// brk, and gets no executable memory -- and Henge started QEMU anyway,
+    /// brk, and gets no executable memory -- and Tuxedo started QEMU anyway,
     /// which segfaulted inside qemu_init() with a perfectly healthy 4 GB of
     /// headroom. The crash looked like memory pressure and was nothing of the
     /// kind.
@@ -320,7 +320,7 @@ enum JITBootstrap {
     }
 
     /// Whether TrollStore is on this device. It answers enable-jit on the `apple-magnifier` scheme, but that scheme is also the
-    /// Magnifier app's, on every iPhone, so whether it opens says nothing. A Henge TrollStore installed knows from its marker file;
+    /// Magnifier app's, on every iPhone, so whether it opens says nothing. A Tuxedo TrollStore installed knows from its marker file;
     /// otherwise SpringBoard is asked to open TrollStore, suspended, which an ordinary app is refused (9) when it exists and told
     /// it does not (7) when it does not. TrollStore installs on iOS 14.0 to 17.0 only.
     static let isTrollStoreInstalled: Bool = {
@@ -338,7 +338,7 @@ enum JITBootstrap {
         return false
     }()
 
-    /// Whether this copy of Henge was installed by TrollStore (or TrollStore Lite): it leaves a marker file next to the app in
+    /// Whether this copy of Tuxedo was installed by TrollStore (or TrollStore Lite): it leaves a marker file next to the app in
     /// its bundle container (TrollStore's `TS_MARKER`).
     static var isInstalledWithTrollStore: Bool {
         let container = Bundle.main.bundleURL.deletingLastPathComponent()
@@ -350,7 +350,7 @@ enum JITBootstrap {
     /// A rootless jailbreak (Dopamine and its kin) puts its files in /var/jb and lets apps see it.
     static var isJailbroken: Bool { FileManager.default.fileExists(atPath: "/var/jb") }
 
-    /// Whether Henge was already marked as debugged when it was opened, before it asked anything of anyone. That is what a
+    /// Whether Tuxedo was already marked as debugged when it was opened, before it asked anything of anyone. That is what a
     /// jailbreak that allows JIT in apps does to every app it launches (Dopamine's "Allow JIT in Apps" setting), and it needs
     /// no hand-off at all. Read once, early (HengeApp.init), so a later attach is not mistaken for it.
     nonisolated(unsafe) static var debuggedAtLaunch = false
@@ -375,7 +375,7 @@ enum JITBootstrap {
 
     /// Ask StikDebug to attach to us and run the JIT script.
     ///
-    /// This backgrounds Henge — iOS switches to StikDebug, which attaches over the
+    /// This backgrounds Tuxedo — iOS switches to StikDebug, which attaches over the
     /// debugserver protocol, runs the script, and relaunches us. Everything after
     /// this point happens in a *new* foreground pass of the app.
     @MainActor
@@ -408,9 +408,9 @@ enum JITBootstrap {
         // path attaches to this already-running process. bundle-id stays as the fallback.
         var url = "stikjit://enable-jit?bundle-id=\(bundleID)&pid=\(getpid())"
 
-        // Sending the script inline makes Henge self-contained. StikDebug accepts
+        // Sending the script inline makes Tuxedo self-contained. StikDebug accepts
         // script-data unconditionally (HomeView.handleExternalURL), so we do not
-        // depend on the user having assigned a script to Henge in StikDebug's UI.
+        // depend on the user having assigned a script to Tuxedo in StikDebug's UI.
         if let script = loadScript(), let encoded = base64URLEncode(script) {
             HengeLog.log("jit", "loaded henge-jit.js (\(script.count) chars, "
                              + "\(encoded.count) chars encoded); sending inline")
@@ -427,7 +427,7 @@ enum JITBootstrap {
         }
 
         // Not canOpenURL first: that needs LSApplicationQueriesSchemes for 'stikjit', which is
-        // checked against whichever app iOS actually installed — a container app hosting Henge
+        // checked against whichever app iOS actually installed — a container app hosting Tuxedo
         // fails the query even when StikDebug is installed. open() has no such restriction.
         HengeLog.log("jit", "opening stikjit:// for bundle \(bundleID), pid \(getpid()); "
                          + "Henge will be backgrounded and relaunched after attach")

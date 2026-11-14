@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Makes a folder Henge on iOS can bring in, for a Linux machine (twin of tools/export_ios.sh).
+# Makes a folder Tuxedo on iOS can bring in, for a Linux machine (twin of tools/export_ios.sh).
 #   tools/linux/export-ios.sh DISK FIRMWARE [NAME] [RAM_MB] [OUTDIR]
 # DISK is a Debian image (build/linux/debian-console.img), FIRMWARE is u-boot.bin.
 # The disk goes in packed (disk.img.hvsparse: holes left out). Reads both inputs; writes nothing to them.

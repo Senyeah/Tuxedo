@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * henge_codec: /dev/hvcodec for Henge's hvcodec DMA device (docs/guest-video-encode-plan.md, stage VE4).
+ * henge_codec: /dev/hvcodec for Tuxedo's hvcodec DMA device (docs/guest-video-encode-plan.md, stage VE4).
  *
  * Each open file is one host codec context. HVCODEC_IOC_CALL pins the caller's buffers (the message, the raw data
  * to the host, the reply and the raw data from the host), puts their pages on the device's queue as one chain and

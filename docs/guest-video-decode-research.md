@@ -1,6 +1,6 @@
 # Hardware video decode for the Linux guest
 
-This file answers one question. Can Henge give its Linux guest hardware video decode through the virtual GPU, with VideoToolbox (`VTDecompressionSession`) on the host? It also answers a second question: is there a standard "Linux requests a decode" interface that the host can serve?
+This file answers one question. Can Tuxedo give its Linux guest hardware video decode through the virtual GPU, with VideoToolbox (`VTDecompressionSession`) on the host? It also answers a second question: is there a standard "Linux requests a decode" interface that the host can serve?
 
 Written on 13/11/2026 against `linux/integration` at `deb5830`. Repository statements carry a file and line. The pinned virglrenderer tree is UTM's fork at `451505ad0aa4` (`tools/gfx/versions.env:17`), checked out in `build/gfx/src/virglrenderer`. Guest Mesa statements come from the Mesa `mesa-25.0.7` tag. External statements have a link in [Sources](#sources). [Not verified](#not-verified) lists what nobody has checked.
 
@@ -17,7 +17,7 @@ The virgl path is the shortest one. The guest needs no new driver. The host must
 
 The hard part is a mismatch in the two APIs. VA-API is a "stateless" API. The guest parses the stream headers and sends parsed fields plus slice data. VideoToolbox is a "stateful" API. It wants the complete stream, with the original parameter sets. So the host must rebuild the parameter sets from the parsed fields. That is practical for H.264 and VP9. It is hard for AV1. It is blocked for HEVC, because VA-API does not carry the HEVC reference picture set tables.
 
-"DMA" here only means that the host reads and writes guest RAM directly. Henge maps guest RAM into its own process. Compressed data moves from guest RAM to the host in one small native copy. Decoded frames stay on the host GPU and never go through guest RAM, unless an application reads them back.
+"DMA" here only means that the host reads and writes guest RAM directly. Tuxedo maps guest RAM into its own process. Compressed data moves from guest RAM to the host in one small native copy. Decoded frames stay on the host GPU and never go through guest RAM, unless an application reads them back.
 
 ## The two standard decode interfaces
 
@@ -39,7 +39,7 @@ VideoToolbox is stateful. It takes access units of the original stream and a for
 - The guest driver decides what to offer only from the host's capability set. `virgl_get_video_param` (Mesa `src/gallium/drivers/virgl/virgl_screen.c:191` to `:276`) looks up each profile in `caps.v2.video_caps[]`. With no entries, `vainfo` lists no decode profiles.
 - The guest driver supports decode for H.264, HEVC, MPEG-2, VC-1, JPEG, VP9 and AV1 (`virgl_screen.c:209` to `:224`).
 
-Today Henge offers no video caps. `build_virgl` configures virglrenderer with `-Dvideo=false` (`tools/gfx/build-deps.sh:269`). Without `ENABLE_VIDEO`, virglrenderer writes `num_video_caps = 0` (`src/vrend/vrend_renderer.c:13518` to `:13522`).
+Today Tuxedo offers no video caps. `build_virgl` configures virglrenderer with `-Dvideo=false` (`tools/gfx/build-deps.sh:269`). Without `ENABLE_VIDEO`, virglrenderer writes `num_video_caps = 0` (`src/vrend/vrend_renderer.c:13518` to `:13522`).
 
 ### The protocol
 
@@ -61,7 +61,7 @@ How the data moves:
 
 1. The application (for example FFmpeg) parses the headers. It gives libva a picture parameter buffer and slice data buffers. Mesa's VA frontend adds an Annex B start code to each H.264 or HEVC slice (`src/gallium/frontends/va/picture.c:409` to `:497`). It calls `decode_bitstream` once for each `vaRenderPicture` call (`picture.c:1078` to `:1083`).
 2. Mesa's virgl driver copies the slices into a staging buffer resource and the parsed fields into a descriptor resource. Both resources are backed by guest RAM. Then it emits `DECODE_BITSTREAM` (`src/gallium/drivers/virgl/virgl_video.c:1003` to `:1056`).
-3. The command stream reaches Henge as `SUBMIT_3D` (`devices/virtio_gpu.c:595`, `:659`). `devices/vgpu_virgl.m:328` passes it to `virgl_renderer_submit_cmd`.
+3. The command stream reaches Tuxedo as `SUBMIT_3D` (`devices/virtio_gpu.c:595`, `:659`). `devices/vgpu_virgl.m:328` passes it to `virgl_renderer_submit_cmd`.
 4. virglrenderer reads the bitstream and the descriptor from the resources' iovecs (`src/vrend/vrend_video.c:774` and `:787`). Those iovecs point into guest RAM, attached at `devices/vgpu_virgl.m:296` to `:304`.
 5. The current back end, `src/vrend/virgl_video.c`, calls VA-API on a Linux host GPU. At `END_FRAME` it waits for the surface (`virgl_video.c:3179` to `:3206`). It then exports the surface as a dma-buf, imports it as an EGL image and copies each plane into the guest's plane textures with `glCopyTexSubImage2D` (`vrend_video.c:149` to `:208`).
 6. The decoded frame is now in host GL textures that belong to the guest's plane resources. A player that uses `vaExportSurfaceHandle` and EGL import (for example mpv with `--hwdec=vaapi`) samples those textures through virgl. The frame does not go through guest RAM.
@@ -85,9 +85,9 @@ flowchart LR
 ### Why the current back end cannot run on Apple
 
 - The meson option needs `libva` and `libva-drm` (`meson.build:450` to `:457`). Neither exists on iOS or macOS.
-- `vrend_video_init` needs a DRM file descriptor from the `get_drm_fd` callback (`vrend_renderer.c:7935` to `:7942`). Henge's callbacks do not have one (`devices/vgpu_virgl.m:722`).
+- `vrend_video_init` needs a DRM file descriptor from the `get_drm_fd` callback (`vrend_renderer.c:7935` to `:7942`). Tuxedo's callbacks do not have one (`devices/vgpu_virgl.m:722`).
 - Plane import uses `EGL_LINUX_DMA_BUF_EXT` (`vrend_video.c:167` to `:181`). ANGLE on Metal does not offer it.
-- The flag `VIRGL_RENDERER_USE_VIDEO` is behind `VIRGL_RENDERER_UNSTABLE_APIS` (`src/virglrenderer.h:157` to `:163`). Henge passes only `VIRGL_RENDERER_USE_GLES` (`devices/vgpu_virgl.m:728`).
+- The flag `VIRGL_RENDERER_USE_VIDEO` is behind `VIRGL_RENDERER_UNSTABLE_APIS` (`src/virglrenderer.h:157` to `:163`). Tuxedo passes only `VIRGL_RENDERER_USE_GLES` (`devices/vgpu_virgl.m:728`).
 
 The back end API is small. `src/vrend/virgl_video.h:128` to `:159` has 14 functions: init, caps, codec and buffer create and destroy, begin, decode, encode and end. A VideoToolbox back end can implement that API and leave the protocol and the guest unchanged.
 
@@ -127,10 +127,10 @@ In UTM's virglrenderer (as a patch in `tools/gfx`, like `virglrenderer-angle-tim
 
 1. Meson: let `-Dvideo=true` select a VideoToolbox back end with no `libva` and no `libdrm` (`meson.build:450` to `:457`, `src/meson.build:196` to `:198` and `:294` to `:295`).
 2. A new `src/vrend/virgl_video_vt.m` that implements `virgl_video.h`. Caps come from `VTIsHardwareDecodeSupported`. `END_FRAME` builds one `CMSampleBuffer`, decodes it synchronously and waits with `VTDecompressionSessionWaitForAsynchronousFrames`.
-3. `vrend_video.c`: replace the dma-buf import at `:149` to `:208` with an IOSurface pbuffer for each plane. The pinned ANGLE accepts R8, RG8, R16 and RG16 IOSurface planes (`build/gfx/src/angle-gclient/angle/src/libANGLE/renderer/metal/IOSurfaceSurfaceMtl.mm:47` to `:56`, plane index at `:84`). Henge already uses the same call for scanout (`devices/vgpu_virgl.m:459` to `:489`). Keep the pbuffers in a cache by IOSurface, because VideoToolbox reuses a small pool.
+3. `vrend_video.c`: replace the dma-buf import at `:149` to `:208` with an IOSurface pbuffer for each plane. The pinned ANGLE accepts R8, RG8, R16 and RG16 IOSurface planes (`build/gfx/src/angle-gclient/angle/src/libANGLE/renderer/metal/IOSurfaceSurfaceMtl.mm:47` to `:56`, plane index at `:84`). Tuxedo already uses the same call for scanout (`devices/vgpu_virgl.m:459` to `:489`). Keep the pbuffers in a cache by IOSurface, because VideoToolbox reuses a small pool.
 4. `vrend_renderer.c:7935` to `:7942`: start the video back end without a DRM descriptor.
 
-In Henge:
+In Tuxedo:
 
 1. `tools/gfx/build-deps.sh:268` to `:269`: `-Dvideo=true`, the new patch, and its hash in `write_manifest`.
 2. `devices/vgpu_virgl.m:728`: pass `VIRGL_RENDERER_USE_VIDEO`, with `VIRGL_RENDERER_UNSTABLE_APIS` defined.
@@ -144,17 +144,17 @@ In the guest: `apt install mesa-va-drivers vainfo` (and `mpv`, `ffmpeg`, `gstrea
 What it is: a virtio device that carries V4L2 calls from the guest to the host. ChromeOS and Android carry it. virtio-video was the earlier design, and virtio-media replaced it.
 
 - Guest: the driver is not in mainline. Patch v8 was posted on 28/08/2026. The encode plan records version 10 on 29/10/2026 (this file did not find v9 or v10). Debian's 16 KB kernel (`LINUX-PLAN-04-kernel-16k.md`, K1) does not have it, so the guest needs an out-of-tree module built for that kernel.
-- Host: Henge must add a new virtio device. It must answer the V4L2 calls of a stateful memory-to-memory decoder: formats, buffer queues, stream on and off, the source-change event and drain. Google's reference devices are in Rust (crosvm). Henge's devices are in C.
+- Host: Tuxedo must add a new virtio device. It must answer the V4L2 calls of a stateful memory-to-memory decoder: formats, buffer queues, stream on and off, the source-change event and drain. Google's reference devices are in Rust (crosvm). Tuxedo's devices are in C.
 - Fit with VideoToolbox: very good. A stateful decoder gets the original stream, with its parameter sets in band. H.264, HEVC, VP9 and AV1 all map to VideoToolbox with standard header parsing. The HEVC block of path 1 does not exist here.
-- Copies: decoded frames go into guest RAM, about 3.1 MB for each 1080p NV12 frame (190 MB/s at 60 frames per second). Most players then upload the frame to the GPU again through virgl. Zero-copy needs the capture buffers to be virtio-gpu resources shared by UUID. Henge has no `VIRTIO_GPU_F_RESOURCE_UUID`.
+- Copies: decoded frames go into guest RAM, about 3.1 MB for each 1080p NV12 frame (190 MB/s at 60 frames per second). Most players then upload the frame to the GPU again through virgl. Zero-copy needs the capture buffers to be virtio-gpu resources shared by UUID. Tuxedo has no `VIRTIO_GPU_F_RESOURCE_UUID`.
 - Applications: FFmpeg `h264_v4l2m2m` and related decoders, GStreamer `v4l2h264dec` and related, mpv through FFmpeg (`--hwdec=v4l2m2m-copy`), Firefox for H.264 since Firefox 116 (more codecs need a downstream FFmpeg). Chromium on desktop Linux uses VA-API, not V4L2 (not verified for Debian's build).
 
 ## Path 3: Vulkan Video through Venus
 
-- Henge builds without Venus (`tools/gfx/build-deps.sh:269`). The Venus spike (`tools/gfx/venus-spike/README.md`) and `LINUX-PLAN-10-accelerated-graphics.md` option 2 cover its cost.
+- Tuxedo builds without Venus (`tools/gfx/build-deps.sh:269`). The Venus spike (`tools/gfx/venus-spike/README.md`) and `LINUX-PLAN-10-accelerated-graphics.md` option 2 cover its cost.
 - ANGLE is not the block. ANGLE only gives OpenGL ES. Vulkan Video needs a host Vulkan with the video extensions. Released MoltenVK 1.4.2 does not have them. Pull request 2836 adds H.264 and H.265 decode on VideoToolbox, but it is open and has no review.
 - No source shows Venus forwarding the video extensions. Guest applications with Vulkan Video decode are few: mpv, FFmpeg, GStreamer, and Firefox 153 (off by default).
-- This path is the right long-term design for HEVC, because Vulkan Video carries complete parameter sets. Today it depends on two projects that Henge does not control.
+- This path is the right long-term design for HEVC, because Vulkan Video carries complete parameter sets. Today it depends on two projects that Tuxedo does not control.
 
 ## Path 4: a user-space bridge
 
@@ -179,7 +179,7 @@ The effort numbers are estimates, not measurements.
 
 ## Where the copies happen
 
-"Proxied via DMA" means this in Henge: a virtio descriptor carries a guest physical address, and the device code reads or writes that memory through a host pointer. `hv_phys_ptr` turns the address into a pointer (`core/machine.c:584` to `:588`). `hv_virtq_read` and `hv_virtq_write` copy through descriptors (`devices/virtio.c:280` to `:288`). When a device writes guest RAM, it calls `hv_dma_written` so that the JIT drops translations of those pages (`core/machine.c:568` to `:574`). No DMA engine exists. The only real DMA is inside the Apple decoder, which writes its IOSurface.
+"Proxied via DMA" means this in Tuxedo: a virtio descriptor carries a guest physical address, and the device code reads or writes that memory through a host pointer. `hv_phys_ptr` turns the address into a pointer (`core/machine.c:584` to `:588`). `hv_virtq_read` and `hv_virtq_write` copy through descriptors (`devices/virtio.c:280` to `:288`). When a device writes guest RAM, it calls `hv_dma_written` so that the JIT drops translations of those pages (`core/machine.c:568` to `:574`). No DMA engine exists. The only real DMA is inside the Apple decoder, which writes its IOSurface.
 
 Path 1, per frame:
 
@@ -215,7 +215,7 @@ Keep path 2 as the later answer for HEVC, and for full coverage if path 1 shows 
 Run it with `hengevm` on the Mac, because VideoToolbox exists there and no phone is needed.
 
 1. Patch virglrenderer: build with `-Dvideo=true` and a `virgl_video_vt.m` that does only H.264 decode. Copy the planes on the CPU (`CVPixelBufferLockBaseAddress`, then `glTexSubImage2D` into each plane resource's texture).
-2. Henge: pass `VIRGL_RENDERER_USE_VIDEO` at `devices/vgpu_virgl.m:728`.
+2. Tuxedo: pass `VIRGL_RENDERER_USE_VIDEO` at `devices/vgpu_virgl.m:728`.
 3. Guest: `vainfo` must list `VAProfileH264Main` and `VAProfileH264High` with `VAEntrypointVLD`.
 4. Correctness: compare `ffmpeg -hwaccel vaapi -i clip.mp4 -f framemd5 -` with `ffmpeg -hwaccel none -i clip.mp4 -f framemd5 -`. Use a 1080p H.264 High clip with B-frames.
 5. Speed: `ffmpeg -hwaccel vaapi -hwaccel_output_format vaapi -i clip.mp4 -f null -` against `-hwaccel none`. Record the frame rate and the guest CPU time. Then play with `mpv --hwdec=vaapi --vo=gpu` and count dropped frames.
@@ -246,7 +246,7 @@ Code that both can share, written one time:
 
 ## Not verified
 
-- That Mesa's virgl VA driver and `vaExportSurfaceHandle` work end to end on Henge's virtio-gpu without blob resources. Public reports of guest VA-API on virgl with Linux hosts often show no profiles. No report shows a working setup. The spike verified it for H.264 on the Mac ([Spike results](#spike-results)).
+- That Mesa's virgl VA driver and `vaExportSurfaceHandle` work end to end on Tuxedo's virtio-gpu without blob resources. Public reports of guest VA-API on virgl with Linux hosts often show no profiles. No report shows a working setup. The spike verified it for H.264 on the Mac ([Spike results](#spike-results)).
 - That FFmpeg's VA-API VP9 path sends the whole frame and the AV1 path sends only tile data. This is from memory of FFmpeg's `vaapi_vp9.c` and `vaapi_av1.c`.
 - That common HEVC encoders refer to SPS reference picture sets by index. This is expected; it makes path 1 fail for HEVC.
 - That VideoToolbox gives one output frame for each synchronous decode call, in decode order, for H.264 with B-frames. The spike verified it on the Mac.
@@ -280,7 +280,7 @@ Run on 13/11/2026 on the Mac (Apple M4 Pro, 14 cores), branch `spike/video-decod
 What was built:
 
 - `tools/gfx/virglrenderer-videotoolbox.patch`, applied by `build-deps.sh` after the timestamp patch. It adds `src/vrend/virgl_video_vt.m` and builds `-Dvideo=true` with no `libva` and no `libdrm`. The back end writes the SPS and PPS from the parsed fields, reads the PPS id from each slice header, collects the slices between `BEGIN_FRAME` and `END_FRAME`, and decodes one `CMSampleBuffer` synchronously. `vrend_video.c` copies the output planes into the plane textures with `glTexSubImage2D`. The IOSurface pbuffer import (item 3 of [What changes](#what-changes)) is not in the spike.
-- Henge: guest video is off by default. `hengevm --gpu-accel --gpu-video` passes `VIRGL_RENDERER_USE_VIDEO` (`devices/vgpu_virgl.m`). The iOS app has no setting for it, so it never turns video on. VideoToolbox, CoreMedia and CoreVideo are on the `hengevm` and iOS link lines. The iOS app was not built.
+- Tuxedo: guest video is off by default. `hengevm --gpu-accel --gpu-video` passes `VIRGL_RENDERER_USE_VIDEO` (`devices/vgpu_virgl.m`). The iOS app has no setting for it, so it never turns video on. VideoToolbox, CoreMedia and CoreVideo are on the `hengevm` and iOS link lines. The iOS app was not built.
 - `tools/linux/video-decode-check.py` (`make test-linux-video`) runs steps 3 to 5 on a clone of the desktop image.
 - `make test-vgpu-virgl` sends video commands with video off, and an oversized `DECODE_BITSTREAM` with video on under `libgmalloc`.
 
@@ -302,7 +302,7 @@ The spike passes: the checksums match and the hardware path decodes 1080p30 at a
 
 What the spike showed:
 
-- Mesa's virgl VA driver works on Henge's virtio-gpu without blob resources and without context-init, for decode and for `mpv`'s `vaExportSurfaceHandle` path. The first item in [Not verified](#not-verified) is now true for H.264.
+- Mesa's virgl VA driver works on Tuxedo's virtio-gpu without blob resources and without context-init, for decode and for `mpv`'s `vaExportSurfaceHandle` path. The first item in [Not verified](#not-verified) is now true for H.264.
 - A synchronous `VTDecompressionSessionDecodeFrame` gives one output frame for each call, in decode order, with B-frames. The checksums prove it.
 - Mesa 25.0 sends all the slices of a picture in one `DECODE_BITSTREAM` (4 slices in one call for the 4-slice clip). So the picture descriptor's active reference counts are the last slice's. The back end learns the PPS default counts only from the last slice of a call, and only when that slice does not override them.
 - The learnt default counts change the PPS once, at the first P picture. VideoToolbox accepted the new format description on the same session (1 parameter set update, 1 session per codec).
@@ -314,7 +314,7 @@ What the spike showed:
 
 ### Review fixes
 
-An independent review of runs 1 to 6 found these defects. The patch and Henge now handle them:
+An independent review of runs 1 to 6 found these defects. The patch and Tuxedo now handle them:
 
 - Heap overflow (blocker). Upstream's `vrend_video_decode_bitstream` copied the guest's size into the bitstream resource's `width0` heap block. `-Dvideo=true` made this code reachable. The copy is now at most `width0` bytes, and only from a `VIRGL_BIND_CUSTOM` buffer. `test_vgpu_virgl` sends a 64 KiB size for a 16-byte buffer under `libgmalloc`: without the bound it crashes (status 139), with it it passes.
 - The off switch did not close the hole. The video commands ran even without `VIRGL_RENDERER_USE_VIDEO`. Now no context gets a video context unless `vrend_video_init` worked. Every video command then fails with `EINVAL`, as in a library built without video. `test_vgpu_virgl` checks this.
@@ -427,7 +427,7 @@ Run on 14/11/2026. This is stage 6 of [Stages](#stages): the machine setting, th
 - The iOS app has a "Video decode" switch for each Linux machine, under "Graphics acceleration" and shown only when that is on. It is off by default (`MachineModel.video`, missing means off). Its note says that the device's video decoder then parses data that the guest controls. `henge_vm_boot_linux` has a `video` argument; with acceleration it sets `HvVmConfig.video`, the flag that `hengevm --gpu-video` sets, which passes `VIRGL_RENDERER_USE_VIDEO`. `make test-machine-model` checks the default and that the switch has no effect without acceleration or on a Mac.
 - `tools/linux/README.md` ("Video decode (VA-API)") tells the guest what to install, how to check it with `vainfo`, the players' options, and what stays in software.
 - `make test-linux-video` is the frame checksum test for each codec: two H.264, two VP9 and three AV1 clips, each decoded with `-hwaccel vaapi` and with `-hwaccel none`, every frame equal. It also checks the speed, `mpv`, and `hengevm`'s log.
-- The patched virglrenderer is built for `ios` and `sim` into the shared `build/gfx` (the earlier libraries are in `build/gfx/ios.pre-video` and `build/gfx/sim.pre-video`). The Henge device build and `make ios-lib` succeed with it. The phone was not run. Video stays off until the switch is on, so the phone's behaviour does not change. That build needs VideoToolbox, CoreMedia and CoreVideo on every app's link line; see [Stage 6 review fixes](#stage-6-review-fixes).
+- The patched virglrenderer is built for `ios` and `sim` into the shared `build/gfx` (the earlier libraries are in `build/gfx/ios.pre-video` and `build/gfx/sim.pre-video`). The Tuxedo device build and `make ios-lib` succeed with it. The phone was not run. Video stays off until the switch is on, so the phone's behaviour does not change. That build needs VideoToolbox, CoreMedia and CoreVideo on every app's link line; see [Stage 6 review fixes](#stage-6-review-fixes).
 
 The final run on the Mac, with one patched library and one boot:
 
@@ -461,7 +461,7 @@ An independent review of stages 2 to 6 found these defects. The patch now handle
 | `hengevm`'s log | 11 VA-API runs: each decoded all its frames on a hardware decoder, 0 failed, 0 skipped, 1 session; all 5,040 frames copied on the GPU, with 9 to 24 surfaces for each codec as before (the cache was never dropped in these streams); no frame refused by the new checks |
 | Without `--gpu-video` | no decode profile, and the back end does not start |
 | `make test-vgpu-virgl` | passes with video off (197 checks) and on under `libgmalloc` (217 checks), then runs `make test-vt-crafted` |
-| Henge device build against the new `ios` library | succeeds, with and without the three frameworks in `ios/project.yml` |
+| Tuxedo device build against the new `ios` library | succeeds, with and without the three frameworks in `ios/project.yml` |
 
 Not shown: a pool change in a real stream (FFmpeg makes a new VA-API context when the size changes, so the codec and its cache go away first), and the new libraries on the phone. The new `ios` and `sim` libraries were built into a copy of `build/gfx`, not into the shared tree, which phone builds link. Until the shared tree is rebuilt from this patch, it has the stage 6 libraries, with the defects above. A branch that links it needs `-framework VideoToolbox -framework CoreMedia -framework CoreVideo` (as in `linux/integration`'s `ios/project.yml`).
 

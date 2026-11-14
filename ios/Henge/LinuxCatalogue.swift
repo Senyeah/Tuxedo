@@ -97,7 +97,7 @@ enum LinuxCatalogue {
         return try decode(data, base: url)
     }
 
-    /// An entry that needs a newer Henge is refused.
+    /// An entry that needs a newer Tuxedo is refused.
     static func checkBuild(_ image: LinuxImage, appBuild: Int) throws {
         if let min = image.minBuild, min > appBuild {
             throw LinuxError.text("\(image.name) needs a newer Henge (build \(min); this is build \(appBuild)). Update Henge to install it.")

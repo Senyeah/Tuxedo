@@ -1,12 +1,12 @@
 # Licensing
 
-Henge is GPL-2.0-or-later ([LICENSE](../LICENSE)). The shipped binary is a combined
+Tuxedo is GPL-2.0-or-later ([LICENSE](../LICENSE)). The shipped binary is a combined
 GPL work because code from Husk (GPL-2.0-or-later) is compiled into it, so it cannot
 go on the App Store.
 
 | Code | Licence | Where |
 | --- | --- | --- |
-| Henge | GPL-2.0-or-later | `core/`, `devices/`, `host/`, `ios/`, `tools/` |
+| Tuxedo | GPL-2.0-or-later | `core/`, `devices/`, `host/`, `ios/`, `tools/` |
 | Code from Husk | GPL-2.0-or-later | `ios/Henge/JIT/`, `HengeLog.swift`, `Native/henge-ios-jit.*`, `henge-brk.S`, `HengeJITHelper/` |
 | QEMU's `tcg-apple-jit.h` | LGPL-2.1-or-later | `ios/Henge/Native/` |
 | StikJIT (the Bitrise build applies `ci/stikjit-high-address.patch`) | MPL-2.0 | `ios/Henge/Resources/legal/` |
@@ -19,7 +19,7 @@ go on the App Store.
 | SwiftTerm 1.99.1 (the Linux console) | MIT | `ios/Henge/Resources/legal/LICENSE-SwiftTerm-MIT.txt` |
 | U-Boot `v2026.10` (Linux guest firmware, not in the app) | GPL-2.0, most files also under later versions | the Linux image catalogue; see below |
 | Debian packages in the Linux images, and their kernel | each package's own licence | the Linux image catalogue; see below |
-| FFmpeg 9.0.2 with the Henge patch, in the `henge-ffmpeg` package for Linux guests (not in the app) | GPL-2.0-or-later as built; FFmpeg's own code is LGPL-2.1-or-later with GPL parts | the Henge apt repository; see below |
+| FFmpeg 9.0.2 with the Tuxedo patch, in the `henge-ffmpeg` package for Linux guests (not in the app) | GPL-2.0-or-later as built; FFmpeg's own code is LGPL-2.1-or-later with GPL parts | the Tuxedo apt repository; see below |
 | `libhvcodec`, `henge-codec-info`, and the files that the FFmpeg patch adds | LGPL-2.1-or-later | `tools/linux/hvcodec/` |
 | libslirp, pcre2 | BSD | Prebuilt from Husk |
 | glib, libintl | LGPL-2.1-or-later | Prebuilt from Husk |
@@ -62,7 +62,7 @@ To hand out the source with a binary, publish a tarball of that tag next to it, 
 
 ### The Debian image
 
-The image is made by `mmdebstrap` from Debian trixie, component `main` only, so it holds no `contrib` or `non-free` package and no firmware blob. The mirror is a `snapshot.debian.org` snapshot, set by `DEBIAN_SNAPSHOT` in `tools/linux/versions.env` (now `20261110T000000Z`), so the package set does not move between builds. Each package has its own licence, and its text is in `/usr/share/doc/<package>/copyright` inside the image. The kernel is Debian's `linux-image-arm64-16k`, GPL-2.0 with the Linux syscall exception. The `henge-guest` package (`tools/linux/henge-guest`) is Henge's, so GPL-2.0-or-later as in the table above. It has no `copyright` file yet.
+The image is made by `mmdebstrap` from Debian trixie, component `main` only, so it holds no `contrib` or `non-free` package and no firmware blob. The mirror is a `snapshot.debian.org` snapshot, set by `DEBIAN_SNAPSHOT` in `tools/linux/versions.env` (now `20261110T000000Z`), so the package set does not move between builds. Each package has its own licence, and its text is in `/usr/share/doc/<package>/copyright` inside the image. The kernel is Debian's `linux-image-arm64-16k`, GPL-2.0 with the Linux syscall exception. The `henge-guest` package (`tools/linux/henge-guest`) is Tuxedo's, so GPL-2.0-or-later as in the table above. It has no `copyright` file yet.
 
 `build-image.sh` writes `build/linux/debian-console.manifest` and `debian-desktop.manifest`. Each has the snapshot URL, the kernel version, the `extlinux.conf`, the image's SHA-256 and a `[packages]` list of every binary package and version, from `dpkg-query -W`. The list is also in the guest (`dpkg -l`). The build of 13/11/2026 has 164 packages in the console image and 338 in the desktop image, with kernel `6.12.107+deb13-arm64-16k`. Keep both manifests with the release.
 
@@ -77,23 +77,23 @@ apt-get source linux=6.12.107-1    # the kernel image's source package is linux
 apt-cache showsrc PACKAGE          # names the source package of a binary package
 ```
 
-The binary package `linux-image-6.12.107+deb13-arm64-16k` does not resolve by its own name. Its source is `linux`, and `linux-image-arm64-16k` is a metapackage whose source is `linux-signed-arm64`. The build passes `mmdebstrap` only a `deb` line, so the image has no source line, and a person who has only the image needs the lines above. `snapshot.debian.org` is run by Debian, and Henge does not control it.
+The binary package `linux-image-6.12.107+deb13-arm64-16k` does not resolve by its own name. Its source is `linux`, and `linux-image-arm64-16k` is a metapackage whose source is `linux-signed-arm64`. The build passes `mmdebstrap` only a `deb` line, so the image has no source line, and a person who has only the image needs the lines above. `snapshot.debian.org` is run by Debian, and Tuxedo does not control it.
 
 ### FFmpeg (henge-ffmpeg)
 
-`henge-ffmpeg` is an `ffmpeg` for the Linux guest with the device's codecs (`docs/guest-video-encode-plan.md`). It is not in the app or in the images yet. `tools/linux/build-ffmpeg.sh` builds it, `build-ffmpeg-pkg.sh` packages it, and `publish-apt.sh` puts it in the Henge apt repository with its source.
+`henge-ffmpeg` is an `ffmpeg` for the Linux guest with the device's codecs (`docs/guest-video-encode-plan.md`). It is not in the app or in the images yet. `tools/linux/build-ffmpeg.sh` builds it, `build-ffmpeg-pkg.sh` packages it, and `publish-apt.sh` puts it in the Tuxedo apt repository with its source.
 
 | Item | Value |
 | --- | --- |
 | Upstream | `https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz`, SHA-256 `8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e` (`FFMPEG_VERSION`, `FFMPEG_SHA256` in `tools/linux/versions.env`). The release signature was checked against FFmpeg's release key when it was pinned. |
 | Patch | `tools/linux/hvcodec/ffmpeg-henge.patch`, SHA-256 `949e760cf014a8eec4144470113048d5b3db9c9789c438dcabfc3fcfadca3dd5`. It adds `libavutil/hwcontext_henge.*`, `libavcodec/henge*.c`, `libavcodec/hengeenc.c` and `libavfilter/vf_scale_henge.c`, each with FFmpeg's LGPL-2.1-or-later header, and changes FFmpeg files to register them. |
-| Henge code linked in | `libhvcodec` (`tools/linux/hvcodec/libhvcodec/`) and `henge-codec-info.c`, LGPL-2.1-or-later. Both include `host/vcodec_proto.h`, which has no licence line, so it has the repository's GPL-2.0-or-later. A `libhvcodec` that is LGPL on its own needs an LGPL line on that header. |
+| Tuxedo code linked in | `libhvcodec` (`tools/linux/hvcodec/libhvcodec/`) and `henge-codec-info.c`, LGPL-2.1-or-later. Both include `host/vcodec_proto.h`, which has no licence line, so it has the repository's GPL-2.0-or-later. A `libhvcodec` that is LGPL on its own needs an LGPL line on that header. |
 | Configure | `--enable-gpl` with `libx264` and `libx265`, so the binaries are GPL-2.0-or-later. The `libav*` libraries are static. The full line is in `ffmpeg.manifest`. |
 | Shared libraries | x264, x265, dav1d, Opus, LAME, GnuTLS and their dependencies come from Debian at run time. Each has its own `copyright` file in the guest, and its source comes from the snapshot as for the image (above). |
 | Build record | `build/linux/ffmpeg/ffmpeg.manifest`: the release, the hashes of the tarball, the patch, `libhvcodec` and each binary, the configure line, and the version of each Debian build and run-time package. The package has a copy at `/usr/share/doc/henge-ffmpeg/ffmpeg.manifest`. Two builds from the same inputs gave the same binaries and the same `.deb` on 14/11/2026. |
 | In the package | `/usr/share/doc/henge-ffmpeg/copyright` (machine-readable, with the source URL) and FFmpeg's `LICENSE.md`. The GPL and LGPL texts are Debian's `/usr/share/common-licenses/`. |
 
-The source offer. Whoever hosts the `.deb` hands out a GPL binary, so that person must also hand out the source. `publish-apt.sh` writes `build/linux/source/ffmpeg-<release>-henge<N>/` next to the repository, and the server gets it at `https://walkies.site/henge-linux-catalogue/source/ffmpeg-9.0.2-henge1/`, the URL in the package's `copyright` file. It holds the unmodified tarball, the patch, `build-ffmpeg.sh`, `ffmpeg.manifest`, `henge-ffmpeg-src.tar.xz` (the Henge files of the build: `libhvcodec`, `henge-codec-info.c`, `vcodec_proto.h`, the man page, the package scripts, `versions.env` and the repository's `LICENSE`), `README.txt` with the build steps, and `SHA256SUMS`. The script does not publish a `henge-ffmpeg` whose source directory is missing or has another manifest, and it does not let a source directory change under the same version. A later change only to a file of the offer that does not change the binaries, such as `LICENSE`, keeps the published directory as it was. Keep each source directory on the server for as long as its `.deb` is in the pool. Whether this offer is enough in law is for the host to decide; it gives the complete source of the binary from the same place.
+The source offer. Whoever hosts the `.deb` hands out a GPL binary, so that person must also hand out the source. `publish-apt.sh` writes `build/linux/source/ffmpeg-<release>-henge<N>/` next to the repository, and the server gets it at `https://walkies.site/henge-linux-catalogue/source/ffmpeg-9.0.2-henge1/`, the URL in the package's `copyright` file. It holds the unmodified tarball, the patch, `build-ffmpeg.sh`, `ffmpeg.manifest`, `henge-ffmpeg-src.tar.xz` (the Tuxedo files of the build: `libhvcodec`, `henge-codec-info.c`, `vcodec_proto.h`, the man page, the package scripts, `versions.env` and the repository's `LICENSE`), `README.txt` with the build steps, and `SHA256SUMS`. The script does not publish a `henge-ffmpeg` whose source directory is missing or has another manifest, and it does not let a source directory change under the same version. A later change only to a file of the offer that does not change the binaries, such as `LICENSE`, keeps the published directory as it was. Keep each source directory on the server for as long as its `.deb` is in the pool. Whether this offer is enough in law is for the host to decide; it gives the complete source of the binary from the same place.
 
 `henge-ffmpeg` does not change Debian's `ffmpeg` package or its files. The two can be installed together.
 

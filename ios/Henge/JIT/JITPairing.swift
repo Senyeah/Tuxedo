@@ -11,14 +11,14 @@ import UserNotifications
 /// iOS 27 can pair with a computer it finds on the local network, started from
 /// the iPhone: Settings › Privacy & Security › Developer Mode lists every
 /// `_remotepairing-pairable-host._tcp` service, and pairing with one asks for the
-/// PIN that host shows. Henge plays that computer for its own iPhone:
+/// PIN that host shows. Tuxedo plays that computer for its own iPhone:
 /// libhenge_rppairing (src/rppairing-ios, idevice's PairableHost) listens on a
 /// port and runs the pairing; this publishes the port through mDNSResponder
 /// (dns_sd, so only the Local Network permission is needed, not the multicast
 /// entitlement) and stores the resulting RPPairing file where Built-in StikJIT
 /// reads it.
 ///
-/// The user pairs from Settings, so Henge has to keep running in the background:
+/// The user pairs from Settings, so Tuxedo has to keep running in the background:
 /// a BGContinuedProcessingTask ("<bundle id>.pairing.session", permitted by
 /// `$(PRODUCT_BUNDLE_IDENTIFIER).pairing.*` in Info.plist) whose system progress
 /// UI also shows the PIN. When iOS refuses it (a re-signed bundle whose
@@ -29,7 +29,7 @@ import UserNotifications
 @MainActor final class OnDevicePairing: ObservableObject {
     static let shared = OnDevicePairing()
 
-    /// Shown on the iPhone as "Pair with Henge"; the host identifier is derived from it.
+    /// Shown on the iPhone as "Pair with Tuxedo"; the host identifier is derived from it.
     static let hostName = "Henge"
     static let timeout: TimeInterval = 300
 
@@ -44,7 +44,7 @@ import UserNotifications
     }
 
     @Published private(set) var phase: Phase = .idle
-    /// iOS refused the continued-processing task: Henge can only wait briefly in the background.
+    /// iOS refused the continued-processing task: Tuxedo can only wait briefly in the background.
     @Published private(set) var backgroundLimited = false
 
     static var isSupported: Bool {

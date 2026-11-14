@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The tool pill: a dark capsule with the keys' edge, so it sits in the pad's light and not over it.
-/// It holds the Lab's tools and Henge's session tools; each tool is a `PadPillButtonStyle` button.
+/// It holds the Lab's tools and Tuxedo's session tools; each tool is a `PadPillButtonStyle` button.
 struct PadPill<Content: View>: View {
     var tuning: PadTuning
     /// nil follows the system.

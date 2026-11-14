@@ -1,8 +1,8 @@
 #!/bin/sh
-# The Henge apt repository and the source offer, built on the Mac (docs/guest-video-encode-plan.md, VE3.3):
+# The Tuxedo apt repository and the source offer, built on the Mac (docs/guest-video-encode-plan.md, VE3.3):
 #   $OUT/apt     dists/trixie/{Release,InRelease,Release.gpg}, main/binary-{arm64,all}, pool/main/h/<package>/,
 #                henge-archive.asc
-#   $OUT/source  ffmpeg-<release>-henge<N>/: the FFmpeg tarball, the patch, build-ffmpeg.sh, ffmpeg.manifest, the Henge
+#   $OUT/source  ffmpeg-<release>-henge<N>/: the FFmpeg tarball, the patch, build-ffmpeg.sh, ffmpeg.manifest, the Tuxedo
 #                files of the build (henge-ffmpeg-src.tar.xz), README.txt, SHA256SUMS
 # It adds henge-ffmpeg (build-ffmpeg-pkg.sh), henge-codec-dkms (build-codec-dkms-pkg.sh), henge-va (build-va-pkg.sh)
 # and henge-guest (built now)

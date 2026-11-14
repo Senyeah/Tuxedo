@@ -1,5 +1,5 @@
 // make_icon.swift DIR: draws the app icon's two windows as transparent 1024x1024 layers, for
-// ios/Henge/AppIcon.icon/Assets (Icon Composer's format: iOS adds the glass). l0 is the front one.
+// ios/Tuxedo/AppIcon.icon/Assets (Icon Composer's format: iOS adds the glass). l0 is the front one.
 import CoreGraphics
 import Foundation
 import ImageIO

@@ -136,7 +136,7 @@ enum PreviewShape {
 }
 
 enum MachineList {
-    /// nil when the list is damaged or from a newer Henge. A machine whose disk is gone is dropped.
+    /// nil when the list is damaged or from a newer Tuxedo. A machine whose disk is gone is dropped.
     static func decode(_ data: Data, diskExists: (VirtualMachine) -> Bool = { FileManager.default.fileExists(atPath: $0.disk.path) }) -> [VirtualMachine]? {
         guard let list = try? JSONDecoder().decode([VirtualMachine].self, from: data) else { return nil }
         return list.filter(diskExists)

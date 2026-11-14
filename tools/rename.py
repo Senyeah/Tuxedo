@@ -145,14 +145,19 @@ def is_engine_ident(t):
         or t in ("hengevm", "hengerestore")
 
 STAGES = {
-    3: dict(globs=["*.md"], skip=["docs/rename-tuxedo-plan.md", "CHANGELOG.md"],
-            token=lambda t: t == "Henge", md_prose=True),
+    3: dict(globs=["*.md", "ios/*", "host/*", "core/*", "devices/*", "tests/*", "tools/*", "Makefile", "ci/*", ".github/*"],
+            skip=["docs/rename-tuxedo-plan.md", "CHANGELOG.md", "tools/rename*", "*.json", "*.plist", "*.yml", "*.yaml", "*.patch", "*.pbxproj"],
+            token=lambda t: t == "Henge", md_prose=True, code_comments=True),
     4: dict(globs=["ios/*", "host/*", "core/*", "devices/*", "tests/*", "tools/*", "third_party/*", "Makefile", "*.sh"],
             skip=["tools/linux/henge-guest/*", "tools/linux/henge-va/*", "tools/linux/henge-ffmpeg/*",
                   "tools/linux/henge-codec-dkms/*", "tools/linux/rootfs*", "tools/linux/customize.sh",
                   "tools/rename*", "*.md", "ios/TrackpadLab/*", "tools/linux/hvcodec/ffmpeg-henge.patch"],
             token=is_engine_ident, no_phrases=True),
 }
+
+
+COMMENT = re.compile(r"^\s*(//|#|\*|/\*|--|;)")
+CODE_EXT = (".swift", ".c", ".h", ".m", ".py", ".sh", ".S", ".js")
 
 
 def md_prose_line(line, state):
@@ -175,8 +180,11 @@ def run_stage(n, apply):
         for i, line in enumerate(t.split("\n"), 1):
             new = line
             ok = not keep.line(p, i, line)
-            if ok and st.get("md_prose"):
+            if ok and p.endswith(".md") and st.get("md_prose"):
                 ok = md_prose_line(line, fence)
+            elif ok and st.get("code_comments"):
+                ok = p.endswith(CODE_EXT) or p == "Makefile"
+                ok = ok and bool(COMMENT.match(line)) and not line.startswith("#!")
             if ok:
                 def sub(mm):
                     tok = mm.group(0)
@@ -185,7 +193,7 @@ def run_stage(n, apply):
                     if tok not in m:
                         sys.exit(f"{p}:{i}: token {tok} is not in the map")
                     return m[tok]
-                if st.get("md_prose"):
+                if st.get("md_prose") and p.endswith(".md"):
                     # Skip inline code spans.
                     parts = re.split(r"(`[^`]*`)", line)
                     new = "".join(x if x.startswith("`") else TOKEN.sub(sub, x) for x in parts)

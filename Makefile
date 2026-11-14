@@ -157,7 +157,7 @@ $(B)/test_virtio_fs: tests/test_virtio_fs.c $(B)/virtio_fs.o $(B)/virtio.o $(B)/
 $(B)/test_secrets: tests/test_secrets.c $(B)/share.o $(B)/safe_path.o $(B)/fs_server.o $(B)/secrets.o $(B)/status.o
 	$(CC) $(CFLAGS) $^ -o $@
 
-# Henge's virt device tree against QEMU's (needs qemu-system-aarch64, dtc and uv).
+# Tuxedo's virt device tree against QEMU's (needs qemu-system-aarch64, dtc and uv).
 test-linux-dtb: $(B)/hengevm
 	uv run tools/linux/dtb-compare.py
 .PHONY: test-linux-dtb
@@ -292,7 +292,7 @@ linux-va-pkg:
 	HENGE_LINUX_OUT=$(LINUX_OUT) tools/linux/build-va-pkg.sh
 .PHONY: linux-va-pkg
 
-# P6: the shared folder (~/Henge, davfs2) against --share. SHARE_ARGS="--image FILE" for an image that has davfs2.
+# P6: the shared folder (~/Tuxedo, davfs2) against --share. SHARE_ARGS="--image FILE" for an image that has davfs2.
 test-linux-share: $(B)/hengevm
 	uv run tools/linux/share-check.py $(SHARE_ARGS)
 .PHONY: test-linux-share
@@ -399,7 +399,7 @@ clean: # keeps build/linux: guest artefacts take minutes to rebuild
 
 .PHONY: all test clean
 
-# ---- iOS: the engine as a static library for the Henge app (ios/) ----
+# ---- iOS: the engine as a static library for the Tuxedo app (ios/) ----
 # make ios-lib -> build/ios/libhengevm.a. Networking links the arm64 iOS builds
 # of libslirp and glib from Husk's sysroot (scripts there make them); see ios/README.md.
 IOS_SDKNAME = iphoneos

@@ -1,4 +1,4 @@
-// The VA-API driver for virtio-gpu in a Henge guest: Mesa's virgl driver, with NV12 as the only 8-bit 4:2:0 surface
+// The VA-API driver for virtio-gpu in a Tuxedo guest: Mesa's virgl driver, with NV12 as the only 8-bit 4:2:0 surface
 // format of a decode config.
 //
 // Why: Mesa's VA frontend offers NV12, YV12 and I420 surfaces for each virgl decode config. FFmpeg's

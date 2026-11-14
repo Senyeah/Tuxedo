@@ -4,9 +4,9 @@ import StikJIT
 
 /// The debugger half of Built-in StikJIT (docs/06-built-in-jit.md).
 ///
-/// A process cannot synchronously debug itself, so Henge starts this extension,
+/// A process cannot synchronously debug itself, so Tuxedo starts this extension,
 /// sends it its PID, the pairing file and henge-jit.js, and StikJIT attaches over
-/// LocalDevVPN and services the script's trap requests until Henge detaches.
+/// LocalDevVPN and services the script's trap requests until Tuxedo detaches.
 private enum HengeJITWork {
     /// One request at a time: enabling JIT holds this queue while the debugger is attached.
     static let queue = DispatchQueue(label: "com.henge.app.jit-helper")
@@ -17,13 +17,13 @@ private enum HengeJITWork {
             .appendingPathComponent("StikJIT", isDirectory: true)
         let paths = DDIPaths.default(in: root)
         var configuration = StikJIT.Configuration.default
-        /// Appended to the reply so Henge's log shows how the port was chosen.
+        /// Appended to the reply so Tuxedo's log shows how the port was chosen.
         var portNote = ""
         var needsScan = false
         if let rsdPort = request.rsdPort {
             configuration.rsdPort = rsdPort
         } else if request.operation != .resetDDI {
-            // Henge found no advertised port. StikJIT's 49152 is closed when the device picked another at boot.
+            // Tuxedo found no advertised port. StikJIT's 49152 is closed when the device picked another at boot.
             let lookup = RSDPortResolver.resolve()
             NSLog("[HengeJIT] RemotePairing port: %@", lookup.detail)
             if let port = lookup.port { configuration.rsdPort = port } else { needsScan = true }
@@ -120,7 +120,7 @@ private enum HengeJITWork {
 
 /// NSExtensionPrincipalClass (Info.plist). The request arrives as JSON in the
 /// first input item; the response goes back as JSON in the item the request
-/// completes with. Enable completes only once Henge's script has detached, so
+/// completes with. Enable completes only once Tuxedo's script has detached, so
 /// the request, and this process, last as long as the debugger does.
 @objc(HengeJITHelperHandler)
 final class HengeJITHelperHandler: NSObject, NSExtensionRequestHandling {

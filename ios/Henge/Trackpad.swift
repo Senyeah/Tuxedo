@@ -284,7 +284,7 @@ enum TrackpadFeel {
     /// PadTuning.Motion.style: "texture", "ticks" or "none".
     static var motion: String { UserDefaults.standard.string(forKey: motionKey) ?? PadTuning.Motion().style }
 
-    /// Henge's tuning: the Lab's approved defaults with the motion feel from Settings.
+    /// Tuxedo's tuning: the Lab's approved defaults with the motion feel from Settings.
     static func tuning(motion: String, page: String? = nil) -> PadTuning {
         var t = PadTuning()
         t.motion.style = motion

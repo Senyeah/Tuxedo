@@ -141,7 +141,7 @@ def command(args, kernel, initrd, tmp, append=APPEND, disk=None, firmware=None):
                      "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-device", "virtio-rng-pci"]
         if not args.henge_dtb:
             return argv + ["-append", append]
-        # Henge's tree carries the command line; QEMU adds only the initrd range.
+        # Tuxedo's tree carries the command line; QEMU adds only the initrd range.
         dtb = os.path.join(tmp, "henge.dtb")
         r = subprocess.run([args.hengevm, "--dump-dtb", dtb, "--append", append,
                             "--ram", str(args.ram), "--cpus", str(args.cpus)], capture_output=True, text=True)
@@ -334,7 +334,7 @@ def uboot_checks(p, image, times, scale):
     times["uboot prompt"] = time.monotonic() - t
     t = time.monotonic()
     pci = uboot_cmd(p, "pci", scale)
-    # Henge's virtio is modern only (0x104x); QEMU's is transitional (0x100x).
+    # Tuxedo's virtio is modern only (0x104x); QEMU's is transitional (0x100x).
     for what, pattern in [("host bridge", r"00\.00\.00\s+0x1b36\s+0x0008\s+Bridge"),
                           ("virtio block", r"0x1af4\s+0x10(42|01)\s+Mass storage"),
                           ("virtio network", r"0x1af4\s+0x10(41|00)\s+Network"),

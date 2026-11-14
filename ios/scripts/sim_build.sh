@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds Henge for the iOS Simulator, boots a simulator if none is booted, installs and launches it.
+# Builds Tuxedo for the iOS Simulator, boots a simulator if none is booted, installs and launches it.
 # Usage: ios/scripts/sim_build.sh [device name or UDID]   (default: the booted simulator, else "iPhone 18 Pro")
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -14,7 +14,7 @@ make ios-sim-lib ${HENGE_GFX:+GFX=1} ${HENGE_SIM_NET:+SIM_NET_ROOT=$SIM_NET_ROOT
 (cd ios && xcodegen generate)
 LOG="$DD/build.log"
 mkdir -p "$DD"
-# The old Henge.app survives a failed build, so the exit code decides, not the bundle.
+# The old Tuxedo.app survives a failed build, so the exit code decides, not the bundle.
 if ! xcodebuild -project ios/Henge.xcodeproj -scheme HengeSim -skipPackagePluginValidation \
   -destination 'generic/platform=iOS Simulator' -configuration Debug -derivedDataPath "$DD" HENGE_GFX_DIR="$GFX_ROOT" HENGE_GFX="$HENGE_GFX" HENGE_SIM_NET="$HENGE_SIM_NET" HENGE_SIM_NET_ROOT="$SIM_NET_ROOT" build >"$LOG" 2>&1; then
   grep -E 'error:' "$LOG" >&2 || tail -20 "$LOG" >&2

@@ -1,17 +1,17 @@
 ---
 title: FFMPEG-HENGE
 section: 7
-header: Henge
+header: Tuxedo
 footer: henge-ffmpeg
 ---
 
 # NAME
 
-ffmpeg-henge - the device's hardware video codecs in ffmpeg, in a Henge virtual machine
+ffmpeg-henge - the device's hardware video codecs in ffmpeg, in a Tuxedo virtual machine
 
 # DESCRIPTION
 
-A Henge virtual machine runs on an iPhone, an iPad or a Mac (the *device*). The
+A Tuxedo virtual machine runs on an iPhone, an iPad or a Mac (the *device*). The
 device has hardware video decoders and encoders. The **henge-ffmpeg** package
 gives an **ffmpeg** that uses them.
 
@@ -23,13 +23,13 @@ virtual machine, and its speed is the speed of the device's hardware.
 The package installs these commands:
 
 `/usr/local/bin/ffmpeg`, `/usr/local/bin/ffprobe`
-:   Links to the Henge build. The default `PATH` has `/usr/local/bin` before
-    `/usr/bin`, so the command `ffmpeg` is the Henge build. A shell that ran
+:   Links to the Tuxedo build. The default `PATH` has `/usr/local/bin` before
+    `/usr/bin`, so the command `ffmpeg` is the Tuxedo build. A shell that ran
     `ffmpeg` before the install needs `hash -r`.
 
 `/usr/bin/ffmpeg`
 :   Debian's own build, from Debian's **ffmpeg** package, if it is installed.
-    The Henge package does not change it. Run it by its full path.
+    The Tuxedo package does not change it. Run it by its full path.
 
 `henge-codec-info`
 :   Shows the codecs that this device has. See QUERYING THE DEVICE.
@@ -237,7 +237,7 @@ the system stopped the session. Ignore that text.
 - No ProRes.
 - AV1 output only where the device's hardware encodes AV1. There is no software
   AV1 encoder.
-- No encode while Henge is not on the screen of an iPhone or an iPad. The
+- No encode while Tuxedo is not on the screen of an iPhone or an iPad. The
   system stops the session, and **ffmpeg** stops with an error.
 - A software filter stops 4K at 60 fps: each frame then comes down to the
   virtual machine and goes up again, and the filter runs on the virtual
@@ -286,7 +286,7 @@ Constant quality to H.264:
     ffmpeg -hwaccel henge -hwaccel_output_format henge -i in.mkv \
            -c:v h264_henge -q:v 65 -c:a copy out.mp4
 
-Debian's own build, with no Henge codecs:
+Debian's own build, with no Tuxedo codecs:
 
     /usr/bin/ffmpeg -i in.mkv -c:v libx264 out.mp4
 
@@ -303,7 +303,7 @@ Debian's own build, with no Henge codecs:
     removed. The package does not replace a file there that it did not make.
 
 `/usr/lib/henge/ffmpeg/bin/`
-:   The Henge **ffmpeg**, **ffprobe** and **henge-codec-info**.
+:   The Tuxedo **ffmpeg**, **ffprobe** and **henge-codec-info**.
 
 `/usr/bin/ffmpeg`
 :   Debian's **ffmpeg**, if it is installed.

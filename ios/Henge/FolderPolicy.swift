@@ -181,7 +181,7 @@ enum FolderPolicy {
     }
 
     /// Whether the app coordinates opens and writes (HV_FS_PROVIDER): iCloud Drive and File Provider storage.
-    /// A folder in Henge's own container or on a drive is plain files.
+    /// A folder in Tuxedo's own container or on a drive is plain files.
     static func isProvider(path: String, ubiquitous: Bool) -> Bool {
         ubiquitous || path.contains("/Mobile Documents/") || path.contains("/File Provider Storage/")
     }
@@ -225,7 +225,7 @@ enum FolderPolicy {
         path.split(separator: "/").contains { $0 == ".Trash" || $0 == ".Trashes" }
     }
 
-    /// A URL that opens Files at a folder in Henge's Documents.
+    /// A URL that opens Files at a folder in Tuxedo's Documents.
     static func filesURL(_ folder: URL) -> URL? {
         var c = URLComponents()
         c.scheme = "shareddocuments"
