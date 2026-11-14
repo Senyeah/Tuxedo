@@ -171,7 +171,7 @@ A guest library that sends the raw stream to the host over a socket or a small v
 | mpv | `--hwdec=vaapi` | `--hwdec=v4l2m2m-copy` | `--hwdec=vulkan` | No |
 | FFmpeg | `-hwaccel vaapi` | `-c:v h264_v4l2m2m` | `-hwaccel vulkan` | Only a patched build |
 | GStreamer | `va` plugin | `v4l2` plugin | `vulkan` plugin | Only a new element |
-| Firefox | VA-API (not verified on virgl) | H.264 | Off by default | No |
+| Firefox | VA-API, with `henge-va` (see Firefox) | H.264 | Off by default | No |
 | Chromium | VA-API, may need `VaapiIgnoreDriverChecks` (not verified) | No on desktop | No | No |
 | Rough effort | 2 to 3 weeks for H.264 and VP9; 2 more for AV1 | 4 to 6 weeks | Unknown; blocked upstream | 2 to 3 weeks, few users |
 
@@ -250,7 +250,7 @@ Code that both can share, written one time:
 - That FFmpeg's VA-API VP9 path sends the whole frame and the AV1 path sends only tile data. This is from memory of FFmpeg's `vaapi_vp9.c` and `vaapi_av1.c`.
 - That common HEVC encoders refer to SPS reference picture sets by index. This is expected; it makes path 1 fail for HEVC.
 - That VideoToolbox gives one output frame for each synchronous decode call, in decode order, for H.264 with B-frames. The spike verified it on the Mac.
-- That Firefox and Chromium on Debian use VA-API on virgl, and with which flags.
+- That Chromium on Debian uses VA-API on virgl, and with which flags. (Firefox does, with `henge-va`: see Firefox.)
 - Hardware VP9 and AV1 on the iPhone 18 Pro.
 - All effort numbers.
 
@@ -473,3 +473,28 @@ On the owner's iPhone 18 Pro (iOS 27.3), 14/11/2026, through SSH into the Linux 
 - framemd5, `-hwaccel vaapi` against `-hwaccel none`, 1080p30 15 s clips made on the Mac (libx264 High with B-frames, libvpx-vp9, SVT-AV1): 450 of 450 frames equal for each codec. So ANGLE's IOSurface pbuffers work on the iPhone GPU.
 - Speed, `-hwaccel_output_format vaapi -f null -` against software: H.264 348 against 284 fps (guest CPU 0.40 against 4.0 s), VP9 329 against 537 fps (0.39 against 1.7 s), AV1 255 against 348 fps (0.33 against 2.5 s). On these simple test patterns the phone's software decode is sometimes faster in wall time; the hardware path uses a fifth to a tenth of the guest CPU.
 - Not measured: 4K decode, mpv playback on the phone, heat, and the background.
+
+## Firefox
+
+Firefox 160 in the guest (Wayland, Plasma 6.3) started VA-API, decoded one frame on the device, logged `Unsupported VA-API surface format 808596553` and `CreateImageVAAPI(): failed to get VideoFrameSurface`, and made a software decoder.
+
+Cause, from the sources:
+
+- Mesa 25.0 `vlVaQuerySurfaceAttributes` (`src/gallium/frontends/va/surface.c`) adds NV12, YV12 and IYUV for a `VA_RT_FORMAT_YUV420` config, each if `is_video_format_supported` says yes. virgl's function is `vl_video_buffer_is_format_supported`: it asks only if the plane formats (R8, R8G8) can be sampled and rendered to. It does not read `PIPE_VIDEO_CAP_PREFERED_FORMAT`, so the NV12 in the host's video caps has no effect on this list, and no host change can remove I420 without removing R8 textures.
+- FFmpeg 7.1 `vaapi_decode_find_best_format` (`libavcodec/vaapi_decode.c`) goes through that list with `av_find_best_pix_fmt_of_2` against the stream's `yuv420p`. YV12 and I420 both map to `yuv420p`, and the later one wins: I420. Firefox's `ffvpx` has the same code for VP9 and AV1.
+- Firefox `VideoFramePool::GetVideoFrameSurface` (`dom/media/platforms/ffmpeg/FFmpegVideoFramePool.cpp`) refuses a surface whose fourcc is not NV12, YV12, P010 or P016.
+
+Fix: the guest package `henge-va` (`tools/linux/henge-va`, `tools/linux/README.md`). It puts a 12 KB driver in front of Mesa's that lists NV12 only for an 8-bit decode config. No host change, no new app build. A patched `mesa-va-drivers` was the other choice; it would hold back Debian's Mesa updates.
+
+On the owner's iPhone 18 Pro, 14/11/2026, `henge-va` 1.0.0 installed, Firefox 160 with a new profile and its RDD sandbox on, 1080p30 clips, 20 s each (evidence in `build/evidence/firefox-vaapi`):
+
+| | Before, H.264 | H.264 | VP9 | AV1 |
+|---|---|---|---|---|
+| `IsHardwareAccelerated=true` decoders | 1, then a software one | 1 | 1 | 1 |
+| `failed to get VideoFrameSurface` | 1 | 0 | 0 | 0 |
+| Frames from VA-API as DMABuf surfaces | 0 | 578 | 559 | 558 |
+| `totalVideoFrames`, dropped (page) | 525, 25 | 558, 16 | 557, 39 | 525, 19 |
+| RDD process CPU, one core | | 6 % | 3 % | 5 % |
+| RDD process CPU with hardware decode off | | 26 % | 16 % | 24 % |
+
+`/usr/bin/ffmpeg -hwaccel vaapi` now picks `nv12` surfaces; with `-vf format=yuv420p`, 450 of 450 frames are equal to `-hwaccel none` for each clip, and the decode is a little faster than with I420 surfaces (H.264 101 against 90 fps, VP9 85 against 75, AV1 88 against 76, with the download). `mpv --hwdec=vaapi-copy` gives the same 450 frames for each clip, and `mpv --hwdec=vaapi --vo=gpu` still plays on VA-API.

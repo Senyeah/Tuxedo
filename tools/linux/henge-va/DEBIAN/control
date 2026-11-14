@@ -1,0 +1,16 @@
+Package: henge-va
+Version: 1.0.0
+Architecture: arm64
+Maintainer: Henge <henge@localhost>
+Section: video
+Priority: optional
+Depends: libc6
+Enhances: mesa-va-drivers
+Description: VA-API decode surfaces for Firefox on a Henge machine
+ Mesa's VA-API driver for virtio-gpu offers NV12, YV12 and I420 decode
+ surfaces. FFmpeg's VA-API decoder takes I420, which Firefox refuses,
+ so Firefox decodes in software. This package puts a small driver in
+ front of Mesa's that offers NV12 only, the format the device decodes
+ to. Mesa's driver moves to mesa_virtio_gpu_drv_video.so
+ (LIBVA_DRIVER_NAME=mesa_virtio_gpu) and comes back when the package
+ is removed.

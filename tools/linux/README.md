@@ -13,6 +13,7 @@ Every script runs inside the builder container, so no cross compiler is needed.
 - `build-ffmpeg.sh` (VE2): the guest's `ffmpeg` with the Henge codecs. It applies `hvcodec/ffmpeg-henge.patch` to the FFmpeg release in `versions.env`, builds `libhvcodec` (`hvcodec/libhvcodec/`) and `henge-codec-info`, and writes `ffmpeg/bin/` and `ffmpeg/ffmpeg.manifest` in the artefact directory. It runs in an arm64 `debian:trixie` container with packages from the pinned snapshot (about 3 min). `make test-linux-ffmpeg` checks the result in a clone of the desktop image. See `docs/guest-video-encode-plan.md`.
 - `build-ffmpeg-pkg.sh` (VE3): the `henge-ffmpeg` package from that build, with `henge-ffmpeg/` (its `postinst`, `prerm` and `copyright`) and the man page `hvcodec/ffmpeg-henge.7.md`. Output: `ffmpeg/henge-ffmpeg_<release>-henge<N>_arm64.deb`. `make linux-ffmpeg-pkg`. `build-image.sh` installs this package (the version in `versions.env`) and `man-db` in both images, so build it first.
 - `publish-apt.sh` (VE3): the signed apt repository in `build/linux/apt` and the source offer in `build/linux/source`. Nothing leaves the Mac unless you give it `--rsync`. `make linux-apt`. `henge-archive.asc` is the repository's public key.
+- `build-va-pkg.sh`: the `henge-va` package from `henge-va/`, the VA-API driver that goes in front of Mesa's virgl driver so Firefox keeps VA-API decode (see Video decode). Output: `va/henge-va_<version>_arm64.deb`. `make linux-va-pkg`. Both images have the package, `publish-apt.sh` adds it to the repository, and `henge-guest` recommends it.
 - `snapshot-apt.sh`: sourced by the container scripts above, so they install packages from the snapshot in `versions.env`.
 - `run.sh`: runs a command in the builder image. `build/linux/` is mounted at `/out`, the repo's `tools/linux/` at `/tools` (read only), and a named volume at `/work` for source trees.
 
@@ -341,10 +342,24 @@ vainfo --display drm --device /dev/dri/renderD128
 
 - mpv: `mpv --hwdec=vaapi --vo=gpu FILE`. The decoded frames stay on the host GPU. `hwdec-current` in mpv's statistics (`i`) says `vaapi`.
 - FFmpeg: `/usr/bin/ffmpeg -hwaccel vaapi -hwaccel_device /dev/dri/renderD128 -hwaccel_output_format vaapi -i FILE ...` keeps the frames on the GPU; without `-hwaccel_output_format vaapi` each frame comes back to guest RAM.
+- Firefox: it uses VA-API with no setting, for H.264 (Debian's `libavcodec`), VP9 and AV1 (its own `ffvpx`), and shows the frames as DMABuf surfaces with no copy. It needs `henge-va` (below). `about:support` shows the hardware decoders under "Media".
 - GStreamer: the `va` plugin in `gstreamer1.0-plugins-bad` (`vah264dec`, `vavp9dec`, `vaav1dec`; not tested on Henge).
 - Not in hardware: HEVC (VA-API does not carry the reference picture sets that VideoToolbox needs), MPEG-2, VC-1, JPEG, VP9 profiles 1 and 3, AV1 profiles 1 and 2, and AV1 with film grain. Players fall back to software decode for those, except AV1 with film grain: its frames fail, so turn hardware decode off in the player (`--hwdec=no`).
 - A stream that fails on the host gives no error in the guest: the frame keeps its old pixels until the next key frame. `hengevm`'s log (`HV_VIRGL_VERBOSE=1`) has a line for each failure and, when the player closes, a total for each codec.
 - The phone pauses an accelerated machine in the background, and the decoder with it.
+
+### henge-va
+
+Mesa's VA-API driver for virgl offers NV12, YV12 and I420 surfaces for each 8-bit decode config. FFmpeg's VA-API decoder (`vaapi_decode_find_best_format`) takes the last format that is equal to the stream's `yuv420p`, which is I420. Firefox takes NV12, YV12, P010 and P016 surfaces only (`VideoFramePool::GetVideoFrameSurface`). So Firefox started VA-API, decoded one frame, logged `Unsupported VA-API surface format 808596553` (I420), and went to software decode. The host cannot change that list: Mesa's virgl driver asks only if R8 and R8G8 textures exist, and does not read the host's preferred format.
+
+`henge-va` (`henge-va/henge_va.c`, 12 KB) installs `/usr/lib/aarch64-linux-gnu/dri/virtio_gpu_drv_video.so`, the file that libva loads for virtio-gpu. It loads Mesa's driver and removes YV12 and I420 from the surface formats of a decode config that has NV12. That is the list radeonsi and the Intel drivers give. FFmpeg, mpv and Firefox then all use NV12, the format VideoToolbox decodes to. Video processing configs and 10-bit formats are not changed.
+
+- The package diverts Mesa's link to `mesa_virtio_gpu_drv_video.so` with `dpkg-divert`, so an update of `mesa-va-drivers` goes to that name, and `apt remove henge-va` puts Mesa's link back. It does not depend on `mesa-va-drivers`: without it, the driver finds nothing to load and libva reports no driver, as before.
+- `LIBVA_DRIVER_NAME=mesa_virtio_gpu` uses Mesa's driver with no filter, for a test.
+- With `/usr/bin/ffmpeg -hwaccel vaapi` and no `-hwaccel_output_format`, the frames now come back as `nv12`, not `yuv420p`. The pixels are the same. Add `-vf format=yuv420p` or `-pix_fmt yuv420p` where the output must be planar.
+- An existing machine gets it with `henge-guest` 1.10.1 from the Henge repository (it is in `Recommends`), or with `sudo apt install henge-va`.
+
+`build-va-pkg.sh` (`make linux-va-pkg`, needs Docker) builds the driver with `-Werror`, runs it against a stand-in for Mesa's driver (`henge-va/test`: a decode config, a decode config with no NV12, a video processing config), then installs the package over `mesa-va-drivers` in the container, reinstalls `mesa-va-drivers`, and removes the package; Mesa's link must move, stay moved, and come back.
 
 ## ffmpeg with the device's codecs (henge-ffmpeg)
 
