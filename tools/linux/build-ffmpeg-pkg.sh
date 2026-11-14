@@ -9,7 +9,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 
 if [ "${1:-}" != "--inner" ]; then
-    OUT=${TUX_LINUX_OUT:-$HOME/Repos/Henge/build/linux}
+    OUT=${TUX_LINUX_OUT:-$(cd "$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)/build/linux}
     if [ ! -f "$OUT/ffmpeg/ffmpeg.manifest" ]; then
         echo "build-ffmpeg-pkg.sh: no $OUT/ffmpeg/ffmpeg.manifest; run build-ffmpeg.sh (make linux-ffmpeg) first" >&2
         exit 1

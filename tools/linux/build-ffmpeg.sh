@@ -10,8 +10,8 @@ ROOT=$(cd "$HERE/../.." && pwd)
 
 if [ "${1:-}" != "--inner" ]; then
     . "$HERE/versions.env"
-    OUT=${TUX_LINUX_OUT:-$HOME/Repos/Henge/build/linux}
-    VOLUME=${TUX_LINUX_VOLUME:-henge-linux-work}
+    OUT=${TUX_LINUX_OUT:-$(cd "$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)/build/linux}
+    VOLUME=${TUX_LINUX_VOLUME:-tux-linux-work}
     TARBALL="$OUT/ffmpeg/src/ffmpeg-$FFMPEG_VERSION.tar.xz"
     mkdir -p "$OUT/ffmpeg/src"
     if [ ! -f "$TARBALL" ]; then

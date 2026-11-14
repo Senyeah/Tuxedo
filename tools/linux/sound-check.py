@@ -29,7 +29,8 @@ import numpy as np
 import pexpect
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-OUT = os.environ.get("TUX_LINUX_OUT", "$HOME/Repos/Henge/build/linux")
+OUT = os.environ.get("TUX_LINUX_OUT") or os.path.join(os.path.dirname(subprocess.run(
+    ["git", "-C", ROOT, "rev-parse", "--path-format=absolute", "--git-common-dir"], capture_output=True, text=True, check=True).stdout.strip()), "build", "linux")
 SHELL = r"henge@henge:\S*\$ "
 MARK = "TUX_RC_"
 FMT = {5: np.dtype("<i2"), 17: np.dtype("<i4"), 19: np.dtype("<f4")}

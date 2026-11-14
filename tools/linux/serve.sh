@@ -3,7 +3,9 @@
 # Usage: serve.sh [--dir DIR] [--bind ADDR] [--port N] [--yes]
 set -euo pipefail
 
-DIR=${TUX_LINUX_OUT:-$HOME/Repos/Henge/build/linux}/dist
+HERE=$(cd "$(dirname "$0")" && pwd)
+
+DIR=${TUX_LINUX_OUT:-$(cd "$(git -C "$HERE" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)/build/linux}/dist
 BIND= PORT=8000 YES=0
 while [ $# -gt 0 ]; do
     case $1 in

@@ -3,7 +3,7 @@
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-OUT=${TUX_LINUX_OUT:-$HOME/Repos/Henge/build/linux}
+OUT=${TUX_LINUX_OUT:-$(cd "$(git -C "$HERE" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)/build/linux}
 QEMU=${QEMU:-/opt/homebrew/bin/qemu-system-aarch64}
 
 ACCEL=tcg

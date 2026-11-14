@@ -3,9 +3,9 @@
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-OUT=${TUX_LINUX_OUT:-$HOME/Repos/Henge/build/linux}
-IMAGE=${TUX_LINUX_IMAGE:-henge-linux-builder}
-VOLUME=${TUX_LINUX_VOLUME:-henge-linux-work}
+OUT=${TUX_LINUX_OUT:-$(cd "$(git -C "$HERE" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)/build/linux}
+IMAGE=${TUX_LINUX_IMAGE:-tux-linux-builder}
+VOLUME=${TUX_LINUX_VOLUME:-tux-linux-work}
 
 mkdir -p "$OUT"
 

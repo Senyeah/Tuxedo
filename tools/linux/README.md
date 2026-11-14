@@ -17,7 +17,7 @@ Every script runs inside the builder container, so no cross compiler is needed.
 - `snapshot-apt.sh`: sourced by the container scripts above, so they install packages from the snapshot in `versions.env`.
 - `run.sh`: runs a command in the builder image. `build/linux/` is mounted at `/out`, the repo's `tools/linux/` at `/tools` (read only), and a named volume at `/work` for source trees.
 
-`run.sh` builds the image on first use. `TUX_LINUX_OUT` is the artefact directory. `run.sh`, `package-image.sh`, `serve.sh`, `qemu-ref.sh`, `qemu-check.py`, `balloon-check.py` and `sound-check.py` default to the author's `$HOME/Repos/Henge/build/linux`, so on any other Mac set it first (see From nothing). `smoke.py` and the Makefile targets default to `build/linux` of the main checkout, where all worktrees share the files.
+`run.sh` builds the image on first use. `TUX_LINUX_OUT` is the artefact directory. The scripts and checks default to `build/linux` of the main checkout (found with `git rev-parse --git-common-dir`), where all worktrees share the files.
 
 Keep source trees in `/work`, not on the Mac filesystem. It is case-insensitive and the kernel tree has names that differ only by case.
 

@@ -125,7 +125,7 @@ for a in "$@"; do
     esac
 done
 
-OUT=${TUX_LINUX_OUT:-$HOME/Repos/Henge/build/linux}
+OUT=${TUX_LINUX_OUT:-$(cd "$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)/build/linux}
 GNUPGHOME=${TUX_APT_GNUPGHOME:-$HOME/.henge-apt-key}
 REMOTE=${TUX_APT_REMOTE:-root@walkies.site:/home/USER/henge-linux-catalogue/files}
 URL=${TUX_APT_URL:-https://walkies.site/henge-linux-catalogue}
