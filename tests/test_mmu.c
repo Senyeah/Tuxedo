@@ -207,17 +207,6 @@ static void linux_remote(HvMachine *m) {
                "A1 remote: a TLBI by VA for the running ASID left its entry");
     linux_switch(&c, empty, rK, rB, B);
     check_that(tlb_has(&c, U, 0, D + 0xc000), "A1 remote: a TLBI for A dropped B's stashed entry");
-
-    /* HV_SWITCH_FLUSH never skips Linux's TLBI VMALLE1 right after a switch: its ASID rollover needs it. */
-    int knob = hv_knob[HV_K_SWITCHFLUSH];
-    hv_knob[HV_K_SWITCHFLUSH] = 1;
-    linux_switch(&c, empty, rK, rA, A);
-    hv_mmu_access(&c, U, HV_ACC_READ, 0, &pa);
-    linux_switch(&c, empty, rK, rB, B);
-    hv_sysreg_sys(&c, 0xd508871fu, 0); /* tlbi vmalle1 */
-    linux_switch(&c, empty, rK, rA, A);
-    check_that(!tlb_has(&c, U, 0, D), "A1: HV_SWITCH_FLUSH left out a TLBI VMALLE1 after a switch");
-    hv_knob[HV_K_SWITCHFLUSH] = knob;
 }
 
 /* E0PD (the virt board advertises it): EL0 and unprivileged accesses to a half with TCR.E0PDx set fault at level 0. */

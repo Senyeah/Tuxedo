@@ -217,7 +217,7 @@ flush:
     return NULL;
 }
 
-/* WFE. xnu's spin loops arm the exclusive monitor on the lock word (LDAXR)
+/* WFE. Guest spin loops arm the exclusive monitor on the lock word (LDAXR)
    and wait for it to change; leaving for the dispatcher every time made a
    waiting CPU spin through it (a hundred thousand times a second). Wait here
    instead: the host core sleeps in its own WFE on the host copy of the word,
@@ -279,7 +279,7 @@ static void *fast_resume(HvCpu *cpu) {
     if (off < 0) off = getenv("HV_NO_FAST_RESUME") != NULL;
     HvMachine *m = cpu->m;
     HvPerCpu *p = cpu->pc_state;
-    if (off || !m->chain || m->trace || m->log >= 2 || !p || cpu->pc == m->stop_pc || cpu->pc == m->stop_pc2 || cpu->halted || cpu->off) { if (m->stats_interval) m->stats.fr_fail[0]++; return NULL; }
+    if (off || !m->chain || m->trace || m->log >= 2 || !p || cpu->pc == m->stop_pc || cpu->halted || cpu->off) { if (m->stats_interval) m->stats.fr_fail[0]++; return NULL; }
     if (__atomic_load_n(&cpu->exit_req, __ATOMIC_RELAXED) || __atomic_load_n(&m->flush_pending, __ATOMIC_RELAXED) ||
         __atomic_load_n(&m->stw_active, __ATOMIC_RELAXED)) {
         if (m->stats_interval) m->stats.fr_fail[1]++;
@@ -458,7 +458,7 @@ static int wait_for_interrupt(HvCpu *cpu) {
     hv_big_unlock(m); /* let the other CPUs run while this one sleeps */
     park(cpu);
     /* A thread on another CPU often has something for this one microseconds later
-       (a pipe, a Mach message: macOS is made of these), and waking a sleeping host
+       (a pipe, a wake-up IPI), and waking a sleeping host
        thread takes far longer than that: watch for it a little first. HV_WFI_SPIN: microseconds. */
     int spin_us = hv_knob[HV_K_WFI_SPIN];
     if (spin_us) {
@@ -628,14 +628,6 @@ static void print_stats(HvCpu *cpu, int force) {
         fprintf(stderr, "  whole-TLB flushes/s: TLBI all here %.0f, TLBI all shared %.0f, SCTLR %.0f, TTBR1 %.0f, TCR %.0f, MAIR %.0f, range of all %.0f, requests overflowed %.0f\n",
                 RATE(flush_why[0]), RATE(flush_why[1]), RATE(flush_why[2]), RATE(flush_why[3]), RATE(flush_why[4]), RATE(flush_why[5]),
                 RATE(flush_why[6]), RATE(flush_why[7]));
-        fprintf(stderr, "  TLBI all here/s by time since a TTBR0 change: <2us %.0f, <20us %.0f, <200us %.0f, later %.0f; left out %.0f (%.0f of them late); at",
-                RATE(flush_after_switch[0]), RATE(flush_after_switch[1]), RATE(flush_after_switch[2]), RATE(flush_after_switch[3]), RATE(flush_skipped),
-                RATE(flush_skipped_late));
-        for (int i = 0; i < 8 && s->flush_pc[i].pc; i++) fprintf(stderr, " %llx x%llu", (unsigned long long)s->flush_pc[i].pc, (unsigned long long)s->flush_pc[i].n);
-        fprintf(stderr, "\n");
-        if (s->flush_checked)
-            fprintf(stderr, "  switch-flush checks/s: %.0f, entries walked %.0f, found out of date %.0f (flushed), access flag only %.0f\n",
-                    RATE(flush_checked), RATE(flush_check_entries), RATE(flush_check_bad), RATE(flush_check_af));
         fprintf(stderr, "  cache drops/s: full %.0f, ASID %.0f, user VA %.0f, kernel VA %.0f, code %.0f (whole user half %.0f, filter full %.0f, big user range %.0f)\n", RATE(reset_why[0]),
                 RATE(reset_why[1]), RATE(reset_why[2]), RATE(reset_why[3]), RATE(reset_why[4]), RATE(reset_why[5]), RATE(reset_why[6]), RATE(reset_why[7]));
         { /* block hash health: chain lengths and how much of it is stale */
@@ -1037,11 +1029,7 @@ static int run_loop(HvCpu *cpu, int one) {
             pending_chain = NULL;
             why = 3;
         }
-        if (cpu->pc == m->stop_pc || cpu->pc == m->stop_pc2) {
-            if (!m->stop_hook) return HV_EXIT_HALT;
-            m->stop_hook(cpu);
-            pending_chain = NULL; /* every call must come back through here */
-        }
+        if (cpu->pc == m->stop_pc) return HV_EXIT_HALT;
 
         if ((m->log || m->gen_checks) && cpu->el && (cpu->sctlr_el1 & 1) && !((cpu->pc >> 55) & 1) && cpu->pc >= 0x100000000ull) { /* EL1 at a user address: how did we get here? */
             static int reported;
@@ -1094,7 +1082,7 @@ static int run_loop(HvCpu *cpu, int one) {
         /* Remember it for indirect branches (not the tests' stop PC: that must reach us). */
         /* EL0 tables only hold user VAs and EL1 tables kernel VAs, so each half has its own salt. */
         int kernel = b->flags & HV_BLOCK_EL1;
-        if (m->chain && b->va != m->stop_pc && b->va != m->stop_pc2 && (int)((b->va >> 55) & 1) == kernel) {
+        if (m->chain && b->va != m->stop_pc && (int)((b->va >> 55) & 1) == kernel) {
             HvPerCpu *pcs = cpu->pc_state;
             uint64_t *t = pcs->ijc + (size_t)(b->flags & (HV_IJC_TABLES - 1)) * (HV_IJC_TABLE_BYTES / 8);
             uint64_t tag = b->va ^ cpu->ijc_salt[kernel];

@@ -32,7 +32,7 @@ static inline uint64_t hv_exec_key(uint64_t page_va, int64_t addend) {
 #define HV_TLB_PAGE_BITS 14
 #define HV_TLB_ADJ 15
 #define HV_TLB_INVALID 0x8080808080808080ull /* what memset(0x80) leaves */
-#define HV_TLB_BITS 14 /* 16384 entries per EL: 256 MB of 16 KB pages (xnu's working set overflowed 64 MB) */
+#define HV_TLB_BITS 14 /* 16384 entries per EL: 256 MB of 16 KB pages (a kernel's working set overflowed 64 MB) */
 #define HV_TLB_SIZE (1u << HV_TLB_BITS)
 #define HV_IJC_TABLES 16
 #define HV_RET_BITS 13 /* entries in a return table */
@@ -90,7 +90,7 @@ typedef struct HvCpu {
     uint64_t ijc_tab[16];    /* 0x440: each flags value's branch-cache table (ijc + flags * table size) */
     uint64_t gaddend[4];     /* 0x4c0: host addends of the pages groups of accesses on one base register were checked in (translate_mem) */
     uint64_t xjump_thunk;    /* 0x4e0: hv_xjump_thunk */
-    uint64_t tcr_el1;        /* 0x4e8: here, in reach of one load, for translated MRS (xnu reads it ~17K times a second at login) */
+    uint64_t tcr_el1;        /* 0x4e8: here, in reach of one load, for translated MRS (read ~17K times a second at login) */
     uint64_t par_el1;        /* 0x4f0: likewise, read after each AT */
     uint64_t cntvoff;        /* 0x4f8: the virtual counter is the host's less this (m->cntvoff), read inline */
     /* 0x500: what tags in the return tables (ret_tab) are xored with, [0] user, [1] kernel.
@@ -135,7 +135,7 @@ typedef struct HvCpu {
 #define HV_USER_FILLS 2048
     uint16_t user_fills[HV_USER_FILLS];
     uint32_t nuser_fills;
-    /* The same for kernel entries, so a whole-TLB flush (macOS 27 asks for hundreds a second) clears
+    /* The same for kernel entries, so a whole-TLB flush (a guest can ask for hundreds a second) clears
        what was filled since the last one instead of all four tables (2 MB). More than HV_KERNEL_FILLS: all. */
 #define HV_KERNEL_FILLS 4096
     uint16_t kernel_fills[HV_KERNEL_FILLS];
@@ -152,12 +152,11 @@ typedef struct HvCpu {
        are cleared. */
     uint16_t asid_cid[65536];
     uint16_t cid_asid[65536]; /* --stats: the ASID a user id was given to (to tell live tags from dead ones) */
-    /* The translation table base asid_cid[ASID] was given under: an ASID back with another table (xnu gives one hardware
+    /* The translation table base asid_cid[ASID] was given under: an ASID back with another table (a kernel may give one hardware
        ASID to more than one address space, and may follow a switch between them with a whole-TLB flush rather than one
        by ASID) gets a fresh id, as the TLB stashes are keyed by the whole TTBR0. */
     uint64_t asid_base[65536];
     uint32_t next_cid, kernel_gen;
-    uint64_t ttbr0_changed_at; /* --stats: host time of the last TTBR0 change */
 
     /* Generic timer: physical and virtual. The counter is host time scaled to 24 MHz. */
     uint64_t cntv_ctl, cntv_cval;

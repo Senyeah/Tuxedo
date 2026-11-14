@@ -14,7 +14,7 @@
    paths, branch-cache misses, and the literal pool. In a region of 1 MB (the reach of the
    short branches between them) hot parts grow from the bottom and cold parts from the top,
    so code that runs sits together. What runs is a small part of what a translation holds,
-   and macOS runs so much code, so thinly, that how much fits in the CPU's caches and branch
+   and a guest kernel runs so much code, so thinly, that how much fits in the CPU's caches and branch
    tables is a large part of how fast it goes. HV_K2=1: one part, in the order written.
 
    Each part is built in a static buffer and copied into the JIT region once. Branches between
@@ -961,7 +961,7 @@ static void translate_mem(Emit *e, uint32_t insn, uint64_t pc) {
         return;
     }
     /* CASP on the host address, as the guest wrote it, when its two pairs are guest registers that live
-       in their own host registers (pairs must be even and consecutive: no stand-ins). macOS 27 runs tens of
+       in their own host registers (pairs must be even and consecutive: no stand-ins). a busy kernel runs tens of
        thousands a second, and each took the helper. */
     int casp = op.kind == HV_MEM_CASP;
     if (casp && (is_stolen(op.rs) || is_stolen(op.rs + 1) || is_stolen(op.rt) || is_stolen((op.rt + 1) & 31))) casp = -1;
@@ -1201,7 +1201,7 @@ static void translate_mem(Emit *e, uint32_t insn, uint64_t pc) {
 }
 
 /* DC ZVA: zero the 64-byte block holding Xt, on the host's own copy when the
-   TLB maps it writable (xnu's bzero does this a million times a second).
+   TLB maps it writable (a kernel's memset does this a million times a second).
    The host's DC ZVA block is 64 bytes too (checked at translation time);
    a miss, a code page or a device takes the SYS helper. */
 static int host_zva_is_64(void) {
@@ -1214,7 +1214,7 @@ static int host_zva_is_64(void) {
     return known;
 }
 
-/* IC IVAU at EL1 (xnu: 100K+ a second), without the helper when the page holds
+/* IC IVAU at EL1 (100K+ a second under load), without the helper when the page holds
    no translated code: look the address up like a load, find its host page, and
    check the main RAM's code-page flags. A TLB miss, another RAM region or a
    code page take the helper, which invalidates. */
@@ -1854,7 +1854,7 @@ static void plan_groups(Emit *e, const uint32_t *code, uint32_t max, uint64_t va
 #define KILL(r) (cur[(r) & 31] = -1)
     for (uint32_t i = 0; i < max && i < HV_MAX_BLOCK_INSNS; i++) {
         uint32_t insn = code[i];
-        if (i > 0 && (va + 4ull * i == e->m->stop_pc || va + 4ull * i == e->m->stop_pc2)) break;
+        if (i > 0 && va + 4ull * i == e->m->stop_pc) break;
         HvInsnKind kind = hv_classify(insn);
         if ((e->flags & HV_BLOCK_FPOFF) && kind != HV_INSN_UNDEFINED && is_fp_insn(insn)) break;
         if (kind == HV_INSN_COPY && (insn & 0xfffff01fu) == 0xd503201fu) continue; /* hints (NOP, BTI): no register */
@@ -1990,7 +1990,7 @@ static int translate_emit(HvMachine *m, HvBlock *b, const uint32_t *code, uint32
     int ended = 0;
     while (i < max && !ended) {
         uint64_t pc = b->va + 4ull * i;
-        if (i > 0 && (pc == m->stop_pc || pc == m->stop_pc2)) break; /* so the dispatcher sees stop_pc at a block start */
+        if (i > 0 && pc == m->stop_pc) break; /* so the dispatcher sees stop_pc at a block start */
         e->cur_pc = pc;
         e->cur_i = i;
         e->u_prev = e->u_live, e->u_live = 0;
@@ -2094,7 +2094,7 @@ int hv_translate_place(HvMachine *m, HvBlock *b) {
     for (uint32_t k = 0; k < e->nsite && !m->trace; k++) { /* tracing logs every block entry */
         uint32_t slot = e->site[k].slot;
         uint64_t t = e->site[k].target;
-        if (m->slot_xa[slot] || e->site[k].flags != b->flags || t == m->stop_pc || t == m->stop_pc2) continue; /* the dispatcher stops there */
+        if (m->slot_xa[slot] || e->site[k].flags != b->flags || t == m->stop_pc) continue; /* the dispatcher stops there */
         const uint32_t *code = NULL;
         if (t == b->va) code = dst;
         else {

@@ -146,15 +146,6 @@ static int read_reg(HvCpu *cpu, uint32_t reg, uint64_t *v) {
         *v = 0;
         return 0;
     }
-    /* Apple implementation-defined registers (op0 3, CRn 15). A
-       kernel reads error-status registers there (S3_6_C15_C0_0, S3_3_C15_C8_0..)
-       when it reports a machine error; zero means no error recorded. */
-    if ((reg >> 14) == 3 && ((reg >> 7) & 15) == 15) {
-        if (m->log) fprintf(stderr, "hengevm: read of implementation-defined S3_%u_C15_C%u_%u = 0\n", (reg >> 11) & 7,
-                            (reg >> 3) & 15, reg & 7);
-        *v = 0;
-        return 0;
-    }
     return -1;
 }
 
@@ -176,7 +167,7 @@ static int write_reg(HvCpu *cpu, uint32_t reg, uint64_t v) {
         return 0;
     case R(3, 0, 4, 0, 0): cpu->spsr_el1 = v; return 0;
     case R(3, 0, 4, 0, 1): cpu->elr_el1 = v; return 0;
-    case R(3, 0, 1, 0, 0): { /* SCTLR: xnu flips the PAC enables (EnIA/IB/DA/DB) on every process switch */
+    case R(3, 0, 1, 0, 0): { /* SCTLR: a guest may flip the PAC enables (EnIA/IB/DA/DB) on every process switch */
         uint64_t changed = cpu->sctlr_el1 ^ v;
         cpu->sctlr_el1 = v;
         if (changed & (1u | 1u << 19 | 1u << 24 | 1u << 25)) { /* M, WXN, E0E, EE: what translations depend on */
@@ -191,12 +182,11 @@ static int write_reg(HvCpu *cpu, uint32_t reg, uint64_t v) {
     case R(3, 0, 2, 0, 0): { /* a process switch */
         uint64_t old = cpu->ttbr0_el1;
         cpu->ttbr0_el1 = v;
-        if (old != v) cpu->ttbr0_changed_at = mach_absolute_time();
         hv_tlb_switch_user(cpu, old, v);
         hv_ijc_switch(cpu);
         return 0;
     }
-    case R(3, 0, 2, 0, 1): { /* TTBR1: xnu rewrites it unchanged on context switches; with TCR.A1 Linux switches ASIDs here */
+    case R(3, 0, 2, 0, 1): { /* TTBR1: a guest may rewrite it unchanged on context switches; with TCR.A1 Linux switches ASIDs here */
         uint64_t old = cpu->ttbr1_el1;
         cpu->ttbr1_el1 = v;
         if ((old ^ v) & 0x0000ffffffffffffull) cpu->m->stats.flush_why[3]++, hv_tlb_flush(cpu);
@@ -256,12 +246,6 @@ other:
     }
     /* Debug and PMU registers: ignored. */
     if ((reg >> 14) == 2 || (((reg >> 7) & 15) == 9 && (reg >> 14) == 3)) return 0;
-    /* Apple implementation-defined registers (op0 3, CRn 15): ignored, see read_reg. */
-    if ((reg >> 14) == 3 && ((reg >> 7) & 15) == 15) {
-        if (m->log) fprintf(stderr, "hengevm: write to implementation-defined S3_%u_C15_C%u_%u ignored\n", (reg >> 11) & 7,
-                            (reg >> 3) & 15, reg & 7);
-        return 0;
-    }
     return -1;
 }
 
@@ -340,8 +324,8 @@ void hv_tlbi_apply(HvCpu *cpu, uint32_t op1, uint32_t crn, uint32_t crm, uint32_
        Xt[43:0] is VA[55:12]. Everything else (all, by ASID, ranges) drops it all. */
     int by_va = crn == 8 && op1 == 0 && (crm == 1 || crm == 3 || crm == 7) && (op2 & 1);
     int by_asid = crn == 8 && op1 == 0 && (crm == 1 || crm == 3 || crm == 7) && op2 == 2; /* ASIDE1: non-global (user) entries */
-    /* RVAE1, RVAAE1, RVALE1, RVAALE1 (IS/OS/local): xnu uses these for every
-       multi-page unmap. Xt: ASID[63:48], TG[47:46], SCALE[45:44], NUM[43:39],
+    /* RVAE1, RVAAE1, RVALE1, RVAALE1 (IS/OS/local): a guest uses these for
+       multi-page unmaps. Xt: ASID[63:48], TG[47:46], SCALE[45:44], NUM[43:39],
        BaseADDR[36:0] in granule units; (NUM+1) << (5*SCALE+1) granules. */
     int by_range = crn == 8 && op1 == 0 && (crm == 2 || crm == 5 || crm == 6) && (op2 & 1);
     if (by_range) {
@@ -383,57 +367,12 @@ void hv_tlbi_apply(HvCpu *cpu, uint32_t op1, uint32_t crn, uint32_t crm, uint32_
         if (cpu->m->log >= 2)
             fprintf(stderr, "tlbi-all S1_%u_C%u_C%u_%u pc %llx\n", op1, crn, crm, op2, (unsigned long long)pc);
         cpu->m->stats.flush_why[crm == 7 ? 0 : 1]++;
-        uint64_t since_switch = crm == 7 ? mach_absolute_time() - cpu->ttbr0_changed_at : ~0ull; /* 24 MHz ticks */
-        /* HV_SWITCH_FLUSH=1 (testing): macOS 27's xnu follows a process switch between two shared regions with a
-           local TLBI VMALLE1, to drop the old region's global entries. Here every process's user entries are put
-           aside under its own TTBR0 and its cached branch targets under its own ASID, so nothing of the old one
-           can be seen; such a flush, within 20 us of a TTBR0 change, is left out. */
-        /* HV_SWITCH_FLUSH=2: one in 128 is checked first (hv_tlb_check_all, too slow for all of macOS 27's ~800/s) and done
-           if any entry kept no longer matches the page tables. One in 32 until 2026-11-09: each check walks ~4000 entries
-           (1-2 ms on the phone), up to 26 a second in a login's busiest windows, while other CPUs wait on this one for
-           their TLBIs; none of those checks (thousands, every phone session) ever found an entry out of date. */
-        /* HV_SWITCH_FLUSH=3: under emulation the same flush often comes later than 20 us (the phone: 30-100/s at
-           20-200 us, each emptying every TLB and branch cache of the CPU): up to 200 us it is left out too, if it is at
-           a PC already seen within 20 us of a TTBR0 change, i.e. the same instruction in xnu's switch path. */
-        static _Thread_local uint32_t nth;
-        int late = 0;
-        if (crm == 7 && hv_knob[HV_K_SWITCHFLUSH] >= 3 && since_switch >= 480 && since_switch < 4800) {
-            for (int i = 0; i < 4; i++)
-                if (__atomic_load_n(&cpu->m->switch_flush_pc[i], __ATOMIC_RELAXED) == pc) late = 1;
-        }
-        if (crm == 7 && hv_knob[HV_K_SWITCHFLUSH] >= 3 && since_switch < 480) {
-            int known = 0;
-            for (int i = 0; i < 4 && !known; i++) {
-                uint64_t have = __atomic_load_n(&cpu->m->switch_flush_pc[i], __ATOMIC_RELAXED), zero = 0;
-                if (have == pc) known = 1;
-                else if (!have && __atomic_compare_exchange_n(&cpu->m->switch_flush_pc[i], &zero, pc, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) known = 1;
-            }
-        }
-        /* Not under TCR.A1: Linux's ASID rollover needs this flush to retire the old ids */
-        if (crm == 7 && hv_knob[HV_K_SWITCHFLUSH] && !((cpu->tcr_el1 >> 22) & 1) && (since_switch < 480 || late) &&
-            (hv_knob[HV_K_SWITCHFLUSH] < 2 || (nth++ & 127) || !hv_tlb_check_all(cpu))) {
-            if (cpu->m->stats_interval) cpu->m->stats.flush_skipped++, cpu->m->stats.flush_skipped_late += (uint64_t)late;
-            return;
-        }
-        if (crm == 7 && cpu->m->stats_interval) {
-            uint64_t dt = since_switch;
-            cpu->m->stats.flush_after_switch[dt < 48 ? 0 : dt < 480 ? 1 : dt < 4800 ? 2 : 3]++;
-            for (int i = 0; i < 8 && dt < 480; i++) { /* where the ones right after a switch come from */
-                uint64_t *slot_pc = &cpu->m->stats.flush_pc[i].pc;
-                if (*slot_pc == pc) { __atomic_add_fetch(&cpu->m->stats.flush_pc[i].n, 1, __ATOMIC_RELAXED); break; }
-                uint64_t zero = 0;
-                if (!*slot_pc && __atomic_compare_exchange_n(slot_pc, &zero, pc, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
-                    __atomic_add_fetch(&cpu->m->stats.flush_pc[i].n, 1, __ATOMIC_RELAXED);
-                    break;
-                }
-            }
-        }
         hv_tlb_flush(cpu);
     }
 }
 
 /* Translations are never out of date: CPU writes to code pages and device DMA drop them as
-   they happen. So IC IVAU has nothing to do, though xnu issues it for pages nobody wrote, and
+   they happen. So IC IVAU has nothing to do, though a guest may issue it for pages nobody wrote, and
    dropping them there meant translating them all again and every CPU's branch cache starting
    over. HV_IC_IVAU: as before. */
 int hv_ic_ivau_drops(void) {
@@ -496,7 +435,7 @@ int hv_sysreg_sys(HvCpu *cpu, uint32_t insn, uint64_t pc) {
             /* A small range (RVAE1IS and kin): page by page, the same way. */
             uint64_t npages = 0;
             int by_range = crn == 8 && op1 == 0 && (crm == 2 || crm == 5) && (op2 & 1);
-            if (by_range && ((xt >> 46) & 3) == 2) { /* 16 KB granule, as xnu uses */
+            if (by_range && ((xt >> 46) & 3) == 2) { /* 16 KB granule */
                 npages = (((xt >> 39) & 31) + 1) << (5 * ((xt >> 44) & 3) + 1);
                 va = (uint64_t)((int64_t)((xt & 0x1fffffffffull) << (64 - 37)) >> (64 - 37 - 14));
                 /* HV_RANGE_DROP=N: ranges up to N pages are done from here too, in one pass (hv_tlbi_drop_remote_range) */

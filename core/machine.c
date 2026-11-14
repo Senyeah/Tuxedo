@@ -39,16 +39,12 @@ static void zfree(void *p, size_t n, size_t sz) {
 }
 
 int hv_knob[HV_K_COUNT];
-static const char *const hv_knob_names[HV_K_COUNT] = {"HV_NO_RAS", "HV_SUPERBLOCKS", "HV_GROUPS", "HV_WFI_SPIN", "HV_FLUSH", "HV_K1", "HV_K2", "HV_K3", "HV_TLBT", "HV_JIT_CAP", "HV_RECHECK", "HV_SYNC_WAIT", "HV_SWITCH_FLUSH", "HV_RANGE_DROP", "HV_MOVIMM", "HV_PREDSTAT", "HV_WALK_LOG", "HV_HOIST_CHECK", "HV_IJC_PAGES", "HV_DNS_PROXY"};
+static const char *const hv_knob_names[HV_K_COUNT] = {"HV_NO_RAS", "HV_SUPERBLOCKS", "HV_GROUPS", "HV_WFI_SPIN", "HV_FLUSH", "HV_K1", "HV_K2", "HV_K3", "HV_TLBT", "HV_JIT_CAP", "HV_RECHECK", "HV_SYNC_WAIT", "HV_RANGE_DROP", "HV_MOVIMM", "HV_PREDSTAT", "HV_WALK_LOG", "HV_HOIST_CHECK", "HV_IJC_PAGES", "HV_DNS_PROXY"};
 
 static void knobs_init(void) {
     for (int i = 0; i < HV_K_COUNT; i++)
         hv_knob[i] = getenv(hv_knob_names[i]) ? atoi(getenv(hv_knob_names[i])) : 0;
     if (getenv("HV_NO_RAS") && !*getenv("HV_NO_RAS")) hv_knob[HV_K_NO_RAS] = 1;
-    /* HV_SWITCH_FLUSH (skipping the local TLBI VMALLE1 xnu issues right after a process switch) is off unless asked
-       since 2026-11-09: a checked skip on the phone found a kept user entry out of date (a stack page, no mapping),
-       the stale state that flush exists to retire (xnu reusing a hardware ASID, which can leave every process's kept
-       entries stale, not just the incoming one's). It was worth ~3% on a process-spawn loop; not worth guest memory. */
     if (!getenv("HV_IJC_PAGES")) hv_knob[HV_K_IJCPAGES] = 1;
     if (!getenv("HV_DNS_PROXY")) hv_knob[HV_K_DNSPROXY] = 1;
 }
@@ -140,7 +136,6 @@ static int init_rest(HvMachine *m) {
     m->blocks = zalloc(m->max_blocks, sizeof(HvBlock));
     if (!m->blocks) return -1;
     m->stop_pc = ~0ull;
-    m->stop_pc2 = ~0ull;
     m->chain = 1;
     m->slots = zalloc(m->max_slots, sizeof *m->slots);
     m->slot_site = zalloc(m->max_slots, sizeof *m->slot_site);
@@ -487,10 +482,6 @@ HvRam *hv_ram_lookup(HvMachine *m, uint64_t pa) {
     return NULL;
 }
 
-uint32_t *hv_smc_counts;
-uint64_t *hv_smc_last;
-uint64_t hv_smc_pages, hv_smc_cpu, hv_smc_dma;
-
 void hv_invalidate_code(HvMachine *m, uint64_t pa) {
     HvRam *r = hv_ram_lookup(m, pa);
     if (!r) return;
@@ -502,13 +493,6 @@ void hv_invalidate_code(HvMachine *m, uint64_t pa) {
     r->code_pages[pg] = 0;
     __atomic_add_fetch(&r->page_gen[pg], 1, __ATOMIC_SEQ_CST);
     m->stats.flush_smc++;
-    if (hv_smc_counts && pg < hv_smc_pages) {
-        hv_smc_counts[pg]++;
-        uint64_t caller = hv_self ? hv_self->pc : 0;
-        hv_smc_last[pg] = caller;
-        if (hv_self) hv_smc_cpu++;
-        else hv_smc_dma++;
-    }
     /* Exits from other pages chained into the stale blocks go back to their stub
        (whose next chain finds the new translation). Under the translation lock,
        as chaining them is: one that saw the old generation is done by now. */

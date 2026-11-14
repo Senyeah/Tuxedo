@@ -170,7 +170,7 @@ static void ijc_clear(HvCpu *cpu, int kernel) {
         memset(cpu->pc_state->ijc + (size_t)t * (HV_IJC_TABLE_BYTES / 8), 0, HV_IJC_TABLE_BYTES);
 }
 
-/* The ASID is in TTBR0 (xnu) unless TCR.A1 puts it in TTBR1 (Linux). */
+/* The ASID is in TTBR0 unless TCR.A1 puts it in TTBR1 (Linux). */
 static int current_asid(HvCpu *cpu) {
     return (int)(((cpu->tcr_el1 >> 22) & 1 ? cpu->ttbr1_el1 : cpu->ttbr0_el1) >> 48);
 }
@@ -348,8 +348,7 @@ void hv_tlb_flush_user_range(HvCpu *cpu, uint64_t va, uint64_t len) {
 }
 
 /* A big range of kernel VAs. A full flush here also dropped every process's entries and both halves of the branch
-   caches, and macOS 27 sends ranges like this hundreds of times a second (a phone running it did 120-260 full flushes a
-   second, Sequoia none). Up to 64 MB page by page, as small ranges are; past that, a scan for kernel entries in the range
+   caches, and a guest can send ranges like this hundreds of times a second. Up to 64 MB page by page, as small ranges are; past that, a scan for kernel entries in the range
    and the kernel half of the branch caches. */
 void hv_tlb_flush_kernel_range(HvCpu *cpu, uint64_t va, uint64_t len) {
     if (cpu->m && cpu->m->stats_interval) cpu->m->stats.kernel_ranges++;
@@ -440,7 +439,7 @@ static int ijc_drop_va(HvCpu *cpu, uint64_t va, int asid, int remote) {
     HvMachine *m = cpu->m;
     HvPerCpu *p = cpu->pc_state;
     {   /* A return may lead into the page. For the kernel only if it is code the CPU has run;
-           xnu remaps data all the time and its code hardly ever. For a process only if it is the
+           a kernel remaps data all the time and its code hardly ever. For a process only if it is the
            one running: a switch forgets the returns of the others anyway. */
         uint64_t page = va & ~((1ull << HV_TLB_PAGE_BITS) - 1);
         uint32_t sl = (uint32_t)(va >> HV_TLB_PAGE_BITS) & (HV_TLB_SIZE - 1);
@@ -493,7 +492,7 @@ void hv_tlb_flush_va_asid(HvCpu *cpu, uint64_t va, int asid) {
 }
 
 /* One page (a TLBI by VA): as hv_tlb_flush_va_asid, but in the stashes only that page's entries go,
-   not every entry of the address space (macOS 27 sends tens of thousands a second, and each made a
+   not every entry of the address space (a guest can send tens of thousands a second, and each made a
    process refill its whole TLB the next time it ran). */
 void hv_tlb_flush_va_page(HvCpu *cpu, uint64_t va, int asid) {
     uint32_t idx = (va >> HV_TLB_PAGE_BITS) & (HV_TLB_SIZE - 1);
@@ -592,40 +591,7 @@ static void write_guard(HvCpu *cpu, HvRam *ram, uint64_t pg, uint32_t code, HvTl
     if (__atomic_load_n(&ram->code_pages[pg], __ATOMIC_RELAXED)) e->write_tag = HV_TLB_INVALID;
 }
 
-/* HV_KVA_HIST (measuring, for a kernel fastmem window): which kernel VAs get TLB fills, per GB from the bottom of xnu's
-   kernel VA space, and how many distinct 16 KB pages. hv_kva_hist_dump writes it out. */
-#define KVA_GBS 2048 /* buckets: 2048 of 1 GB from 0xfffffe0000000000 by default; HV_KVA_BASE (hex) and HV_KVA_SHIFT move and widen them */
-static uint64_t KVA_BASE = 0xfffffe0000000000ull;
-static int kva_shift = 30;
-static uint64_t kva_fills[KVA_GBS], kva_pages_n[KVA_GBS], kva_below, kva_above;
-static uint8_t *kva_seen; /* one bit per page */
-static int kva_on = -1;
-static void kva_note(uint64_t va) {
-    if (kva_on < 0) {
-        kva_on = getenv("HV_KVA_HIST") != NULL;
-        if (getenv("HV_KVA_BASE")) KVA_BASE = strtoull(getenv("HV_KVA_BASE"), NULL, 16);
-        if (getenv("HV_KVA_SHIFT")) kva_shift = atoi(getenv("HV_KVA_SHIFT"));
-    }
-    if (!kva_on) return;
-    if (!kva_seen) kva_seen = calloc((size_t)KVA_GBS << (kva_shift - HV_TLB_PAGE_BITS - 3), 1);
-    if (va < KVA_BASE) { __atomic_add_fetch(&kva_below, 1, __ATOMIC_RELAXED); return; }
-    uint64_t off = va - KVA_BASE, gb = off >> kva_shift;
-    if (gb >= KVA_GBS) { __atomic_add_fetch(&kva_above, 1, __ATOMIC_RELAXED); return; }
-    __atomic_add_fetch(&kva_fills[gb], 1, __ATOMIC_RELAXED);
-    uint64_t pg = off >> HV_TLB_PAGE_BITS;
-    uint8_t bit = (uint8_t)(1u << (pg & 7));
-    if (!(__atomic_fetch_or(&kva_seen[pg >> 3], bit, __ATOMIC_RELAXED) & bit)) __atomic_add_fetch(&kva_pages_n[gb], 1, __ATOMIC_RELAXED);
-}
-
-void hv_kva_hist_dump(FILE *f) {
-    if (kva_on <= 0) return;
-    fprintf(f, "kva below %llu above %llu (outside %d buckets of 2^%d bytes from %llx)\n", (unsigned long long)kva_below, (unsigned long long)kva_above, KVA_GBS, kva_shift, (unsigned long long)KVA_BASE);
-    for (int g = 0; g < KVA_GBS; g++)
-        if (kva_fills[g]) fprintf(f, "kva gb %d fills %llu pages %llu\n", g, (unsigned long long)kva_fills[g], (unsigned long long)kva_pages_n[g]);
-}
-
 static void tlb_fill(HvCpu *cpu, uint64_t va, int el, const HvWalk *w) {
-    if ((va >> 55) & 1) kva_note(va & ~(uint64_t)PAGE_MASK);
     if (w->block_size < (1ull << HV_TLB_PAGE_BITS)) return; /* smaller guest pages: slow path only */
     HvRam *ram = ram_of(cpu->m, w->pa);
     if (!ram) return;
@@ -682,7 +648,7 @@ static HvRam *ram_of_host(HvMachine *m, const uint8_t *host);
 
 uint32_t hv_mmu_access(HvCpu *cpu, uint64_t va, HvAccess acc, int el, uint64_t *pa) {
     /* The TLB entry first, as translated code trusts it: slow paths that are slow for another reason (a page's
-       last bytes, the access kind) need no walk (macOS 27: 100-250K a second). */
+       last bytes, the access kind) need no walk (100-250K a second under load). */
     if (acc != HV_ACC_EXEC && cpu->m) {
         const HvTlbEntry *e = hv_tlb_ent(cpu, (uint32_t)(va >> HV_TLB_PAGE_BITS) & (HV_TLB_SIZE - 1), hv_tlb_table(cpu, el));
         uint64_t tag = acc == HV_ACC_WRITE ? e->write_tag : e->read_tag;
@@ -999,7 +965,7 @@ static void *ijc_resolve(HvCpu *cpu, uint64_t va, uint32_t flags) {
     HvPerCpu *pcs = cpu->pc_state;
     int kernel = flags & HV_BLOCK_EL1;
 #define FAIL(k) do { if (m->stats_interval) m->stats.light_fail[k]++; return 0; } while (0)
-    if (!m->chain || va == m->stop_pc || va == m->stop_pc2 || (int)((va >> 55) & 1) != kernel || (va & 3)) FAIL(0);
+    if (!m->chain || va == m->stop_pc || (int)((va >> 55) & 1) != kernel || (va & 3)) FAIL(0);
     if (pcs->ijc_keyed_count >= (1u << 17) || pcs->ucode_count + 1 >= (1u << HV_UCODE_BITS) / 2) FAIL(1);
     int table = !kernel ? 0 : (flags & HV_BLOCK_PAN) ? 2 : 1;
     HvTlbEntry *e = hv_tlb_ent(cpu, (va >> HV_TLB_PAGE_BITS) & (HV_TLB_SIZE - 1), table);
@@ -1124,72 +1090,6 @@ static HvRam *ram_of_host(HvMachine *m, const uint8_t *host) {
     for (int i = 0; i < m->nram; i++)
         if ((uint64_t)(host - m->ram[i].host) < m->ram[i].size) return &m->ram[i];
     return NULL;
-}
-
-/* HV_SWITCH_FLUSH=2 (checking): every entry this CPU holds, in its TLB and in the stashes it would bring back, walked again
-   in its own address space. Returns how many no longer match the page tables (a walk fault, or another page), so that
-   a whole-TLB flush that is left out would have dropped something the guest expects gone. A cleared access flag alone
-   is counted apart (stats) and not as out of date: xnu ages pages with its own TLBIs. */
-int hv_tlb_check_all(HvCpu *cpu) {
-    HvMachine *m = cpu->m;
-    HvPerCpu *p = cpu->pc_state;
-    uint64_t ttbr0 = cpu->ttbr0_el1;
-    int bad = 0;
-    static int told;
-    for (int pass = -1; pass < (p ? HV_STASHES : 0); pass++) {
-        /* The stash passes walk with cpu->ttbr0_el1 set to the stash's: inside a walk of any page, so another CPU's
-           TLBI meanwhile (which reads it for the running ASID, ijc_drop_va) counts as raced and is left to this CPU. */
-        if (pass == 0) walk_begin(cpu, HV_WALK_ANY);
-        uint32_t n = 3 * HV_TLB_SIZE;
-        const HvTlbStash *s = NULL;
-        if (pass >= 0) {
-            s = &p->stash[pass];
-            uint64_t t = __atomic_load_n(&s->ttbr0, __ATOMIC_ACQUIRE);
-            if (!t || __atomic_load_n(&s->gen, __ATOMIC_ACQUIRE) != s->saved_gen) continue; /* would not be brought back */
-            n = s->n > HV_STASH_CAP ? HV_STASH_CAP : s->n;
-            cpu->ttbr0_el1 = t;
-        }
-        for (uint32_t k = 0; k < n; k++) {
-            const HvTlbEntry *e;
-            int table;
-            if (!s) table = (int)(k / HV_TLB_SIZE), e = hv_tlb_ent(cpu, k % HV_TLB_SIZE, table);
-            else table = hv_tlb_tmajor ? s->slot[k] >> HV_TLB_BITS : s->slot[k] & 3, e = &s->ent[k];
-            uint64_t rt = e->read_tag, wt = e->write_tag, xt = e->exec_tag;
-            if (rt == HV_TLB_INVALID && wt == HV_TLB_INVALID && xt == HV_TLB_INVALID) continue;
-            uint64_t va = rt != HV_TLB_INVALID ? rt + HV_TLB_ADJ : wt != HV_TLB_INVALID ? wt + HV_TLB_ADJ : hv_exec_key(xt, e->addend);
-            if (s && (va >> 55) & 1) continue; /* stashes hold the user half only */
-            HvWalk w;
-            hv_mmu_walk(cpu, va, rt != HV_TLB_INVALID || wt != HV_TLB_INVALID ? HV_ACC_READ : HV_ACC_EXEC, table ? 1 : 0, &w);
-            if (m->stats_interval) m->stats.flush_check_entries++;
-            const char *why = NULL;
-            if (w.fsc >= HV_FSC_ACCESS(0) && w.fsc <= HV_FSC_ACCESS(3)) {
-                if (m->stats_interval) m->stats.flush_check_af++;
-                continue;
-            }
-            if (w.fsc >= HV_FSC_PERMISSION(0) && w.fsc <= HV_FSC_PERMISSION(3)) continue; /* PAN or EL: not about where the page is */
-            if (w.fsc) why = "no mapping";
-            else {
-                uint64_t page_pa = w.pa & ~(uint64_t)PAGE_MASK;
-                const uint8_t *host = (const uint8_t *)(uintptr_t)(va + (uint64_t)e->addend);
-                HvRam *ram = ram_of_host(m, host);
-                if (!ram || ram->pa + (uint64_t)(host - ram->host) != page_pa) why = "another page";
-            }
-            if (why) {
-                bad++;
-                if (told++ < 16)
-                    fprintf(stderr, "hengevm: switch-flush check: %s entry (table %d, va %llx, ttbr0 %llx) is out of date: %s (fsc %x)\n",
-                            s ? "stashed" : "live", table, (unsigned long long)va, (unsigned long long)cpu->ttbr0_el1, why, w.fsc);
-            }
-        }
-        cpu->ttbr0_el1 = ttbr0;
-    }
-    cpu->ttbr0_el1 = ttbr0;
-    if (p) walk_end(cpu);
-    if (m->stats_interval) {
-        m->stats.flush_checked++;
-        if (bad) m->stats.flush_check_bad++;
-    }
-    return bad;
 }
 
 /* The address space a stash is kept under: TTBR0, with TTBR1's ASID when TCR.A1 puts it there. */

@@ -244,7 +244,7 @@ int hv_exception_insn(HvCpu *cpu, uint32_t insn, uint64_t pc) {
             return 1;
         }
         cpu->x[0] = r;
-        if (!cpu->halted && !cpu->off) return 0; /* like a call: the block carries on (xnu makes one per context switch) */
+        if (!cpu->halted && !cpu->off) return 0; /* like a call: the block carries on (a guest kernel may make one per context switch) */
         cpu->pc = pc + 4;
         cpu->exit_reason = cpu->halted ? HV_EXIT_HALT : HV_EXIT_BRANCH; /* CPU_OFF: the dispatcher parks it */
         return 1;
