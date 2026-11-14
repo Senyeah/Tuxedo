@@ -314,6 +314,12 @@ test-linux-codec-dma: $(B)/hengevm
 	uv run tools/linux/codec-dma-check.py --hengevm $(B)/hengevm --out $(LINUX_OUT) --kernel-update $(CODEC_ARGS)
 .PHONY: linux-codec-dkms test-linux-codec-dma
 
+# The henge-va package: the VA-API driver in front of Mesa's virgl driver that offers NV12 decode surfaces only, so
+# Firefox keeps VA-API decode. The build tests it against a stand-in for Mesa's driver, then installs and removes it.
+linux-va-pkg:
+	HENGE_LINUX_OUT=$(LINUX_OUT) tools/linux/build-va-pkg.sh
+.PHONY: linux-va-pkg
+
 # P6: the shared folder (~/Henge, davfs2) against --share. SHARE_ARGS="--image FILE" for an image that has davfs2.
 test-linux-share: $(B)/hengevm
 	uv run tools/linux/share-check.py $(SHARE_ARGS)

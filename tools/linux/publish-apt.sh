@@ -4,7 +4,8 @@
 #                henge-archive.asc
 #   $OUT/source  ffmpeg-<release>-henge<N>/: the FFmpeg tarball, the patch, build-ffmpeg.sh, ffmpeg.manifest, the Henge
 #                files of the build (henge-ffmpeg-src.tar.xz), README.txt, SHA256SUMS
-# It adds henge-ffmpeg (build-ffmpeg-pkg.sh), henge-codec-dkms (build-codec-dkms-pkg.sh) and henge-guest (built now)
+# It adds henge-ffmpeg (build-ffmpeg-pkg.sh), henge-codec-dkms (build-codec-dkms-pkg.sh), henge-va (build-va-pkg.sh)
+# and henge-guest (built now)
 # to the pool. A pool file is never replaced
 # with other content: raise the version instead. Each henge-ffmpeg in the pool must have its source directory.
 # The private key is only in $HENGE_APT_GNUPGHOME (default ~/.henge-apt-key), never in the repository.
@@ -132,6 +133,7 @@ PUBKEY=$HERE/henge-archive.asc
 KEYRING=$HERE/henge-guest/usr/share/keyrings/henge-archive.gpg
 FFDEB=$OUT/ffmpeg/henge-ffmpeg_${VER}_arm64.deb
 CODECDEB=$OUT/codec/henge-codec-dkms_$(sed -n 's/^Version: //p' "$HERE/henge-codec-dkms/DEBIAN/control")_all.deb
+VADEB=$OUT/va/henge-va_$(sed -n 's/^Version: //p' "$HERE/henge-va/DEBIAN/control")_arm64.deb
 hgpg() { gpg --homedir "$GNUPGHOME" --batch "$@"; }
 fpr_of() { hgpg --with-colons --show-keys "$1" 2>/dev/null | awk -F: '$1 == "fpr" {print $10; exit}'; }
 
@@ -155,10 +157,11 @@ if [ $RSYNC = 0 ] && [ $CHECK = 1 ]; then
 else
     [ -f "$FFDEB" ] || die "no $FFDEB; run make linux-ffmpeg-pkg"
     [ -f "$CODECDEB" ] || die "no $CODECDEB; run make linux-codec-dkms"
+    [ -f "$VADEB" ] || die "no $VADEB; run make linux-va-pkg"
     STAGE=$OUT/apt-stage
     rm -rf "$STAGE" && mkdir -p "$STAGE"
     HENGE_LINUX_OUT=$STAGE "$HERE/build-guest-pkg.sh" >/dev/null
-    cp "$FFDEB" "$CODECDEB" "$STAGE/"
+    cp "$FFDEB" "$CODECDEB" "$VADEB" "$STAGE/"
     docker run --rm -i --platform linux/arm64 -v "$OUT":/out -v "$STAGE":/stage -v "$ROOT":/src:ro \
         debian:trixie sh /src/tools/linux/publish-apt.sh --inner
     rm -rf "$STAGE"
