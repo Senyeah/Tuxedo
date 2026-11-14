@@ -5,7 +5,7 @@ import StikJIT
 /// The debugger half of Built-in StikJIT (docs/06-built-in-jit.md).
 ///
 /// A process cannot synchronously debug itself, so Tuxedo starts this extension,
-/// sends it its PID, the pairing file and henge-jit.js, and StikJIT attaches over
+/// sends it its PID, the pairing file and tux-jit.js, and StikJIT attaches over
 /// LocalDevVPN and services the script's trap requests until Tuxedo detaches.
 private enum TuxJITWork {
     /// One request at a time: enabling JIT holds this queue while the debugger is attached.

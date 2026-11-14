@@ -1,6 +1,6 @@
-# .github/workflows/build-henge.yml
+# .github/workflows/build-tux.yml
 #
-# Builds a Henge.ipa from your fork's main branch on a GitHub-hosted macOS
+# Builds a Tuxedo.ipa from your fork's main branch on a GitHub-hosted macOS
 # runner, no Mac needed. Free on a PUBLIC repo: public repos get unlimited
 # minutes on hosted runners, including macOS. On a private repo, macOS minutes
 # bill at 10x, so the free tier's ~2000 min/month is only ~200 macOS minutes.
@@ -8,12 +8,12 @@
 # The IPA comes out unsigned with ad-hoc signing (package_ipa.sh's normal
 # output). SideStore/AltStore re-signs it with your certificate on install
 # and keeps the entitlements it can; increased-memory-limit only survives if
-# your certificate carries it, and Henge falls back to file-backed guest RAM
+# your certificate carries it, and Tuxedo falls back to file-backed guest RAM
 # without it.
 
-name: Build Henge IPA
+name: Build Tuxedo IPA
 
-# Manual only (Actions tab > Build Henge IPA > Run workflow): pushes to main don't build an IPA.
+# Manual only (Actions tab > Build Tuxedo IPA > Run workflow): pushes to main don't build an IPA.
 on:
   workflow_dispatch: {}
 
@@ -33,10 +33,10 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      - name: Check out Henge (this fork)
+      - name: Check out Tuxedo (this fork)
         uses: actions/checkout@v4
         with:
-          path: Henge
+          path: Tuxedo
 
       # fetch_deps.sh copies prebuilt pieces out of a BUILT Husk checkout:
       # StikJIT.xcframework (vendored in Husk's repo, comes with checkout),
@@ -72,12 +72,12 @@ jobs:
         working-directory: Husk
         run: bash scripts/fetch_sources.sh
 
-      # Henge only needs these three sysroot pieces: libffi (a glib dep),
+      # Tuxedo only needs these three sysroot pieces: libffi (a glib dep),
       # glib (whose meson subprojects also produce libpcre2-8 and libintl),
       # and libslirp (the guest network). Skip Husk's pixman/libucontext/qemu
       # stages entirely: that's the Android emulator, minutes instead of an
       # hour-plus.
-      - name: Build the iOS libraries Henge needs
+      - name: Build the iOS libraries Tuxedo needs
         working-directory: Husk
         run: bash scripts/build_ios.sh libffi glib libslirp
 
@@ -85,32 +85,32 @@ jobs:
         working-directory: Husk
         run: bash scripts/build_rppairing_ios.sh
 
-      - name: Copy prebuilt deps into Henge
-        working-directory: Henge
+      - name: Copy prebuilt deps into Tuxedo
+        working-directory: Tuxedo
         run: zsh ios/scripts/fetch_deps.sh
 
       - name: Build the engine
-        working-directory: Henge
+        working-directory: Tuxedo
         run: make ios-lib
 
-      - name: Package Henge.ipa
-        working-directory: Henge
+      - name: Package Tuxedo.ipa
+        working-directory: Tuxedo
         run: zsh ios/scripts/package_ipa.sh
 
-      - name: Upload Henge.ipa
+      - name: Upload Tuxedo.ipa
         uses: actions/upload-artifact@v4
         with:
-          name: Henge-ipa-${{ github.sha }}
-          path: /Users/runner/Desktop/Henge.ipa
+          name: Tuxedo-ipa-${{ github.sha }}
+          path: /Users/runner/Desktop/Tuxedo.ipa
           if-no-files-found: error
 
-      - name: Package Henge.tipa
-        working-directory: Henge
+      - name: Package Tuxedo.tipa
+        working-directory: Tuxedo
         run: zsh ios/scripts/package_ipa.sh --trollstore
 
-      - name: Upload Henge.tipa
+      - name: Upload Tuxedo.tipa
         uses: actions/upload-artifact@v4
         with:
-          name: Henge-tipa-${{ github.sha }}
-          path: /Users/runner/Desktop/Henge.tipa
+          name: Tuxedo-tipa-${{ github.sha }}
+          path: /Users/runner/Desktop/Tuxedo.tipa
           if-no-files-found: error

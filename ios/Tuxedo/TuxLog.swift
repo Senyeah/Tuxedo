@@ -206,7 +206,7 @@ enum TuxLog {
     /// Turn "the app vanished with no crash log" into a labelled last line.
     ///
     /// Deliberately does NOT touch SIGTRAP or SIGBUS: those belong to the JIT trap
-    /// guard in henge-ios-jit.c, which needs to step over an unserviced brk rather
+    /// guard in tux-ios-jit.c, which needs to step over an unserviced brk rather
     /// than treat it as fatal. Stealing them here would break JIT detection.
     /// SIGPIPE is already set to SIG_IGN in start() and must stay that way.
     private static func installCrashHandlers() {
@@ -292,7 +292,7 @@ enum TuxLog {
         if ring.count > ringLimit { ring.removeFirst(ring.count - ringLimit) }
         ringLock.unlock()
 
-        // The C side (henge-ios-jit.c, henge-display.c) writes to os_log itself as
+        // The C side (tux-ios-jit.c, henge-display.c) writes to os_log itself as
         // well as stderr, because those are the lines most worth surviving a hard
         // crash. Mirroring them again here would double every one of them in
         // Console.app.
@@ -360,8 +360,8 @@ enum TuxLog {
         let info = Bundle.main.infoDictionary ?? [:]
         let version = info["CFBundleShortVersionString"] as? String ?? "?"
         let build   = info["CFBundleVersion"] as? String ?? "?"
-        let commit  = info["HengeBuildCommit"] as? String ?? "unstamped"
-        let built   = info["HengeBuildDate"] as? String ?? "?"
+        let commit  = info["TuxBuildCommit"] as? String ?? "unstamped"
+        let built   = info["TuxBuildDate"] as? String ?? "?"
         log("boot", "build       : \(version) (\(build)) \(commit) built \(built)")
         log("boot", "pid         : \(getpid())")
         log("boot", "log file    : \(logFileURL.path)")

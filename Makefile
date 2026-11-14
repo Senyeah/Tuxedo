@@ -126,8 +126,8 @@ $(B)/test_net_forward: tests/test_net_forward.c $(B)/net_forward.o
 $(B)/test_dns_lifecycle: tests/test_dns_lifecycle.c $(B)/dns_proxy.o
 	$(CC) $(CFLAGS) $^ -o $@
 
-$(B)/test_vm_lifecycle: tests/test_vm_lifecycle.c ios/Henge/Native/henge-vm.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(NET_OBJ) $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(VCODEC_OBJ)
-	$(CC) $(CFLAGS) -Iios/Henge/Native $^ $(SLIRP_LIBS) $(METAL_LIBS) $(VT_FRAMEWORKS) -framework AudioToolbox -o $@
+$(B)/test_vm_lifecycle: tests/test_vm_lifecycle.c ios/Tuxedo/Native/tux-vm.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(NET_OBJ) $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(VCODEC_OBJ)
+	$(CC) $(CFLAGS) -Iios/Tuxedo/Native $^ $(SLIRP_LIBS) $(METAL_LIBS) $(VT_FRAMEWORKS) -framework AudioToolbox -o $@
 
 $(B)/test_console: tests/test_console.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(NET_OBJ) $(B)/dns_proxy.o
 	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -o $@
@@ -455,19 +455,19 @@ ios-sim-lib:
 .PHONY: ios-sim-lib
 
 # Session-owned display routing, independent of JIT, Metal and a connected monitor.
-$(B)/test_display_targets: ios/Henge/DisplayTargetSelection.swift tests/test_display_targets.swift | $(B)
+$(B)/test_display_targets: ios/Tuxedo/DisplayTargetSelection.swift tests/test_display_targets.swift | $(B)
 	xcrun --sdk macosx swiftc $^ -o $@
 
 # The router's hand-off to the engine, with the engine call recorded instead of made.
-$(B)/test_display_router: ios/Henge/DisplayRouter.swift ios/Henge/DisplayTargetSelection.swift tests/test_display_router.swift tests/display_engine_stub.h | $(B)
+$(B)/test_display_router: ios/Tuxedo/DisplayRouter.swift ios/Tuxedo/DisplayTargetSelection.swift tests/test_display_router.swift tests/display_engine_stub.h | $(B)
 	xcrun --sdk macosx swiftc -import-objc-header tests/display_engine_stub.h $(filter %.swift,$^) -o $@
 
 # Which external screen shows the Mac before iOS 27, for any order of session and plug events.
-$(B)/test_external_screen_plan: ios/Henge/ExternalScreenPlan.swift tests/test_external_screen_plan.swift | $(B)
+$(B)/test_external_screen_plan: ios/Tuxedo/ExternalScreenPlan.swift tests/test_external_screen_plan.swift | $(B)
 	xcrun --sdk macosx swiftc $^ -o $@
 
 # The glue: fake screens and a real router, to check what each screen is told and what the engine draws.
-$(B)/test_legacy_external_display: ios/Henge/LegacyExternalDisplay.swift ios/Henge/ExternalScreenPlan.swift ios/Henge/MachinePresentation.swift ios/Henge/DisplayRouter.swift ios/Henge/DisplayTargetSelection.swift tests/test_legacy_external_display.swift tests/display_engine_stub.h | $(B)
+$(B)/test_legacy_external_display: ios/Tuxedo/LegacyExternalDisplay.swift ios/Tuxedo/ExternalScreenPlan.swift ios/Tuxedo/MachinePresentation.swift ios/Tuxedo/DisplayRouter.swift ios/Tuxedo/DisplayTargetSelection.swift tests/test_legacy_external_display.swift tests/display_engine_stub.h | $(B)
 	xcrun --sdk macosx swiftc -import-objc-header tests/display_engine_stub.h $(filter %.swift,$^) -o $@
 
 # Info.plist must declare the external display scene role with ExternalDisplaySceneDelegate, or iOS 17-26 never offer the display.
@@ -475,7 +475,7 @@ $(B)/test_scene_manifest: tests/test_scene_manifest.swift | $(B)
 	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
 
 # Guest mode sizes and when to send them: pure policy, no UIKit.
-$(B)/test_edge_push: ios/Henge/EdgePush.swift tests/test_edge_push.swift | $(B)
+$(B)/test_edge_push: ios/Tuxedo/EdgePush.swift tests/test_edge_push.swift | $(B)
 	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
 
 test-edge-push: $(B)/test_edge_push
@@ -509,14 +509,14 @@ test-pad-motion: $(B)/test_pad_motion
 	$<
 .PHONY: test-pad-field test-pad-layout test-pointer-buttons test-pad-motion
 
-$(B)/test_physical_mouse_buttons: ios/Henge/PhysicalMouseButtons.swift tests/test_physical_mouse_buttons.swift | $(B)
+$(B)/test_physical_mouse_buttons: ios/Tuxedo/PhysicalMouseButtons.swift tests/test_physical_mouse_buttons.swift | $(B)
 	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
 
 test-physical-mouse-buttons: $(B)/test_physical_mouse_buttons
 	$<
 .PHONY: test-physical-mouse-buttons
 
-$(B)/test_display_mode_policy: ios/Henge/DisplayModePolicy.swift tests/test_display_mode_policy.swift | $(B)
+$(B)/test_display_mode_policy: ios/Tuxedo/DisplayModePolicy.swift tests/test_display_mode_policy.swift | $(B)
 	xcrun --sdk macosx swiftc $^ -o $@
 
 test-display-mode-policy: $(B)/test_display_mode_policy
@@ -524,7 +524,7 @@ test-display-mode-policy: $(B)/test_display_mode_policy
 .PHONY: test-display-mode-policy
 
 # TS5: a touch on the Linux picture as guest units, and the slot table. Pure, no UIKit.
-$(B)/test_touch_mapping: ios/Henge/TouchMapping.swift tests/test_touch_mapping.swift | $(B)
+$(B)/test_touch_mapping: ios/Tuxedo/TouchMapping.swift tests/test_touch_mapping.swift | $(B)
 	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
 
 test-touch-mapping: $(B)/test_touch_mapping
@@ -536,7 +536,7 @@ test-display-routing: $(B)/test_display_targets $(B)/test_display_router $(B)/te
 	$(B)/test_display_router
 	$(B)/test_external_screen_plan
 	$(B)/test_legacy_external_display
-	$(B)/test_scene_manifest ios/Henge/Info.plist ios/Henge/ExternalDisplaySceneDelegate.swift
+	$(B)/test_scene_manifest ios/Tuxedo/Info.plist ios/Tuxedo/ExternalDisplaySceneDelegate.swift
 .PHONY: test-display-routing
 
 # Host renderer smoke test: virglrenderer on ANGLE (Metal) with an IOSurface. Not part of make test.
@@ -630,7 +630,7 @@ ios-gfx-ldflags:
 .PHONY: ios-gfx-ldflags
 
 # The machine list: lists from before Linux guests still decode, and a Linux folder is recovered like a Mac's.
-$(B)/test_machine_model: ios/Henge/MachineModel.swift ios/Henge/ForwardPolicy.swift tests/test_machine_model.swift | $(B)
+$(B)/test_machine_model: ios/Tuxedo/MachineModel.swift ios/Tuxedo/ForwardPolicy.swift tests/test_machine_model.swift | $(B)
 	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
 
 test-machine-model: $(B)/test_machine_model
@@ -638,11 +638,11 @@ test-machine-model: $(B)/test_machine_model
 .PHONY: test-machine-model
 
 # I7: the Linux catalogue, hashes, space and build checks, and the download bookkeeping.
-$(B)/test_linux_catalogue: ios/Henge/LinuxCatalogue.swift ios/Henge/LinuxDownload.swift ios/Henge/RangedDownload.swift tests/test_linux_catalogue.swift | $(B)
+$(B)/test_linux_catalogue: ios/Tuxedo/LinuxCatalogue.swift ios/Tuxedo/LinuxDownload.swift ios/Tuxedo/RangedDownload.swift tests/test_linux_catalogue.swift | $(B)
 	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
 
 # When the on-screen keyboard follows a Linux desktop (henge-keyboard): pure policy, no UIKit.
-$(B)/test_keyboard_follow: ios/Henge/KeyboardFollow.swift tests/test_keyboard_follow.swift | $(B)
+$(B)/test_keyboard_follow: ios/Tuxedo/KeyboardFollow.swift tests/test_keyboard_follow.swift | $(B)
 	xcrun --sdk macosx swiftc $^ -o $@
 
 test-keyboard-follow: $(B)/test_keyboard_follow
@@ -650,7 +650,7 @@ test-keyboard-follow: $(B)/test_keyboard_follow
 .PHONY: test-keyboard-follow
 
 # When a session asks for Face ID and when a Linux wallet is open, and the wallet's Keychain names: pure policy.
-$(B)/test_session_gate: ios/Henge/SessionGate.swift ios/Henge/WalletScope.swift tests/test_session_gate.swift | $(B)
+$(B)/test_session_gate: ios/Tuxedo/SessionGate.swift ios/Tuxedo/WalletScope.swift tests/test_session_gate.swift | $(B)
 	xcrun --sdk macosx swiftc $^ -o $@
 
 test-session-gate: $(B)/test_session_gate
@@ -658,7 +658,7 @@ test-session-gate: $(B)/test_session_gate
 .PHONY: test-session-gate
 
 # FM8: a Linux machine's folders from Files: names, slots, bookmarks, states, modes, exports. Pure policy.
-$(B)/test_folder_policy: ios/Henge/MachineModel.swift ios/Henge/FolderPolicy.swift tests/test_folder_policy.swift | $(B)
+$(B)/test_folder_policy: ios/Tuxedo/MachineModel.swift ios/Tuxedo/FolderPolicy.swift tests/test_folder_policy.swift | $(B)
 	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
 
 test-folder-policy: $(B)/test_folder_policy
@@ -673,7 +673,7 @@ test-linux-catalogue: $(B)/test_linux_catalogue
 $(B)/hvsparse_swift.o: host/hvsparse.c host/hvsparse.h | $(B)
 	$(CC) -std=c11 -O1 -c host/hvsparse.c -o $@
 
-$(B)/test_linux_unpack: ios/Henge/LinuxUnpack.swift ios/Henge/LinuxCatalogue.swift ios/Henge/LinuxDownload.swift ios/Henge/RangedDownload.swift ios/Henge/MachineModel.swift tests/test_linux_unpack.swift $(B)/hvsparse_swift.o | $(B)
+$(B)/test_linux_unpack: ios/Tuxedo/LinuxUnpack.swift ios/Tuxedo/LinuxCatalogue.swift ios/Tuxedo/LinuxDownload.swift ios/Tuxedo/RangedDownload.swift ios/Tuxedo/MachineModel.swift tests/test_linux_unpack.swift $(B)/hvsparse_swift.o | $(B)
 	xcrun --sdk macosx swiftc -parse-as-library -import-objc-header host/hvsparse.h $^ -o $@
 
 test-linux-unpack: $(B)/test_linux_unpack
@@ -681,7 +681,7 @@ test-linux-unpack: $(B)/test_linux_unpack
 .PHONY: test-linux-unpack
 
 # E13/T4: the engine gate.
-# Does not run ios/scripts/sim_build.sh (HengeSim): run it when ios/ changes.
+# Does not run ios/scripts/sim_build.sh (TuxSim): run it when ios/ changes.
 # Needs no Husk checkout: IOS_DEPS falls back to Homebrew's libslirp when the default sysroot is missing.
 GATE_IOS_DEPS ?= $(if $(wildcard $(IOS_DEPS)/include/slirp/libslirp.h),$(IOS_DEPS),/opt/homebrew)
 gate-engine:
@@ -700,14 +700,14 @@ gate-engine:
 .PHONY: gate-engine
 
 # What the JIT setup tells the user and when it retries by itself, for each kind of network path and helper error.
-$(B)/test_device_status_policy: ios/Henge/DeviceStatusPolicy.swift tests/test_device_status_policy.swift | $(B)
+$(B)/test_device_status_policy: ios/Tuxedo/DeviceStatusPolicy.swift tests/test_device_status_policy.swift | $(B)
 	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
 
 test-device-status-policy: $(B)/test_device_status_policy
 	$(B)/test_device_status_policy
 .PHONY: test-device-status-policy
 
-$(B)/test_jit_advice: ios/Henge/JIT/JITNetworkAdvice.swift tests/test_jit_advice.swift | $(B)
+$(B)/test_jit_advice: ios/Tuxedo/JIT/JITNetworkAdvice.swift tests/test_jit_advice.swift | $(B)
 	xcrun --sdk macosx swiftc $^ -o $@
 
 test-jit-advice: $(B)/test_jit_advice

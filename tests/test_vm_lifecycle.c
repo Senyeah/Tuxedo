@@ -1,5 +1,5 @@
-#include "henge-vm.h"
-#include "henge-ios-jit.h"
+#include "tux-vm.h"
+#include "tux-ios-jit.h"
 #include "jit_region.h"
 #include "vcodec.h"
 #include "vm.h"
@@ -281,7 +281,7 @@ int main(void) {
         if (rc) fprintf(stderr, "virt with video encode: %s\n", error);
         check("virt boots with video encode", rc == 0);
         check("video encode adds the hvcodec device", hv_vm_virt() && hv_vm_virt()->codec);
-        char tmp[1024] = ""; /* where henge-vm.c puts it */
+        char tmp[1024] = ""; /* where tux-vm.c puts it */
         if (getenv("TMPDIR") && *getenv("TMPDIR")) snprintf(tmp, sizeof tmp, "%s", getenv("TMPDIR"));
         else confstr(_CS_DARWIN_USER_TEMP_DIR, tmp, sizeof tmp);
         struct sockaddr_un a = {.sun_family = AF_UNIX};

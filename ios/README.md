@@ -1,20 +1,20 @@
 # Tuxedo for iOS
 
 The Tuxedo app on HengeVM's engine. Build: `ios/scripts/package_ipa.sh` (writes
-`~/Desktop/Henge.ipa`; `--trollstore` writes `Henge.tipa`, for TrollStore and
+`~/Desktop/Tuxedo.ipa`; `--trollstore` writes `Tuxedo.tipa`, for TrollStore and
 TrollStore Lite, without the entitlements TrollStore bans). Needs Xcode 27 or later, xcodegen,
 and the prebuilt pieces
 `ios/scripts/fetch_deps.sh` copies from Husk (StikJIT, the pairing library,
 libslirp and glib for iOS). `TUX_ENTITLEMENTS` picks the app's entitlements file
-(default `Henge/Henge.entitlements`). A free personal team uses
-`Henge/Henge.personal.entitlements`: pass it to xcodebuild as a build setting
-(`xcodebuild ... TUX_ENTITLEMENTS=Henge/Henge.personal.entitlements`, since
+(default `Tuxedo/Tuxedo.entitlements`). A free personal team uses
+`Tuxedo/Tuxedo.personal.entitlements`: pass it to xcodebuild as a build setting
+(`xcodebuild ... TUX_ENTITLEMENTS=Tuxedo/Tuxedo.personal.entitlements`, since
 `project.yml` sets it and an environment variable does not override that), and to
 the packager as an environment variable (`TUX_ENTITLEMENTS=... ios/scripts/package_ipa.sh`).
 
 - **JIT**: on iOS 26+ (TXM) only an attached debugger can grant executable
   memory. Tuxedo uses the same machinery as Husk: StikDebug, TrollStore, a
-  jailbreak, or the built-in StikJIT helper (`HengeJITHelper.appex`, with
+  jailbreak, or the built-in StikJIT helper (`TuxJITHelper.appex`, with
   on-device pairing on iOS 27). The app claims one 1 GB region per launch
   (`JITBootstrap.jitBytes`) and the engine writes through a `vm_remap`'d alias
   (`host/jit_region.c`, split mode).
@@ -47,11 +47,11 @@ the packager as an environment variable (`TUX_ENTITLEMENTS=... ios/scripts/packa
   idle desktop, rotate the phone, use keyboard/mouse through the dock, and end
   the session while connected. These individual lifecycle cases, other devices
   and AirPlay have not been separately verified.
-- **Sharing** (`Henge/Sharing.swift`, `host/share.c`,
+- **Sharing** (`Tuxedo/Sharing.swift`, `host/share.c`,
   [docs/architecture.md](../docs/architecture.md)): the Shared folder in Files and
   the clipboard. The guest's clipboard follows along; going the other way uses the
   system paste button, since iOS asks permission when an app reads it on its own.
-- **Hardware input** (`Henge/Hardware.swift`): a keyboard's keys go to the guest's
+- **Hardware input** (`Tuxedo/Hardware.swift`): a keyboard's keys go to the guest's
   USB keyboard by HID usage, which is how iOS reports them. A trackpad or mouse
   goes through GameController with the pointer locked, which iPadOS allows only
   for an app filling the screen. The first scroll values are logged to
@@ -63,24 +63,24 @@ the packager as an environment variable (`TUX_ENTITLEMENTS=... ios/scripts/packa
 
 A machine folder needs `u-boot.bin` and `machine.json` (`MachineFolder.required`, in `MachineModel.swift`), and `disk.img`, or `disk.img.hvsparse` in an exported folder. `machine.json` has `name` and `ramMB`; other keys are ignored.
 
-- **Boot**: `tux_vm_boot_linux(firmware, disk, ram_mb, cpus, accel, video, encode, ...)` in `Native/henge-vm.h` starts `tuxvm`'s `virt` board with U-Boot. The same header has `tux_vm_console_read` and `tux_vm_console_write` for the serial console, and `tux_vm_power_button`, which presses the guest's power key. Shut Down on a Linux session presses it, so Debian shuts down by itself.
+- **Boot**: `tux_vm_boot_linux(firmware, disk, ram_mb, cpus, accel, video, encode, ...)` in `Native/tux-vm.h` starts `tuxvm`'s `virt` board with U-Boot. The same header has `tux_vm_console_read` and `tux_vm_console_write` for the serial console, and `tux_vm_power_button`, which presses the guest's power key. Shut Down on a Linux session presses it, so Debian shuts down by itself.
 - **Session**: `SessionView` shows the console (`ConsoleView.swift`, a SwiftTerm terminal over the engine's 256 KB ring) or the screen. A machine opens on the console. The console model lives with the session, so its scrollback survives a switch to the screen and back. The serial line has no window size and the guest shell assumes 80 columns, so `ConsoleModel.fit()` types `stty rows R cols C` on request.
 - **Install**: `LinuxCatalogue.swift` reads `linux-images.json`, `LinuxDownload.swift` and `RangedDownload.swift` fetch the firmware and the disk and resume with byte ranges, `LinuxUnpack.swift` decodes the LZFSE package and runs `hv_sparse_unpack`, and `LinuxInstaller.swift` grows the disk to the chosen size and writes the installed marker last. `tools/linux/package-image.sh` writes the catalogue and its packages (see [tools/linux/README.md](../tools/linux/README.md)).
 - **Catalogue setting**: Settings, Linux images, Catalogue URL (the `henge.linux.catalogueURL` default). Empty means no catalogue: import a folder instead. File names in the catalogue may be relative to its URL. A public host must use `https`, because App Transport Security refuses plain `http` except to local hosts (`NSAllowsLocalNetworking`). An image's `minBuild` is checked against `CFBundleVersion`.
 - **Screen**: a Linux machine on the phone follows the phone's safe area at scale 2 and the device's rotation (`DisplayModePolicy.swift`). Settings also offers an external display, 2560x1440 and 1920x1080. The guest follows a mode change through `/.henge/display` and `henge-display`.
 - **Graphics acceleration**: see below. **Sharing**: the shared folder is `~/Henge` in the guest, and the desktop image shares the clipboard.
-- **SwiftTerm**: the console's terminal, a Swift package (MIT) in `project.yml`, pinned to 1.99.1. It is the app's only Swift package. Its build plugin needs `-skipPackagePluginValidation`, and `xcodebuild` must not get `-sdk`. Its licence is in `Henge/Resources/legal/LICENSE-SwiftTerm-MIT.txt`. `ios/scripts/check_display.sh` clones it over the network on its first run.
+- **SwiftTerm**: the console's terminal, a Swift package (MIT) in `project.yml`, pinned to 1.99.1. It is the app's only Swift package. Its build plugin needs `-skipPackagePluginValidation`, and `xcodebuild` must not get `-sdk`. Its licence is in `Tuxedo/Resources/legal/LICENSE-SwiftTerm-MIT.txt`. `ios/scripts/check_display.sh` clones it over the network on its first run.
 - **iPad and hardware keyboards** have not been tried with Linux. The iPhone checklist ([docs/iphone-checklist.md](../docs/iphone-checklist.md)) is not done.
 
 ## iOS Simulator
 
-`ios/scripts/sim_build.sh [device]` builds the `HengeSim` target, boots a simulator if none is booted
+`ios/scripts/sim_build.sh [device]` builds the `TuxSim` target, boots a simulator if none is booted
 (default "iPhone 18 Pro"), installs and launches Tuxedo, and prints the path of `henge.log`. It needs no
 phone, signing, Husk checkout or libslirp: the engine is built for `iphonesimulator` in `build/ios-sim`
 (`make ios-sim-lib`).
 
 What differs from the device app: networking is a stub (`host/net_stub.c`, the guest has no network),
-pairing is a stub (`HengeSim/sim_stubs.c`), and there is no JIT helper or StikJIT. The JIT region is
+pairing is a stub (`TuxSim/sim_stubs.c`), and there is no JIT helper or StikJIT. The JIT region is
 made in-process the way `host/jit_region.c` does (RW map, alias, R-X): a simulator process is a macOS
 process, so no debugger is needed. Settings shows JIT "On" and `henge.log` has "self: PASS ... simulator memory".
 Launch with `simctl`, not under a debugger. Memory figures in Settings read zero in the simulator.
@@ -95,9 +95,9 @@ no acceleration and the switch shows an error. In Xcode, set both settings by ha
 default, passed to `tux_vm_boot_linux`. With it on, a "Video decode" switch (also off by default) lets the guest's VA-API decode H.264, VP9 and AV1 on VideoToolbox; the phone's decoder then parses data that the guest controls (`tools/linux/README.md`, "Video decode"). A Linux machine also has a "Video encode" switch, off by default, that needs no acceleration: the guest's `ffmpeg` from `henge-ffmpeg` then encodes and decodes on VideoToolbox through `hvcodec` (`host/vcodec.m`), at `10.0.2.4:8470` and on the DMA device for `/dev/hvcodec`, with the iOS memory limits in `ffmpeg-henge(7)`. The phone's codecs then take data that the guest controls. When the app goes to the background, `tux_vm_set_background` ends the codec sessions (`hv_vcodec_lose_sessions`), so `ffmpeg` stops with one error and does not encode in the background. GPU memory (textures, render targets, the scanout's `IOSurface`)
 counts against the app on the phone, unlike guest RAM, and `phys_footprint` in the simulator does not
 show it, so memory figures need the device. In the background an accelerated machine pauses whole (`hv_vm_set_background`), even while its guest plays sound, because iOS allows no Metal work there: `hv_vm_pause` waits up to 1.5 s for the renderer's queue to empty, then stops the presenter until the resume. A machine without acceleration pauses unless its guest plays sound. ANGLE, libepoxy and virglrenderer licences are in
-`Henge/Resources/legal/`.
+`Tuxedo/Resources/legal/`.
 
-Code from Husk (GPL-2.0-or-later): `Henge/JIT/*`, `Henge/HengeLog.swift`,
-`Henge/Native/henge-ios-jit.*`, `henge-brk.S`, `HengeJITHelper/`. StikJIT is
-MPL-2.0 and idevice MIT (`Henge/Resources/legal/`); `tcg-apple-jit.h` is QEMU's
+Code from Husk (GPL-2.0-or-later): `Tuxedo/JIT/*`, `Tuxedo/TuxLog.swift`,
+`Tuxedo/Native/tux-ios-jit.*`, `tux-brk.S`, `TuxJITHelper/`. StikJIT is
+MPL-2.0 and idevice MIT (`Tuxedo/Resources/legal/`); `tcg-apple-jit.h` is QEMU's
 (LGPL-2.1). See [docs/licensing.md](../docs/licensing.md).

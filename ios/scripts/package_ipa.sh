@@ -9,15 +9,15 @@ set -e
 IOS="$(cd "$(dirname "$0")/.." && pwd)"
 TROLLSTORE=false
 [ "$1" = "--trollstore" ] && TROLLSTORE=true
-OUT="$HOME/Desktop/Henge.ipa"
-[ "$TROLLSTORE" = true ] && OUT="$HOME/Desktop/Henge.tipa"
+OUT="$HOME/Desktop/Tuxedo.ipa"
+[ "$TROLLSTORE" = true ] && OUT="$HOME/Desktop/Tuxedo.tipa"
 [ -d "$IOS/deps/StikJIT.xcframework" ] || "$IOS/scripts/fetch_deps.sh"
 cd "$IOS"
 xcodegen generate >/dev/null
 . "$IOS/scripts/gfx_env.sh" # graphics acceleration when the libraries are built, else none
 DD="$IOS/build/DerivedData"
 mkdir -p "$IOS/build"
-xcodebuild -project Henge.xcodeproj -scheme Henge -configuration Release -skipPackagePluginValidation -destination 'generic/platform=iOS' \
+xcodebuild -project Tuxedo.xcodeproj -scheme Tuxedo -configuration Release -skipPackagePluginValidation -destination 'generic/platform=iOS' \
     -derivedDataPath "$DD" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" TUX_GFX_DIR="$GFX_ROOT" TUX_GFX="$TUX_GFX" build > "$DD.buildlog" 2>&1 || {
     # Never package what an older build left behind.
     grep -E "error:|BUILD" "$DD.buildlog" | sort -u
@@ -25,9 +25,9 @@ xcodebuild -project Henge.xcodeproj -scheme Henge -configuration Release -skipPa
     exit 1
 }
 grep -E "BUILD" "$DD.buildlog" || true
-APP="$DD/Build/Products/Release-iphoneos/Henge.app"
+APP="$DD/Build/Products/Release-iphoneos/Tuxedo.app"
 rc=0
-for f in "$APP/Henge" "$APP/henge-jit.js" "$APP/PlugIns/HengeJITHelper.appex/HengeJITHelper" \
+for f in "$APP/Tuxedo" "$APP/tux-jit.js" "$APP/PlugIns/TuxJITHelper.appex/TuxJITHelper" \
          "$APP/Frameworks/StikJIT.framework/StikJIT" "$APP/Frameworks/StikJIT.framework/Info.plist"; do
     if [ -f "$f" ]; then printf "  ok       %s\n" "${f#$APP/}"; else echo "  MISSING  ${f#$APP/}" >&2; rc=1; fi
 done
@@ -39,12 +39,12 @@ mkdir -p "$STAGE/Payload"
 cp -R "$APP" "$STAGE/Payload/"
 ENT="$STAGE/entitlements.plist"
 # TUX_ENTITLEMENTS picks another file, as for xcodebuild (Tuxedo/Tuxedo.personal.entitlements for a free team).
-cp "$IOS/${TUX_ENTITLEMENTS:-Henge/Henge.entitlements}" "$ENT"
+cp "$IOS/${TUX_ENTITLEMENTS:-Tuxedo/Tuxedo.entitlements}" "$ENT"
 BANNED_KEYS=("com.apple.private.cs.debugger" "dynamic-codesigning" "com.apple.private.skip-library-validation")
 if [ "$TROLLSTORE" = true ]; then for k in "${BANNED_KEYS[@]}"; do plutil -remove "$k" "$ENT" 2>/dev/null || true; done; fi
-SAPP="$STAGE/Payload/Henge.app"
-plutil -insert HengeBuildCommit -string "$(git -C "$IOS/.." rev-parse --short=12 HEAD 2>/dev/null || echo unknown)" "$SAPP/Info.plist"
-plutil -insert HengeBuildDate -string "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SAPP/Info.plist"
+SAPP="$STAGE/Payload/Tuxedo.app"
+plutil -insert TuxBuildCommit -string "$(git -C "$IOS/.." rev-parse --short=12 HEAD 2>/dev/null || echo unknown)" "$SAPP/Info.plist"
+plutil -insert TuxBuildDate -string "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SAPP/Info.plist"
 sign() { codesign --force --sign - --timestamp=none "$@"; }
 for fw in "$SAPP"/Frameworks/*.framework; do [ -d "$fw" ] && sign "$fw"; done
 for ex in "$SAPP"/PlugIns/*.appex; do [ -d "$ex" ] && sign "$ex"; done

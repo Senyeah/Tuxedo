@@ -1,5 +1,5 @@
 #!/bin/bash
-# libffi, glib and libslirp for the iOS Simulator, so HengeSim's guests get a network.
+# libffi, glib and libslirp for the iOS Simulator, so TuxSim's guests get a network.
 # Husk's build_ios.sh builds for iphoneos only; this runs a copy of it with the simulator SDK.
 # Output: $HUSK/build/ios-sim-arm64/sysroot (make ios-sim-lib uses it when it exists).
 set -euo pipefail

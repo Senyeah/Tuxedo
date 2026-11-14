@@ -368,7 +368,7 @@ enum JITBootstrap {
         #endif
     }
 
-    /// henge-jit.js as standard base64, which Built-in StikJIT's custom script takes.
+    /// tux-jit.js as standard base64, which Built-in StikJIT's custom script takes.
     static var scriptBase64: String? {
         loadScript()?.data(using: .utf8)?.base64EncodedString()
     }
@@ -412,11 +412,11 @@ enum JITBootstrap {
         // script-data unconditionally (HomeView.handleExternalURL), so we do not
         // depend on the user having assigned a script to Tuxedo in StikDebug's UI.
         if let script = loadScript(), let encoded = base64URLEncode(script) {
-            TuxLog.log("jit", "loaded henge-jit.js (\(script.count) chars, "
+            TuxLog.log("jit", "loaded tux-jit.js (\(script.count) chars, "
                              + "\(encoded.count) chars encoded); sending inline")
             url += "&script-data=\(encoded)"
         } else {
-            TuxLog.log("jit", "WARNING: could not load henge-jit.js from the bundle. "
+            TuxLog.log("jit", "WARNING: could not load tux-jit.js from the bundle. "
                              + "Falling back to whatever script StikDebug has assigned "
                              + "to this bundle id -- if none, JIT will not be enabled.")
         }
@@ -440,11 +440,11 @@ enum JITBootstrap {
     }
 
     private static func loadScript() -> String? {
-        // Accept either bundle layout: the build copies henge-jit.js to the bundle
+        // Accept either bundle layout: the build copies tux-jit.js to the bundle
         // root, but a folder-reference build phase would put it under Resources/.
         let candidates = [
-            Bundle.main.path(forResource: "henge-jit", ofType: "js"),
-            Bundle.main.path(forResource: "henge-jit", ofType: "js", inDirectory: "Resources"),
+            Bundle.main.path(forResource: "tux-jit", ofType: "js"),
+            Bundle.main.path(forResource: "tux-jit", ofType: "js", inDirectory: "Resources"),
         ]
         for case let path? in candidates {
             if let s = try? String(contentsOfFile: path, encoding: .utf8) { return s }

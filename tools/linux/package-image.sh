@@ -31,7 +31,7 @@ OUT=${OUT:-$LINUX/dist}
 MANIFEST=${MANIFEST:-${IMAGE%.img}.manifest}
 [ -f "$MANIFEST" ] || { echo "no manifest at $MANIFEST (--manifest)" >&2; exit 2; }
 # The first build that can install Linux: one past the build in Info.plist now
-[ -n "$MIN_BUILD" ] || MIN_BUILD=$(( $(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "$ROOT/ios/Henge/Info.plist") + 1 ))
+[ -n "$MIN_BUILD" ] || MIN_BUILD=$(( $(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "$ROOT/ios/Tuxedo/Info.plist") + 1 ))
 
 HVSPARSE=$ROOT/build/hvsparse
 [ -x "$HVSPARSE" ] || make -C "$ROOT" build/hvsparse >/dev/null

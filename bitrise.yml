@@ -14,7 +14,7 @@ workflows:
     steps:
       - git-clone@8: {}
       - script@1:
-          title: Build Henge IPA
+          title: Build Tuxedo IPA
           inputs:
             - content: |-
                 #!/usr/bin/env bash

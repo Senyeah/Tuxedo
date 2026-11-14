@@ -59,4 +59,4 @@ mkdir -p "${BITRISE_DEPLOY_DIR:?Bitrise must set BITRISE_DEPLOY_DIR}"
 # Bitrise's deploy step treats an .ipa as an installable artifact and rejects it
 # without a provisioning profile. Wrap it so it is uploaded as a generic file;
 # users extract the IPA and let SideStore or AltStore re-sign it.
-( cd "$HOME/Desktop" && zip -0 -q "$BITRISE_DEPLOY_DIR/Henge-color-fix-unsigned.zip" Henge.ipa )
+( cd "$HOME/Desktop" && zip -0 -q "$BITRISE_DEPLOY_DIR/Tuxedo-color-fix-unsigned.zip" Tuxedo.ipa )

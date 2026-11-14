@@ -6,8 +6,8 @@ OUT="build/display-check"
 mkdir -p "$OUT"
 IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 SOURCES=()
-while IFS= read -r source; do SOURCES+=("$source"); done < <(find ios/Henge ios/Pad -name '*.swift' -print | sort)
-SOURCES+=(ios/HengeJITHelper/HengeJITMessages.swift)
+while IFS= read -r source; do SOURCES+=("$source"); done < <(find ios/Tuxedo ios/Pad -name '*.swift' -print | sort)
+SOURCES+=(ios/TuxJITHelper/TuxJITMessages.swift)
 
 # SwiftTerm, at the version in ios/project.yml, built for the device from its own checkout.
 ST_DIR="$OUT/SwiftTerm-src"
@@ -22,8 +22,8 @@ ST_MODULE=$(dirname "$(find "$OUT/swiftterm" -name SwiftTerm.swiftmodule -print 
 # Linking/package export still require the dependencies described in ios/README.md.
 xcrun swiftc -emit-object -whole-module-optimization -swift-version 5 \
   -target arm64-apple-ios17.0 -sdk "$IOS_SDK" \
-  -import-objc-header ios/Henge/HengeBridge.h -Ihost -Icore -Idevices -I "$ST_MODULE" \
-  "${SOURCES[@]}" -o "$OUT/Henge.o"
+  -import-objc-header ios/Tuxedo/TuxBridge.h -Ihost -Icore -Idevices -I "$ST_MODULE" \
+  "${SOURCES[@]}" -o "$OUT/Tuxedo.o"
 
 make test-display-routing
 

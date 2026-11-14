@@ -93,7 +93,7 @@ make ios-lib
 ios/scripts/package_ipa.sh
 ```
 
-That produces `~/Desktop/Henge.ipa`, and `package_ipa.sh --trollstore` writes `Henge.tipa`.
+That produces `~/Desktop/Tuxedo.ipa`, and `package_ipa.sh --trollstore` writes `Tuxedo.tipa`.
 
 `make` builds the engine for the Mac, `build/tuxvm`, and `make test` runs its tests. `make test-linux-smoke` boots Debian on it, after `tools/linux` has built the firmware and an image. Graphics acceleration needs the libraries from `tools/gfx/build-deps.sh` and `make GFX=1`.
 

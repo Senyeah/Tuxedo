@@ -15,14 +15,14 @@ make ios-sim-lib ${TUX_GFX:+GFX=1} ${TUX_SIM_NET:+SIM_NET_ROOT=$SIM_NET_ROOT}
 LOG="$DD/build.log"
 mkdir -p "$DD"
 # The old Tuxedo.app survives a failed build, so the exit code decides, not the bundle.
-if ! xcodebuild -project ios/Henge.xcodeproj -scheme HengeSim -skipPackagePluginValidation \
+if ! xcodebuild -project ios/Tuxedo.xcodeproj -scheme TuxSim -skipPackagePluginValidation \
   -destination 'generic/platform=iOS Simulator' -configuration Debug -derivedDataPath "$DD" TUX_GFX_DIR="$GFX_ROOT" TUX_GFX="$TUX_GFX" TUX_SIM_NET="$TUX_SIM_NET" TUX_SIM_NET_ROOT="$SIM_NET_ROOT" build >"$LOG" 2>&1; then
   grep -E 'error:' "$LOG" >&2 || tail -20 "$LOG" >&2
   echo "build failed (log: $LOG)" >&2
   exit 1
 fi
 grep -E 'BUILD SUCCEEDED' "$LOG"
-APP="$DD/Build/Products/Debug-iphonesimulator/Henge.app"
+APP="$DD/Build/Products/Debug-iphonesimulator/Tuxedo.app"
 [ -d "$APP" ] || { echo "build failed: no $APP" >&2; exit 1; }
 
 DEVICE="${1:-}"

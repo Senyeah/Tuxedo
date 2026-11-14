@@ -47,18 +47,18 @@ flowchart LR
 
 | What | Where |
 | --- | --- |
-| Request for pointer lock. A block replaces `prefersPointerLocked` on the class of the root view controller. | `ios/Henge/Hardware.swift:121-137` |
-| The "refused" hint is for iPad only. The comment says "An iPhone never locks it". | `ios/Henge/Hardware.swift:139-146` |
-| `HardwareMouse.start()` attaches to each `GCMouse` and calls `PointerLock.set(true)`. | `ios/Henge/Hardware.swift:167-194` |
-| Movement: `mouseMovedHandler` gives raw deltas. Tuxedo scales them and calls `tux_vm_mouse_move`. There is no log line. | `ios/Henge/Hardware.swift:220`, `228-236` |
-| Buttons: the first 32 events are logged as `physical mouse button: raw=… guest=…`. | `ios/Henge/Hardware.swift:238-246` |
-| Scroll: the first 24 events are logged as `scroll raw: …`. | `ios/Henge/Hardware.swift:251-275` |
-| The touch surface ignores `.indirectPointer` touches. It hides the pointer with `UIPointerStyle.hidden()`. | `ios/Henge/Trackpad.swift:50-54`, `80`, `115`, `136` |
-| The hint "Make Tuxedo full screen to use the trackpad or mouse" shows only when `PointerLock.refused` is true. | `ios/Henge/SessionView.swift:161-162`, `211-216` |
-| The lock is released when the app has its own controls to show. | `ios/Henge/SessionView.swift:245`, `293` |
-| `UIApplicationSupportsIndirectInputEvents` is true. There is no `UIRequiresFullScreen` key. Multiple scenes are off. | `ios/Henge/Info.plist:79-91` |
-| The entitlements are `get-task-allow` and the increased memory limit. Nothing else. | `ios/Henge/Henge.personal.entitlements` |
-| The bridge to the guest. All three calls are relative. | `ios/Henge/Native/henge-vm.c:386-400`, `host/vm.c:898`, `938`, `972` |
+| Request for pointer lock. A block replaces `prefersPointerLocked` on the class of the root view controller. | `ios/Tuxedo/Hardware.swift:121-137` |
+| The "refused" hint is for iPad only. The comment says "An iPhone never locks it". | `ios/Tuxedo/Hardware.swift:139-146` |
+| `HardwareMouse.start()` attaches to each `GCMouse` and calls `PointerLock.set(true)`. | `ios/Tuxedo/Hardware.swift:167-194` |
+| Movement: `mouseMovedHandler` gives raw deltas. Tuxedo scales them and calls `tux_vm_mouse_move`. There is no log line. | `ios/Tuxedo/Hardware.swift:220`, `228-236` |
+| Buttons: the first 32 events are logged as `physical mouse button: raw=… guest=…`. | `ios/Tuxedo/Hardware.swift:238-246` |
+| Scroll: the first 24 events are logged as `scroll raw: …`. | `ios/Tuxedo/Hardware.swift:251-275` |
+| The touch surface ignores `.indirectPointer` touches. It hides the pointer with `UIPointerStyle.hidden()`. | `ios/Tuxedo/Trackpad.swift:50-54`, `80`, `115`, `136` |
+| The hint "Make Tuxedo full screen to use the trackpad or mouse" shows only when `PointerLock.refused` is true. | `ios/Tuxedo/SessionView.swift:161-162`, `211-216` |
+| The lock is released when the app has its own controls to show. | `ios/Tuxedo/SessionView.swift:245`, `293` |
+| `UIApplicationSupportsIndirectInputEvents` is true. There is no `UIRequiresFullScreen` key. Multiple scenes are off. | `ios/Tuxedo/Info.plist:79-91` |
+| The entitlements are `get-task-allow` and the increased memory limit. Nothing else. | `ios/Tuxedo/Tuxedo.personal.entitlements` |
+| The bridge to the guest. All three calls are relative. | `ios/Tuxedo/Native/tux-vm.c:386-400`, `host/vm.c:898`, `938`, `972` |
 
 The Info.plist is correct for indirect input. A missing key is not the cause.
 
@@ -139,7 +139,7 @@ A jailbreak or a TrollStore-type install can sign any entitlement. Then P3 and P
 
 ### Step 1: measure (one build, ten minutes on the phone)
 
-Add temporary log lines in `ios/Henge/Hardware.swift` and `ios/Henge/Trackpad.swift`:
+Add temporary log lines in `ios/Tuxedo/Hardware.swift` and `ios/Tuxedo/Trackpad.swift`:
 
 1. In `moved(_:_:)`, log the first 40 raw deltas. After that, log a count each second.
 2. In `HardwareMouse.start()`, log `UIAccessibility.isAssistiveTouchRunning` and `UIDevice.current.userInterfaceIdiom`.

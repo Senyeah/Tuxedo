@@ -19,8 +19,8 @@ struct SceneManifestTests {
 
     static func main() {
         let args = CommandLine.arguments
-        let plistPath = args.count > 1 ? args[1] : "ios/Henge/Info.plist"
-        let sourcePath = args.count > 2 ? args[2] : "ios/Henge/ExternalDisplaySceneDelegate.swift"
+        let plistPath = args.count > 1 ? args[1] : "ios/Tuxedo/Info.plist"
+        let sourcePath = args.count > 2 ? args[2] : "ios/Tuxedo/ExternalDisplaySceneDelegate.swift"
         let role = "UIWindowSceneSessionRoleExternalDisplayNonInteractive"
         let className = "$(PRODUCT_MODULE_NAME).ExternalDisplaySceneDelegate"
 

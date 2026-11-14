@@ -1,12 +1,12 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
- * Tuxedo -- iOS dual-mapped JIT memory for QEMU's TCG.  See henge-ios-jit.h.
+ * Tuxedo -- iOS dual-mapped JIT memory for QEMU's TCG.  See tux-ios-jit.h.
  *
  * Derived from AetherPS4-iOS's src/core/ios/ios_jit_allocator.cpp
  * (shadPS4 Emulator Project, GPL-2.0-or-later), ported C++ -> C.
  */
 
-#include "henge-ios-jit.h"
+#include "tux-ios-jit.h"
 
 #ifdef __APPLE__
 #include <TargetConditionals.h>
@@ -105,10 +105,10 @@ static double tux_now_ms(void)
 
 /* ------------------------------------------------------------------ symbols */
 /*
- * The trap sequences live in henge-brk.S, compiled straight into this binary.
+ * The trap sequences live in tux-brk.S, compiled straight into this binary.
  * Tuxedo deliberately does NOT link or dlopen Stossy11's BreakpointJIT.framework:
  * it has no stated license, and any embedded framework carrying entitlements is
- * rejected by AMFI at launch on sideloaded builds. See henge-brk.S for the
+ * rejected by AMFI at launch on sideloaded builds. See tux-brk.S for the
  * verification that our encoding matches theirs exactly.
  */
 extern void    *tux_brk_get_jit_mapping(void *addr, size_t len);

@@ -1,7 +1,7 @@
 #include "share.h"
 #include "net_slirp.h"
 #include <sys/mman.h>
-#include "henge-vm.h"
+#include "tux-vm.h"
 
 #include <os/proc.h>
 #include <TargetConditionals.h>
@@ -13,7 +13,7 @@
 
 #include "dispatch.h"
 #include <dispatch/dispatch.h>
-#include "henge-ios-jit.h"
+#include "tux-ios-jit.h"
 #include "net_slirp.h"
 #include "dns_proxy.h"
 #include "vm.h"

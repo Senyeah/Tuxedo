@@ -366,7 +366,7 @@ struct JITSetupFlow: View {
              subtitle: "TrollStore can enable JIT for apps it installed, with no pairing file, "
                      + "VPN or computer.") {
             VStack(alignment: .leading, spacing: 14) {
-                point(1, "Install Henge.ipa through TrollStore, on an iOS version TrollStore supports. It carries the "
+                point(1, "Install Tuxedo.ipa through TrollStore, on an iOS version TrollStore supports. It carries the "
                        + "entitlements TrollStore keeps, so the same file works there and in a sideloader.",
                       done: JITBootstrap.isInstalledWithTrollStore)
                 point(2, "In TrollStore's Settings, turn on URL Scheme. TrollStore ignores enable-jit requests without it.")

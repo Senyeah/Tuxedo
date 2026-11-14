@@ -7,16 +7,16 @@ go on the App Store.
 | Code | Licence | Where |
 | --- | --- | --- |
 | Tuxedo | GPL-2.0-or-later | `core/`, `devices/`, `host/`, `ios/`, `tools/` |
-| Code from Husk | GPL-2.0-or-later | `ios/Henge/JIT/`, `HengeLog.swift`, `Native/henge-ios-jit.*`, `henge-brk.S`, `HengeJITHelper/` |
-| QEMU's `tcg-apple-jit.h` | LGPL-2.1-or-later | `ios/Henge/Native/` |
-| StikJIT (the Bitrise build applies `ci/stikjit-high-address.patch`) | MPL-2.0 | `ios/Henge/Resources/legal/` |
-| idevice | MIT | `ios/Henge/Resources/legal/` |
-| Pairing library's Rust crates | Listed per crate | `ios/Henge/Resources/legal/LICENSES-rppairing-crates.txt` |
+| Code from Husk | GPL-2.0-or-later | `ios/Tuxedo/JIT/`, `TuxLog.swift`, `Native/tux-ios-jit.*`, `tux-brk.S`, `TuxJITHelper/` |
+| QEMU's `tcg-apple-jit.h` | LGPL-2.1-or-later | `ios/Tuxedo/Native/` |
+| StikJIT (the Bitrise build applies `ci/stikjit-high-address.patch`) | MPL-2.0 | `ios/Tuxedo/Resources/legal/` |
+| idevice | MIT | `ios/Tuxedo/Resources/legal/` |
+| Pairing library's Rust crates | Listed per crate | `ios/Tuxedo/Resources/legal/LICENSES-rppairing-crates.txt` |
 | QEMU's `virt` machine, as a reference for the Linux board's layout and device tree | GPL-2.0-or-later | `devices/virt.c`, `devices/virt_fdt.c` |
-| ANGLE (built from source, static) | BSD-3-Clause | `ios/Henge/Resources/legal/LICENSES-ANGLE.txt` |
+| ANGLE (built from source, static) | BSD-3-Clause | `ios/Tuxedo/Resources/legal/LICENSES-ANGLE.txt` |
 | Code inside ANGLE's static libraries | abseil, astc-encoder: Apache-2.0. zlib: zlib. xxhash: BSD-2-Clause. volk: MIT (iOS and simulator libraries only) | same file |
-| libepoxy (UTM's fork, patched), virglrenderer (UTM's fork) | MIT | `ios/Henge/Resources/legal/LICENSE-libepoxy-MIT.txt`, `LICENSE-virglrenderer-MIT.txt` |
-| SwiftTerm 1.99.1 (the Linux console) | MIT | `ios/Henge/Resources/legal/LICENSE-SwiftTerm-MIT.txt` |
+| libepoxy (UTM's fork, patched), virglrenderer (UTM's fork) | MIT | `ios/Tuxedo/Resources/legal/LICENSE-libepoxy-MIT.txt`, `LICENSE-virglrenderer-MIT.txt` |
+| SwiftTerm 1.99.1 (the Linux console) | MIT | `ios/Tuxedo/Resources/legal/LICENSE-SwiftTerm-MIT.txt` |
 | U-Boot `v2026.10` (Linux guest firmware, not in the app) | GPL-2.0, most files also under later versions | the Linux image catalogue; see below |
 | Debian packages in the Linux images, and their kernel | each package's own licence | the Linux image catalogue; see below |
 | FFmpeg 9.0.2 with the Tuxedo patch, in the `henge-ffmpeg` package for Linux guests (not in the app) | GPL-2.0-or-later as built; FFmpeg's own code is LGPL-2.1-or-later with GPL parts | the Tuxedo apt repository; see below |
@@ -24,7 +24,7 @@ go on the App Store.
 | libslirp, pcre2 | BSD | Prebuilt from Husk |
 | glib, libintl | LGPL-2.1-or-later | Prebuilt from Husk |
 
-The licence files in `ios/Henge/Resources/legal/` are in the root of `Henge.app`. The app has no screen that shows them yet.
+The licence files in `ios/Tuxedo/Resources/legal/` are in the root of `Tuxedo.app`. The app has no screen that shows them yet.
 
 ## Linux guests
 
@@ -32,7 +32,7 @@ A Linux machine needs two things that are not in the repository or in the app: a
 
 ### ANGLE, libepoxy and virglrenderer
 
-`tools/gfx/build-deps.sh` builds these from source as static libraries and writes their licence files to `build/gfx/<target>/share/licenses`. `ios/Henge/Resources/legal/LICENSES-ANGLE.txt` is those ANGLE files joined, in the same order and with the same text, and the other two files are copies of `libepoxy/COPYING` and `virglrenderer/COPYING`. The three targets (`macos`, `ios`, `sim`) have the same licence files.
+`tools/gfx/build-deps.sh` builds these from source as static libraries and writes their licence files to `build/gfx/<target>/share/licenses`. `ios/Tuxedo/Resources/legal/LICENSES-ANGLE.txt` is those ANGLE files joined, in the same order and with the same text, and the other two files are copies of `libepoxy/COPYING` and `virglrenderer/COPYING`. The three targets (`macos`, `ios`, `sim`) have the same licence files.
 
 ANGLE's own licence is BSD-3-Clause. Its static `libGLESv2.a` also holds code from its `third_party` folder. Reading the archive members shows abseil, astc-encoder, zlib and xxhash in all three targets, and volk in the iOS and simulator targets only. The licence file also carries jsoncpp, the SPIR-V headers and tools, ceval and libXNVCtrl, which no member of the archives matches. They are kept so that a later ANGLE pin cannot drop a notice by accident. The libepoxy patch (`tools/gfx/libepoxy-static-gl.patch`) and the pins in `tools/gfx/versions.env` are the source offer for those two libraries: both come from UTM's forks, at the commits named there.
 

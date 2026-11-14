@@ -22,7 +22,7 @@ import Foundation
     func setRequestInterruptionBlock(_ block: @escaping (NSUUID?) -> Void)
 }
 
-/// Starts the separate helper process (PlugIns/HengeJITHelper.appex) that debugs Tuxedo.
+/// Starts the separate helper process (PlugIns/TuxJITHelper.appex) that debugs Tuxedo.
 ///
 /// The helper is found by the bundle identifier it has in this installation,
 /// read from its own Info.plist. Sideloaders that sign with the user's own
@@ -36,7 +36,7 @@ import Foundation
 /// until Tuxedo detaches. Log category "jit-helper".
 @MainActor
 enum TuxBuiltInJIT {
-    static let helperFile = "HengeJITHelper.appex"
+    static let helperFile = "TuxJITHelper.appex"
 
     /// Requests that have started and not finished, kept alive until they do.
     private static var running: [HelperRequest] = []
