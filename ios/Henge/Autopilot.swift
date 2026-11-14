@@ -45,7 +45,7 @@ enum Autopilot {
         return (try? FileManager.default.moveItem(at: once, to: plan)) != nil
     }()
 
-    @MainActor static func run(start: @escaping (VirtualMac) -> Void) async {
+    @MainActor static func run(start: @escaping (VirtualMachine) -> Void) async {
         guard enabled else { return }
         let url = docs.appendingPathComponent("henge-autopilot.txt")
         HengeLog.log("autopilot", "following \(url.lastPathComponent)")
@@ -68,25 +68,25 @@ enum Autopilot {
         }
     }
 
-    @MainActor private static func perform(_ line: String, start: (VirtualMac) -> Void) async {
+    @MainActor private static func perform(_ line: String, start: (VirtualMachine) -> Void) async {
         let parts = line.split(separator: " ", maxSplits: 1).map(String.init)
         let arg = parts.count > 1 ? parts[1] : ""
         switch parts[0] {
         case "start":
             for _ in 0..<240 where !JITBootstrap.ready { try? await Task.sleep(nanoseconds: 500_000_000) }
             guard JITBootstrap.ready else { HengeLog.log("autopilot", "JIT is not on; not starting a machine"); return }
-            let all: [VirtualMac] = Machines.shared.all
-            var mac: VirtualMac?
+            let all: [VirtualMachine] = Machines.shared.all
+            var machine: VirtualMachine?
             if arg.isEmpty {
-                mac = all.max { a, b in (a.lastUsed ?? a.added) < (b.lastUsed ?? b.added) }
+                machine = all.max { a, b in (a.lastUsed ?? a.added) < (b.lastUsed ?? b.added) }
             } else {
-                mac = all.first { $0.name.lowercased() == arg.lowercased() }
+                machine = all.first { $0.name.lowercased() == arg.lowercased() }
             }
-            guard let mac else {
+            guard let machine else {
                 HengeLog.log("autopilot", "no machine called \(arg); there are \(all.map(\.name))")
                 return
             }
-            start(mac)
+            start(machine)
         case "wait":
             try? await Task.sleep(nanoseconds: UInt64((Double(arg) ?? 0) * 1e9))
         case "type":
@@ -168,7 +168,7 @@ enum Autopilot {
         case "snap": // the guest's screen, full size, into Documents/snap.jpg (or NAME.jpg): "snap", "snap safari"
             let name = arg.isEmpty ? "snap" : arg
             let url = docs.appendingPathComponent("\(name).jpg")
-            if let image = MacPreview.capture(width: 1920, height: 1080),
+            if let image = MachinePreview.capture(width: 1920, height: 1080),
                let data = UIImage(cgImage: image).jpegData(compressionQuality: 0.9), (try? data.write(to: url, options: .atomic)) != nil {
                 HengeLog.log("autopilot", "snap \(url.lastPathComponent), \(data.count / 1024) KB")
             } else {

@@ -3,7 +3,7 @@ import QuartzCore
 
 /// A running machine as an external display shows it: the session's router and the guest's screen
 /// shape. One id means one session (its router), whatever the aspect.
-struct MacPresentation: Identifiable {
+struct MachinePresentation: Identifiable {
     let display: DisplayRouter
     let aspect: CGFloat
 

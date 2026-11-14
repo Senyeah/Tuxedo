@@ -117,7 +117,7 @@ enum FolderPick {
     }
 
     @MainActor static func applyIfRunning(_ machine: UUID) {
-        if let mac = Machines.shared.all.first(where: { $0.id == machine }) { FolderSession.shared.changed(mac) }
+        if let machine = Machines.shared.all.first(where: { $0.id == machine }) { FolderSession.shared.changed(machine) }
     }
 }
 

@@ -177,17 +177,17 @@ struct FolderPolicyTests {
         """
         let list = MachineList.decode(Data(old.utf8), diskExists: { _ in true })!
         check("an old list: no folders", list[0].folders == nil)
-        var mac = list[0]
+        var machine = list[0]
         var f = SharedFolder(name: "Projects", bookmark: Data([9, 8, 7]))
         f.mode = .copyOnWrite
         f.displayPath = "iCloud Drive › Projects"
         f.lost = true
-        mac.folders = [f]
-        let data = try JSONEncoder().encode([mac])
+        machine.folders = [f]
+        let data = try JSONEncoder().encode([machine])
         let back = MachineList.decode(data, diskExists: { _ in true })!
         check("folders round-trip", back[0].folders == [f])
         check("a list without folders writes none", !String(decoding: try JSONEncoder().encode(list), as: UTF8.self).contains("folders"))
-        let info = MachineFolder.exportInfo(mac)
+        let info = MachineFolder.exportInfo(machine)
         let infoText = String(decoding: try JSONSerialization.data(withJSONObject: info), as: UTF8.self)
         check("an export of the machine leaves the folders out", info["folders"] == nil && !infoText.contains("bookmark") && !infoText.contains("Projects"))
     }

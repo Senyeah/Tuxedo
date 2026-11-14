@@ -6,8 +6,8 @@ import Foundation
 /// Screens are named by their surface id; a presentation is whatever the host shows.
 struct ExternalScreenPlan<Presentation: Identifiable> {
     enum Change {
-        case showMac(UUID, Presentation)
-        case stopMac(UUID, Presentation)
+        case showMachine(UUID, Presentation)
+        case stopMachine(UUID, Presentation)
     }
 
     private var presentation: Presentation?
@@ -16,26 +16,26 @@ struct ExternalScreenPlan<Presentation: Identifiable> {
     mutating func connect(_ surface: UUID) -> [Change] {
         screens.append(surface)
         guard let presentation else { return [] }
-        return [.showMac(surface, presentation)]
+        return [.showMachine(surface, presentation)]
     }
 
     mutating func disconnect(_ surface: UUID) -> [Change] {
         guard let index = screens.firstIndex(of: surface) else { return [] }
         screens.remove(at: index)
         guard let presentation else { return [] }
-        return [.stopMac(surface, presentation)]
+        return [.stopMachine(surface, presentation)]
     }
 
     /// Every connected screen shows this presentation from now on, replacing any earlier one.
     mutating func begin(_ presentation: Presentation) -> [Change] {
         self.presentation = presentation
-        return screens.map { .showMac($0, presentation) }
+        return screens.map { .showMachine($0, presentation) }
     }
 
     /// Only the presentation that began can end it: a late end from an older one (another id) changes nothing.
     mutating func end(_ presentation: Presentation) -> [Change] {
         guard let current = self.presentation, current.id == presentation.id else { return [] }
         self.presentation = nil
-        return screens.map { .stopMac($0, current) }
+        return screens.map { .stopMachine($0, current) }
     }
 }

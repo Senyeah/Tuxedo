@@ -1,7 +1,7 @@
 import Foundation
 import UIKit
 
-extension VirtualMac {
+extension VirtualMachine {
     var screen: (width: Int, height: Int) { (screenWidth ?? 1920, screenHeight ?? 1080) }
     /// A phone's machine with no chosen size takes the phone's safe area at scale 2; rotation changes it.
     var followsPhoneScreen: Bool { !Device.isPad && screenWidth == nil }
@@ -13,15 +13,15 @@ extension VirtualMac {
 /// a file beside the disk: iOS's memory limit does not count a mapped file's pages either.
 enum GuestMemory {
     /// Points the engine at the file (it is unlinked as soon as it is open) and returns the size that fits.
-    static func prepare(_ mac: VirtualMac) -> UInt64 {
-        let file = mac.directory.appendingPathComponent("ram.tmp")
+    static func prepare(_ machine: VirtualMachine) -> UInt64 {
+        let file = machine.directory.appendingPathComponent("ram.tmp")
         setenv("HV_RAM_FILE", file.path, 1)
-        let free = (try? mac.directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
+        let free = (try? machine.directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
             .volumeAvailableCapacityForImportantUsage ?? 0
         let room = free > 0 ? UInt64(max(free - (2 << 30), 0)) >> 20 : UInt64.max
         let reach = henge_largest_mapping_mb()
-        let ram = min(UInt64(mac.ramMB), room, reach > 512 ? reach - 512 : 0) / 512 * 512
-        HengeLog.log("session", "guest RAM \(ram) MB (asked \(mac.ramMB), disk room \(room), largest mapping \(reach))")
+        let ram = min(UInt64(machine.ramMB), room, reach > 512 ? reach - 512 : 0) / 512 * 512
+        HengeLog.log("session", "guest RAM \(ram) MB (asked \(machine.ramMB), disk room \(room), largest mapping \(reach))")
         return ram
     }
 }
@@ -30,7 +30,7 @@ enum GuestMemory {
 final class Machines: ObservableObject {
     static let shared = Machines()
 
-    @Published private(set) var all: [VirtualMac] = []
+    @Published private(set) var all: [VirtualMachine] = []
     @Published private(set) var importing: String?
     @Published var lastError: String?
 
@@ -68,10 +68,10 @@ final class Machines: ObservableObject {
         let items = (try? fm.contentsOfDirectory(at: Self.root, includingPropertiesForKeys: nil)) ?? []
         for item in items {
             guard let id = UUID(uuidString: item.lastPathComponent), !known.contains(id) else { continue }
-            if let mac = MachineList.recover(id: id, folder: item, defaultRAMMB: Device.suggestedRAMGB * 1024) {
-                all.append(mac)
+            if let machine = MachineList.recover(id: id, folder: item, defaultRAMMB: Device.suggestedRAMGB * 1024) {
+                all.append(machine)
                 save()
-                HengeLog.log("machines", "\(mac.name) finished installing but was not listed: listed again")
+                HengeLog.log("machines", "\(machine.name) finished installing but was not listed: listed again")
                 continue
             }
             HengeLog.log("machines", "removing the unfinished machine \(id)")
@@ -114,10 +114,10 @@ final class Machines: ObservableObject {
             let info = try JSONDecoder().decode(MachineFile.self, from: data)
             let missing = MachineFolder.required.filter { !FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path) }
             guard missing.isEmpty, Self.hasDisk(folder) else { throw message("The folder is missing \((missing + (Self.hasDisk(folder) ? [] : ["disk.img"])).joined(separator: ", ")).") }
-            var mac = VirtualMac(name: info.name ?? folder.lastPathComponent, ramMB: info.ramMB ?? 2048, diskBytes: 0)
-            importing = mac.name
+            var machine = VirtualMachine(name: info.name ?? folder.lastPathComponent, ramMB: info.ramMB ?? 2048, diskBytes: 0)
+            importing = machine.name
             unpacked = 0
-            let dest = mac.directory
+            let dest = machine.directory
             let fm = FileManager.default
             try fm.createDirectory(at: dest, withIntermediateDirectories: true)
             excludeFromBackup()
@@ -130,7 +130,7 @@ final class Machines: ObservableObject {
             let packed = folder.appendingPathComponent(Self.packedDisk)
             if fm.fileExists(atPath: packed.path) {
                 // Off the main thread: unpacking tens of gigabytes takes minutes.
-                let target = mac.disk.path, source = packed.path
+                let target = machine.disk.path, source = packed.path
                 let ok = await Task.detached { () -> Bool in
                     hv_sparse_unpack(source, target, { done, total, _ in
                         let fraction = Double(done) / Double(max(total, 1))
@@ -141,10 +141,10 @@ final class Machines: ObservableObject {
                 if move { try? fm.removeItem(at: packed) }
             }
             if move { try? fm.removeItem(at: folder) }
-            mac.diskBytes = (try? fm.attributesOfItem(atPath: mac.disk.path)[.size] as? Int64) ?? 0
-            all.append(mac)
+            machine.diskBytes = (try? fm.attributesOfItem(atPath: machine.disk.path)[.size] as? Int64) ?? 0
+            all.append(machine)
             save()
-            HengeLog.log("machines", "imported \(mac.name) (\(mac.diskBytes >> 30) GB disk)")
+            HengeLog.log("machines", "imported \(machine.name) (\(machine.diskBytes >> 30) GB disk)")
         } catch {
             lastError = error.localizedDescription
             HengeLog.log("machines", "import of \(folder.lastPathComponent) failed: \(error.localizedDescription)")
@@ -155,9 +155,9 @@ final class Machines: ObservableObject {
     /// Makes a folder "Bring in a machine" can read back,
     /// in Documents/Exports, which the Files app can reach. Deleting Henge deletes that folder too,
     /// so it has to be moved out of Henge before a reinstall that replaces the app's data.
-    func export(_ mac: VirtualMac) {
+    func export(_ machine: VirtualMachine) {
         guard exporting == nil, importing == nil else { return }
-        exporting = mac.name
+        exporting = machine.name
         exported = 0
         lastExport = nil
         lastError = nil
@@ -167,33 +167,33 @@ final class Machines: ObservableObject {
                 exporting = nil
                 UIApplication.shared.isIdleTimerDisabled = false
             }
-            do { lastExport = try await writeExport(mac) } catch {
+            do { lastExport = try await writeExport(machine) } catch {
                 lastError = error.localizedDescription
-                HengeLog.log("machines", "export of \(mac.name) failed: \(error.localizedDescription)")
+                HengeLog.log("machines", "export of \(machine.name) failed: \(error.localizedDescription)")
             }
         }
     }
 
-    private func writeExport(_ mac: VirtualMac) async throws -> URL {
+    private func writeExport(_ machine: VirtualMachine) async throws -> URL {
         let fm = FileManager.default
         let exports = Self.inbox.appendingPathComponent("Exports", isDirectory: true)
-        let safeName = mac.name.replacingOccurrences(of: "/", with: "-")
+        let safeName = machine.name.replacingOccurrences(of: "/", with: "-")
         let final = exports.appendingPathComponent(safeName, isDirectory: true)
         // Not under its final name until it is whole, so a cut-short export can't be mistaken for a machine.
         let partial = exports.appendingPathComponent(safeName + ".partial", isDirectory: true)
         try? fm.removeItem(at: partial)
         try? fm.removeItem(at: final)
-        let used = (try? mac.disk.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?.totalFileAllocatedSize ?? 0
+        let used = (try? machine.disk.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?.totalFileAllocatedSize ?? 0
         let free = (try? Self.root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?.volumeAvailableCapacityForImportantUsage ?? 0
         let needed = Int64(used) + (256 << 20)
         if free > 0 && free < needed {
-            throw message("Exporting \(mac.name) needs about \(ByteText.string(UInt64(needed))) free; this \(Device.name) has \(ByteText.string(UInt64(free))). Deleting a downloaded Linux image (Install, the trash button) frees space.")
+            throw message("Exporting \(machine.name) needs about \(ByteText.string(UInt64(needed))) free; this \(Device.name) has \(ByteText.string(UInt64(free))). Deleting a downloaded Linux image (Install, the trash button) frees space.")
         }
         try fm.createDirectory(at: partial, withIntermediateDirectories: true)
         do {
-            try fm.copyItem(at: mac.firmware, to: partial.appendingPathComponent("u-boot.bin"))
-            try JSONSerialization.data(withJSONObject: MachineFolder.exportInfo(mac)).write(to: partial.appendingPathComponent("machine.json"))
-            let source = mac.disk.path, target = partial.appendingPathComponent(Self.packedDisk).path
+            try fm.copyItem(at: machine.firmware, to: partial.appendingPathComponent("u-boot.bin"))
+            try JSONSerialization.data(withJSONObject: MachineFolder.exportInfo(machine)).write(to: partial.appendingPathComponent("machine.json"))
+            let source = machine.disk.path, target = partial.appendingPathComponent(Self.packedDisk).path
             let ok = await Task.detached { () -> Bool in
                 hv_sparse_pack_progress(source, target, { done, total, _ in
                     let fraction = Double(done) / Double(max(total, 1))
@@ -206,25 +206,25 @@ final class Machines: ObservableObject {
             try? fm.removeItem(at: partial)
             throw error
         }
-        HengeLog.log("machines", "exported \(mac.name) to \(final.path)")
+        HengeLog.log("machines", "exported \(machine.name) to \(final.path)")
         return final
     }
 
     /// A machine made here (the installer), already in its directory.
-    func add(_ mac: VirtualMac) {
-        all.removeAll { $0.id == mac.id }
-        all.append(mac)
+    func add(_ machine: VirtualMachine) {
+        all.removeAll { $0.id == machine.id }
+        all.append(machine)
         save()
     }
 
     /// Every field but the folders and forwards: settings and the session change those with updateFolders and
     /// updateForwards, so an older copy of the record cannot put back a stale bookmark or forward.
-    func update(_ mac: VirtualMac) {
-        guard let i = all.firstIndex(where: { $0.id == mac.id }) else { return }
-        var mac = mac
-        mac.folders = all[i].folders
-        mac.forwards = all[i].forwards
-        all[i] = mac
+    func update(_ machine: VirtualMachine) {
+        guard let i = all.firstIndex(where: { $0.id == machine.id }) else { return }
+        var machine = machine
+        machine.folders = all[i].folders
+        machine.forwards = all[i].forwards
+        all[i] = machine
         save()
     }
 

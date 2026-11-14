@@ -3,7 +3,7 @@ import SwiftUI
 /// The Install tab: the Linux installer inside a page of its own.
 struct InstallView: View {
     /// Starts a machine made here, from the finished screen.
-    var start: (VirtualMac) -> Void = { _ in }
+    var start: (VirtualMachine) -> Void = { _ in }
     @ObservedObject private var linux = LinuxInstaller.shared
     @ObservedObject private var jit = JITCoordinator.shared
     @State private var jitReady = JITBootstrap.ready

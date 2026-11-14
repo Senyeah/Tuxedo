@@ -36,7 +36,7 @@ struct RootView: View {
     @ObservedObject private var machines = Machines.shared
     @ObservedObject private var jit = JITCoordinator.shared
     @Environment(\.scenePhase) private var scenePhase
-    @State private var running: VirtualMac?
+    @State private var running: VirtualMachine?
     @State private var tab = Tab.machines
     @AppStorage(DeskAppearance.key) private var appearance = DeskAppearance.system
 
@@ -46,7 +46,7 @@ struct RootView: View {
                 HomeView(running: $running, tab: $tab)
                     .tabItem { Label(MachineList.tabTitle, systemImage: "terminal") }
                     .tag(Tab.machines)
-                InstallView(start: { mac in tab = .machines; running = mac })
+                InstallView(start: { machine in tab = .machines; running = machine })
                     .tabItem { Label("Install", systemImage: "arrow.down.circle") }
                     .tag(Tab.install)
                 SettingsView()
@@ -55,7 +55,7 @@ struct RootView: View {
             }
             .tint(Desk.accentLight)
             if let running {
-                SessionView(mac: running) { self.running = nil }
+                SessionView(machine: running) { self.running = nil }
                     .environment(\.colorScheme, .dark) // still dark while it fades out over a light page
                     .transition(.opacity)
             }
@@ -86,11 +86,11 @@ struct RootView: View {
         }
         .onChange(of: jit.attachGeneration) { _ in JITBootstrap.prewarm() } // the built-in helper attached
         .task { // testing only: HENGE_AUTOPILOT
-            await Autopilot.run { mac in
+            await Autopilot.run { machine in
                 // A session still on screen (its machine stopped) is closed first: the same value again would start nothing.
-                guard running != nil else { running = mac; return }
+                guard running != nil else { running = machine; return }
                 running = nil
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { running = mac }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { running = machine }
             }
         }
     }

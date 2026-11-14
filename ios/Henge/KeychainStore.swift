@@ -17,10 +17,10 @@ final class KeychainStore {
     private var unlocked = false
 
     /// The machine the guest's wallet is for.
-    func attach(_ mac: VirtualMac) {
+    func attach(_ machine: VirtualMachine) {
         var store = HvSecretStore(ctx: nil, list: storeList, read: storeRead, write: storeWrite, remove: storeRemove)
-        Self.dropOldLayout(machine: mac.id)
-        henge_vm_secrets(&store, WalletScope.id(mac.id))
+        Self.dropOldLayout(machine: machine.id)
+        henge_vm_secrets(&store, WalletScope.id(machine.id))
     }
 
     /// The session's check passed, or the wallet locks: in the background, or when the session ends.

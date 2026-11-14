@@ -13,7 +13,7 @@ enum ScreenPreset {
 }
 
 /// A machine brought over or made here: its files and its settings.
-struct VirtualMac: Identifiable, Codable, Hashable {
+struct VirtualMachine: Identifiable, Codable, Hashable {
     var id = UUID()
     var name: String
     var ramMB: Int
@@ -123,8 +123,8 @@ enum MachineFolder {
     }
 
     /// machine.json for an export.
-    static func exportInfo(_ mac: VirtualMac) -> [String: Any] {
-        ["name": mac.name, "ramMB": mac.ramMB]
+    static func exportInfo(_ machine: VirtualMachine) -> [String: Any] {
+        ["name": machine.name, "ramMB": machine.ramMB]
     }
 }
 
@@ -137,14 +137,14 @@ enum PreviewShape {
 
 enum MachineList {
     /// nil when the list is damaged or from a newer Henge. A machine whose disk is gone is dropped.
-    static func decode(_ data: Data, diskExists: (VirtualMac) -> Bool = { FileManager.default.fileExists(atPath: $0.disk.path) }) -> [VirtualMac]? {
-        guard let list = try? JSONDecoder().decode([VirtualMac].self, from: data) else { return nil }
+    static func decode(_ data: Data, diskExists: (VirtualMachine) -> Bool = { FileManager.default.fileExists(atPath: $0.disk.path) }) -> [VirtualMachine]? {
+        guard let list = try? JSONDecoder().decode([VirtualMachine].self, from: data) else { return nil }
         return list.filter(diskExists)
     }
 
     /// A folder whose install finished but was never listed. Needs the marker, a machine.json and a disk,
     /// plus the files the guest boots from. `defaultRAMMB` is used when machine.json has none.
-    static func recover(id: UUID, folder: URL, defaultRAMMB: Int) -> VirtualMac? {
+    static func recover(id: UUID, folder: URL, defaultRAMMB: Int) -> VirtualMachine? {
         let fm = FileManager.default
         let marker = folder.appendingPathComponent(MachinePaths.installedMarker)
         guard fm.fileExists(atPath: marker.path),
@@ -153,10 +153,10 @@ enum MachineList {
               fm.fileExists(atPath: folder.appendingPathComponent("disk.img").path) else { return nil }
         guard fm.fileExists(atPath: folder.appendingPathComponent("u-boot.bin").path) else { return nil }
         let size = (try? fm.attributesOfItem(atPath: folder.appendingPathComponent("disk.img").path)[.size] as? Int64) ?? 0
-        var mac = VirtualMac(id: id, name: info.name ?? "Linux", ramMB: info.ramMB ?? defaultRAMMB, diskBytes: size)
+        var machine = VirtualMachine(id: id, name: info.name ?? "Linux", ramMB: info.ramMB ?? defaultRAMMB, diskBytes: size)
         let os = (try? String(contentsOf: marker, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        mac.osName = os.isEmpty ? nil : os
-        return mac
+        machine.osName = os.isEmpty ? nil : os
+        return machine
     }
 
     static let tabTitle = "Machines"

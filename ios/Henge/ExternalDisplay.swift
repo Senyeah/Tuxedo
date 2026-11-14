@@ -2,8 +2,8 @@ import SwiftUI
 
 /// The accessory only presents the existing guest's pixels. It never owns or
 /// starts a VM, and hardware input continues through the phone's SessionView.
-struct ExternalMacDisplay: View {
-    let presentation: MacPresentation
+struct ExternalDisplay: View {
+    let presentation: MachinePresentation
     /// The id this display's view connects to the router under; a display scene passes its own.
     var surface = UUID()
 
@@ -35,8 +35,8 @@ private struct GuestHidden: View {
 /// Puts the session's guest on an external display. iOS 27 delivers that scene only to this
 /// accessory; earlier iOS connects it to ExternalDisplaySceneDelegate (LegacyExternalDisplay),
 /// which is told about the session either way and acts only where iOS gives it scenes.
-struct ExternalMacDisplayModifier: ViewModifier {
-    let presentation: MacPresentation
+struct ExternalDisplayModifier: ViewModifier {
+    let presentation: MachinePresentation
 
     @ViewBuilder
     func body(content: Content) -> some View {
@@ -46,7 +46,7 @@ struct ExternalMacDisplayModifier: ViewModifier {
         if #available(iOS 27.0, *) { // the compiler requires this to call the iOS 27 sceneAccessory API
             session.sceneAccessory {
                 ExternalNonInteractiveAccessory {
-                    ExternalMacDisplay(presentation: presentation)
+                    ExternalDisplay(presentation: presentation)
                 }
             }
         } else {

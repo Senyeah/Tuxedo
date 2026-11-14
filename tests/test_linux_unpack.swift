@@ -54,8 +54,8 @@ struct LinuxUnpackTests {
                        diskSHA256: "", unpackedBytes: unpacked, logicalBytes: Int64(logical), firmwareURL: URL(string: "http://x/f")!,
                        firmwareBytes: 8, firmwareSHA256: "")
         }
-        func mac(_ img: LinuxImage, disk: Int64) -> VirtualMac {
-            var m = VirtualMac(name: "Dev \"quoted\"", ramMB: 1536, diskBytes: disk)
+        func machine(_ img: LinuxImage, disk: Int64) -> VirtualMachine {
+            var m = VirtualMachine(name: "Dev \"quoted\"", ramMB: 1536, diskBytes: disk)
             m.osName = img.name
             return m
         }
@@ -72,7 +72,7 @@ struct LinuxUnpackTests {
         let want = Int64(logical) + (24 << 20)
         let dir = tmp.appendingPathComponent("machine")
         var stages = Set<String>()
-        try LinuxUnpack.make(img, files: files, into: dir, mac: mac(img, disk: want), diskBytes: want) { s, _, _ in stages.insert("\(s)") }
+        try LinuxUnpack.make(img, files: files, into: dir, machine: machine(img, disk: want), diskBytes: want) { s, _, _ in stages.insert("\(s)") }
         precondition(stages == ["decode", "unpack"])
         let made = dir.appendingPathComponent("disk.img")
         try check(size(made) == want)
@@ -91,23 +91,23 @@ struct LinuxUnpackTests {
 
         // The image's own size: no growing.
         let dir2 = tmp.appendingPathComponent("machine2")
-        try LinuxUnpack.make(img, files: files, into: dir2, mac: mac(img, disk: Int64(logical)), diskBytes: Int64(logical)) { _, _, _ in }
+        try LinuxUnpack.make(img, files: files, into: dir2, machine: machine(img, disk: Int64(logical)), diskBytes: Int64(logical)) { _, _, _ in }
         try check(size(dir2.appendingPathComponent("disk.img")) == Int64(logical))
 
         // Below the image's size: refused, and nothing is left.
         let dir3 = tmp.appendingPathComponent("machine3")
-        let small = fails { try LinuxUnpack.make(img, files: files, into: dir3, mac: mac(img, disk: 1 << 20), diskBytes: 1 << 20) { _, _, _ in } }
+        let small = fails { try LinuxUnpack.make(img, files: files, into: dir3, machine: machine(img, disk: 1 << 20), diskBytes: 1 << 20) { _, _, _ in } }
         precondition(small?.contains("at least") == true && !fm.fileExists(atPath: dir3.path))
 
         // A download cut short, and a wrong decoded size: each fails and removes the folder.
         let cut = tmp.appendingPathComponent("cut.lzfse")
         try Data(contentsOf: lzfse).prefix(Int(try size(lzfse)) / 2).write(to: cut)
         let dir4 = tmp.appendingPathComponent("machine4")
-        let bad = fails { try LinuxUnpack.make(img, files: .init(disk: cut, firmware: fw), into: dir4, mac: mac(img, disk: want), diskBytes: want) { _, _, _ in } }
+        let bad = fails { try LinuxUnpack.make(img, files: .init(disk: cut, firmware: fw), into: dir4, machine: machine(img, disk: want), diskBytes: want) { _, _, _ in } }
         precondition(bad != nil && !fm.fileExists(atPath: dir4.path))
         let dir5 = tmp.appendingPathComponent("machine5")
         let wrong = image(unpacked: unpackedBytes + 1)
-        let wrongSize = fails { try LinuxUnpack.make(wrong, files: files, into: dir5, mac: mac(wrong, disk: want), diskBytes: want) { _, _, _ in } }
+        let wrongSize = fails { try LinuxUnpack.make(wrong, files: files, into: dir5, machine: machine(wrong, disk: want), diskBytes: want) { _, _, _ in } }
         precondition(wrongSize?.contains("wrong size") == true && !fm.fileExists(atPath: dir5.path))
 
         // Not an LZFSE file at all.

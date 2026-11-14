@@ -49,12 +49,12 @@ final class FolderSession: ObservableObject {
     }
 
     /// Before a Linux machine boots: the engine's table for henge_vm_boot_linux.
-    func start(_ mac: VirtualMac) {
+    func start(_ machine: VirtualMachine) {
         end()
-        machine = mac.id
+        self.machine = machine.id
         notices.reset()
         henge_vm_folders_hook(folderHook, nil)
-        apply(mac.folders ?? [])
+        apply(machine.folders ?? [])
         watch = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
@@ -82,9 +82,9 @@ final class FolderSession: ObservableObject {
 
     /// Settings changed this machine's folders while it runs: they apply at once (a new mode when nothing in the
     /// guest has the folder open).
-    func changed(_ mac: VirtualMac) {
-        guard machine == mac.id else { return }
-        apply(mac.folders ?? [])
+    func changed(_ machine: VirtualMachine) {
+        guard self.machine == machine.id else { return }
+        apply(machine.folders ?? [])
     }
 
     var device: Bool { machine != nil && henge_vm_folders_device() != 0 }
