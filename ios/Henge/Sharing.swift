@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 /// What a running guest shares with this device: the Shared folder in Files, and the clipboard. The clipboard
-/// follows through a small helper: tools/henge-agent.m in macOS, henge-clipboard in a Debian desktop (host/share.c).
+/// follows through a small helper: henge-clipboard in a Debian desktop (host/share.c).
 enum Sharing {
     static var folder: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Shared", isDirectory: true)
@@ -18,12 +18,12 @@ enum Sharing {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         // A Unix socket's path can't be long, so the short temporary folder.
         let socket = (NSTemporaryDirectory() as NSString).appendingPathComponent("s.sock")
-        henge_vm_share(folder.path, socket, Bundle.main.path(forResource: "henge-agent", ofType: "gz"))
+        henge_vm_share(folder.path, socket)
     }
 
     /// The helper asks the server for news at most 25 s apart.
     static var helperRunning: Bool {
-        let seen = henge_share_agent_seen()
+        let seen = henge_share_helper_seen()
         return seen >= 0 && seen < 40
     }
 

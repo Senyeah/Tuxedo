@@ -5,10 +5,8 @@
 
 #include "virtio.h"
 
-/* virtio-input (device type 18), Linux input event codes, as macOS's
-   AppleVirtIOInput drivers expect: it calls a device with relative X/Y a
-   mouse, one with absolute X/Y a trackpad, and one with keys but no left
-   button a keyboard. Events come from the host UI on any thread
+/* virtio-input (device type 18), Linux input event codes, as Linux's
+   virtio_input driver expects. Events come from the host UI on any thread
    (hv_virtio_input_send) and reach the guest from the CPU thread
    (hv_virtio_input_poll, from the board's tick). The touch kind (virt board
    only) is a touchscreen with multitouch protocol B, as QEMU's virtio-multitouch. */

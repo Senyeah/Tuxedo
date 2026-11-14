@@ -397,7 +397,7 @@ int main(void) {
     link_in(secret, "lf");
     link_in(outside, "ld");
 
-    check("start", "the share server starts", hv_share_start(root, sock_path, NULL), 0);
+    check("start", "the share server starts", hv_share_start(root, sock_path), 0);
 
     int beneath = safe_path_beneath();
     printf("test_share_paths: O_NOFOLLOW_ANY and O_RESOLVE_BENEATH %s\n", beneath ? "work" : "are not here");

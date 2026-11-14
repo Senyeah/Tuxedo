@@ -130,12 +130,9 @@ static void test_xhci(void) {
     uint32_t ports = rd32(&m, bar + 4) >> 24, proto = rd32(&m, bar + XECP + 8);
     check("xHCI USB 2 protocol starts at port 1", proto & 0xff, 1);
     check("xHCI USB 2 protocol covers every port", (proto >> 8) & 0xff, ports);
-    /* Linux reads speed ID 2 as low speed and refuses the trackpad's 64-byte ep0, so the virt board says high (3). */
+    /* Linux reads speed ID 2 as low speed and refuses the trackpad's 64-byte ep0, so the port says high (3). */
     check("virt keyboard port is full speed", (rd32(&m, bar + OP + 0x400) >> 10) & 0xf, 1);
     check("virt trackpad port is high speed", (rd32(&m, bar + OP + 0x410) >> 10) & 0xf, 3);
-    HvXhci *mac = hv_xhci_create(&m, b.pcie); /* what vmapple builds: no Linux speeds */
-    check("vmapple keyboard port speed is unchanged", (mac->portsc[0] >> 10) & 0xf, 1);
-    check("vmapple trackpad port speed is unchanged", (mac->portsc[1] >> 10) & 0xf, 2);
 
     uint64_t mem = VIRT_MEM + 0x200000, dcbaa = mem, cmd = mem + 0x1000, erst = mem + 0x2000, ev = mem + 0x3000;
     uint64_t out = mem + 0x4000, in = mem + 0x5000, ep0 = mem + 0x6000, buf = mem + 0x7000;
@@ -590,7 +587,7 @@ static void test_vm(void) {
     HvMachine *vm = hv_vm_machine();
     check("virt board", hv_vm_virt() != NULL, 1);
     check("RAM base", hv_vm_devs()->ram_pa, VIRT_MEM);
-    check("disk device", hv_vm_devs()->blk[0] != NULL, 1);
+    check("disk device", hv_vm_devs()->blk != NULL, 1);
     check("firmware in flash", rd32(vm, VIRT_FLASH0), 0x14000000);
     check("tree at the start of RAM", rd32(vm, VIRT_MEM), 0xedfe0dd0);
     check("cpu 1 waits for CPU_ON", hv_vm_cpu(1)->off, 1);
@@ -2036,7 +2033,7 @@ static void test_blk(const char *disk_path) {
     Seg past[1] = {{VD_BUF, 512, 0}};
     check("blk: a write past the end fails", blk_request(&d, 1, 4096, past, 1, NULL), 1);
     check("blk: flush", blk_request(&d, 4, 0, NULL, 0, NULL), 0);
-    check("blk: barrier", blk_request(&d, 0x10000, 0, NULL, 0, NULL), 0);
+    check("blk: the old Apple barrier type is unsupported", blk_request(&d, 0x10000, 0, NULL, 0, NULL), 2);
     check("blk: unknown type", blk_request(&d, 0x77, 0, NULL, 0, NULL), 2);
     test_blk_discard(&d, disk_path);
     memset(r, 0, 32);
@@ -2331,7 +2328,7 @@ static void test_create_limits(void) {
     check("create: the rng takes the first slot", vb.rng->vio.pci.slot, 1);
     check("create: xHCI follows", vb.usb->pci.slot, 2);
     check("create: E0PD in ID_AA64MMFR2 (no forced KPTI under KASLR)", mm.id.mmfr2 >> 60 & 15, 1);
-    check("create: PAuth stays advertised (P3: clearing it was no faster)", mm.id.isar1, hv_id_regs_vmapple().isar1);
+    check("create: PAuth stays advertised (P3: clearing it was no faster)", mm.id.isar1, hv_id_regs_default().isar1);
     check("create: no balloon without HV_BALLOON", vb.balloon == NULL, 1);
     check("create: no virtio-fs without folders", vb.fs == NULL, 1);
     int touch_slot = vb.touch->vio.pci.slot;

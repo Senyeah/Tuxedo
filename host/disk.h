@@ -3,8 +3,7 @@
 
 #include <stdint.h>
 
-/* A raw disk image file, optionally starting `offset` bytes in (QEMU's vmapple
-   notes say the first 16 KB of auxiliary.bin is metadata the guest never sees). */
+/* A raw disk image file, optionally starting `offset` bytes in (a header the guest never sees). */
 typedef struct HvDisk {
     int fd;
     int wfd;         /* writes, past the host's cache (F_NOCACHE); -1: through fd */

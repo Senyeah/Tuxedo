@@ -26,8 +26,6 @@ enum EngineTuning {
         if d.bool(forKey: wfiSpinKey) { env["HV_WFI_SPIN"] = "50" }
         if d.object(forKey: fastFlushKey) as? Bool == false { env["HV_FLUSH"] = "0" }
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        // GPU command trace: on while Documents/trace-on exists (it is checked every frame, so it can be toggled live).
-        env["HV_PVG_TRACE_FILE"] = docs.appendingPathComponent("trace-on").path
         let url = docs.appendingPathComponent("henge-env.txt")
         if let text = try? String(contentsOf: url, encoding: .utf8) {
             for raw in text.split(whereSeparator: \.isNewline) {

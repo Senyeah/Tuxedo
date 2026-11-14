@@ -6,9 +6,8 @@
 
 #include "virtio.h"
 
-/* virtio-snd (virtio 1.2, section 5.14) with one output stream: what
-   Virtualization.framework's VZVirtioSoundDeviceConfiguration gives a macOS
-   guest, which AppleVirtIOSound drives.
+/* virtio-snd (virtio 1.2, section 5.14) with one output stream: the
+   device Linux's snd_virtio drives.
 
    The guest's PCM goes into a ring here; a host backend (CoreAudio on the Mac)
    pulls it out on its own thread with hv_virtio_snd_pull. A transmit buffer goes

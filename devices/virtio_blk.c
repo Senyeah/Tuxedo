@@ -17,7 +17,6 @@
 #define T_FLUSH 4
 #define T_GET_ID 8
 #define T_DISCARD 11
-#define T_APPLE_BARRIER 0x10000
 
 #define S_OK 0
 #define S_IOERR 1
@@ -103,8 +102,6 @@ static int handle(HvVirtioBlk *b, HvVirtqElem *e, uint32_t *written) {
         }
         break;
     }
-    case T_APPLE_BARRIER: /* a no-op here, as in QEMU: requests complete in order */
-        break;
     default:
         status = S_UNSUPP;
         break;
@@ -127,9 +124,9 @@ static uint64_t now_us(void) {
     return (uint64_t)ts.tv_sec * 1000000 + (uint64_t)ts.tv_nsec / 1000;
 }
 
-/* Workers take requests in order and run them in parallel; a flush or an
-   Apple barrier first waits for every request before it to finish, and nothing
-   after it starts until it is done, so their ordering meaning holds. */
+/* Workers take requests in order and run them in parallel; a flush first
+   waits for every request before it to finish, and nothing after it starts
+   until it is done. */
 static void *worker(void *opaque) {
     HvVirtioBlk *b = opaque;
     /* HV_BLK_STATS: requests, bytes, flushes and how busy this worker was, every 10 s. */
@@ -148,7 +145,7 @@ static void *worker(void *opaque) {
         HvVblkReq *r = &b->ring[b->claimed % HV_VBLK_RING];
         uint32_t type = 0;
         hv_virtq_read(&b->vio, &r->e, 0, &type, 4);
-        int fence = type == T_FLUSH || type == T_APPLE_BARRIER;
+        int fence = type == T_FLUSH;
         b->claimed++;
         if (fence) {
             b->fence = 1;
@@ -275,12 +272,11 @@ void hv_virtio_blk_poll(HvVirtioBlk *b) {
     notify(&b->vio, q); /* requests that waited for room in the ring */
 }
 
-HvVirtioBlk *hv_virtio_blk_create(HvMachine *m, HvPcie *bus, HvDisk *disk, int apple_variant) {
+HvVirtioBlk *hv_virtio_blk_create(HvMachine *m, HvPcie *bus, HvDisk *disk) {
     HvVirtioBlk *b = calloc(1, sizeof *b);
     if (!b) return NULL;
     HvVirtio *v = &b->vio;
-    /* Off for the macOS guest: Apple's driver has not been checked against it. */
-    int can_discard = !apple_variant && !disk->readonly && disk->hole;
+    int can_discard = !disk->readonly && disk->hole;
     hv_virtio_init(v, m, 2, 0x010000, 1, F_SEG_MAX | F_BLK_SIZE | F_FLUSH | (disk->readonly ? F_RO : 0) |
                     (can_discard ? F_DISCARD : 0));
     v->dev = b;
@@ -298,16 +294,10 @@ HvVirtioBlk *hv_virtio_blk_create(HvMachine *m, HvPcie *bus, HvDisk *disk, int a
     }
     if (!b->workers_started) { hv_virtio_blk_destroy(b); return NULL; }
     uint64_t capacity = disk->size / 512;
-    /* Apple's driver takes one descriptor per segment from the queue's 256
-       and does not use indirect tables: with segments up to 126, two big
-       writes used them all and the next failed (kIOReturnNoMemory, ENOMEM in
-       APFS, or its cleanup asserted "Adding invalid index 65535"). 32 got a
-       restore through, but a freshly installed Mac's first boot (Spotlight
-       indexing while Setup Assistant starts) still saw page-in ENOMEM; with 8
-       it boots to Setup Assistant cleanly. */
+    /* One descriptor per segment from the 256 in the queue, and no indirect tables: 8 leaves the ring room. */
     uint32_t seg_max = getenv("HV_BLK_SEG_MAX") ? (uint32_t)atoi(getenv("HV_BLK_SEG_MAX")) : 8;
     if (seg_max < 1 || seg_max > HV_VIRTQ_MAX_SEGS - 2) seg_max = 8;
-    uint32_t blk_size = 512, apple_type = (uint32_t)apple_variant;
+    uint32_t blk_size = 512;
     uint16_t num_queues = 1;
     memcpy(v->config + 0, &capacity, 8);
     memcpy(v->config + 12, &seg_max, 4);
@@ -319,29 +309,7 @@ HvVirtioBlk *hv_virtio_blk_create(HvMachine *m, HvPcie *bus, HvDisk *disk, int a
         memcpy(v->config + 40, &max_segs, 4);
         memcpy(v->config + 44, &align, 4);
     }
-    memcpy(v->config + 60, &apple_type, 4);
     v->config_len = 96;
-    if (apple_variant) {
-        /* Apple's identifiers, SCSI storage class, as vmapple-virtio-blk-pci sets them. */
-        uint16_t vendor = 0x106b, device = 0x1a00;
-        memcpy(v->pci.config + 0, &vendor, 2);
-        memcpy(v->pci.config + 2, &device, 2);
-        /* Apple vendor data (a virtio 1.2 PCI vendor-data capability, cfg_type
-           9, vendor 0x106b). AppleVirtIOStorageDevice reads 8 bytes of it: if
-           bit 0 of the first byte is clear, or the capability is missing, it
-           reports the disk as AES-XTS inline-encrypted, and APFS then refuses
-           an unencrypted Data volume. These disks are plain files, so bit 0
-           is set. QEMU's model has no such capability. */
-        uint8_t *cap = v->pci.config + 0x88;
-        v->pci.config[0x71] = 0x88; /* chain it after the notify capability */
-        cap[0] = 0x09;
-        cap[1] = 0x00;
-        cap[2] = 6 + 8;
-        cap[3] = 9;
-        memcpy(cap + 4, &vendor, 2);
-        memset(cap + 6, 0, 8);
-        cap[6] = 1; /* not inline-encrypted */
-    }
     hv_pcie_attach(bus, &v->pci);
     return b;
 }

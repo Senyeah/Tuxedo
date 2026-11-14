@@ -10,8 +10,7 @@ DD=build/ios-sim-app
 # The guest network, when tools/build_sim_net.sh has built libslirp and glib for the simulator
 SIM_NET_ROOT=${SIM_NET_ROOT:-$PWD/build/husk/build/ios-sim-arm64/sysroot}
 if [ -f "$SIM_NET_ROOT/lib/libslirp.a" ]; then HENGE_SIM_NET=1; else HENGE_SIM_NET=; SIM_NET_ROOT=; echo "no simulator libslirp: the guest has no network (tools/build_sim_net.sh)"; fi
-make ios-sim-lib ${HENGE_GFX:+GFX=1} ${HENGE_SIM_NET:+SIM_NET_ROOT=$SIM_NET_ROOT} build/henge-agent.gz
-tools/build_ios_restore.sh sim
+make ios-sim-lib ${HENGE_GFX:+GFX=1} ${HENGE_SIM_NET:+SIM_NET_ROOT=$SIM_NET_ROOT}
 (cd ios && xcodegen generate)
 LOG="$DD/build.log"
 mkdir -p "$DD"

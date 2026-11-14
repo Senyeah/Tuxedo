@@ -440,7 +440,7 @@ int main(void) {
     ram = calloc(1, RAM_SIZE);
     hv_machine_add_ram(&m, RAM, RAM_SIZE, ram, 0);
     HvGic *gic = hv_gicv3_create(&m, 0x08000000, 0x080a0000);
-    HvPcie *bus = hv_pcie_create(&m, gic, 0x3f000000, 0x01000000, 0x10000000, 0x2eff0000, 35, 1);
+    HvPcie *bus = hv_pcie_create(&m, gic, 0x3f000000, 0x01000000, 0x10000000, 0x2eff0000, 35);
     dev = hv_virtio_fs_create(&m, bus);
     check("created", dev != NULL, 1);
     if (!dev) return 1;

@@ -544,7 +544,7 @@ static void *input_thread(void *unused) {
         else if (!strncmp(line, "clip ", 5)) hv_share_set_clipboard(line + 5);
         else if (!strncmp(line, "getclip", 7)) {
             char *text = hv_share_take_clipboard();
-            fprintf(stderr, "hengevm: guest clipboard: %s (agent seen %ld s ago)\n", text ? text : "(nothing new)", hv_share_agent_seen());
+            fprintf(stderr, "hengevm: guest clipboard: %s (helper seen %ld s ago)\n", text ? text : "(nothing new)", hv_share_helper_seen());
             free(text);
         }
         else if (!strncmp(line, "kbdheight ", 10)) hv_share_set_keyboard_height(atof(line + 10)); /* the device keyboard's part of the screen */
@@ -1066,7 +1066,7 @@ int main(int argc, char **argv) {
     if (share_folder) {
         char sock[256];
         snprintf(sock, sizeof sock, "%s.sock", share_folder);
-        if (hv_share_start(share_folder, sock, getenv("HV_AGENT")) == 0) hv_net_set_share_socket(sock);
+        if (hv_share_start(share_folder, sock) == 0) hv_net_set_share_socket(sock);
     }
     if (hv_net_forward_listen(forward_addr) != 0 || hv_net_forward_set(forwards, nforwards) != 0) {
         fprintf(stderr, "hengevm: --forward-addr %s or a --forward port given twice\n", forward_addr);

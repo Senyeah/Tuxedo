@@ -146,7 +146,7 @@ static int read_reg(HvCpu *cpu, uint32_t reg, uint64_t *v) {
         *v = 0;
         return 0;
     }
-    /* Apple implementation-defined registers (op0 3, CRn 15). The vmapple
+    /* Apple implementation-defined registers (op0 3, CRn 15). A
        kernel reads error-status registers there (S3_6_C15_C0_0, S3_3_C15_C8_0..)
        when it reports a machine error; zero means no error recorded. */
     if ((reg >> 14) == 3 && ((reg >> 7) & 15) == 15) {

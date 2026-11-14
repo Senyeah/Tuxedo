@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """Keeps the guest clipboard in step with the device (host/share.c, /.henge/clipboard).
-Same protocol as tools/henge-agent.m in macOS: GET waits up to 25 s for news, PUT sends the guest's."""
+GET waits up to 25 s for news, PUT sends the guest's."""
 import base64
 import http.client
 import os

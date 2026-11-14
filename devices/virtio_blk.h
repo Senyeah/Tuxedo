@@ -6,9 +6,7 @@
 
 #include <pthread.h>
 
-/* virtio-blk. The vmapple variant (QEMU's vmapple-virtio-blk-pci) uses Apple's
-   PCI IDs and puts its role in the max_secure_erase_sectors config field. */
-enum { HV_VBLK_PLAIN = 0, HV_VBLK_ROOT = 1, HV_VBLK_AUX = 2 };
+/* virtio-blk. */
 
 /* Requests run on a worker thread, like a real controller doing DMA, so the
    CPU thread never waits on the host disk. The CPU thread takes requests off
@@ -36,7 +34,7 @@ typedef struct HvVirtioBlk {
     uint32_t completed;  /* workers: requests done (in any order) */
     uint32_t claimed;    /* workers: requests taken (under mu) */
     int inflight;        /* taken, not done */
-    int fence;           /* a flush or barrier waits for everything before it: nothing else is taken meanwhile */
+    int fence;           /* a flush waits for everything before it: nothing else is taken meanwhile */
     pthread_cond_t done_cv;
     uint32_t published;  /* CPU thread: completions pushed to the used ring */
     pthread_mutex_t mu;
@@ -45,7 +43,7 @@ typedef struct HvVirtioBlk {
     int stopping, workers_started;
 } HvVirtioBlk;
 
-HvVirtioBlk *hv_virtio_blk_create(HvMachine *m, HvPcie *bus, HvDisk *disk, int apple_variant);
+HvVirtioBlk *hv_virtio_blk_create(HvMachine *m, HvPcie *bus, HvDisk *disk);
 /* CPU thread: publish finished requests and raise the interrupt. */
 void hv_virtio_blk_poll(HvVirtioBlk *b);
 /* Tests: wait for the worker to finish everything submitted, then publish it. */

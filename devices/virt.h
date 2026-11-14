@@ -74,7 +74,7 @@ typedef struct HvVirt {
     HvVirtioGpu *gpu;
     HvVirtioSnd *snd;
     HvVirtioInput *touch;     /* before the balloon, so HV_BALLOON does not move it */
-    HvVirtioBalloon *balloon; /* HV_BALLOON=MB, as on vmapple */
+    HvVirtioBalloon *balloon; /* HV_BALLOON=MB */
     HvVirtioFs *fs;           /* the Files folders; last, so a machine with folders keeps every other slot */
     HvVirtioHvcodec *codec;   /* only when asked for (hengevm --vcodec-dma): last, so no other device moves */
     uint8_t *flash0, *flash1;

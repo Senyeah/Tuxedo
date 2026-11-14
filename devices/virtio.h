@@ -5,7 +5,7 @@
 
 #include "pcie.h"
 
-/* virtio 1.x over PCI (modern only, as vmapple sets disable-legacy), split
+/* virtio 1.x over PCI (modern only, as QEMU sets disable-legacy), split
    virtqueues, INTx interrupts. Requests are handled synchronously when the
    driver notifies. */
 #define HV_VIRTQ_MAX 4

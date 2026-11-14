@@ -89,10 +89,6 @@ jobs:
         working-directory: Henge
         run: zsh ios/scripts/fetch_deps.sh
 
-      - name: Build the restore stack (libirecovery, usbmuxd, idevicerestore)
-        working-directory: Henge
-        run: zsh tools/build_ios_restore.sh
-
       - name: Build the engine
         working-directory: Henge
         run: make ios-lib

@@ -264,7 +264,7 @@ static void test_endpoint(void) {
     char dir[] = "/tmp/henge-status-XXXXXX";
     if (!mkdtemp(dir)) return;
     snprintf(sock_path, sizeof sock_path, "%s/s.sock", dir);
-    check("endpoint: the share server starts", hv_share_start(dir, sock_path, NULL), 0);
+    check("endpoint: the share server starts", hv_share_start(dir, sock_path), 0);
     hv_status_reset(NULL);
     char resp[4096];
     http_get("/.henge/status?since=0", resp, sizeof resp);

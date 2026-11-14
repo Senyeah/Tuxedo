@@ -65,7 +65,7 @@ int hv_knob_set(HvMachine *m, const char *name, int value) {
 }
 
 /* Only features the translator handles. Host features are a superset (Apple M1 and later), so copied instructions always exist. */
-HvIdRegs hv_id_regs_vmapple(void) {
+HvIdRegs hv_id_regs_default(void) {
     return (HvIdRegs){
         .midr = 0x611f0220ull,  /* Apple; a configuration constant for now */
         .pfr0 = 0x1100000001110011ull,  /* EL0/EL1 AArch64, FP+AdvSIMD with FP16, GICv3 sysregs, CSV2, CSV3 */
@@ -92,7 +92,7 @@ int hv_machine_init_jit(HvMachine *m, void *rx, void *rw, size_t jit_bytes) {
 }
 
 static int init_rest(HvMachine *m) {
-    m->id = hv_id_regs_vmapple();
+    m->id = hv_id_regs_default();
     pthread_mutex_init(&m->big_mu, NULL);
     pthread_cond_init(&m->big_cv, NULL);
     pthread_mutexattr_t ra;
@@ -127,7 +127,7 @@ static int init_rest(HvMachine *m) {
     /* So the tests can run the translator these ways too (the iOS and --phone paths read them in knobs_init). */
     if (getenv("HV_SUPERBLOCKS")) hv_knob[HV_K_SUPERBLOCKS] = atoi(getenv("HV_SUPERBLOCKS"));
     /* The exact check for an access in a page's last 15 bytes, in the access's out-of-line path (code size only):
-       on the phone, Golden Gate's boot and login send 80-240K such accesses a second to the helper without it. It
+       on the phone, a heavy boot can send 80-240K such accesses a second to the helper without it. It
        costs ~13% of the code (Mac 2026-11-09: 296-300 against 259-261 bytes a block), and the phone's code cache
        fills every 40-60 s: worth a phone A/B (HV_RECHECK 0 vs 1 over a login), not a Mac one (~7K such accesses/s). */
     hv_knob[HV_K_RECHECK] = getenv("HV_RECHECK") ? atoi(getenv("HV_RECHECK")) : 1;

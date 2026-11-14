@@ -29,7 +29,7 @@ int hv_disk_open(HvDisk *d, const char *path, uint64_t offset, int readonly) {
     /* HV_WRITE_CACHE=0: writes skip the host's cache (F_NOCACHE), so a long run of them cannot pile up
        gigabytes of dirty pages; reads stay cached, and the kernel keeps the two coherent. Off by default:
        on the Mac bench big writes took 2-3x as long that way (2 GB + sync 4-6 s -> 9-17 s) and everyday
-       work was no faster. The phone's installer turns it on for the restore, which writes ~15 GB at once. */
+       work was no faster. */
     const char *wc = getenv("HV_WRITE_CACHE");
     if (!readonly && wc && !atoi(wc)) {
         d->wfd = open(path, O_RDWR);

@@ -5,7 +5,7 @@
 
 #include "gicv3.h"
 
-/* PL061 GPIO, as vmapple has it: inputs pulled low unless the host drives
+/* PL061 GPIO, inputs pulled low unless the host drives
    them; QEMU wires the power button to pin 3. */
 typedef struct HvPl061 {
     HvGic *gic;

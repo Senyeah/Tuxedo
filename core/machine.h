@@ -62,7 +62,7 @@ typedef struct HvBlock {
 #define HV_MAX_MMIO 48
 #define HV_BLOCK_HASH (1 << 21) /* one bucket per block: chains are walked on every front-cache miss */
 #define HV_JC_BITS 16
-#define HV_MAX_BLOCKS (3 << 20) /* a macOS boot runs well over a million distinct blocks; a full flush retranslates them all */
+#define HV_MAX_BLOCKS (3 << 20) /* a boot runs well over a million distinct blocks; a full flush retranslates them all */
 #define HV_PROF_RING (1 << 16)
 #define HV_MAX_SLOTS (6 << 20)  /* chainable exits: about two per block */
 
@@ -216,7 +216,7 @@ enum { HV_PHASE_RUN, HV_PHASE_TRANSLATE, HV_PHASE_HELPER, HV_PHASE_SYNC, HV_PHAS
 #define HV_REQ_TLB_ALL 1u   /* drop the whole TLB and branch cache */
 #define HV_REQ_IJC_RESET 2u /* drop the branch cache (code changed) */
 
-/* The identification registers the guest reads; a board fills them (hv_machine_init gives the vmapple values). */
+/* The identification registers the guest reads; a board fills them (hv_machine_init gives the default values). */
 typedef struct HvIdRegs {
     uint64_t midr, pfr0, dfr0, isar0, isar1, mmfr0, mmfr1, mmfr2;
 } HvIdRegs;
@@ -296,10 +296,8 @@ typedef struct HvMachine {
     /* --profile: host PCs of the CPU thread sampled every millisecond, drained by the stats line. */
     uint64_t *prof;
     uint32_t prof_head, prof_tail;
-    /* The host counter when the machine started: every CPU's CNTVOFF, so the guest's virtual counter (its
-       mach_absolute_time) starts near 0 as on a Mac or under Virtualization.framework. With the host's own
-       count (days of uptime) macOS 12 took the user as idle for that long and put itself to sleep while
-       still starting up: its window server never drew. */
+    /* The host counter when the machine started: every CPU's CNTVOFF, so the guest's virtual counter
+       starts near 0. With the host's own count (days of uptime) a guest can take the user as idle for that long. */
     uint64_t cntvoff;
     HvIdRegs id;
 } HvMachine;
@@ -316,7 +314,7 @@ static inline HvBlock *hv_block_find(HvMachine *m, uint32_t h, uint64_t va, uint
     return NULL;
 }
 
-HvIdRegs hv_id_regs_vmapple(void);
+HvIdRegs hv_id_regs_default(void);
 int hv_machine_init(HvMachine *m, size_t jit_bytes);
 /* The same with JIT memory the host provides (iOS: the region a debugger granted and its writable alias). */
 int hv_machine_init_jit(HvMachine *m, void *rx, void *rw, size_t jit_bytes);

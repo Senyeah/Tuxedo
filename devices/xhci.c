@@ -43,7 +43,6 @@ enum { CC_SUCCESS = 1, CC_TRB_ERROR = 5, CC_STALL = 6, CC_SLOTS_FULL = 9, CC_SLO
 #define PORT_CEC (1u << 23)
 #define PORT_CHANGES (PORT_CSC | PORT_PEC | PORT_WRC | PORT_OCC | PORT_PRC | PORT_PLC | PORT_CEC)
 #define SPEED_FULL 1
-#define SPEED_HIGH 2 /* vmapple keeps this value; xHCI numbers it as low speed */
 #define XHCI_SPEED_HIGH 3
 
 /* ---- the devices' descriptors ---- */
@@ -59,7 +58,7 @@ static const uint8_t kbd_report_desc[] = {
 
 static const uint8_t kbd_device_desc[18] = {
     18, 1, 0x00, 0x02, 0, 0, 0, 64, /* USB 2.0, class per interface, EP0 64 bytes */
-    0xac, 0x05, 0x20, 0x02,         /* vendor Apple, product 0x0220 (an ANSI keyboard): macOS knows its layout, no Keyboard Setup Assistant */
+    0xac, 0x05, 0x20, 0x02,         /* vendor Apple, product 0x0220 (an ANSI keyboard): the guest knows its layout */
     0x00, 0x01, 1, 2, 3, 1,         /* bcdDevice 1.00, strings 1-3, one configuration */
 };
 
@@ -976,8 +975,8 @@ void hv_xhci_key(HvXhci *x, uint8_t usage, int down) {
     hv_machine_wake(x->m);
 }
 
-/* Linux input key codes to HID keyboard usages (the same table macOS's virtio
-   keyboard driver uses), modifiers included. */
+/* Linux input key codes to HID keyboard usages (the same table as the virtio
+   keyboard), modifiers included. */
 static const uint8_t linux_to_hid[256] = {
     0x00, 0x29, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x2d, 0x2e, 0x2a, 0x2b,
     0x14, 0x1a, 0x08, 0x15, 0x17, 0x1c, 0x18, 0x0c, 0x12, 0x13, 0x2f, 0x30, 0x28, 0xe0, 0x04, 0x16,
@@ -1138,17 +1137,12 @@ void hv_xhci_poll(HvXhci *x) {
         if (x->slots[slot].dev >= 0) run_ep_in(x, slot);
 }
 
-void hv_xhci_set_linux_speeds(HvXhci *x) {
-    x->tp_speed = XHCI_SPEED_HIGH;
-    reset(x);
-}
-
 HvXhci *hv_xhci_create(HvMachine *m, HvPcie *bus) {
     HvXhci *x = calloc(1, sizeof *x);
     x->m = m;
-    x->tp_speed = SPEED_HIGH;
+    x->tp_speed = XHCI_SPEED_HIGH; /* speed ID 2 reads as low speed in Linux, which refuses a 64-byte ep0 */
     pthread_mutex_init(&x->mu, NULL);
-    /* QEMU's xHCI IDs. Class 0x0c0330 with revision 0: macOS's IOPCIClassMatch compares all 32 bits. */
+    /* QEMU's xHCI IDs. Class 0x0c0330 with revision 0. */
     hv_pci_init(&x->pci, 0x1b36, 0x000d, 0x0c033000, 0x1af4, 0x1100);
     x->pci.opaque = x;
     x->pci.bar_read = bar_read;

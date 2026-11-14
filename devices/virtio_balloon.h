@@ -5,10 +5,10 @@
 
 #include "virtio.h"
 
-/* virtio memory balloon (device type 5), which macOS drives with AppleVirtIOBalloon. The host asks for a
+/* virtio memory balloon (device type 5), which Linux drives with virtio_balloon. The host asks for a
    number of pages; the guest's kernel takes that many from its own free memory (dropping caches if it must)
    and says which; their host pages go back to the OS. Guest RAM is real memory on the phone, outside Henge's
-   footprint, so this is the one way to get it back from a running Mac when iOS runs short.
+   footprint, so this is the one way to get it back from a running guest when iOS runs short.
    Pages are 4 KB in the protocol (num_pages, actual and the page numbers), 16 KB on the host: a host page is
    given back once all four of its quarters are in the balloon. */
 #define HV_VIRTIO_BALLOON_F_DEFLATE_ON_OOM (1ull << 2) /* the guest deflates before its kernel kills a process */

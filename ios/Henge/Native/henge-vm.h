@@ -55,12 +55,12 @@ int henge_vm_cpus_on(void);                /* CPUs the guest has started */
 int henge_vm_guest_el0(void);              /* any CPU running user code right now */
 
 /* Input: Linux key codes, relative pointer, buttons 0 left 1 right 2 middle. */
-/* The shared folder and clipboard (host/share.c). henge_vm_share goes before henge_vm_boot_linux; agent may be NULL.
+/* The shared folder and clipboard (host/share.c). henge_vm_share goes before henge_vm_boot_linux.
    henge_share_take_clipboard returns what the guest copied, once: a malloc'd string, or NULL. */
-void henge_vm_share(const char *folder, const char *socket_path, const char *agent);
+void henge_vm_share(const char *folder, const char *socket_path);
 void henge_share_set_clipboard(const char *text);
 char *henge_share_take_clipboard(void);
-long henge_share_agent_seen(void);
+long henge_share_helper_seen(void);
 /* 1 when the focused program in a Linux desktop wants text; *seq changes with each request from the guest. */
 int henge_share_keyboard_wanted(unsigned long *seq);
 /* The part of the guest's picture that the keyboard covers, from the bottom: 0 (down) to 1. */

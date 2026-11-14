@@ -10,7 +10,7 @@
 #include "mmu.h"
 
 /* Only EL0 and EL1 exist for the guest; HengeVM plays EL2 (PSCI over HVC, as
-   QEMU's vmapple machine sets up) and there is no EL3. */
+   as QEMU's virt machine sets up) and there is no EL3. */
 
 #define PSTATE_EXTRA_MASK ((1ull << 22) | (1ull << 23) | (1ull << 12) | (1ull << 24) | (1ull << 25))
 
@@ -198,22 +198,6 @@ static uint64_t psci(HvCpu *cpu, uint64_t fn, int *retry) {
         if (!t) return (uint64_t)-2;
         return t->off ? 1 : 0;
     }
-    /* vmapple's paravirtualized PAC (XNU osfmk/arm64/hv_hvc.h): the guest
-       cannot program PAC keys itself, so the hypervisor does. HengeVM never
-       signs pointers, so there is nothing to program; each call only has to
-       succeed (XNU spins on a nonzero x0). */
-    case 0xc1000000: /* VMAPPLE_PAC_SET_INITIAL_STATE */
-    case 0xc1000002: /* VMAPPLE_PAC_SET_A_KEYS */
-    case 0xc1000003: /* VMAPPLE_PAC_SET_B_KEYS */
-    case 0xc1000004: /* VMAPPLE_PAC_SET_EL0_DIVERSIFIER */
-    case 0xc1000005: /* VMAPPLE_PAC_SET_EL0_DIVERSIFIER_AT_EL1 */
-    case 0xc1000006: /* VMAPPLE_PAC_SET_G_KEY */
-    case 0xc10000f0: /* VMAPPLE_PAC_NOP */
-        return 0;
-    case 0xc1000001: /* VMAPPLE_PAC_GET_DEFAULT_KEYS: x2 = default ROP id, x3 = default JOP id */
-        cpu->x[2] = 0x524f50; /* the values only name keys, and no key is ever used */
-        cpu->x[3] = 0x4a4f50;
-        return 0;
     default:
         if (cpu->m->log) fprintf(stderr, "hengevm: unknown hypervisor call %#llx (x1 %#llx) at el%u\n",
                                  (unsigned long long)fn, (unsigned long long)cpu->x[1], cpu->el);
@@ -250,7 +234,7 @@ int hv_exception_insn(HvCpu *cpu, uint32_t insn, uint64_t pc) {
         hv_take_exception(cpu, HV_EXC_SYNC, HV_EC_SVC64 << 26 | 1u << 25 | imm16, 0, 0, pc + 4);
         return 1;
     }
-    if (opc == 0 && ll == 2 && cpu->el == 1) { /* HVC: the hypervisor's PSCI and vmapple's PAC calls */
+    if (opc == 0 && ll == 2 && cpu->el == 1) { /* HVC: the hypervisor's PSCI calls */
         int retry = 0;
         uint64_t r = psci(cpu, cpu->x[0], &retry);
         if (retry) { /* run the HVC again after a turn: the dispatcher hands the big lock on outside the block */

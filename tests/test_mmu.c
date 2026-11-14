@@ -242,7 +242,7 @@ static void e0pd(HvMachine *m, HvCpu *cpu) {
     expect("E0PD0: EL0 reads the upper half", cpu, K, HV_ACC_READ, 0, D + 0x4000, 0);
     cpu->tcr_el1 &= ~(3ull << 55);
 
-    /* The vmapple values, bit for bit (the macOS guest reads these). */
+    /* The default values, bit for bit (a guest reads these). */
     static const struct { uint32_t mrs; uint64_t v; const char *n; } vm[] = {
         {0xd5380001u, 0x611f0220ull, "MIDR_EL1"},
         {0xd5380401u, 0x1100000001110011ull, "ID_AA64PFR0_EL1"},
@@ -259,7 +259,7 @@ static void e0pd(HvMachine *m, HvCpu *cpu) {
         cpu->x[1] = 1;
         hv_sysreg_mrs(cpu, vm[i].mrs, 0);
         char what[64];
-        snprintf(what, sizeof what, "%s is not the vmapple value by default", vm[i].n);
+        snprintf(what, sizeof what, "%s is not the default value", vm[i].n);
         check_that(cpu->x[1] == vm[i].v, what);
     }
     m->id = (HvIdRegs){.midr = 1, .pfr0 = 2, .dfr0 = 3, .isar0 = 4, .isar1 = 5, .mmfr0 = 6, .mmfr1 = 7, .mmfr2 = 1ull << 60};

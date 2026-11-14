@@ -65,14 +65,13 @@ int hv_virt_create(HvVirt *b, HvMachine *m, HvCpu *cpus, int ncpus, uint64_t ram
     hv_ocores_i2c_attach(b->i2c, &b->battery.t);
     hv_ocores_i2c_attach(b->i2c, &b->backlight.t);
     b->pcie = hv_pcie_create(m, b->gic, VIRT_PCIE_ECAM, VIRT_PCIE_ECAM_SIZE, VIRT_PCIE_MMIO, VIRT_PCIE_MMIO_SIZE,
-                             32 + VIRT_IRQ_PCIE, 1);
+                             32 + VIRT_IRQ_PCIE);
     hv_machine_add_mmio(m, VIRT_PCIE_PIO, VIRT_PCIE_PIO_SIZE, b, pio_read, pio_write, "pcie-pio");
     /* A fixed order keeps each device in the same slot. */
-    if (root) b->blk = hv_virtio_blk_create(m, b->pcie, root, HV_VBLK_PLAIN);
+    if (root) b->blk = hv_virtio_blk_create(m, b->pcie, root);
     if (mac) b->net = hv_virtio_net_create(m, b->pcie, mac);
     b->rng = hv_virtio_rng_create(m, b->pcie);
     b->usb = hv_xhci_create(m, b->pcie);
-    if (b->usb) hv_xhci_set_linux_speeds(b->usb);
     b->keyboard = hv_virtio_input_create(m, b->pcie, HV_VINPUT_KEYBOARD);
     b->mouse = hv_virtio_input_create(m, b->pcie, HV_VINPUT_MOUSE);
     b->gpu = hv_virtio_gpu_create(m, b->pcie, 1920, 1080);

@@ -7,8 +7,7 @@
 
 /* An xHCI USB host controller (xHCI 1.0, one interrupter, 32-byte contexts,
    INTx) with two USB HID devices: a boot keyboard on port 1 and a Magic
-   Trackpad 2 on port 2: what Virtualization.framework gives a macOS guest as
-   its "Virtual USB Keyboard", plus Apple's multitouch pad, so the guest's
+   Trackpad 2 on port 2: Apple's multitouch pad (hid-magicmouse), so the guest's
    own gesture engine sees a real trackpad. Changes come from the host UI on
    any thread (hv_xhci_key, hv_xhci_touch); the CPU thread delivers them
    (hv_xhci_poll). */
@@ -41,7 +40,7 @@ typedef struct HvXhci {
     HvXhciRing cmd;
     int cmd_running;
     uint32_t portsc[HV_XHCI_PORTS];
-    /* interrupters and their event rings (macOS's driver wants at least three) */
+    /* interrupters and their event rings (the guest wants at least three) */
     struct HvXhciIntr {
         uint32_t iman, imod, erstsz;
         uint64_t erstba, erdp;
@@ -89,8 +88,6 @@ typedef struct HvXhci {
 } HvXhci;
 
 HvXhci *hv_xhci_create(HvMachine *m, HvPcie *bus);
-/* Linux boards: the trackpad port reports speed ID 3 (high). Linux reads vmapple's 2 as low speed and refuses a 64-byte ep0. */
-void hv_xhci_set_linux_speeds(HvXhci *x);
 /* Any thread: a key went down or up (HID usage page 7 usage, e.g. 4 = A; 0xe0-0xe7 are modifiers). */
 void hv_xhci_key(HvXhci *x, uint8_t usage, int down);
 /* The same, by Linux input key code (what the host UI produces). */

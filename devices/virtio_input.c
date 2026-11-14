@@ -42,8 +42,7 @@ static void answer(HvVirtioInput *d) {
         size = 1;
         break;
     case CFG_ID_DEVIDS: { /* bustype BUS_VIRTUAL, vendor, product, version */
-        /* AppleVirtIOInputKeyboard always says vendor Apple (0x5ac) and takes the
-           product from here; HV_KBD_PRODUCT tries others (experiment). */
+        /* HV_KBD_PRODUCT tries other product ids (experiment). */
         uint16_t prod = (uint16_t)(kbd ? (getenv("HV_KBD_PRODUCT") ? atoi(getenv("HV_KBD_PRODUCT")) : 1) : touch ? 3 : 2);
         uint16_t ids[4] = {0x06, 0x0627, prod, 1};
         memcpy(data, ids, sizeof ids);

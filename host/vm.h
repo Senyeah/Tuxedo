@@ -8,7 +8,7 @@
 #include "virt.h"
 
 /* The virtual machine as a host app drives it: build it from files, run it, feed
-   it input, stop it. The macOS command-line tool and the iOS app both use this. */
+   it input, stop it. The command-line tool and the iOS app both use this. */
 
 /* A folder from the Files app (fs_server.h). The guest's helper mounts it at /media/henge/<name>. */
 typedef struct HvVmFolder {
@@ -44,8 +44,7 @@ typedef struct HvDisplayOps {
     int (*snapshot)(void *d, uint8_t *bgra, uint32_t width, uint32_t height);
     int (*pointer)(void *d, int *x, int *y);
     void (*set_mode)(void *d, uint32_t width, uint32_t height);
-    void (*set_size_mm)(void *d, uint32_t width_mm, uint32_t height_mm); /* NULL: the guest is not told */
-    void (*hide_cursor)(void *d, int hidden); /* NULL: the cursor is part of the guest's picture */
+    void (*hide_cursor)(void *d, int hidden);
 } HvDisplayOps;
 
 /* The devices of any board, for the code that does not care which board it is. */
@@ -59,7 +58,7 @@ typedef struct HvBoardDevs {
     HvVirtioNet *net;
     HvVirtioSnd *snd;
     HvVirtioBalloon *balloon;
-    HvVirtioBlk *blk[2]; /* root, then aux (vmapple only) */
+    HvVirtioBlk *blk; /* the root disk */
     uint8_t *ram;
     uint64_t ram_pa, ram_size;
     const HvDisplayOps *display; /* NULL: no display device */
@@ -76,7 +75,7 @@ HvVirt *hv_vm_virt(void);     /* NULL unless a virt machine exists */
 const HvBoardDevs *hv_vm_devs(void);
 HvCpu *hv_vm_cpu(int index);
 extern void (*hv_prof_register)(void); /* debugging: each thread that will run guest code calls this */
-/* Frames go to this CAMetalLayer, drawn by the GPU, instead of hv_vm_boot_display. */
+/* Frames go to this CAMetalLayer, drawn by the GPU. */
 void hv_vm_set_display_layer(void *layer);
 uint64_t hv_vm_gpu_frames(void);
 /* Any thread: the screen size the guest is offered. Kept for later machines; a
@@ -86,7 +85,7 @@ void hv_vm_set_display_mode(uint32_t width, uint32_t height);
 void hv_vm_set_display_scale(double scale);
 /* The mode and scale last set; 0 when no mode was ever set (outputs untouched). */
 int hv_vm_display(uint32_t *w, uint32_t *h, double *scale);
-/* The panel's size, for a guest that works out its pixel density from it (vmapple). 0 x 0: the default. */
+/* No effect: nothing in the virtio GPU path uses a panel size. */
 void hv_vm_set_display_size_mm(uint32_t width_mm, uint32_t height_mm);
 int hv_vm_ncpus(void);
 
@@ -141,7 +140,7 @@ int hv_vm_power_button(void); /* 1 if the key will be pressed */
 void hv_vm_touch(int id, int phase, int x, int y, uint32_t ts_ms);
 void hv_vm_touch_frame(uint32_t ts_ms); /* commit one frame with every finger that moved */
 void hv_vm_touch_button(int down); /* the pad's full press (a click) */
-/* The virt board's touchscreen (no effect on vmapple). slot 0 to 9; phase 0 down, 1 move, 2 up;
+/* The virt board's touchscreen. slot 0 to 9; phase 0 down, 1 move, 2 up;
    x, y 0 to 32767 over the whole guest picture, clamped. Nothing reaches the guest until _frame. */
 void hv_vm_screen_touch(int slot, int phase, int x, int y);
 void hv_vm_screen_touch_frame(void);

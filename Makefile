@@ -25,8 +25,8 @@ endef
 CORE = $(B)/classify.o $(B)/operands.o $(B)/translate.o $(B)/dispatch.o $(B)/mmu.o $(B)/memop.o \
        $(B)/exception.o $(B)/sysreg.o $(B)/machine.o
 HOST = $(B)/jit_region.o $(B)/enter.o $(B)/disk.o
-DEV = $(B)/pvg_lite.o $(B)/pvg_metal.o $(B)/vgpu_metal.o $(B)/gicv3.o $(B)/timer.o $(B)/pl011.o $(B)/pl031.o $(B)/cfg.o $(B)/bdif.o $(B)/pcie.o \
-      $(B)/virtio.o $(B)/virtio_blk.o $(B)/virtio_net.o $(B)/virtio_rng.o $(B)/virtio_input.o $(B)/virtio_gpu.o $(B)/virtio_snd.o $(B)/virtio_usb.o $(B)/virtio_balloon.o $(B)/virtio_hvcodec.o $(B)/xhci.o $(B)/vmapple.o $(B)/aes.o $(B)/pl061.o $(B)/metallib.o $(B)/fdt.o $(B)/guest_ram.o $(B)/virt.o $(B)/virt_fdt.o $(B)/ocores_i2c.o $(B)/devstatus.o \
+DEV = $(B)/vgpu_metal.o $(B)/gicv3.o $(B)/timer.o $(B)/pl011.o $(B)/pl031.o $(B)/pcie.o \
+      $(B)/virtio.o $(B)/virtio_blk.o $(B)/virtio_net.o $(B)/virtio_rng.o $(B)/virtio_input.o $(B)/virtio_gpu.o $(B)/virtio_snd.o $(B)/virtio_balloon.o $(B)/virtio_hvcodec.o $(B)/xhci.o $(B)/pl061.o $(B)/fdt.o $(B)/guest_ram.o $(B)/virt.o $(B)/virt_fdt.o $(B)/ocores_i2c.o $(B)/devstatus.o \
       $(B)/virtio_fs.o $(B)/fs_server.o $(B)/safe_path.o $(GFX_OBJ)
 ENGINE = $(CORE) $(HOST)
 VM = $(B)/vm.o $(B)/linux_boot.o $(B)/status.o
@@ -47,11 +47,6 @@ $(B)/hengevm-ref: host/hvf_ref.c host/hvf_ref.entitlements $(ENGINE) $(DEV) $(B)
 	$(CC) $(CFLAGS) host/hvf_ref.c $(ENGINE) $(DEV) $(B)/linux_boot.o -framework Hypervisor $(METAL_LIBS) -o $@
 	codesign -s - -f --entitlements host/hvf_ref.entitlements $@
 
-# Mac-only graphics device (ParavirtualizedGraphics.framework, as QEMU uses it).
-# Built for an older deployment target: the framework's memory callbacks are
-# marked obsolete in macOS 27 without a documented replacement.
-$(B)/pvg_metal.o: devices/pvg_metal.m devices/*.h core/*.h host/*.h $(B)/.gfx-stamp | $(B)
-	$(CC) $(CFLAGS) -fobjc-arc -Wno-unused-parameter -Wno-deprecated-declarations -c $< -o $@
 # The virtio GPU's presenter (Metal, both platforms).
 $(B)/vgpu_metal.o: devices/vgpu_metal.m devices/*.h core/*.h host/*.h $(B)/.gfx-stamp | $(B)
 	$(CC) $(CFLAGS) -fobjc-arc -c $< -o $@
@@ -61,8 +56,6 @@ $(B)/vgpu_virgl.o: devices/vgpu_virgl.m devices/*.h core/*.h host/*.h $(B)/.gfx-
 	$(CC) $(CFLAGS) -fobjc-arc -Wno-unused-parameter -I$(GFX_DIR)/include -DHV_ANGLE_COMMIT='"$(ANGLE_COMMIT)"' -c $< -o $@
 $(B)/virt_window.o: host/virt_window.m host/*.h $(B)/.gfx-stamp | $(B)
 	$(CC) -fobjc-arc -O2 -g -Wall -Wextra -Icore -Ihost -Idevices -c $< -o $@
-$(B)/pvg_mac.o: devices/pvg_mac.m devices/*.h core/*.h host/*.h | $(B)
-	$(CC) -fobjc-arc -O2 -g -Wall -mmacosx-version-min=15.2 -Icore -Ihost -Idevices -c $< -o $@
 
 # User-mode NAT for the NIC: Homebrew's libslirp (brew install libslirp).
 SLIRP_CFLAGS = $(shell pkg-config --cflags slirp)
@@ -73,31 +66,11 @@ NET_OBJ = $(B)/net_slirp.o $(B)/net_forward.o
 $(B)/dns_proxy.o: host/dns_proxy.c host/dns_proxy.h core/machine.h | $(B)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-RB = $(B)/restore
-RESTORE_PKGS = libplist-2.0 libusbmuxd-2.0 libimobiledevice-1.0 libimobiledevice-glue-1.0 libtatsu-1.0 libzip libcurl
-RESTORE_CFLAGS = -O2 -w -DHAVE_CONFIG_H -Ithird_party/restore_config -Ithird_party -Ithird_party/libusb-1.0 \
-                 -Ithird_party/libirecovery/include $(shell pkg-config --cflags $(RESTORE_PKGS) 2>/dev/null)
-RESTORE_LIBS = $(shell pkg-config --libs $(RESTORE_PKGS) 2>/dev/null) -lz
-IRECV_SRC = third_party/libirecovery/src/libirecovery.c
-MUXD_SRC = $(wildcard third_party/usbmuxd/src/*.c)
-IDR_SRC = $(wildcard third_party/idevicerestore/src/*.c)
-RESTORE_OBJ = $(patsubst third_party/%.c,$(RB)/%.o,$(IRECV_SRC) $(MUXD_SRC) $(IDR_SRC))
-
-# The helper that runs inside macOS on a virtual Mac (share.c serves it to the guest).
-$(B)/henge-agent: tools/henge-agent.m
-	@mkdir -p $(B)
-	env -u SDKROOT -u IPHONEOS_DEPLOYMENT_TARGET xcrun --sdk macosx clang -arch arm64 -mmacosx-version-min=12.0 -fobjc-arc -Wall -Wextra -O2 -framework AppKit $< -o $@
-	codesign -f -s - $@
-
-# Compressed in the app: tools that sign an IPA would try to sign a bare Mach-O too.
-$(B)/henge-agent.gz: $(B)/henge-agent
-	gzip -9 -n -c $< > $@
-
 $(B)/share.o: host/share.c host/*.h devices/*.h core/*.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(B)/hengevm: host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(NET_OBJ) $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(VCODEC_OBJ) $(B)/mac-restore/libhengerestore.a $(if $(GFX),$(wildcard $(GFX_LIBS)))
-	$(CC) $(CFLAGS) host/main.c $(ENGINE) $(DEV) $(B)/pvg_mac.o $(NET_OBJ) $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/usb_host.o $(B)/virt_window.o $(VCODEC_OBJ) $(B)/mac-restore/libhengerestore.a -lz $(VT_FRAMEWORKS) -framework Foundation -framework CFNetwork -framework Security -framework SystemConfiguration -framework IOKit $(SLIRP_LIBS) -framework AudioToolbox -framework ParavirtualizedGraphics -framework Metal -framework IOSurface \
+$(B)/hengevm: host/main.c $(ENGINE) $(DEV) $(NET_OBJ) $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/virt_window.o $(VCODEC_OBJ) $(if $(GFX),$(wildcard $(GFX_LIBS)))
+	$(CC) $(CFLAGS) host/main.c $(ENGINE) $(DEV) $(NET_OBJ) $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/virt_window.o $(VCODEC_OBJ) $(VT_FRAMEWORKS) -framework Foundation $(SLIRP_LIBS) -framework AudioToolbox -framework Metal -framework IOSurface \
 	    -framework Foundation -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers -framework CoreFoundation \
 	    -framework AppKit -framework QuartzCore $(GFX_LDLIBS) -o $@
 
@@ -149,20 +122,20 @@ $(B)/test_status: tests/test_status.c $(B)/status.o $(B)/share.o $(B)/safe_path.
 $(B)/test_net_forward: tests/test_net_forward.c $(B)/net_forward.o
 	$(CC) $(CFLAGS) $^ -o $@
 
-# Native app lifecycle with real devices and networking; no restore assets.
+# Native app lifecycle with real devices and networking.
 $(B)/test_dns_lifecycle: tests/test_dns_lifecycle.c $(B)/dns_proxy.o
 	$(CC) $(CFLAGS) $^ -o $@
 
-$(B)/test_vm_lifecycle: tests/test_vm_lifecycle.c ios/Henge/Native/henge-vm.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(NET_OBJ) $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/usb_host.o $(VCODEC_OBJ)
+$(B)/test_vm_lifecycle: tests/test_vm_lifecycle.c ios/Henge/Native/henge-vm.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(NET_OBJ) $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(VCODEC_OBJ)
 	$(CC) $(CFLAGS) -Iios/Henge/Native $^ $(SLIRP_LIBS) $(METAL_LIBS) $(VT_FRAMEWORKS) -framework AudioToolbox -o $@
 
-$(B)/test_console: tests/test_console.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(NET_OBJ) $(B)/dns_proxy.o $(B)/usb_host.o
+$(B)/test_console: tests/test_console.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(NET_OBJ) $(B)/dns_proxy.o
 	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -o $@
 
 # Runs build/hengevm, so it is built first.
 $(B)/test_cli: tests/test_cli.c $(B)/hengevm | $(B)
 	$(CC) $(CFLAGS) tests/test_cli.c -o $@
-$(B)/test_virt: tests/test_virt.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(NET_OBJ) $(B)/dns_proxy.o $(B)/usb_host.o
+$(B)/test_virt: tests/test_virt.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(NET_OBJ) $(B)/dns_proxy.o
 	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -o $@
 
 # PUT /.henge/keyboard: what henge-keyboard in a Linux desktop asks of the device.
@@ -235,7 +208,6 @@ ACCEL_B ?= build/accel
 test-linux-accel:
 	@if [ ! -d "$(GFX_DIR)" ]; then echo "test-linux-accel: skipped: no graphics libraries in $(GFX_DIR)"; exit 0; fi; \
 	mkdir -p $(ACCEL_B) && \
-	{ [ -f $(ACCEL_B)/mac-restore/libhengerestore.a ] || { $(MAKE) build/mac-restore/libhengerestore.a && cp -R build/mac-restore $(ACCEL_B)/ && touch $(ACCEL_B)/mac-restore/libhengerestore.a; }; } && \
 	$(MAKE) GFX=1 B=$(ACCEL_B) $(ACCEL_B)/hengevm && \
 	uv run tools/linux/accel-check.py --hengevm $(ACCEL_B)/hengevm $(ACCEL_ARGS)
 .PHONY: test-linux-accel
@@ -246,7 +218,6 @@ test-linux-accel:
 test-linux-video:
 	@if [ ! -d "$(GFX_DIR)" ]; then echo "test-linux-video: skipped: no graphics libraries in $(GFX_DIR)"; exit 0; fi; \
 	mkdir -p $(ACCEL_B) && \
-	{ [ -f $(ACCEL_B)/mac-restore/libhengerestore.a ] || { $(MAKE) build/mac-restore/libhengerestore.a && cp -R build/mac-restore $(ACCEL_B)/ && touch $(ACCEL_B)/mac-restore/libhengerestore.a; }; } && \
 	$(MAKE) GFX=1 B=$(ACCEL_B) $(ACCEL_B)/hengevm && \
 	uv run tools/linux/video-decode-check.py --hengevm $(ACCEL_B)/hengevm $(VIDEO_ARGS)
 .PHONY: test-linux-video
@@ -257,7 +228,6 @@ test-linux-video:
 test-linux-gpu-pause:
 	@if [ ! -d "$(GFX_DIR)" ]; then echo "test-linux-gpu-pause: skipped: no graphics libraries in $(GFX_DIR)"; exit 0; fi; \
 	mkdir -p $(ACCEL_B) && \
-	{ [ -f $(ACCEL_B)/mac-restore/libhengerestore.a ] || { $(MAKE) build/mac-restore/libhengerestore.a && cp -R build/mac-restore $(ACCEL_B)/ && touch $(ACCEL_B)/mac-restore/libhengerestore.a; }; } && \
 	$(MAKE) GFX=1 B=$(ACCEL_B) $(ACCEL_B)/hengevm && \
 	uv run tools/linux/gpu-pause-check.py --hengevm $(ACCEL_B)/hengevm $(GPU_PAUSE_ARGS)
 .PHONY: test-linux-gpu-pause
@@ -267,7 +237,6 @@ test-linux-gpu-pause:
 test-linux-shader-cache:
 	@if [ ! -d "$(GFX_DIR)" ]; then echo "test-linux-shader-cache: skipped: no graphics libraries in $(GFX_DIR)"; exit 0; fi; \
 	mkdir -p $(ACCEL_B) && \
-	{ [ -f $(ACCEL_B)/mac-restore/libhengerestore.a ] || { $(MAKE) build/mac-restore/libhengerestore.a && cp -R build/mac-restore $(ACCEL_B)/ && touch $(ACCEL_B)/mac-restore/libhengerestore.a; }; } && \
 	$(MAKE) GFX=1 B=$(ACCEL_B) $(ACCEL_B)/hengevm && \
 	uv run tools/linux/shader-stall.py --hengevm $(ACCEL_B)/hengevm $(if $(STALL_ARGS),$(STALL_ARGS),--check)
 .PHONY: test-linux-shader-cache
@@ -393,9 +362,6 @@ test-vm-lifecycle: $(B)/test_vm_lifecycle
 	$(B)/test_vm_lifecycle
 .PHONY: test-vm-lifecycle
 
-$(B)/test_pvg_lifecycle: tests/test_pvg_lifecycle.m $(ENGINE) $(DEV)
-	$(CC) $(CFLAGS) -fobjc-arc $^ $(METAL_LIBS) -o $@
-
 $(B)/test_vgpu_metal: tests/test_vgpu_metal.m $(ENGINE) $(DEV)
 	$(CC) $(CFLAGS) -fobjc-arc $^ $(METAL_LIBS) -o $@
 
@@ -445,11 +411,11 @@ IOS_DEPS ?= $(if $(wildcard ios/deps/include/slirp/libslirp.h),$(CURDIR)/ios/dep
 IOS_CFLAGS = -std=c11 -Wall -Wextra -O2 -g -Icore -Ihost -Idevices -I$(IOS_DEPS)/include/slirp $(if $(GFX),-DHV_GFX=1)
 IB = build/ios
 IOS_GFX_DIR ?= $(GFX_ROOT)/ios
-IOS_SRC = $(wildcard core/*.c) host/prof_ios.c host/jit_region.c host/disk.c host/vm.c host/linux_boot.c host/status.c $(IOS_NET) host/net_forward.c host/dns_proxy.c host/share.c host/safe_path.c host/fs_server.c host/secrets.c host/audio_mac.c host/hvsparse.c host/usb_host.c \
-          $(filter-out devices/pvg_mac.m,$(wildcard devices/*.c))
+IOS_SRC = $(wildcard core/*.c) host/prof_ios.c host/jit_region.c host/disk.c host/vm.c host/linux_boot.c host/status.c $(IOS_NET) host/net_forward.c host/dns_proxy.c host/share.c host/safe_path.c host/fs_server.c host/secrets.c host/audio_mac.c host/hvsparse.c \
+          $(wildcard devices/*.c)
 # hvcodec, for a machine's Video encode setting. The app links VideoToolbox for it (ios/project.yml).
 IOS_VCODEC_OBJ = $(IB)/host/vcodec.o $(IB)/host/vt_decode.o $(IB)/host/vt_caps.o
-IOS_OBJ = $(patsubst %.c,$(IB)/%.o,$(IOS_SRC)) $(IB)/host/enter.o $(IB)/devices/pvg_metal.o $(IB)/devices/vgpu_metal.o $(if $(GFX),$(IB)/devices/vgpu_virgl.o) $(IOS_VCODEC_OBJ)
+IOS_OBJ = $(patsubst %.c,$(IB)/%.o,$(IOS_SRC)) $(IB)/host/enter.o $(IB)/devices/vgpu_metal.o $(if $(GFX),$(IB)/devices/vgpu_virgl.o) $(IOS_VCODEC_OBJ)
 
 $(IB)/.gfx-stamp: FORCE
 	@mkdir -p $(IB)
@@ -460,9 +426,6 @@ $(IB)/core/mmu.o: core/mmu.c core/*.h host/*.h devices/*.h $(IB)/.gfx-stamp
 $(IB)/%.o: %.c core/*.h host/*.h devices/*.h $(IB)/.gfx-stamp
 	@mkdir -p $(dir $@)
 	$(IOS_CC) $(IOS_CFLAGS) -c $< -o $@
-$(IB)/devices/pvg_metal.o: devices/pvg_metal.m devices/*.h core/*.h host/*.h $(IB)/.gfx-stamp
-	@mkdir -p $(dir $@)
-	$(IOS_CC) $(IOS_CFLAGS) -fobjc-arc -Wno-unused-parameter -Wno-deprecated-declarations -c $< -o $@
 $(IB)/devices/vgpu_metal.o: devices/vgpu_metal.m devices/*.h core/*.h host/*.h $(IB)/.gfx-stamp
 	@mkdir -p $(dir $@)
 	$(IOS_CC) $(IOS_CFLAGS) -fobjc-arc -c $< -o $@
@@ -490,31 +453,6 @@ ios-sim-lib:
 	  IOS_SDK='$$(shell xcrun --sdk iphonesimulator --show-sdk-path)' \
 	  IOS_CC='xcrun --sdk iphonesimulator clang -arch arm64 -target arm64-apple-ios17.0-simulator -isysroot $$(IOS_SDK)'
 .PHONY: ios-sim-lib
-
-# The restore stack, built from the same sources and with the same stand-ins as iOS.
-$(B)/mac-restore/libhengerestore.a: tools/build_ios_restore.sh host/libusb_shim.c host/install.c host/curl_shim.m $(wildcard third_party/*/src/*.c) $(wildcard third_party/libirecovery/src/*.c)
-	nice -n 10 tools/build_ios_restore.sh mac
-
-# The installer: libirecovery, usbmuxd and idevicerestore (third_party, vendored
-# sources) linked against host/libusb_shim.c, so they restore the virtual Mac
-# through its USB port the way Virtualization.framework's installer does.
-# Mac build: the libraries they need come from Homebrew (libimobiledevice,
-# libtatsu, libplist, libzip).
-$(RB)/libirecovery/%.o: third_party/libirecovery/%.c
-	@mkdir -p $(dir $@)
-	$(CC) $(RESTORE_CFLAGS) -DPACKAGE_VERSION='"1.3.1-henge"' -c $< -o $@
-$(RB)/usbmuxd/%.o: third_party/usbmuxd/%.c
-	@mkdir -p $(dir $@)
-	$(CC) $(RESTORE_CFLAGS) -DPACKAGE_NAME='"usbmuxd"' -DPACKAGE_VERSION='"1.1.1-henge"' -Dmain=usbmuxd_main -Dlog_level=usbmuxd_log_level -c $< -o $@
-$(RB)/idevicerestore/%.o: third_party/idevicerestore/%.c
-	@mkdir -p $(dir $@)
-	$(CC) $(RESTORE_CFLAGS) -Ithird_party/idevicerestore/src -DIDEVICERESTORE_NOMAIN -DPACKAGE_NAME='"idevicerestore"' -DPACKAGE_VERSION='"1.0.0-henge"' -c $< -o $@
-$(B)/libusb_shim.o: host/libusb_shim.c host/*.h devices/*.h | $(B)
-	$(CC) $(CFLAGS) -Ithird_party -c $< -o $@
-$(B)/install.o: host/install.c host/*.h devices/*.h | $(B)
-	$(CC) $(CFLAGS) $(RESTORE_CFLAGS) -c $< -o $@
-restore-objs: $(RESTORE_OBJ)
-.PHONY: restore-objs
 
 # Session-owned display routing, independent of JIT, Metal and a connected monitor.
 $(B)/test_display_targets: ios/Henge/DisplayTargetSelection.swift tests/test_display_targets.swift | $(B)
@@ -614,7 +552,7 @@ test-virgl-host:
 
 # A5: the real virgl renderer behind the virtio GPU, driven through its control queue. Same libraries; with GFX=1 it
 # is also part of make test. Skipped (exit 0) when GFX_DIR is missing.
-$(B)/test_vgpu_virgl: tests/test_vgpu_virgl.c $(ENGINE) $(filter-out $(B)/vgpu_virgl.o,$(DEV)) $(B)/vgpu_virgl.o $(VM) $(B)/audio_mac.o $(NET_OBJ) $(B)/dns_proxy.o $(B)/usb_host.o $(GFX_LIBS)
+$(B)/test_vgpu_virgl: tests/test_vgpu_virgl.c $(ENGINE) $(filter-out $(B)/vgpu_virgl.o,$(DEV)) $(B)/vgpu_virgl.o $(VM) $(B)/audio_mac.o $(NET_OBJ) $(B)/dns_proxy.o $(GFX_LIBS)
 	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) $(GFX_FRAMEWORKS) -framework AudioToolbox -o $@
 
 test-vgpu-virgl:
@@ -742,7 +680,7 @@ test-linux-unpack: $(B)/test_linux_unpack
 	$(B)/test_linux_unpack
 .PHONY: test-linux-unpack
 
-# E13/T4: the engine gate. The macOS guest boot has no machine on this Mac, so it stays an iPhone check.
+# E13/T4: the engine gate.
 # Does not run ios/scripts/sim_build.sh (HengeSim): run it when ios/ changes.
 # Needs no Husk checkout: IOS_DEPS falls back to Homebrew's libslirp when the default sysroot is missing.
 GATE_IOS_DEPS ?= $(if $(wildcard $(IOS_DEPS)/include/slirp/libslirp.h),$(IOS_DEPS),/opt/homebrew)

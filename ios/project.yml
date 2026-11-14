@@ -93,9 +93,6 @@ targets:
           - "-lc++"
           - "-framework"
           - "QuartzCore"
-          # The installer (tools/build_ios_restore.sh): libirecovery, usbmuxd, idevicerestore and their libraries.
-          - "-lhengerestore"
-          - "-lz"
           - "-lslirp"
           - "-lglib-2.0"
           - "-lintl"
@@ -130,16 +127,9 @@ targets:
         script: |
           set -e
           cd "$SRCROOT/.."
-          make ios-lib ${HENGE_GFX:+GFX=1} build/henge-agent.gz
-          ./tools/build_ios_restore.sh
+          make ios-lib ${HENGE_GFX:+GFX=1}
         basedOnDependencyAnalysis: false
     postBuildScripts:
-      - name: Bundle the Mac helper
-        # What runs inside macOS for the clipboard and shared folder (tools/henge-agent.m).
-        script: |
-          set -e
-          cp "$SRCROOT/../build/henge-agent.gz" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/henge-agent.gz"
-        basedOnDependencyAnalysis: false
       - name: Embed StikJIT
         # As in Husk: the helper links StikJIT; it lives in the app's Frameworks
         # with a minimal Info.plist (installd refuses one without), signed here.
@@ -254,8 +244,6 @@ targets:
           - "-lc++"
           - "-framework"
           - "QuartzCore"
-          - "-lhengerestore"
-          - "-lz"
           - "-liconv"
           - "-lresolv"
           - "-framework"
@@ -282,12 +270,5 @@ targets:
         script: |
           set -e
           cd "$SRCROOT/.."
-          make ios-sim-lib ${HENGE_GFX:+GFX=1} ${HENGE_SIM_NET:+SIM_NET_ROOT=$HENGE_SIM_NET_ROOT} build/henge-agent.gz
-          ./tools/build_ios_restore.sh sim
-        basedOnDependencyAnalysis: false
-    postBuildScripts:
-      - name: Bundle the Mac helper
-        script: |
-          set -e
-          cp "$SRCROOT/../build/henge-agent.gz" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/henge-agent.gz"
+          make ios-sim-lib ${HENGE_GFX:+GFX=1} ${HENGE_SIM_NET:+SIM_NET_ROOT=$HENGE_SIM_NET_ROOT}
         basedOnDependencyAnalysis: false

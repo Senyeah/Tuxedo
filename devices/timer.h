@@ -6,7 +6,7 @@
 #include "cpu.h"
 #include "gicv3.h"
 
-/* The generic timer's outputs: virtual timer on PPI 27 (as vmapple wires it),
+/* The generic timer's outputs: virtual timer on PPI 27,
    physical timer on PPI 30. Level-triggered: asserted while enabled, unmasked
    and expired. */
 #define HV_PPI_VTIMER 27

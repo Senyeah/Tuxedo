@@ -308,7 +308,7 @@ void henge_vm_console_write(const uint8_t *buf, size_t n) {
     pthread_rwlock_unlock(&api_lock);
 }
 
-/* The power key is GPIO pin 3 (VIRT_GPIO_POWER, and QEMU's pin on vmapple); a press is high for 100 ms. */
+/* The power key is GPIO pin 3 (VIRT_GPIO_POWER, QEMU's pin); a press is high for 100 ms. */
 static int power_pin(int level, uint64_t gen) {
     if (!lock_running()) return 0;
     HvPl061 *gpio = hv_vm_devs()->gpio;
@@ -426,12 +426,12 @@ int henge_vm_guest_el0(void) {
     return found;
 }
 
-void henge_vm_share(const char *folder, const char *socket_path, const char *agent) {
-    if (hv_share_start(folder, socket_path, agent) == 0) hv_net_set_share_socket(socket_path);
+void henge_vm_share(const char *folder, const char *socket_path) {
+    if (hv_share_start(folder, socket_path) == 0) hv_net_set_share_socket(socket_path);
 }
 void henge_share_set_clipboard(const char *text) { hv_share_set_clipboard(text); }
 char *henge_share_take_clipboard(void) { return hv_share_take_clipboard(); }
-long henge_share_agent_seen(void) { return hv_share_agent_seen(); }
+long henge_share_helper_seen(void) { return hv_share_helper_seen(); }
 int henge_share_keyboard_wanted(unsigned long *seq) { return hv_share_keyboard_wanted(seq); }
 void henge_share_set_keyboard_height(double fraction) { hv_share_set_keyboard_height(fraction); }
 

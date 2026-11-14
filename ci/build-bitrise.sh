@@ -50,7 +50,6 @@ cd "$HENGE_ROOT"
 bash ci/build-stikjit.sh "$STIKJIT_ROOT"
 rm -rf "$HENGE_ROOT/ios/deps/StikJIT.xcframework"
 ditto "$STIKJIT_ROOT/StikJIT.xcframework" "$HENGE_ROOT/ios/deps/StikJIT.xcframework"
-./tools/build_ios_restore.sh
 make ios-lib
 mkdir -p "$HOME/Desktop"
 ./ios/scripts/package_ipa.sh

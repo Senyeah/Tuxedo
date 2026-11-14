@@ -88,7 +88,7 @@ int main(void) {
     char store_dir[128], share_path[64];
     snprintf(share_path, sizeof share_path, "%s/s", dir);
     snprintf(store_dir, sizeof store_dir, "%s/store", dir);
-    check("the share server starts", hv_share_start(dir, share_path, NULL), 0);
+    check("the share server starts", hv_share_start(dir, share_path), 0);
 
     /* The wallet has its own socket (port HV_SHARE_SECRETS_PORT in the guest), so the guest can keep that port
        to one user; port 80's socket does not serve it, and the wallet's serves nothing else. */

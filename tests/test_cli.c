@@ -55,7 +55,7 @@ int main(void) {
                                               memmem(blob, n, "pl011", 5) != NULL);
     unlink(dtb);
 
-    static const char *const gone[][2] = {{"--board", "virt"}, {"--board", "vmapple"}, {"--rom", "x"}, {"--aux", "x"},
+    static const char *const gone[][2] = {{"--board", "virt"}, {"--rom", "x"}, {"--aux", "x"},
                                           {"--ecid", "1"}, {"--seed", "1"}, {"--install", "x"}, {"--no-pvg", NULL},
                                           {"--aux-offset", "1"}};
     for (size_t i = 0; i < sizeof gone / sizeof *gone; i++) {

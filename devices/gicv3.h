@@ -9,7 +9,7 @@
 /* GICv3 with one security state (DS=1), no LPIs or ITS: the distributor, one
    redistributor per CPU, and each CPU's ICC_* system registers. INTIDs 0-15
    are SGIs, 16-31 PPIs (both banked per CPU), 32 and up SPIs. */
-#define HV_GIC_NUM_IRQS (256 + 32) /* vmapple: 256 SPIs */
+#define HV_GIC_NUM_IRQS (256 + 32) /* 256 SPIs */
 
 typedef struct HvGicActive {
     uint16_t intid;

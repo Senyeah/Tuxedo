@@ -1,16 +1,16 @@
-/* The folder and clipboard a virtual Mac shares with the device it runs on.
+/* The folder and clipboard a virtual machine shares with the device it runs on.
 
-   The folder is a small WebDAV server, because macOS has a WebDAV client built in, so it mounts like any
-   network drive with nothing to install for that part. The network hands each connection the guest makes to
+   The folder is a small WebDAV server, so the guest mounts it like any
+   network drive (davfs2). The network hands each connection the guest makes to
    10.0.2.4:80 to a Unix socket in the app's own storage: no TCP port is open, so other apps can't reach this.
 
-   /.henge/ is not part of the folder. It has the clipboard, where the helper inside macOS (tools/henge-agent.m)
-   waits for the device's clipboard and sends the guest's, and what it takes to install that helper.
+   /.henge/ is not part of the folder. It has the clipboard, where the helper in the guest (henge-clipboard)
+   waits for the device's clipboard and sends the guest's.
    It also serves the Linux display follower: GET /.henge/display is "W H SCALE"; henge-status:
    GET /.henge/status is the device's time, time zone and brightness; and henge-files: GET /.henge/folders is the
    Files folders' table (fs_server.h), and POST /.henge/folders/done answers the app's export or discard.
 
-   Locks are accepted but not enforced: macOS only writes to a server that offers them, and there is one client. */
+   Locks are accepted but not enforced: a WebDAV client may write only to a server that offers them, and there is one client. */
 #include "share.h"
 #include "fs_server.h"
 #include "safe_path.h"
@@ -41,7 +41,6 @@
 #define TEMP_PREFIX ".henge-put-"
 
 static int rootfd = -1; /* the folder: every path opens below it (safe_path.h) */
-static char agent_path[PATH_MAX];
 
 /* ---- the clipboard ---- */
 
@@ -50,7 +49,7 @@ static pthread_cond_t clip_cond = PTHREAD_COND_INITIALIZER;
 static char *device_clip; /* the device's, for the guest */
 static unsigned long device_seq;
 static char *guest_clip; /* the guest's, until the device takes it */
-static time_t agent_seen;
+static time_t helper_seen;
 
 void hv_share_set_clipboard(const char *text) {
     pthread_mutex_lock(&clip_mu);
@@ -69,9 +68,9 @@ char *hv_share_take_clipboard(void) {
     return text;
 }
 
-long hv_share_agent_seen(void) {
+long hv_share_helper_seen(void) {
     pthread_mutex_lock(&clip_mu);
-    long ago = agent_seen ? (long)(time(NULL) - agent_seen) : -1;
+    long ago = helper_seen ? (long)(time(NULL) - helper_seen) : -1;
     pthread_mutex_unlock(&clip_mu);
     return ago;
 }
@@ -641,97 +640,6 @@ static int do_lock(Conn *c, Request *r) {
 
 /* ---- /.henge/ ---- */
 
-/* What "curl -s http://10.0.2.4/.henge/install | sh" runs in macOS. */
-static const char install_script[] =
-    "#!/bin/sh\n"
-    "D=\"$HOME/Library/Application Support/Henge\"\n"
-    "P=\"$HOME/Library/LaunchAgents/com.henge.agent.plist\"\n"
-    "mkdir -p \"$D\" \"$HOME/Library/LaunchAgents\"\n"
-    "launchctl bootout \"gui/$(id -u)/com.henge.agent\" 2>/dev/null\n"
-    "curl -fsS http://" HV_SHARE_ADDR "/.henge/agent | gunzip > \"$D/henge-agent\" || { echo 'Could not reach Henge.'; exit 1; }\n"
-    "chmod 755 \"$D/henge-agent\"\n"
-    "cat > \"$P\" <<EOF\n"
-    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
-    "<plist version=\"1.0\"><dict>\n"
-    "<key>Label</key><string>com.henge.agent</string>\n"
-    "<key>ProgramArguments</key><array><string>$D/henge-agent</string></array>\n"
-    "<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>\n"
-    "<key>LimitLoadToSessionType</key><string>Aqua</string>\n"
-    "<key>ProcessType</key><string>Background</string>\n"
-    "</dict></plist>\n"
-    "EOF\n"
-    "launchctl bootstrap \"gui/$(id -u)\" \"$P\"\n"
-    "echo 'Henge is set up. You can close this window.'\n";
-
-/* What "curl -s http://10.0.2.4/.henge/lighten | sh" runs in macOS: less background work and drawing, for a Mac
-   whose CPUs are emulated: less animation and drawing, and the system part (update checks, Time Machine) with the
-   Mac's password once. Apple's own background agents can't be turned off with System Integrity Protection on
-   (launchctl disable of gui/ agents did not survive a log out on the Mac bench, 2026-11-08), so it doesn't try.
-   Reduce Motion and Reduce Transparency need System Settings (a script can't write com.apple.universalaccess).
-   Nothing reads the script's own stdin (sh is reading the script from it). */
-static const char lighten_script[] =
-    "#!/bin/sh\n"
-    "echo 'Making macOS lighter for Henge...'\n"
-    "defaults write com.apple.universalaccess reduceMotion -bool true 2>/dev/null </dev/null || "
-    "echo '  Reduce Motion: turn it on in System Settings, Accessibility, Motion.'\n"
-    "defaults write com.apple.universalaccess reduceTransparency -bool true 2>/dev/null </dev/null || "
-    "echo '  Reduce Transparency: turn it on in System Settings, Accessibility, Display.'\n"
-    "defaults write -g NSAutomaticWindowAnimationsEnabled -bool false </dev/null\n"
-    "defaults write -g NSWindowResizeTime -float 0.001 </dev/null\n"
-    "defaults write com.apple.dock launchanim -bool false </dev/null\n"
-    "defaults -currentHost write com.apple.screensaver idleTime -int 0 </dev/null\n"
-    "defaults write com.apple.WindowManager StandardHideWidgets -int 1 </dev/null\n"
-    "defaults write com.apple.WindowManager StageManagerHideWidgets -int 1 </dev/null\n"
-    "W=\"/System/Library/Desktop Pictures/Solid Colors/Black.png\"\n"
-    "[ -f \"$W\" ] || W=$(ls \"/System/Library/Desktop Pictures/Solid Colors/\"*.png 2>/dev/null | head -1)\n"
-    "if [ -n \"$W\" ]; then\n"
-    "  osascript -l JavaScript - \"$W\" >/dev/null 2>&1 <<'JS'\n"
-    "ObjC.import('AppKit');\n"
-    "function run(argv) {\n"
-    "  var url = $.NSURL.fileURLWithPath(argv[0]), screens = $.NSScreen.screens;\n"
-    "  for (var i = 0; i < screens.count; i++)\n"
-    "    $.NSWorkspace.sharedWorkspace.setDesktopImageURLForScreenOptionsError(url, screens.objectAtIndex(i), $({}), null);\n"
-    "}\n"
-    "JS\n"
-    "fi\n"
-    "killall Dock 2>/dev/null\n"
-    "echo 'Done: window and Dock animations, desktop widgets, the screen saver and a moving wallpaper are off.'\n"
-    "echo 'Also turn on Reduce Motion and Reduce Transparency: System Settings, Accessibility.'\n"
-    "echo 'Log out and back in for all of it to take effect. To undo: curl -s http://" HV_SHARE_ADDR "/.henge/unlighten | sh'\n";
-
-/* And back. The wallpaper stays as it is: pick one in System Settings. */
-static const char unlighten_script[] =
-    "#!/bin/sh\n"
-    "defaults write com.apple.universalaccess reduceMotion -bool false 2>/dev/null </dev/null\n"
-    "defaults write com.apple.universalaccess reduceTransparency -bool false 2>/dev/null </dev/null\n"
-    "defaults delete -g NSAutomaticWindowAnimationsEnabled 2>/dev/null </dev/null\n"
-    "defaults delete -g NSWindowResizeTime 2>/dev/null </dev/null\n"
-    "defaults delete com.apple.dock launchanim 2>/dev/null </dev/null\n"
-    "defaults -currentHost delete com.apple.screensaver idleTime 2>/dev/null </dev/null\n"
-    "defaults write com.apple.WindowManager StandardHideWidgets -int 0 </dev/null\n"
-    "defaults write com.apple.WindowManager StageManagerHideWidgets -int 0 </dev/null\n"
-    "killall Dock 2>/dev/null\n"
-    "echo 'Back as it was, apart from the wallpaper (System Settings, Wallpaper).'\n"
-    "echo 'Log out and back in (or restart) for all of it to take effect.'\n";
-
-static int serve_agent(Conn *c, Request *r) {
-    if (body_discard(c, r) != 0) return -1;
-    int fd = agent_path[0] ? open(agent_path, O_RDONLY) : -1;
-    struct stat st;
-    if (fd < 0 || fstat(fd, &st) != 0) {
-        if (fd >= 0) close(fd);
-        return respond_empty(c, r, 404, "Not Found");
-    }
-    char *data = malloc((size_t)st.st_size);
-    ssize_t got = data ? pread(fd, data, (size_t)st.st_size, 0) : -1;
-    close(fd);
-    int rc = got == st.st_size ? respond(c, r, 200, "OK", "Content-Type: application/octet-stream\r\n", data, (size_t)got)
-                               : respond_empty(c, r, 500, "Internal Server Error");
-    free(data);
-    return rc;
-}
-
 /* GET ?since=N waits up to 25 s for a newer clipboard than N. */
 static int clipboard_get(Conn *c, Request *r) {
     if (body_discard(c, r) != 0) return -1;
@@ -744,9 +652,9 @@ static int clipboard_get(Conn *c, Request *r) {
     until.tv_sec = now.tv_sec + 25;
     until.tv_nsec = now.tv_usec * 1000;
     pthread_mutex_lock(&clip_mu);
-    agent_seen = time(NULL);
+    helper_seen = time(NULL);
     while (device_seq <= since && pthread_cond_timedwait(&clip_cond, &clip_mu, &until) != ETIMEDOUT) {}
-    agent_seen = time(NULL);
+    helper_seen = time(NULL);
     unsigned long seq = device_seq;
     char *text = seq > since && device_clip ? strdup(device_clip) : NULL;
     pthread_mutex_unlock(&clip_mu);
@@ -804,7 +712,7 @@ static int clipboard_put(Conn *c, Request *r) {
     pthread_mutex_lock(&clip_mu);
     free(guest_clip);
     guest_clip = text;
-    agent_seen = time(NULL);
+    helper_seen = time(NULL);
     pthread_mutex_unlock(&clip_mu);
     return respond_empty(c, r, 204, "No Content");
 }
@@ -877,15 +785,6 @@ static int secrets_route(Conn *c, Request *r, const char *path) {
 
 static int serve_henge(Conn *c, Request *r) {
     const char *what = r->path + strlen("/.henge/");
-    if (!strcmp(what, "install") && !strcmp(r->method, "GET")) {
-        if (body_discard(c, r) != 0) return -1;
-        return respond(c, r, 200, "OK", "Content-Type: text/plain\r\n", install_script, sizeof install_script - 1);
-    }
-    if ((!strcmp(what, "lighten") || !strcmp(what, "unlighten")) && !strcmp(r->method, "GET")) {
-        if (body_discard(c, r) != 0) return -1;
-        const char *s = what[0] == 'l' ? lighten_script : unlighten_script;
-        return respond(c, r, 200, "OK", "Content-Type: text/plain\r\n", s, strlen(s));
-    }
     if (!strcmp(what, "display") && !strcmp(r->method, "GET")) {
         if (body_discard(c, r) != 0) return -1;
         uint32_t w, h;
@@ -898,7 +797,6 @@ static int serve_henge(Conn *c, Request *r) {
     if (!strcmp(what, "status") && !strcmp(r->method, "GET")) return status_get(c, r);
     if (!strcmp(what, "folders") && !strcmp(r->method, "GET")) return folders_get(c, r);
     if (!strcmp(what, "folders/done") && !strcmp(r->method, "POST")) return folders_done(c, r);
-    if (!strcmp(what, "agent") && !strcmp(r->method, "GET")) return serve_agent(c, r);
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "GET")) return clipboard_get(c, r);
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "PUT")) return clipboard_put(c, r);
     if (!strcmp(what, "keyboard") && !strcmp(r->method, "PUT")) return keyboard_put(c, r);
@@ -1088,14 +986,13 @@ static int listen_on(const char *socket_path, int wallet) {
     return 0;
 }
 
-int hv_share_start(const char *folder, const char *socket_path, const char *agent) {
+int hv_share_start(const char *folder, const char *socket_path) {
     static int started;
     if (started) return 0;
     int fd = safe_root_open(folder);
     if (fd < 0) return -1;
     if (rootfd >= 0) close(rootfd);
     rootfd = fd;
-    if (agent) snprintf(agent_path, sizeof agent_path, "%s", agent);
     char wallet[PATH_MAX];
     if (listen_on(socket_path, 0) != 0) return -1;
     if (hv_share_secrets_socket(socket_path, wallet, sizeof wallet) != 0 || listen_on(wallet, 1) != 0)

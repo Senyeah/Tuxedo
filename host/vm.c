@@ -40,8 +40,8 @@ static void stop_pointer(void);
 static os_unfair_lock display_lock = OS_UNFAIR_LOCK_INIT;
 static CFTypeRef display_layer;
 static int display_layer_set;
-static uint32_t display_w, display_h, display_mm_w, display_mm_h;
-static int display_mode_set, display_mm_set;
+static uint32_t display_w, display_h;
+static int display_mode_set;
 static _Atomic int touch_mode, pointer_hidden; /* pointer_hidden changes under display_lock */
 static double display_scale = 1; /* only reported to the guest, not used for drawing */
 static _Atomic(const HvBoardDevs *) display_devs; /* published only when the board is ready */
@@ -89,7 +89,7 @@ static int vgpu_pointer(void *d, int *x, int *y) {
 }
 static void vgpu_set_mode(void *d, uint32_t w, uint32_t h) { hv_virtio_gpu_set_mode(((VgpuDisplay *)d)->gpu, w, h); }
 static void vgpu_hide_cursor(void *d, int hidden) { hv_vgpu_metal_hide_cursor(((VgpuDisplay *)d)->presenter, hidden); }
-static const HvDisplayOps vgpu_display = {vgpu_set_layer, vgpu_frames, vgpu_snapshot, vgpu_pointer, vgpu_set_mode, NULL,
+static const HvDisplayOps vgpu_display = {vgpu_set_layer, vgpu_frames, vgpu_snapshot, vgpu_pointer, vgpu_set_mode,
                                           vgpu_hide_cursor};
 
 static const HvBoardDevs *shown_display(void) { return atomic_load_explicit(&display_devs, memory_order_acquire); }
@@ -336,12 +336,7 @@ int hv_vm_display(uint32_t *w, uint32_t *h, double *scale) {
 }
 
 void hv_vm_set_display_size_mm(uint32_t width_mm, uint32_t height_mm) {
-    os_unfair_lock_lock(&display_lock);
-    display_mm_w = width_mm, display_mm_h = height_mm, display_mm_set = 1;
-    const HvBoardDevs *shown = shown_display();
-    if (shown && shown->display && shown->display->set_size_mm)
-        shown->display->set_size_mm(shown->display_opaque, width_mm, height_mm);
-    os_unfair_lock_unlock(&display_lock);
+    (void)width_mm, (void)height_mm; /* no effect: the virtio GPU has no panel size in mm */
 }
 
 static void publish_display(void) {
@@ -350,9 +345,8 @@ static void publish_display(void) {
     os_unfair_lock_lock(&display_lock);
     const HvDisplayOps *ops = devs.display;
     if (ops && display_mode_set) ops->set_mode(devs.display_opaque, display_w, display_h);
-    if (ops && display_mm_set && ops->set_size_mm) ops->set_size_mm(devs.display_opaque, display_mm_w, display_mm_h);
     if (ops && display_layer_set) ops->set_layer(devs.display_opaque, (void *)display_layer);
-    if (ops && ops->hide_cursor) ops->hide_cursor(devs.display_opaque, atomic_load(&pointer_hidden));
+    if (ops) ops->hide_cursor(devs.display_opaque, atomic_load(&pointer_hidden));
     atomic_store_explicit(&display_devs, &devs, memory_order_release);
     os_unfair_lock_unlock(&display_lock);
 }
@@ -393,7 +387,7 @@ static int create_virt(const HvVmConfig *c, uint64_t ram_size, char *err, size_t
     if (c->kernel && hv_linux_boot(&virt, c->kernel, c->initrd, c->cmdline, NULL, err, errlen) != 0) return -1;
     devs = (HvBoardDevs){.gic = virt.gic, .uart = virt.uart, .gpio = virt.gpio, .usb = virt.usb,
                          .keyboard = virt.keyboard, .mouse = virt.mouse, .touch = virt.touch, .net = virt.net, .snd = virt.snd,
-                         .balloon = virt.balloon, .blk = {virt.blk, NULL},
+                         .balloon = virt.balloon, .blk = virt.blk,
                          .ram = virt.mem.host, .ram_pa = VIRT_MEM, .ram_size = virt.mem.size};
     virt.poll = board_poll;
     if (c->codec_ops && hv_virt_add_hvcodec(&virt, c->codec_ops, NULL) != 0)
@@ -730,8 +724,7 @@ static void *cpu0_thread(void *unused) {
     atomic_store(&vm_paused, 0); /* the halt ended the pause */
     pthread_mutex_unlock(&pause_mu);
     /* A DMA worker can still be writing after the guest CPUs have exited. */
-    hv_virtio_blk_stop(devs.blk[0]);
-    hv_virtio_blk_stop(devs.blk[1]);
+    hv_virtio_blk_stop(devs.blk);
     hv_virtio_fs_stop(virt.fs);
     hv_audio_detach();
     hv_vm_flush_disks();
@@ -775,17 +768,6 @@ void hv_vm_stop(void) {
     hv_machine_halt(&m, HV_HALT_HOST); /* ends a pause too */
 }
 
-/* macOS's virtio mouse driver drops BTN_RIGHT, so the right button is a Control-click, with the right
-   Control. The USB keyboard is read every 10 ms and the click goes over virtio, so Control goes down
-   50 ms before the click and comes up 50 ms after it. The waits run on a serial queue that the pointer's
-   moves and buttons all go through, so they stay in order and the caller (often the main thread) never
-   waits. The guest's right Control and left button each have two owners, and stay down while either holds them. */
-#define HID_RIGHT_CONTROL 0xe4
-#define LINUX_KEY_RIGHTCTRL 97
-static os_unfair_lock rctrl_lock = OS_UNFAIR_LOCK_INIT;
-static int rctrl_user, rctrl_click;
-static int left_user, left_click, left_sent; /* only the pointer queue touches these */
-
 static dispatch_queue_t pointer_queue(void) {
     static dispatch_queue_t q;
     static dispatch_once_t once;
@@ -797,30 +779,12 @@ static void stop_pointer(void) {
     atomic_store(&input_stopping, 1);
     /* The bridge excludes new input. Finish a click already in progress and
        discard queued input before releasing the keyboard and mouse. */
-    dispatch_sync(pointer_queue(), ^{
-        left_user = left_click = left_sent = 0;
-        os_unfair_lock_lock(&rctrl_lock);
-        rctrl_user = rctrl_click = 0;
-        os_unfair_lock_unlock(&rctrl_lock);
-    });
+    dispatch_sync(pointer_queue(), ^{});
 }
 
-static void rctrl_hold(int *owner, int down) {
-    os_unfair_lock_lock(&rctrl_lock);
-    *owner = down;
-    hv_xhci_key(devs.usb, HID_RIGHT_CONTROL, rctrl_user || rctrl_click);
-    os_unfair_lock_unlock(&rctrl_lock);
-}
+void hv_vm_key(uint16_t code, int down) { hv_xhci_key_linux(devs.usb, code, down); }
 
-void hv_vm_key(uint16_t code, int down) {
-    if (code == LINUX_KEY_RIGHTCTRL) rctrl_hold(&rctrl_user, down);
-    else hv_xhci_key_linux(devs.usb, code, down);
-}
-
-void hv_vm_key_hid(uint8_t usage, int down) {
-    if (usage == HID_RIGHT_CONTROL) rctrl_hold(&rctrl_user, down);
-    else hv_xhci_key(devs.usb, usage, down);
-}
+void hv_vm_key_hid(uint8_t usage, int down) { hv_xhci_key(devs.usb, usage, down); }
 
 static void move_now(void *ctx) {
     if (atomic_load(&input_stopping)) return;
@@ -836,7 +800,7 @@ static void pointer_image(int hidden) {
     os_unfair_lock_lock(&display_lock);
     atomic_store(&pointer_hidden, hidden);
     const HvBoardDevs *shown = shown_display();
-    if (shown && shown->display && shown->display->hide_cursor) shown->display->hide_cursor(shown->display_opaque, hidden);
+    if (shown && shown->display) shown->display->hide_cursor(shown->display_opaque, hidden);
     os_unfair_lock_unlock(&display_lock);
 }
 
@@ -846,21 +810,13 @@ void hv_vm_mouse_move(int dx, int dy) {
     dispatch_async_f(pointer_queue(), (void *)(intptr_t)packed, move_now);
 }
 
-static void left_update(void) {
-    int down = left_user || left_click;
-    if (down == left_sent) return;
-    left_sent = down;
-    hv_virtio_input_send(devs.mouse, HV_EV_KEY, HV_BTN_LEFT, down);
-    hv_virtio_input_send(devs.mouse, HV_EV_SYN, 0, 0);
-}
-
 static void button_now(void *ctx) {
     if (atomic_load(&input_stopping)) return;
     intptr_t v = (intptr_t)ctx;
     int button = (int)(v >> 1), down = (int)(v & 1);
     if (button == 0) {
-        left_user = down;
-        left_update();
+        hv_virtio_input_send(devs.mouse, HV_EV_KEY, HV_BTN_LEFT, down);
+        hv_virtio_input_send(devs.mouse, HV_EV_SYN, 0, 0);
     } else if (button == 1) {
         hv_virtio_input_send(devs.mouse, HV_EV_KEY, HV_BTN_RIGHT, down);
         hv_virtio_input_send(devs.mouse, HV_EV_SYN, 0, 0);

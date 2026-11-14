@@ -134,7 +134,7 @@ uint8_t *hv_virt_build_fdt(const HvVirt *b, const char *bootargs, uint64_t initr
     hv_fdt_end(f);
 
     hv_fdt_begin(f, "pcie@10000000");
-    /* Slot s, pin p (1-4) goes to SPI 3 + (s + p - 1) mod 4: hv_pcie's rotate mode. */
+    /* Slot s, pin p (1-4) goes to SPI 3 + (s + p - 1) mod 4: hv_pcie's slot mod 4 rule. */
     uint32_t map[16 * 10], *e = map;
     for (uint32_t slot = 0; slot < 4; slot++)
         for (uint32_t pin = 1; pin <= 4; pin++) {

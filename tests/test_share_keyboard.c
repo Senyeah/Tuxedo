@@ -129,7 +129,7 @@ int main(void) {
     char dir[] = "/tmp/henge-kbd-XXXXXX";
     if (!mkdtemp(dir)) return 1;
     snprintf(sock_path, sizeof sock_path, "%s/s", dir);
-    check("the share server starts", hv_share_start(dir, sock_path, NULL), 0);
+    check("the share server starts", hv_share_start(dir, sock_path), 0);
 
     unsigned long seq = 99, first;
     check("nothing asked yet: hide", hv_share_keyboard_wanted(&first), 0);
