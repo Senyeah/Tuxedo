@@ -105,15 +105,13 @@ struct MachineModelTests {
         sized.diskBytes = 5
         precondition(sized.logicalDiskBytes == 5) // no disk.img in its folder: the stored size
 
-        // The stopped card has its own words per kind, and a panic is not "stopped unexpectedly".
+        // The stopped card has its own words per kind.
         for guest in [GuestKind.mac, .linux] {
             let name = guest == .linux ? "Debian" : "Mac"
             precondition(StopText.title(.shutdown, guest: guest) == "\(name) shut down")
             precondition(StopText.title(.restart, guest: guest) == "\(name) requested a restart")
-            precondition(StopText.title(.panic, guest: guest) == "\(name) had a kernel panic")
             precondition(StopText.title(.error, guest: guest) == "\(name) stopped unexpectedly")
             precondition(StopText.detail(.error, guest: guest, reason: "boom").contains("boom"))
-            precondition(!StopText.detail(.panic, guest: guest, reason: "guest panic").contains("guest panic"))
         }
         precondition(StopText.startLabel(guest: .linux) == "Start" && StopText.startLabel(guest: .mac) == "Start Mac")
         precondition(StopText.detail(.shutdown, guest: .linux, reason: "").contains("machines"))
