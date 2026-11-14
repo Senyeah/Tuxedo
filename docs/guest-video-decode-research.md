@@ -484,7 +484,7 @@ Cause, from the sources:
 - FFmpeg 7.1 `vaapi_decode_find_best_format` (`libavcodec/vaapi_decode.c`) goes through that list with `av_find_best_pix_fmt_of_2` against the stream's `yuv420p`. YV12 and I420 both map to `yuv420p`, and the later one wins: I420. Firefox's `ffvpx` has the same code for VP9 and AV1.
 - Firefox `VideoFramePool::GetVideoFrameSurface` (`dom/media/platforms/ffmpeg/FFmpegVideoFramePool.cpp`) refuses a surface whose fourcc is not NV12, YV12, P010 or P016.
 
-Fix: the guest package `henge-va` (`tools/linux/henge-va`, `tools/linux/README.md`). It puts a 12 KB driver in front of Mesa's that lists NV12 only for an 8-bit decode config. No host change, no new app build. A patched `mesa-va-drivers` was the other choice; it would hold back Debian's Mesa updates.
+Fix: the guest package `henge-va` (`tools/linux/henge-va`, `tools/linux/README.md`). It puts a small driver (a 10 KB package) in front of Mesa's that lists NV12 only for an 8-bit decode config. No host change, no new app build. A patched `mesa-va-drivers` was the other choice; it would hold back Debian's Mesa updates.
 
 On the owner's iPhone 18 Pro, 14/11/2026, `henge-va` 1.0.0 installed, Firefox 160 with a new profile and its RDD sandbox on, 1080p30 clips, 20 s each (evidence in `build/evidence/firefox-vaapi`):
 

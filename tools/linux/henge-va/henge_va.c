@@ -69,7 +69,8 @@ __attribute__((visibility("default"))) VAStatus __vaDriverInit_1_0(VADriverConte
     if (!h)
         return VA_STATUS_ERROR_UNKNOWN;
     VAStatus (*init)(VADriverContextP) = NULL;
-    for (int minor = VA_MINOR_VERSION; minor >= 0 && !init; minor--) {
+    // Mesa exports the minor of the libva it was built with, which can be newer than ours after an upgrade.
+    for (int minor = VA_MINOR_VERSION + 32; minor >= 0 && !init; minor--) {
         char name[64];
         snprintf(name, sizeof(name), "__vaDriverInit_%d_%d", VA_MAJOR_VERSION, minor);
         init = (VAStatus (*)(VADriverContextP))dlsym(h, name);
