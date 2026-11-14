@@ -187,6 +187,55 @@ S4_LITERALS = [
 ]
 
 
+# Stage 5 (docs/rename-tuxedo-plan.md): file, directory, target and product names, and every reference to them.
+# Not here: display strings, error domains, log tags, the bundle id and everything else a later stage owns.
+S5_DIRS = [("ios/Henge", "ios/Tuxedo"), ("ios/HengeJITHelper", "ios/TuxJITHelper"), ("ios/HengeSim", "ios/TuxSim")]
+S5_FILE = [
+    (re.compile(r"^Henge(?=\.(?:personal\.)?entitlements$)"), "Tuxedo"),
+    (re.compile(r"^Henge(?=[A-Z][A-Za-z0-9]*\.(?:swift|h|c|m|S)$)"), "Tux"),
+    (re.compile(r"^henge(?=-(?:vm|ios-jit)\.[ch]$|-brk\.S$|-jit\.js$)"), "tux"),
+    (re.compile(r"^build-henge(?=\.yml$)"), "build-tux"),
+]
+S5_NOT_NAMES = r"(?<![A-Za-z0-9_])"
+S5_RULES = [
+    (re.compile(S5_NOT_NAMES + r"Henge(?=\.(?:personal\.)?entitlements\b|\.xcodeproj\b|\.(?:ipa|tipa|app)\b)"), "Tuxedo"),
+    (re.compile(r"(?<!/)ios/Henge(?![A-Za-z0-9_])"), "ios/Tuxedo"),
+    (re.compile(S5_NOT_NAMES + r'(?<!domain: ")Henge(JITHelper|JITMessages|Sim|Bridge|BuildCommit|BuildDate)(?![A-Za-z0-9_])'), r"Tux\1"),
+    (re.compile(S5_NOT_NAMES + r"Henge([A-Z][A-Za-z0-9]*)(?=\.(?:swift|h|c|m|S)\b)"), r"Tux\1"),
+    (re.compile(S5_NOT_NAMES + r"henge-(vm|ios-jit)(?=\.(?:[ch]|\*)(?![A-Za-z0-9_]))"), r"tux-\1"),
+    (re.compile(S5_NOT_NAMES + r"henge-brk(?=\.S\b)"), "tux-brk"),
+    (re.compile(S5_NOT_NAMES + r"henge-jit(?=\.js\b)"), "tux-jit"),
+    (re.compile(S5_NOT_NAMES + r"build-henge(?=\.yml\b)"), "build-tux"),
+    (re.compile(r'forResource: "henge-jit"(?=, ofType: "js")'), 'forResource: "tux-jit"'),
+]
+# Bare Henge is the target, scheme or product here; a path part in the iOS docs and scripts.
+_BARE = [(re.compile(r"\bHenge\b"), "Tuxedo")]
+_REL = [(re.compile(r"(?<![A-Za-z0-9_/~.$-])Henge/"), "Tuxedo/")]
+S5_FILE_RULES = [
+    ("ios/project.yml", _BARE), ("ios/scripts/*.sh", _BARE), ("ci/build-bitrise.sh", _BARE), ("bitrise.yml", _BARE),
+    (".github/workflows/build-henge.yml", _BARE), (".github/workflows/build-tux.yml", _BARE),
+    ("ios/.gitignore", _BARE), ("ios/README.md", _REL), ("ios/*/*.personal.entitlements", _REL),
+]
+
+
+def s5_moves():
+    """(old, new) for every tracked path Stage 5 renames."""
+    out = []
+    for p in tracked():
+        n = p
+        for a, b in S5_DIRS:
+            if n == a or n.startswith(a + "/"):
+                n = b + n[len(a):]
+        if n.startswith(("ios/", ".github/")):
+            d, base = os.path.split(n)
+            for rx, rep in S5_FILE:
+                base = rx.sub(rep, base, count=1)
+            n = os.path.join(d, base)
+        if n != p:
+            out.append((p, n))
+    return out
+
+
 STAGES = {
     3: dict(globs=["*.md", "ios/*", "host/*", "core/*", "devices/*", "tests/*", "tools/*", "Makefile", "ci/*", ".github/*"],
             skip=["docs/rename-tuxedo-plan.md", "CHANGELOG.md", "tools/rename*", "*.json", "*.plist", "*.yml", "*.yaml", "*.patch", "*.pbxproj"],
@@ -196,6 +245,8 @@ STAGES = {
                   "tools/linux/henge-codec-dkms/*", "tools/linux/rootfs*", "tools/linux/customize*.sh",
                   "tools/rename*", "tools/linux/hvcodec/ffmpeg-henge.patch", "repo.json", "tools/update-source.py"],
             token=is_stage4_token, ctx=stage4_ctx, literals=S4_LITERALS, no_phrases=True),
+    5: dict(globs=["*"], skip=["tools/rename*", "repo.json", "tools/update-source.py", "*.patch"],
+            token=lambda t: False, rules=S5_RULES, file_rules=S5_FILE_RULES, moves=True),
 }
 
 
@@ -213,12 +264,21 @@ def md_prose_line(line, state):
 def run_stage(n, apply):
     st, keep, m = STAGES[n], Keep(), load_map()
     changed = Counter()
+    if st.get("moves"):
+        mv = s5_moves()
+        for a, b in mv:
+            print(f"mv  {a} -> {b}")
+            if apply:
+                os.makedirs(os.path.dirname(os.path.join(ROOT, b)), exist_ok=True)
+                subprocess.check_call(["git", "mv", a, b], cwd=ROOT)
+        print(f"{len(mv)} paths moved" if apply else f"{len(mv)} paths would move")
     for p in tracked():
         if keep.path(p) or not any(fnmatch.fnmatch(p, g) for g in st["globs"]) or any(fnmatch.fnmatch(p, g) for g in st["skip"]):
             continue
         t = read(p)
         if t is None:
             continue
+        rules = list(st.get("rules", [])) + [r for g, rs in st.get("file_rules", []) if fnmatch.fnmatch(p, g) for r in rs]
         out, fence = [], {"fence": False}
         for i, line in enumerate(t.split("\n"), 1):
             new = line
@@ -244,6 +304,9 @@ def run_stage(n, apply):
                     new = "".join(x if x.startswith("`") else TOKEN.sub(sub, x) for x in parts)
                 else:
                     new = TOKEN.sub(sub, line)
+            if ok:
+                for rx, rep in rules:
+                    new = rx.sub(rep, new)
             for g, a, b in st.get("literals", []):
                 if fnmatch.fnmatch(p, g) and not keep.line(p, i, line):
                     new = new.replace(a, b)
