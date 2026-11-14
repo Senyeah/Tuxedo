@@ -464,3 +464,12 @@ An independent review of stages 2 to 6 found these defects. The patch now handle
 | Henge device build against the new `ios` library | succeeds, with and without the three frameworks in `ios/project.yml` |
 
 Not shown: a pool change in a real stream (FFmpeg makes a new VA-API context when the size changes, so the codec and its cache go away first), and the new libraries on the phone. The new `ios` and `sim` libraries were built into a copy of `build/gfx`, not into the shared tree, which phone builds link. Until the shared tree is rebuilt from this patch, it has the stage 6 libraries, with the defects above. A branch that links it needs `-framework VideoToolbox -framework CoreMedia -framework CoreVideo` (as in `linux/integration`'s `ios/project.yml`).
+
+## Phone results
+
+On the owner's iPhone 18 Pro (iOS 27.3), 14/11/2026, through SSH into the Linux guest (3 CPUs, graphics acceleration, Video decode on), with Debian's `/usr/bin/ffmpeg` 7.1.5.
+
+- `vainfo` lists `VAProfileH264Main`, `VAProfileH264High`, `VAProfileVP9Profile0`, `VAProfileVP9Profile2` and `VAProfileAV1Profile0` with `VAEntrypointVLD`. The back end lists a codec only when VideoToolbox reports a hardware decoder, so the A20 Pro decodes VP9 (after registration) and AV1 in hardware.
+- framemd5, `-hwaccel vaapi` against `-hwaccel none`, 1080p30 15 s clips made on the Mac (libx264 High with B-frames, libvpx-vp9, SVT-AV1): 450 of 450 frames equal for each codec. So ANGLE's IOSurface pbuffers work on the iPhone GPU.
+- Speed, `-hwaccel_output_format vaapi -f null -` against software: H.264 348 against 284 fps (guest CPU 0.40 against 4.0 s), VP9 329 against 537 fps (0.39 against 1.7 s), AV1 255 against 348 fps (0.33 against 2.5 s). On these simple test patterns the phone's software decode is sometimes faster in wall time; the hardware path uses a fifth to a tenth of the guest CPU.
+- Not measured: 4K decode, mpv playback on the phone, heat, and the background.
