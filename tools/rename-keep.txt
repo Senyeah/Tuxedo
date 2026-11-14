@@ -1,0 +1,16 @@
+# Names and lines the rename never touches (docs/rename-tuxedo-plan.md, Stage 0).
+# path:<glob>  whole file | line-re:<regex>  matching lines | lines:<path>:<a>-<b>  a range
+path:docs/rename-tuxedo-plan.md
+path:CHANGELOG.md
+path:LINUX-PLAN-09-risks.md
+path:tools/rename.py
+path:tools/rename-*.txt
+# Upstream's public source; Stage 12 deletes these, nothing renames them.
+path:repo.json
+path:tools/update-source.py
+# Credit links to real repos named Henge.
+line-re:github\.com/(Leviidev|hungbenjamin402|sonnx0868|gavinnolan|AdamLovattDevOps|braedonsaunders)/
+line-re:Leviidev/Henge
+# Dated log entries in docs and plans: a date at the start of a list item or heading.
+line-re:^\s*(?:[-*]\s+|#+\s+)?\*{0,2}\d{1,2}/\d{1,2}/20\d\d
+line-re:formerly Henge
