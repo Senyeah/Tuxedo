@@ -29,7 +29,7 @@ This builds every artefact, in order, on an Apple Silicon Mac. The times are the
 
 Needs:
 
-- Xcode 27 or later, `uv`, and Homebrew's `pkgconf` and `libslirp` (`brew install pkgconf libslirp`). `make` also finds libplist, libimobiledevice, libusbmuxd, libimobiledevice-glue, libtatsu, libzip and curl through `pkg-config` for the Mac tool; `make` says which one is missing.
+- Xcode 27 or later, `uv`, and Homebrew's `pkgconf` and `libslirp` (`brew install pkgconf libslirp`).
 - Docker with arm64 images (Docker Desktop or colima). Keep the artefact directory under your home folder: a path under `/private/tmp` made the scripts exit 0 and write nothing to the Mac.
 - Disk space: the console image takes about 0.53 GB and the desktop image about 0.85 GB on disk (each is a 3 GB sparse file), plus Docker's work volume. `tools/gfx` (optional) takes about 8.3 GB.
 - QEMU (`brew install qemu`) only for the reference checks (`qemu-ref.sh`, `qemu-check.py`, `make test-linux-dtb`).
