@@ -1,5 +1,5 @@
-#ifndef HENGEVM_MACHINE_H
-#define HENGEVM_MACHINE_H
+#ifndef TUXVM_MACHINE_H
+#define TUXVM_MACHINE_H
 
 #include <pthread.h>
 #include <stdint.h>

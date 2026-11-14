@@ -7,11 +7,11 @@ import StikJIT
 /// A process cannot synchronously debug itself, so Tuxedo starts this extension,
 /// sends it its PID, the pairing file and henge-jit.js, and StikJIT attaches over
 /// LocalDevVPN and services the script's trap requests until Tuxedo detaches.
-private enum HengeJITWork {
+private enum TuxJITWork {
     /// One request at a time: enabling JIT holds this queue while the debugger is attached.
     static let queue = DispatchQueue(label: "com.henge.app.jit-helper")
 
-    static func handle(_ request: HengeJITRequest) -> HengeJITRequest.Response {
+    static func handle(_ request: TuxJITRequest) -> TuxJITRequest.Response {
         let manager = FileManager.default
         let root = manager.urls(for: .libraryDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("StikJIT", isDirectory: true)
@@ -25,7 +25,7 @@ private enum HengeJITWork {
         } else if request.operation != .resetDDI {
             // Tuxedo found no advertised port. StikJIT's 49152 is closed when the device picked another at boot.
             let lookup = RSDPortResolver.resolve()
-            NSLog("[HengeJIT] RemotePairing port: %@", lookup.detail)
+            NSLog("[TuxJIT] RemotePairing port: %@", lookup.detail)
             if let port = lookup.port { configuration.rsdPort = port } else { needsScan = true }
             portNote = " [helper port lookup: \(lookup.detail); using \(configuration.rsdPort)]"
         }
@@ -58,7 +58,7 @@ private enum HengeJITWork {
             case .prepare:
                 let readiness = StikJIT.prepareDevice(
                     pairingFile: pairingURL, paths: paths, configuration: configuration,
-                    progress: { NSLog("[HengeJIT] prepare: %@", String(describing: $0)) })
+                    progress: { NSLog("[TuxJIT] prepare: %@", String(describing: $0)) })
                 switch readiness {
                 case .ready(let security):
                     return .init(success: true,
@@ -84,8 +84,8 @@ private enum HengeJITWork {
                     configuration: configuration,
                     script: .customBase64(scriptBase64),
                     forceScript: true,
-                    preparationProgress: { NSLog("[HengeJIT] prepare: %@", String(describing: $0)) },
-                    progress: { NSLog("[HengeJIT] %@", $0) })
+                    preparationProgress: { NSLog("[TuxJIT] prepare: %@", String(describing: $0)) },
+                    progress: { NSLog("[TuxJIT] %@", $0) })
                 return .init(success: true, message: "Henge detached cleanly from its built-in JIT helper." + portNote,
                              txmPresent: StikJIT.isTXMPresent)
             case .resetDDI:
@@ -111,7 +111,7 @@ private enum HengeJITWork {
         let last = UInt16(exactly: UserDefaults.standard.integer(forKey: lastPortKey)) ?? 0
         if last != 0, works(last) { return last }
         let open = RSDPortScanner.openPorts(host: base.deviceAddress)
-        NSLog("[HengeJIT] open ports: %@", open.map(String.init).joined(separator: ","))
+        NSLog("[TuxJIT] open ports: %@", open.map(String.init).joined(separator: ","))
         guard let port = open.first(where: works) else { return nil }
         UserDefaults.standard.set(Int(port), forKey: lastPortKey)
         return port
@@ -122,21 +122,21 @@ private enum HengeJITWork {
 /// first input item; the response goes back as JSON in the item the request
 /// completes with. Enable completes only once Tuxedo's script has detached, so
 /// the request, and this process, last as long as the debugger does.
-@objc(HengeJITHelperHandler)
-final class HengeJITHelperHandler: NSObject, NSExtensionRequestHandling {
+@objc(TuxJITHelperHandler)
+final class TuxJITHelperHandler: NSObject, NSExtensionRequestHandling {
     func beginRequest(with context: NSExtensionContext) {
         let info = (context.inputItems.first as? NSExtensionItem)?.userInfo
-        let data = info?[HengeJITRequest.itemKey] as? Data
-        HengeJITWork.queue.async {
-            let response: HengeJITRequest.Response
-            if let data, let request = try? JSONDecoder().decode(HengeJITRequest.self, from: data) {
-                response = HengeJITWork.handle(request)
+        let data = info?[TuxJITRequest.itemKey] as? Data
+        TuxJITWork.queue.async {
+            let response: TuxJITRequest.Response
+            if let data, let request = try? JSONDecoder().decode(TuxJITRequest.self, from: data) {
+                response = TuxJITWork.handle(request)
             } else {
                 response = .init(success: false, message: "Henge's JIT helper received no request.",
                                  txmPresent: nil)
             }
             let item = NSExtensionItem()
-            item.userInfo = [HengeJITRequest.Response.itemKey: (try? JSONEncoder().encode(response)) ?? Data()]
+            item.userInfo = [TuxJITRequest.Response.itemKey: (try? JSONEncoder().encode(response)) ?? Data()]
             context.completeRequest(returningItems: [item], completionHandler: nil)
         }
     }

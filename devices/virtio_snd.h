@@ -1,5 +1,5 @@
-#ifndef HENGEVM_VIRTIO_SND_H
-#define HENGEVM_VIRTIO_SND_H
+#ifndef TUXVM_VIRTIO_SND_H
+#define TUXVM_VIRTIO_SND_H
 
 #include <pthread.h>
 #include <stdatomic.h>

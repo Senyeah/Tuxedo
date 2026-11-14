@@ -5,8 +5,8 @@
 # ///
 """Check: henge-keyboard in the desktop image tells the host when the focused program wants text (host/share.c).
 
-Boots a clone of the desktop image on hengevm with --share and HV_INPUT_FILE. The input file's "getkbd" prints
-what the guest last asked for ("show" or "hide") and the request count on hengevm's stderr. In the labwc session
+Boots a clone of the desktop image on tuxvm with --share and HV_INPUT_FILE. The input file's "getkbd" prints
+what the guest last asked for ("show" or "hide") and the request count on tuxvm's stderr. In the labwc session
 it checks: the service runs; foot with the focus gives "show" and still gets keys; a window with no text field (wlprobe.py) gives
 "hide", and "show" comes back when it closes; no window gives "hide"; the helper says "hide" when it stops, and
 "show" when it starts with a text field in focus; the guest reads the height that "kbdheight F" sets. --gtk also installs zenity in the clone (needs the network):
@@ -34,7 +34,7 @@ PROBE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wlprobe.py")
 
 
 class Host:
-    """hengevm's input file and stderr."""
+    """tuxvm's input file and stderr."""
 
     def __init__(self, inp, err):
         self.inp, self.err = inp, err
@@ -53,7 +53,7 @@ class Host:
             m = re.search(r"guest keyboard: (show|hide) \(request (\d+)\)\n", open(self.err, errors="replace").read()[before:])
             if m:
                 return m.group(1), int(m.group(2))
-        raise Fail("getkbd: hengevm did not answer")
+        raise Fail("getkbd: tuxvm did not answer")
 
     def wait(self, want, what, limit=30):
         """Waits for want from a request newer than the last accepted one; returns the seconds it took."""
@@ -93,7 +93,7 @@ def upload(p, local, remote):
 def one(args):
     image = args.image
     kernel, initrd = (os.path.join(smoke.linux_dir(), f) for f in ("Image", "initrd.img"))
-    for f in (args.hengevm, kernel, initrd, image, image[:-4] + ".partuuid"):
+    for f in (args.tuxvm, kernel, initrd, image, image[:-4] + ".partuuid"):
         if not os.path.exists(f):
             raise Fail(f"missing {f}")
     partuuid = open(image[:-4] + ".partuuid").read().strip()
@@ -107,7 +107,7 @@ def one(args):
         open(inp, "w").close()
         open(err, "w").close()  # getkbd reads it before the shell makes it
         host = Host(inp, err)
-        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.hengevm, "--kernel", kernel,
+        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.tuxvm, "--kernel", kernel,
                 "--initrd", initrd, "--append", append, "--disk", clone, "--ram", "2048",
                 "--cpus", str(args.cpus), "--display", "1280x720", "--share", share]
         p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200),
@@ -222,7 +222,7 @@ def one(args):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default=os.path.join(smoke.linux_dir(), "debian-desktop.img"))
-    ap.add_argument("--hengevm", default=os.path.join(smoke.ROOT, "build", "hengevm"))
+    ap.add_argument("--tuxvm", default=os.path.join(smoke.ROOT, "build", "tuxvm"))
     ap.add_argument("--cpus", type=int, default=4)
     ap.add_argument("--gtk", action="store_true", help="also install zenity in the clone and check a GTK entry")
     ap.add_argument("--work-dir", help="where the clone goes (the image's APFS volume)")

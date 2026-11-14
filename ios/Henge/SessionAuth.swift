@@ -14,22 +14,22 @@ enum SessionAuth {
 
     static func check(_ name: String) async -> Outcome {
         #if targetEnvironment(simulator)
-        HengeLog.log("session", "face id: skipped in the simulator")
+        TuxLog.log("session", "face id: skipped in the simulator")
         return .passed
         #else
         let context = LAContext()
         context.localizedCancelTitle = "Not Now"
         var error: NSError?
         guard context.canEvaluatePolicy(policy, error: &error) else {
-            HengeLog.log("session", "face id: not available (\(error?.code ?? 0))")
+            TuxLog.log("session", "face id: not available (\(error?.code ?? 0))")
             return .failed(message(error))
         }
         do {
             try await context.evaluatePolicy(policy, localizedReason: "Unlock \(name) and its saved passwords.")
-            HengeLog.log("session", "face id: passed")
+            TuxLog.log("session", "face id: passed")
             return .passed
         } catch {
-            HengeLog.log("session", "face id: refused (\((error as NSError).code))")
+            TuxLog.log("session", "face id: refused (\((error as NSError).code))")
             return .failed(message(error as NSError))
         }
         #endif

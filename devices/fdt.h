@@ -1,5 +1,5 @@
-#ifndef HENGEVM_FDT_H
-#define HENGEVM_FDT_H
+#ifndef TUXVM_FDT_H
+#define TUXVM_FDT_H
 
 #include <stdint.h>
 

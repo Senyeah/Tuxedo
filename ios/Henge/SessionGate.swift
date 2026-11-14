@@ -9,16 +9,16 @@ struct SessionGate: Equatable {
 
     enum Check: Equatable {
         case faceID
-        case skippedForTest // HENGE_AUTOPILOT: the session opens, the wallet stays locked
+        case skippedForTest // TUX_AUTOPILOT: the session opens, the wallet stays locked
 
         /// Only the launch environment skips the check (devicectl launch -e), not a file in Documents.
         static func `for`(environment: [String: String]) -> Check {
-            return environment["HENGE_AUTOPILOT"] != nil ? .skippedForTest : .faceID
+            return environment["TUX_AUTOPILOT"] != nil ? .skippedForTest : .faceID
         }
     }
 
     /// A test that skipped the check unlocks the wallet only when it says so.
-    static func testUnlock(environment: [String: String]) -> Bool { environment["HENGE_AUTOPILOT_WALLET"] == "unlocked" }
+    static func testUnlock(environment: [String: String]) -> Bool { environment["TUX_AUTOPILOT_WALLET"] == "unlocked" }
 
     enum Phase: Equatable {
         case closed   // no session, or its machine stopped

@@ -3,12 +3,12 @@
 # requires-python = ">=3.9"
 # dependencies = ["pexpect"]
 # ///
-"""G6: desktop timings on hengevm (not part of make test).
+"""G6: desktop timings on tuxvm (not part of make test).
 
 Each run boots a clone of debian-desktop.img (direct kernel boot, 1920x1080 unless --display) and reads
 /run/user/1000/henge-times: guest uptime at tty1 login, labwc up and the terminal's shell start.
 Then it runs `seq 1 20000` in a full-screen foot, --seqs times, timed in the guest's own clock.
-Pass --gpu-accel to add hengevm's --gpu-accel. The shared image never changes.
+Pass --gpu-accel to add tuxvm's --gpu-accel. The shared image never changes.
 """
 import argparse
 import os
@@ -38,7 +38,7 @@ def one(args, d, n):
         r = subprocess.run(["/bin/cp", "-c", image, clone], capture_output=True, text=True)
         if r.returncode:
             raise Fail(f"cannot clone {image}: {r.stderr.strip()}")
-        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.hengevm, "--kernel", kernel,
+        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.tuxvm, "--kernel", kernel,
                 "--initrd", initrd, "--append", append, "--disk", clone, "--ram", "2048",
                 "--cpus", str(args.cpus), "--display", args.display]
         if args.window:
@@ -87,7 +87,7 @@ def one(args, d, n):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--hengevm", default=os.path.join(smoke.ROOT, "build", "hengevm"))
+    ap.add_argument("--tuxvm", default=os.path.join(smoke.ROOT, "build", "tuxvm"))
     ap.add_argument("--linux-dir")
     ap.add_argument("--work-dir", help="where the clone goes (the image's APFS volume)")
     ap.add_argument("--runs", type=int, default=3)

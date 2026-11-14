@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Builds Tuxedo for iOS and writes ~/Desktop/Tuxedo.ipa (or ~/Desktop/Tuxedo.tipa with --trollstore).
 # Unsigned build, then signed ad hoc inside out with the entitlements file named by the
-# HENGE_ENTITLEMENTS environment variable (default Tuxedo/Tuxedo.entitlements), as Husk's
+# TUX_ENTITLEMENTS environment variable (default Tuxedo/Tuxedo.entitlements), as Husk's
 # package_ipa.sh does: the sideloader (SideStore, AltStore, Impactor) re-signs it
 # with the user's own certificate and keeps the entitlements it can.
 # --trollstore strips the entitlements TrollStore bans under PPL/TXM.
@@ -18,7 +18,7 @@ xcodegen generate >/dev/null
 DD="$IOS/build/DerivedData"
 mkdir -p "$IOS/build"
 xcodebuild -project Henge.xcodeproj -scheme Henge -configuration Release -skipPackagePluginValidation -destination 'generic/platform=iOS' \
-    -derivedDataPath "$DD" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" HENGE_GFX_DIR="$GFX_ROOT" HENGE_GFX="$HENGE_GFX" build > "$DD.buildlog" 2>&1 || {
+    -derivedDataPath "$DD" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" TUX_GFX_DIR="$GFX_ROOT" TUX_GFX="$TUX_GFX" build > "$DD.buildlog" 2>&1 || {
     # Never package what an older build left behind.
     grep -E "error:|BUILD" "$DD.buildlog" | sort -u
     echo "==> the build failed; nothing packaged" >&2
@@ -38,8 +38,8 @@ trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/Payload"
 cp -R "$APP" "$STAGE/Payload/"
 ENT="$STAGE/entitlements.plist"
-# HENGE_ENTITLEMENTS picks another file, as for xcodebuild (Tuxedo/Tuxedo.personal.entitlements for a free team).
-cp "$IOS/${HENGE_ENTITLEMENTS:-Henge/Henge.entitlements}" "$ENT"
+# TUX_ENTITLEMENTS picks another file, as for xcodebuild (Tuxedo/Tuxedo.personal.entitlements for a free team).
+cp "$IOS/${TUX_ENTITLEMENTS:-Henge/Henge.entitlements}" "$ENT"
 BANNED_KEYS=("com.apple.private.cs.debugger" "dynamic-codesigning" "com.apple.private.skip-library-validation")
 if [ "$TROLLSTORE" = true ]; then for k in "${BANNED_KEYS[@]}"; do plutil -remove "$k" "$ENT" 2>/dev/null || true; done; fi
 SAPP="$STAGE/Payload/Henge.app"

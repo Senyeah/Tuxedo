@@ -1111,7 +1111,7 @@ static void ctx_free(Ctx *c) {
     }
     double secs = ms_since(&c->started) / 1e3;
     if (c->bytes_in > 4096 || getenv("HV_VCODEC_LOG"))
-        fprintf(stderr, "hengevm: vcodec: %s context closed after %.1f s: in %.1f MB, out %.1f MB (%.2f MB/s), %llu frames decoded, %llu packets\n",
+        fprintf(stderr, "tuxvm: vcodec: %s context closed after %.1f s: in %.1f MB, out %.1f MB (%.2f MB/s), %llu frames decoded, %llu packets\n",
                 c->fd < 0 ? "device" : "socket", secs, c->bytes_in / 1e6, c->bytes_out / 1e6, secs > 0 ? (c->bytes_in + c->bytes_out) / 1e6 / secs : 0,
                 (unsigned long long)c->decoded, (unsigned long long)c->packets);
     buf_free(c);

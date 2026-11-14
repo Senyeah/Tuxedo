@@ -1,5 +1,5 @@
 /* /.henge/secrets through the share server on a Unix socket, as henge-secrets in a Linux guest uses it,
-   with the folder store that hengevm uses. */
+   with the folder store that tuxvm uses. */
 #include "secrets.h"
 #include "share.h"
 

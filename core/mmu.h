@@ -1,5 +1,5 @@
-#ifndef HENGEVM_MMU_H
-#define HENGEVM_MMU_H
+#ifndef TUXVM_MMU_H
+#define TUXVM_MMU_H
 
 #include <stdint.h>
 #include <stdio.h>

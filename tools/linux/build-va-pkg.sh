@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build henge-va_<version>_arm64.deb into $HENGE_LINUX_OUT/va, in an arm64 debian:trixie container with the pinned
+# Build henge-va_<version>_arm64.deb into $TUX_LINUX_OUT/va, in an arm64 debian:trixie container with the pinned
 # snapshot. henge-va/henge_va.c is the VA-API driver that goes in front of Mesa's virgl driver (the why is in that
 # file). Before the package: the driver against a stand-in for Mesa's (henge-va/test). After it: the package is
 # installed over mesa-va-drivers in the container and removed again, and Mesa's link must move and come back.
@@ -9,7 +9,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 
 if [ "${1:-}" != "--inner" ]; then
-    OUT=${HENGE_LINUX_OUT:-$(cd "$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)/build/linux}
+    OUT=${TUX_LINUX_OUT:-$(cd "$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)/build/linux}
     mkdir -p "$OUT/va"
     TTY=
     [ -t 0 ] && TTY=-t

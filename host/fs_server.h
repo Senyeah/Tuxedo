@@ -1,5 +1,5 @@
-#ifndef HENGEVM_FS_SERVER_H
-#define HENGEVM_FS_SERVER_H
+#ifndef TUXVM_FS_SERVER_H
+#define TUXVM_FS_SERVER_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -34,7 +34,7 @@ int hv_fs_folder_online(int index, int online);
 int hv_fs_folder_find(const char *name); /* the index, or -1 */
 int hv_fs_folder_count(void);
 void hv_fs_folders_clear(void);
-/* Where a folder is (the app knows; hengevm's are all local). The server calls the hook for a provider folder only. */
+/* Where a folder is (the app knows; tuxvm's are all local). The server calls the hook for a provider folder only. */
 enum { HV_FS_LOCAL = 0, HV_FS_PROVIDER = 1 }; /* PROVIDER: iCloud Drive or another app's File Provider */
 int hv_fs_folder_kind(int index, int kind); /* a different folder at the index is LOCAL until this says not */
 /* The app's part in a provider folder, on the worker that runs the request (it may wait for the network). OPEN:

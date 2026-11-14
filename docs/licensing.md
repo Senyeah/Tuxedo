@@ -36,7 +36,7 @@ A Linux machine needs two things that are not in the repository or in the app: a
 
 ANGLE's own licence is BSD-3-Clause. Its static `libGLESv2.a` also holds code from its `third_party` folder. Reading the archive members shows abseil, astc-encoder, zlib and xxhash in all three targets, and volk in the iOS and simulator targets only. The licence file also carries jsoncpp, the SPIR-V headers and tools, ceval and libXNVCtrl, which no member of the archives matches. They are kept so that a later ANGLE pin cannot drop a notice by accident. The libepoxy patch (`tools/gfx/libepoxy-static-gl.patch`) and the pins in `tools/gfx/versions.env` are the source offer for those two libraries: both come from UTM's forks, at the commits named there.
 
-The Mac tool links these libraries only with `make GFX=1`. The app links them only when `HENGE_GFX` is 1 (`ios/scripts/gfx_env.sh`),.
+The Mac tool links these libraries only with `make GFX=1`. The app links them only when `TUX_GFX` is 1 (`ios/scripts/gfx_env.sh`),.
 
 ### SwiftTerm
 

@@ -55,10 +55,10 @@ final class LinuxInstaller: ObservableObject {
         do {
             let images = try await LinuxCatalogue.fetch(url)
             catalogue = .loaded(images)
-            HengeLog.log("linux", "catalogue: \(images.count) images from \(url.absoluteString)")
+            TuxLog.log("linux", "catalogue: \(images.count) images from \(url.absoluteString)")
         } catch {
             catalogue = .failed(error.localizedDescription)
-            HengeLog.log("linux", "catalogue failed: \(error.localizedDescription)")
+            TuxLog.log("linux", "catalogue failed: \(error.localizedDescription)")
         }
     }
 
@@ -91,7 +91,7 @@ final class LinuxInstaller: ObservableObject {
         grace = UIApplication.shared.beginBackgroundTask(withName: "Henge Linux download") {
             MainActor.assumeIsolated { LinuxInstaller.shared.endGrace() }
         }
-        LinuxDownload.log = { HengeLog.log("linux", $0) }
+        LinuxDownload.log = { TuxLog.log("linux", $0) }
         Task {
             defer { UIApplication.shared.isIdleTimerDisabled = false; endGrace() }
             do {
@@ -99,7 +99,7 @@ final class LinuxInstaller: ObservableObject {
                 if let options { try LinuxUnpack.checkDisk(options.diskBytes, for: image) }
                 try checkSpace(image)
                 Machines.excludeFromBackup(Machines.root)
-                HengeLog.log("linux", "downloading \(image.id) \(image.version)")
+                TuxLog.log("linux", "downloading \(image.id) \(image.version)")
                 let throttle = ProgressThrottle()
                 let files = try await LinuxDownload.fetch(image, in: Self.folder) { stage, have, total in
                     guard throttle.allow(stage == .check || have >= total) else { return }
@@ -113,12 +113,12 @@ final class LinuxInstaller: ObservableObject {
                     }
                 }
                 Machines.excludeFromBackup(Self.folder)
-                HengeLog.log("linux", "\(image.id) downloaded and checked")
+                TuxLog.log("linux", "\(image.id) downloaded and checked")
                 guard let options else { phase = .downloaded; return }
                 let machine = try await make(image, files: files, options: options)
                 phase = .installed(machine.id)
             } catch {
-                HengeLog.log("linux", "failed: \(error.localizedDescription)")
+                TuxLog.log("linux", "failed: \(error.localizedDescription)")
                 phase = .failed(error.localizedDescription)
             }
         }
@@ -136,7 +136,7 @@ final class LinuxInstaller: ObservableObject {
         expected = image.diskBytes
         let throttle = ProgressThrottle()
         let dir = machine.directory, bytes = options.diskBytes, planned = machine
-        HengeLog.log("linux", "making \(machine.name): \(ByteText.string(UInt64(bytes))) disk, \(options.ramMB) MB")
+        TuxLog.log("linux", "making \(machine.name): \(ByteText.string(UInt64(bytes))) disk, \(options.ramMB) MB")
         try await Task.detached {
             try LinuxUnpack.make(image, files: files, into: dir, machine: planned, diskBytes: bytes) { stage, done, total in
                 guard throttle.allow(done >= total) else { return }
@@ -157,7 +157,7 @@ final class LinuxInstaller: ObservableObject {
             if case .loaded(let all) = catalogue { others = all }
             LinuxDownload.delete(image, in: Self.folder, others: others)
         }
-        HengeLog.log("linux", "made \(machine.name) (\(machine.id)), \(ByteText.string(UInt64(machine.diskBytes))) disk")
+        TuxLog.log("linux", "made \(machine.name) (\(machine.id)), \(ByteText.string(UInt64(machine.diskBytes))) disk")
         return machine
     }
 

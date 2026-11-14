@@ -9,14 +9,14 @@ DD=build/ios-sim-app
 . ios/scripts/gfx_env.sh
 # The guest network, when tools/build_sim_net.sh has built libslirp and glib for the simulator
 SIM_NET_ROOT=${SIM_NET_ROOT:-$PWD/build/husk/build/ios-sim-arm64/sysroot}
-if [ -f "$SIM_NET_ROOT/lib/libslirp.a" ]; then HENGE_SIM_NET=1; else HENGE_SIM_NET=; SIM_NET_ROOT=; echo "no simulator libslirp: the guest has no network (tools/build_sim_net.sh)"; fi
-make ios-sim-lib ${HENGE_GFX:+GFX=1} ${HENGE_SIM_NET:+SIM_NET_ROOT=$SIM_NET_ROOT}
+if [ -f "$SIM_NET_ROOT/lib/libslirp.a" ]; then TUX_SIM_NET=1; else TUX_SIM_NET=; SIM_NET_ROOT=; echo "no simulator libslirp: the guest has no network (tools/build_sim_net.sh)"; fi
+make ios-sim-lib ${TUX_GFX:+GFX=1} ${TUX_SIM_NET:+SIM_NET_ROOT=$SIM_NET_ROOT}
 (cd ios && xcodegen generate)
 LOG="$DD/build.log"
 mkdir -p "$DD"
 # The old Tuxedo.app survives a failed build, so the exit code decides, not the bundle.
 if ! xcodebuild -project ios/Henge.xcodeproj -scheme HengeSim -skipPackagePluginValidation \
-  -destination 'generic/platform=iOS Simulator' -configuration Debug -derivedDataPath "$DD" HENGE_GFX_DIR="$GFX_ROOT" HENGE_GFX="$HENGE_GFX" HENGE_SIM_NET="$HENGE_SIM_NET" HENGE_SIM_NET_ROOT="$SIM_NET_ROOT" build >"$LOG" 2>&1; then
+  -destination 'generic/platform=iOS Simulator' -configuration Debug -derivedDataPath "$DD" TUX_GFX_DIR="$GFX_ROOT" TUX_GFX="$TUX_GFX" TUX_SIM_NET="$TUX_SIM_NET" TUX_SIM_NET_ROOT="$SIM_NET_ROOT" build >"$LOG" 2>&1; then
   grep -E 'error:' "$LOG" >&2 || tail -20 "$LOG" >&2
   echo "build failed (log: $LOG)" >&2
   exit 1

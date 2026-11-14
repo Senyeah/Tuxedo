@@ -38,7 +38,7 @@
 		<key>NSExtensionPointIdentifier</key>
 		<string>com.apple.ar.viewer</string>
 		<key>NSExtensionPrincipalClass</key>
-		<string>HengeJITHelperHandler</string>
+		<string>TuxJITHelperHandler</string>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Henge's JIT helper looks up the port this device's pairing service listens on.</string>

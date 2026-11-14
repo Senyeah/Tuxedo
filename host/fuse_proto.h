@@ -1,5 +1,5 @@
-#ifndef HENGEVM_FUSE_PROTO_H
-#define HENGEVM_FUSE_PROTO_H
+#ifndef TUXVM_FUSE_PROTO_H
+#define TUXVM_FUSE_PROTO_H
 
 #include <stdint.h>
 

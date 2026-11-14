@@ -19,7 +19,7 @@ import os
 /// the ordering between "the JIT region was allocated" and "QEMU started
 /// translating" is preserved, which is exactly the ordering that matters when
 /// something goes wrong.
-enum HengeLog {
+enum TuxLog {
     private static let osLog = Logger(subsystem: "com.henge.app", category: "henge")
 
     /// Exposed because a C signal handler closure cannot capture context.
@@ -198,7 +198,7 @@ enum HengeLog {
                 }
             }
         }
-        t.name = "com.henge.log.reader"
+        t.name = "tux.log.reader"
         t.qualityOfService = .userInitiated
         t.start()
     }
@@ -218,7 +218,7 @@ enum HengeLog {
                 let msg = "\n*** FATAL SIGNAL \(received) -- process is dying ***\n"
                 msg.withCString { p in
                     let n = strlen(p)
-                    if HengeLog.rawLogFD >= 0 { _ = write(HengeLog.rawLogFD, p, n) }
+                    if TuxLog.rawLogFD >= 0 { _ = write(TuxLog.rawLogFD, p, n) }
                 }
                 // Drain whatever C wrote but the reader thread never got to.
                 //
@@ -233,7 +233,7 @@ enum HengeLog {
                 //
                 // read(2) and write(2) are async-signal-safe; the non-blocking
                 // flag is what stops this hanging when the pipe is empty.
-                if HengeLog.pipeReadFD >= 0 {
+                if TuxLog.pipeReadFD >= 0 {
                     // Reading a file now, so this cannot block and cannot
                     // miss anything: whatever the tailer has not reached is
                     // still on disk at this descriptor's offset.
@@ -244,10 +244,10 @@ enum HengeLog {
                     // it. The marker was written and nothing after it, which
                     // looked exactly like "QEMU printed nothing".
                     while true {
-                        let n = read(HengeLog.pipeReadFD, HengeLog.crashBuf, 8192)
+                        let n = read(TuxLog.pipeReadFD, TuxLog.crashBuf, 8192)
                         if n <= 0 { break }
-                        if HengeLog.rawLogFD >= 0 {
-                            _ = write(HengeLog.rawLogFD, HengeLog.crashBuf, n)
+                        if TuxLog.rawLogFD >= 0 {
+                            _ = write(TuxLog.rawLogFD, TuxLog.crashBuf, n)
                         }
                     }
                 }
@@ -260,23 +260,23 @@ enum HengeLog {
                 // is the only reason it can be used here -- and the frame
                 // buffer is taken at startup because nothing in a signal
                 // handler may allocate.
-                if HengeLog.rawLogFD >= 0 {
+                if TuxLog.rawLogFD >= 0 {
                     let header = "\n--- backtrace ---\n"
                     header.withCString { p in
-                        _ = write(HengeLog.rawLogFD, p, strlen(p))
+                        _ = write(TuxLog.rawLogFD, p, strlen(p))
                     }
-                    let n = backtrace(HengeLog.crashFrames, 64)
-                    backtrace_symbols_fd(HengeLog.crashFrames, n, HengeLog.rawLogFD)
+                    let n = backtrace(TuxLog.crashFrames, 64)
+                    backtrace_symbols_fd(TuxLog.crashFrames, n, TuxLog.rawLogFD)
                 }
-                if HengeLog.rawLogFD >= 0 { fsync(HengeLog.rawLogFD) }
+                if TuxLog.rawLogFD >= 0 { fsync(TuxLog.rawLogFD) }
                 signal(received, SIG_DFL)
                 raise(received)
             }
         }
         NSSetUncaughtExceptionHandler { ex in
-            HengeLog.log("crash", "uncaught exception: \(ex.name.rawValue) -- \(ex.reason ?? "")")
-            HengeLog.log("crash", ex.callStackSymbols.prefix(20).joined(separator: " | "))
-            HengeLog.flushNow()
+            TuxLog.log("crash", "uncaught exception: \(ex.name.rawValue) -- \(ex.reason ?? "")")
+            TuxLog.log("crash", ex.callStackSymbols.prefix(20).joined(separator: " | "))
+            TuxLog.flushNow()
         }
         log("boot", "crash handlers installed (SEGV/ABRT/ILL/FPE/SYS; "
                   + "TRAP+BUS left to the JIT guard; SIGPIPE ignored)")
@@ -387,6 +387,6 @@ enum HengeLog {
 
     /// Snapshot of process memory, the figure jetsam kills on.
     static func logFootprint(_ tag: String) {
-        henge_ios_jit_log_footprint(tag)
+        tux_ios_jit_log_footprint(tag)
     }
 }

@@ -1,5 +1,5 @@
-#ifndef HENGEVM_GUEST_RAM_H
-#define HENGEVM_GUEST_RAM_H
+#ifndef TUXVM_GUEST_RAM_H
+#define TUXVM_GUEST_RAM_H
 
 #include <pthread.h>
 #include <stdint.h>

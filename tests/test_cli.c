@@ -1,4 +1,4 @@
-/* hengevm's command line: virt is the only board, and the macOS flags are unknown options. */
+/* tuxvm's command line: virt is the only board, and the macOS flags are unknown options. */
 #include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,7 +13,7 @@ static void check(const char *what, int ok) {
     if (!ok) { fprintf(stderr, "FAIL: %s\n", what); failures++; }
 }
 
-/* Runs build/hengevm; returns its exit status, with stderr in err. */
+/* Runs build/tuxvm; returns its exit status, with stderr in err. */
 static int run(char *const argv[], char *err, size_t cap) {
     int fds[2];
     if (pipe(fds)) return -1;
@@ -45,7 +45,7 @@ int main(void) {
     close(fd);
 
     /* No --board: the tree it writes is the virt board's, which has a PL011 at 0x9000000. */
-    char *ok[] = {"build/hengevm", "--dump-dtb", dtb, "--ram", "64", NULL};
+    char *ok[] = {"build/tuxvm", "--dump-dtb", dtb, "--ram", "64", NULL};
     check("a command line without --board builds the virt board", run(ok, err, sizeof err) == 0);
     FILE *f = fopen(dtb, "rb");
     static unsigned char blob[1 << 16];
@@ -59,7 +59,7 @@ int main(void) {
                                           {"--ecid", "1"}, {"--seed", "1"}, {"--install", "x"}, {"--no-pvg", NULL},
                                           {"--aux-offset", "1"}};
     for (size_t i = 0; i < sizeof gone / sizeof *gone; i++) {
-        char *argv[8] = {"build/hengevm", (char *)gone[i][0]};
+        char *argv[8] = {"build/tuxvm", (char *)gone[i][0]};
         int k = 2;
         if (gone[i][1]) argv[k++] = (char *)gone[i][1];
         argv[k++] = "--kernel";
@@ -69,7 +69,7 @@ int main(void) {
         snprintf(what, sizeof what, "%s is an unknown option (usage, exit 2)", gone[i][0]);
         check(what, run(argv, err, sizeof err) == 2 && strncmp(err, "usage:", 6) == 0);
     }
-    char *bare[] = {"build/hengevm", NULL};
+    char *bare[] = {"build/tuxvm", NULL};
     run(bare, err, sizeof err);
     check("the usage text names none of the removed flags", !strstr(err, "--board") && !strstr(err, "--rom") && !strstr(err, "--aux") &&
                                                               !strstr(err, "--ecid") && !strstr(err, "--install") && !strstr(err, "--no-pvg"));

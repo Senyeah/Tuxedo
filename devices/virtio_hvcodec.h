@@ -1,5 +1,5 @@
-#ifndef HENGEVM_VIRTIO_HVCODEC_H
-#define HENGEVM_VIRTIO_HVCODEC_H
+#ifndef TUXVM_VIRTIO_HVCODEC_H
+#define TUXVM_VIRTIO_HVCODEC_H
 
 #include <stdint.h>
 #include <string.h>

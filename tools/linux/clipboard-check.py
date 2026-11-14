@@ -5,9 +5,9 @@
 # ///
 """P7 check: henge-clipboard in the desktop image shares the clipboard with the host (host/share.c).
 
-Boots a clone of the desktop image on hengevm with --share and HV_INPUT_FILE. The input file's
+Boots a clone of the desktop image on tuxvm with --share and HV_INPUT_FILE. The input file's
 "clip TEXT" sets the device's clipboard and "getclip" prints what the guest sent (and when the helper
-was last heard) on hengevm's stderr. It checks: the service runs, text from before the helper started
+was last heard) on tuxvm's stderr. It checks: the service runs, text from before the helper started
 is not applied, device to guest (with non-ASCII text), guest to device (newlines, 1 MB), no echo in
 either direction, a clipboard that is not text is not sent, and the same agent on X11 through XWayland.
 The image needs henge-guest 1.2 and wl-clipboard (--image FILE names a rebuilt copy). The shared image
@@ -32,7 +32,7 @@ BIG = 1_000_000
 
 
 class Host:
-    """hengevm's input file and stderr."""
+    """tuxvm's input file and stderr."""
 
     def __init__(self, inp, err):
         self.inp, self.err = inp, err
@@ -54,7 +54,7 @@ class Host:
                 if m:
                     break
             else:
-                raise Fail("getclip: hengevm did not answer")
+                raise Fail("getclip: tuxvm did not answer")
             text = None if m.group(1) == "(nothing new)" else m.group(1)
             self.seen = int(m.group(2))
             if text is not None or want is None or time.monotonic() > end:
@@ -86,7 +86,7 @@ def one(args):
             raise Fail(f"cannot clone {image}: {r.stderr.strip()}")
         host = Host(inp, err)
         host.line("clip from before the helper started")  # the device's clipboard is set at boot
-        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.hengevm, "--kernel", kernel,
+        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.tuxvm, "--kernel", kernel,
                 "--initrd", initrd, "--append", append, "--disk", clone, "--ram", "2048",
                 "--cpus", str(args.cpus), "--display", "1280x720", "--share", share]
         env = dict(os.environ, HV_INPUT_FILE=inp)
@@ -198,7 +198,7 @@ def one(args):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default=os.path.join(smoke.linux_dir(), "debian-desktop.img"))
-    ap.add_argument("--hengevm", default=os.path.join(smoke.ROOT, "build", "hengevm"))
+    ap.add_argument("--tuxvm", default=os.path.join(smoke.ROOT, "build", "tuxvm"))
     ap.add_argument("--cpus", type=int, default=4)
     ap.add_argument("--work-dir", help="where the clone goes (the image's APFS volume)")
     args = ap.parse_args()

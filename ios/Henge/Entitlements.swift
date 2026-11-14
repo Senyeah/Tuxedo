@@ -6,7 +6,7 @@ enum Entitlements {
     static let increasedMemory = has("com.apple.developer.kernel.increased-memory-limit")
     static let extendedAddressing = has("com.apple.developer.kernel.extended-virtual-addressing")
     /// What iOS allowed when the app opened, before the JIT region took its share.
-    static let memoryLimitAtLaunch = henge_available_memory()
+    static let memoryLimitAtLaunch = tux_available_memory()
 
     private typealias CreateFromSelf = @convention(c) (CFAllocator?) -> CFTypeRef?
     private typealias CopyValue = @convention(c) (CFTypeRef, CFString, UnsafeMutablePointer<Unmanaged<CFError>?>?) -> CFTypeRef?

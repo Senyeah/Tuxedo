@@ -1,5 +1,5 @@
-#ifndef HENGEVM_VIRTIO_RNG_H
-#define HENGEVM_VIRTIO_RNG_H
+#ifndef TUXVM_VIRTIO_RNG_H
+#define TUXVM_VIRTIO_RNG_H
 
 #include "virtio.h"
 

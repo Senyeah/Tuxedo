@@ -48,17 +48,17 @@ struct TouchScreen: UIViewRepresentable {
         func cancelAll() {
             guard !slots.isEmpty else { return }
             _ = slots.releaseAll()
-            henge_vm_screen_touch_cancel()
+            tux_vm_screen_touch_cancel()
         }
 
         private func fingers(_ touches: Set<UITouch>) -> [UITouch] { touches.filter { $0.type != .indirectPointer } }
 
         private func send(_ slot: Int, _ phase: Int32, _ t: UITouch) {
             let g = TouchMapping.position(t.preciseLocation(in: self), in: picture)
-            henge_vm_screen_touch(Int32(slot), phase, Int32(g.x), Int32(g.y))
+            tux_vm_screen_touch(Int32(slot), phase, Int32(g.x), Int32(g.y))
             if phase == 0 && contactsLogged < 12 {
                 contactsLogged += 1
-                HengeLog.log("input", "touch: slot \(slot) down at \(g.x),\(g.y)")
+                TuxLog.log("input", "touch: slot \(slot) down at \(g.x),\(g.y)")
             }
         }
 
@@ -82,7 +82,7 @@ struct TouchScreen: UIViewRepresentable {
                 send(slot, 0, t)
                 sent = true
             }
-            if sent { henge_vm_screen_touch_frame() }
+            if sent { tux_vm_screen_touch_frame() }
         }
 
         override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -95,7 +95,7 @@ struct TouchScreen: UIViewRepresentable {
                 moved = true
             }
             /* One frame per event: fingers move together. */
-            if moved { henge_vm_screen_touch_frame() }
+            if moved { tux_vm_screen_touch_frame() }
         }
 
         /* Linux has no cancel for one contact: a cancelled touch lifts. */
@@ -108,10 +108,10 @@ struct TouchScreen: UIViewRepresentable {
                 let id = ObjectIdentifier(t)
                 down.remove(id)
                 guard let slot = slots.release(id) else { continue }
-                henge_vm_screen_touch(Int32(slot), 2, 0, 0)
+                tux_vm_screen_touch(Int32(slot), 2, 0, 0)
                 lifted = true
             }
-            if lifted { henge_vm_screen_touch_frame() }
+            if lifted { tux_vm_screen_touch_frame() }
             guard down.isEmpty else { return }
             if revealing {
                 revealing = false

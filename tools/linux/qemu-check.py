@@ -9,9 +9,9 @@ import time
 import pexpect
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.environ.get("HENGE_LINUX_OUT", "$HOME/Repos/Henge/build/linux")
+OUT = os.environ.get("TUX_LINUX_OUT", "$HOME/Repos/Henge/build/linux")
 PROMPT = r"\$ $"
-MARK = "HENGE_DONE_"
+MARK = "TUX_DONE_"
 # No userspace knob gives the VA size: the modules segment in /proc/kcore starts at PAGE_END = -(1 << (VA - 1))
 GUEST_VA = (
     'import struct as s;f=open("/proc/kcore","rb");h=f.read(64);o=s.unpack_from("<Q",h,32)[0];'

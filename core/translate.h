@@ -1,5 +1,5 @@
-#ifndef HENGEVM_TRANSLATE_H
-#define HENGEVM_TRANSLATE_H
+#ifndef TUXVM_TRANSLATE_H
+#define TUXVM_TRANSLATE_H
 
 #include <stdint.h>
 

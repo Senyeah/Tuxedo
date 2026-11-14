@@ -1,6 +1,6 @@
 import Foundation
 
-/// The rules for a Linux machine's port forwards, and how the engine's state reads (henge_vm_forward_state).
+/// The rules for a Linux machine's port forwards, and how the engine's state reads (tux_vm_forward_state).
 enum ForwardPolicy {
     static let maxRules = 16
     /// iOS binds no port below 1024.
@@ -90,7 +90,7 @@ enum ForwardPolicy {
         return interface
     }
 
-    /// henge_vm_forward_state's "IP IFNAME" lines, local networks first (Wi-Fi, Ethernet, hotspot, VPN) and loopback last.
+    /// tux_vm_forward_state's "IP IFNAME" lines, local networks first (Wi-Fi, Ethernet, hotspot, VPN) and loopback last.
     static func parseAddresses(_ text: String) -> [Address] {
         let rank = { (a: Address) -> Int in
             a.isLoopback ? 9 : a.interface == "en0" ? 0 : a.interface.hasPrefix("en") ? 1 : a.interface.hasPrefix("bridge") ? 2 : 3
@@ -115,7 +115,7 @@ enum ForwardPolicy {
 
     static let addressInUse: Int32 = 48 // EADDRINUSE on Darwin
 
-    /// One rule's state from henge_vm_forward_state's count, errno and lines.
+    /// One rule's state from tux_vm_forward_state's count, errno and lines.
     static func shown(count: Int32, err: Int32, text: String, phonePort: Int, device: String) -> Shown {
         guard count >= 0 else { return .off }
         let all = parseAddresses(text)

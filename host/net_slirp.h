@@ -1,5 +1,5 @@
-#ifndef HENGEVM_NET_SLIRP_H
-#define HENGEVM_NET_SLIRP_H
+#ifndef TUXVM_NET_SLIRP_H
+#define TUXVM_NET_SLIRP_H
 
 #include "machine.h"
 #include "virtio_net.h"

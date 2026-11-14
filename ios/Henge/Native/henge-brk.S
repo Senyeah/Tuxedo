@@ -32,7 +32,7 @@
  *   makes it a cheap "is StikDebug actually attached?" probe.
  *
  * If StikDebug is NOT attached, these brk instructions raise a real SIGTRAP.
- * henge_ios_jit_install_trap_handler() must be installed first so that becomes a
+ * tux_ios_jit_install_trap_handler() must be installed first so that becomes a
  * NULL return rather than process death.
  */
 
@@ -40,29 +40,29 @@
 
 .section __TEXT,__text,regular,pure_instructions
 
-/* void *henge_brk_get_jit_mapping(void *addr, size_t len);
+/* void *tux_brk_get_jit_mapping(void *addr, size_t len);
  * x0 = addr (pass NULL to request a fresh region), x1 = len.
  * Returns the executable region address in x0, or 0 on failure. */
-.globl _henge_brk_get_jit_mapping
+.globl _tux_brk_get_jit_mapping
 .p2align 2
-_henge_brk_get_jit_mapping:
+_tux_brk_get_jit_mapping:
     mov     x16, #1              /* CMD_PREPARE_REGION */
     brk     #0xf00d
     ret
 
-/* void henge_brk_jit_detach(void); */
-.globl _henge_brk_jit_detach
+/* void tux_brk_jit_detach(void); */
+.globl _tux_brk_jit_detach
 .p2align 2
-_henge_brk_jit_detach:
+_tux_brk_jit_detach:
     mov     x16, #0              /* CMD_DETACH */
     brk     #0xf00d
     ret
 
-/* uint64_t henge_brk_probe(void);
+/* uint64_t tux_brk_probe(void);
  * Returns 0xE0000069 when StikDebug is attached and servicing traps. */
-.globl _henge_brk_probe
+.globl _tux_brk_probe
 .p2align 2
-_henge_brk_probe:
+_tux_brk_probe:
     brk     #0x69
     ret
 

@@ -1,5 +1,5 @@
-#ifndef HENGEVM_XHCI_H
-#define HENGEVM_XHCI_H
+#ifndef TUXVM_XHCI_H
+#define TUXVM_XHCI_H
 
 #include <pthread.h>
 

@@ -40,7 +40,7 @@ enum Device {
     /// The virtual CPU offers Armv8.5 instructions (core/sysreg.c), and Linux uses them. They run as
     /// they are, so the chip needs them too: A14, M1 and later, which is iPhone13,x and iPad13,x up.
     static let chipTooOld: Bool = {
-        let model = HengeLog.deviceModel
+        let model = TuxLog.deviceModel
         guard model.hasPrefix("iPhone") || model.hasPrefix("iPad"),
               let major = Int(model.drop { !$0.isNumber }.prefix { $0.isNumber }) else { return false }
         return major < 13
@@ -80,7 +80,7 @@ enum HardwareKeys {
                 continue
             }
             let usage = UInt8(raw)
-            henge_vm_key_hid(usage, down ? 1 : 0)
+            tux_vm_key_hid(usage, down ? 1 : 0)
             if usage < 0xe0 { lastKey = CACurrentMediaTime() }
             if down {
                 held.insert(usage)
@@ -95,7 +95,7 @@ enum HardwareKeys {
     /// iPadOS can keep a key's release when it takes over, as it does for ⌘-Tab: the guest must not
     /// go on thinking the key is down.
     static func releaseAll() {
-        for usage in held { henge_vm_key_hid(usage, 0) }
+        for usage in held { tux_vm_key_hid(usage, 0) }
         held.removeAll()
     }
 }
@@ -116,7 +116,7 @@ enum PointerLock {
             let kind: AnyClass = type(of: root)
             if patched.insert(ObjectIdentifier(kind)).inserted {
                 let answer: @convention(block) (UIViewController) -> Bool = { _ in
-                    if !asked { asked = true; HengeLog.log("input", "pointer lock: UIKit asked, answer \(wanted)") }
+                    if !asked { asked = true; TuxLog.log("input", "pointer lock: UIKit asked, answer \(wanted)") }
                     return wanted
                 }
                 class_replaceMethod(kind, #selector(getter: UIViewController.prefersPointerLocked), imp_implementationWithBlock(answer), "B@:")
@@ -166,8 +166,8 @@ final class HardwareMouse {
         let swapButtons = defaults.bool(forKey: PhysicalMouseButtons.swapKey)
         buttons = PhysicalMouseButtons(swapsRightAndMiddle: swapButtons)
         buttonsLogged = 0
-        HengeLog.log("input", "physical mouse: swap right/middle \(swapButtons ? "on" : "off")")
-        HengeLog.log("input", "AssistiveTouch \(UIAccessibility.isAssistiveTouchRunning ? "on" : "off"), idiom \(UIDevice.current.userInterfaceIdiom.rawValue)")
+        TuxLog.log("input", "physical mouse: swap right/middle \(swapButtons ? "on" : "off")")
+        TuxLog.log("input", "AssistiveTouch \(UIAccessibility.isAssistiveTouchRunning ? "on" : "off"), idiom \(UIDevice.current.userInterfaceIdiom.rawValue)")
         movesLogged = 0
         movesSince = 0
         lastScrollFirst = 0
@@ -182,7 +182,7 @@ final class HardwareMouse {
         })
         observers.append(NotificationCenter.default.addObserver(forName: .GCMouseDidDisconnect, object: nil, queue: .main) { [weak self] note in
             guard let self, let mouse = note.object as? GCMouse else { return }
-            HengeLog.log("input", "mouse gone: \(mouse.vendorName ?? "?")")
+            TuxLog.log("input", "mouse gone: \(mouse.vendorName ?? "?")")
             // Only this device's buttons: another device may be in a drag.
             for button in self.buttons.releaseAll(for: Self.key(mouse)) { Self.send(button, false) }
             self.mice.removeAll { $0 === mouse }
@@ -191,7 +191,7 @@ final class HardwareMouse {
             // The scene comes in the user info: the notification's object isn't it.
             let scene = note.userInfo?[UIPointerLockState.sceneUserInfoKey] as? UIScene
             let locked = scene?.pointerLockState?.isLocked ?? false
-            HengeLog.log("input", "pointer lock: \(locked ? "on" : "off")")
+            TuxLog.log("input", "pointer lock: \(locked ? "on" : "off")")
         })
         edge = EdgePush()
         if !Device.isPad {
@@ -228,7 +228,7 @@ final class HardwareMouse {
 
     /// Left and right share the pad's owners, so a pad tap or key during a mouse drag cannot end it.
     private static func send(_ button: Int32, _ down: Bool) {
-        guard button < 2 else { return henge_vm_mouse_button(button, down ? 1 : 0) }
+        guard button < 2 else { return tux_vm_mouse_button(button, down ? 1 : 0) }
         if down { PointerButtons.guest.press(Int(button), by: .mouse) } else { PointerButtons.guest.release(Int(button), by: .mouse) }
     }
 
@@ -242,7 +242,7 @@ final class HardwareMouse {
             return
         }
         mice.append(mouse)
-        HengeLog.log("input", "mouse: \(mouse.vendorName ?? "?"), right button \(input.rightButton != nil), middle \(input.middleButton != nil), pressed \(input.leftButton.isPressed) \(input.rightButton?.isPressed ?? false) \(input.middleButton?.isPressed ?? false), try \(tries)")
+        TuxLog.log("input", "mouse: \(mouse.vendorName ?? "?"), right button \(input.rightButton != nil), middle \(input.middleButton != nil), pressed \(input.leftButton.isPressed) \(input.rightButton?.isPressed ?? false) \(input.middleButton?.isPressed ?? false), try \(tries)")
         input.mouseMovedHandler = { [weak self] _, dx, dy in self?.moved(dx, dy) }
         let name = mouse.vendorName ?? "?", key = Self.key(mouse)
         input.leftButton.pressedChangedHandler = { [weak self] _, _, pressed in self?.button(0, pressed, name, key) }
@@ -260,7 +260,7 @@ final class HardwareMouse {
         pushAtEdge(dx, dy)
         if movesLogged < 40 {
             movesLogged += 1
-            HengeLog.log("input", "mouse moved: \(dx), \(dy)")
+            TuxLog.log("input", "mouse moved: \(dx), \(dy)")
         } else {
             movesSince += 1
             sumX += abs(dx)
@@ -269,7 +269,7 @@ final class HardwareMouse {
             if Date().timeIntervalSince(lastMoveLog) >= 1 {
                 let h = Trackpad.Surface.lastHover
                 if pushed > 0 { // only while an edge push runs, so the log does not grow by a line a second
-                    HengeLog.log("input", "mouse moved: \(movesSince) deltas (\(zeroMoves) zero), sum |dx| \(Int(sumX)) |dy| \(Int(sumY)), edge push \(pushed) px, hover \(Int(h.x)),\(Int(h.y))")
+                    TuxLog.log("input", "mouse moved: \(movesSince) deltas (\(zeroMoves) zero), sum |dx| \(Int(sumX)) |dy| \(Int(sumY)), edge push \(pushed) px, hover \(Int(h.x)),\(Int(h.y))")
                 }
                 pushed = 0
                 movesSince = 0
@@ -285,7 +285,7 @@ final class HardwareMouse {
         guard x != 0 || y != 0 else { return }
         restX -= x
         restY -= y
-        henge_vm_mouse_move(Int32(x), Int32(y))
+        tux_vm_mouse_move(Int32(x), Int32(y))
     }
 
     /// Runs for every delta, also the near-zero ones that come while the system pointer is held at an edge.
@@ -293,18 +293,18 @@ final class HardwareMouse {
         guard !Device.isPad else { return }
         let (x, y) = edge.motion(Double(dx * speed), Double(-dy * speed), now: CACurrentMediaTime())
         guard x != 0 || y != 0 else { return }
-        henge_vm_mouse_move(x, y)
+        tux_vm_mouse_move(x, y)
         pushed += Int(abs(x) + abs(y))
     }
 
     private func button(_ physicalButton: Int32, _ pressed: Bool, _ from: String, _ device: Int) {
         guard let guestButton = buttons.event(physicalButton, pressed: pressed, device: device) else {
-            HengeLog.log("input", "physical mouse button: raw=\(physicalButton) \(pressed ? "down" : "up") from \(from) dropped")
+            TuxLog.log("input", "physical mouse button: raw=\(physicalButton) \(pressed ? "down" : "up") from \(from) dropped")
             return
         }
         do {
             let h = Trackpad.Surface.lastHover
-            HengeLog.log("input", "physical mouse button: raw=\(physicalButton) guest=\(guestButton) \(pressed ? "down" : "up") from \(from), hover \(Int(h.x)),\(Int(h.y))")
+            TuxLog.log("input", "physical mouse button: raw=\(physicalButton) guest=\(guestButton) \(pressed ? "down" : "up") from \(from), hover \(Int(h.x)),\(Int(h.y))")
         }
         Self.send(guestButton, pressed)
         if !pressed { StickyKeys.shared.releaseAll() }
@@ -334,9 +334,9 @@ final class HardwareMouse {
         let vertical = way * Self.wheelUnits(verticalRaw, scale: scale)
         if scrollsLogged < 24 {
             scrollsLogged += 1
-            HengeLog.log("input", "scroll raw: \(first), \(second); units: \(horizontal), \(vertical)")
+            TuxLog.log("input", "scroll raw: \(first), \(second); units: \(horizontal), \(vertical)")
         }
-        if horizontal != 0 || vertical != 0 { henge_vm_mouse_scroll(horizontal, vertical) }
+        if horizontal != 0 || vertical != 0 { tux_vm_mouse_scroll(horizontal, vertical) }
     }
 
     private static func wheelUnits(_ value: Float, scale: Float) -> Int32 {

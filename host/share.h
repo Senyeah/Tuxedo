@@ -1,5 +1,5 @@
-#ifndef HENGEVM_SHARE_H
-#define HENGEVM_SHARE_H
+#ifndef TUXVM_SHARE_H
+#define TUXVM_SHARE_H
 
 #include <stddef.h>
 #include <stdio.h>

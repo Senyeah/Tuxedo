@@ -1,5 +1,5 @@
-#ifndef HENGEVM_VIRTIO_FS_H
-#define HENGEVM_VIRTIO_FS_H
+#ifndef TUXVM_VIRTIO_FS_H
+#define TUXVM_VIRTIO_FS_H
 
 #include "fs_server.h"
 #include "virtio.h"

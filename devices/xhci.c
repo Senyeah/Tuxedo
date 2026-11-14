@@ -328,7 +328,7 @@ static int control(HvXhci *x, int slot, const uint8_t setup[8], uint8_t *out, in
        driver cannot flood it. */
     if (x->slots[slot].dev == 1 && x->tp_reqs < 80) {
         x->tp_reqs++;
-        fprintf(stderr, "hengevm: xhci: tp request %02x %02x value %04x index %04x len %u\n",
+        fprintf(stderr, "tuxvm: xhci: tp request %02x %02x value %04x index %04x len %u\n",
                 type, req, value, setup[4] | setup[5] << 8, setup[6] | setup[7] << 8);
     }
     const uint8_t *src = NULL;
@@ -418,7 +418,7 @@ static int control(HvXhci *x, int slot, const uint8_t setup[8], uint8_t *out, in
            driver handshake cold, and we cannot tell what it wants yet. */
         return 0;
     } else {
-        if (x->m->log) fprintf(stderr, "hengevm: xhci: unhandled request %02x %02x value %04x (slot %d, device %d)\n",
+        if (x->m->log) fprintf(stderr, "tuxvm: xhci: unhandled request %02x %02x value %04x (slot %d, device %d)\n",
                                type, req, value, slot, x->slots[slot].dev);
         return -1;
     }
@@ -468,12 +468,12 @@ static void run_ep0(HvXhci *x, int slot) {
                     rd(x, buf, data, 2); /* the data lives in guest memory, at the TRB's pointer */
                     if (data[0] == 0x02 && (data[1] & 1)) {
                         x->tp_mt = 1; /* the guest switched the pad to multitouch */
-                        fprintf(stderr, "hengevm: xhci: trackpad: multitouch on\n");
+                        fprintf(stderr, "tuxvm: xhci: trackpad: multitouch on\n");
                     } else if (data[0] == 0x01) {
                         tp_select(x, data[1]); /* the guest selected a sensor register to read */
-                        fprintf(stderr, "hengevm: xhci: trackpad: select register %02x (%d bytes)\n", data[1], x->tp_f1_len ? x->tp_f1[3] : 0);
+                        fprintf(stderr, "tuxvm: xhci: trackpad: select register %02x (%d bytes)\n", data[1], x->tp_f1_len ? x->tp_f1[3] : 0);
                     } else {
-                        fprintf(stderr, "hengevm: xhci: trackpad: set report %02x %02x\n", data[0], data[1]);
+                        fprintf(stderr, "tuxvm: xhci: trackpad: set report %02x %02x\n", data[0], data[1]);
                     }
                 }
             }
@@ -537,11 +537,11 @@ static void run_ep_in(HvXhci *x, int slot) {
             wr(x, buf, rep, n);
             x->tp_rhead++;
             x->tp_delivered++;
-            if (x->tp_delivered <= 16) fprintf(stderr, "hengevm: xhci: trackpad: %u bytes to the guest (delivered %llu)\n", n, (unsigned long long)x->tp_delivered);
+            if (x->tp_delivered <= 16) fprintf(stderr, "tuxvm: xhci: trackpad: %u bytes to the guest (delivered %llu)\n", n, (unsigned long long)x->tp_delivered);
             if (len >= 30 && x->tp_multi_logs < 40) { /* two fingers or more: dump the frame so we can watch them move */
                 x->tp_multi_logs++;
                 int nf = (int)((len - 12) / 9);
-                fprintf(stderr, "hengevm: xhci: trackpad: %d fingers:", nf);
+                fprintf(stderr, "tuxvm: xhci: trackpad: %d fingers:", nf);
                 for (int i = 0; i < nf; i++) {
                     const uint8_t *b = rep + 12 + 9 * i;
                     int xc = b[0] | ((b[1] & 0x1f) << 8); if (xc & 0x1000) xc -= 0x2000;
@@ -708,7 +708,7 @@ static void run_commands(HvXhci *x) {
         case TRB_NOOP_CMD:
             break;
         default:
-            if (x->m->log) fprintf(stderr, "hengevm: xhci: unhandled command TRB type %d\n", type);
+            if (x->m->log) fprintf(stderr, "tuxvm: xhci: unhandled command TRB type %d\n", type);
             cc = CC_TRB_ERROR;
             break;
         }
@@ -937,7 +937,7 @@ static void bar_write(HvPciDev *d, int bar, uint64_t off, uint64_t v, unsigned s
             if (dci < 1 || dci >= HV_XHCI_EPS) return;
             if (x->slots[slot].dev == 1 && x->tp_db < 8) {
                 x->tp_db++;
-                fprintf(stderr, "hengevm: xhci: trackpad: doorbell dci %d\n", dci);
+                fprintf(stderr, "tuxvm: xhci: trackpad: doorbell dci %d\n", dci);
             }
             /* A doorbell starts a stopped endpoint again (a halted one waits for Reset Endpoint). */
             uint32_t state = rd32(x, out_ctx(x, slot) + 32ull * dci) & 7;

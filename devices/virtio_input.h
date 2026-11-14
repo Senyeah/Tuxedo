@@ -1,5 +1,5 @@
-#ifndef HENGEVM_VIRTIO_INPUT_H
-#define HENGEVM_VIRTIO_INPUT_H
+#ifndef TUXVM_VIRTIO_INPUT_H
+#define TUXVM_VIRTIO_INPUT_H
 
 #include <pthread.h>
 

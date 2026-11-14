@@ -1,9 +1,9 @@
-/* hengevm-ref: a Mac-only test tool. Runs the same machine (HengeVM's RAM,
+/* tuxvm-ref: a Mac-only test tool. Runs the same machine (HengeVM's RAM,
    devices and disks) with the guest CPU on Hypervisor.framework
    instead of the JIT, so a JIT run can be compared against real hardware at
    a breakpoint. HengeVM itself never uses a hypervisor.
 
-   hengevm-ref (--firmware FILE | --kernel FILE [--initrd FILE] [--append STR]) [--disk FILE] [--ram MB] [--break PC [--break-hits N]] [--log N]
+   tuxvm-ref (--firmware FILE | --kernel FILE [--initrd FILE] [--append STR]) [--disk FILE] [--ram MB] [--break PC [--break-hits N]] [--log N]
    It runs one CPU, and the console is write-only. Linux stops at GICv3 init: HVF has no ICC_* registers without its own GIC. */
 #include <Hypervisor/Hypervisor.h>
 #include <stdio.h>
@@ -25,7 +25,7 @@ static hv_vcpu_exit_t *vexit;
     do {                                                                                 \
         hv_return_t r_ = (x);                                                            \
         if (r_ != HV_SUCCESS) {                                                          \
-            fprintf(stderr, "hengevm-ref: %s failed: %x\n", #x, r_);                     \
+            fprintf(stderr, "tuxvm-ref: %s failed: %x\n", #x, r_);                     \
             exit(1);                                                                     \
         }                                                                                \
     } while (0)
@@ -64,7 +64,7 @@ static void map_ram(void) {
 }
 
 static void dump(const char *why) {
-    fprintf(stderr, "\nhengevm-ref: %s\n", why);
+    fprintf(stderr, "\ntuxvm-ref: %s\n", why);
     uint64_t cpsr = reg(HV_REG_CPSR);
     fprintf(stderr, "  pc %016llx el%llu sp %016llx\n", (unsigned long long)reg(HV_REG_PC), (unsigned long long)((cpsr >> 2) & 3),
             (unsigned long long)((cpsr & 0xc) && (cpsr & 1) ? sysreg(HV_SYS_REG_SP_EL1) : sysreg(HV_SYS_REG_SP_EL0)));
@@ -125,7 +125,7 @@ static void sysreg_trap(uint64_t esr) {
 }
 
 static void usage(void) {
-    fprintf(stderr, "usage: hengevm-ref (--firmware FILE | --kernel FILE [--initrd FILE] [--append STR]) [--disk FILE] [--ram MB] [--break PC [--break-hits N]] [--log N]\n");
+    fprintf(stderr, "usage: tuxvm-ref (--firmware FILE | --kernel FILE [--initrd FILE] [--append STR]) [--disk FILE] [--ram MB] [--break PC [--break-hits N]] [--log N]\n");
     exit(2);
 }
 
@@ -135,32 +135,32 @@ static void console_out(void *opaque, uint8_t c) {
     (void)r;
 }
 
-/* The virt board, set up as hengevm does for --firmware or --kernel. 0, or -1 after a message. */
+/* The virt board, set up as tuxvm does for --firmware or --kernel. 0, or -1 after a message. */
 static int create_virt(const char *firmware, const char *kernel, const char *initrd, const char *append,
                        HvDisk *disk, int have_disk, uint64_t ram_mb) {
     static const uint8_t mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
     if (hv_virt_create(&vboard, &m, &cpu, 1, ram_mb << 20, have_disk ? disk : NULL, mac, 0) != 0) {
-        fprintf(stderr, "hengevm-ref: cannot build the virt board\n");
+        fprintf(stderr, "tuxvm-ref: cannot build the virt board\n");
         return -1;
     }
     if (firmware) {
         uint32_t size = 0;
         if (hv_virt_load_firmware(&vboard, firmware) != 0) {
-            fprintf(stderr, "hengevm-ref: cannot read the firmware (at most 64 MB)\n");
+            fprintf(stderr, "tuxvm-ref: cannot read the firmware (at most 64 MB)\n");
             return -1;
         }
         uint8_t *fdt = hv_virt_build_fdt(&vboard, NULL, 0, 0, &size);
         int placed = hv_virt_place_fdt(&vboard, fdt, size);
         free(fdt);
         if (placed != 0) {
-            fprintf(stderr, "hengevm-ref: cannot build the device tree\n");
+            fprintf(stderr, "tuxvm-ref: cannot build the device tree\n");
             return -1;
         }
     }
     hv_virt_reset(&vboard);
     char err[256];
     if (kernel && hv_linux_boot(&vboard, kernel, initrd, append, NULL, err, sizeof err) != 0) {
-        fprintf(stderr, "hengevm-ref: %s\n", err);
+        fprintf(stderr, "tuxvm-ref: %s\n", err);
         return -1;
     }
     vboard.uart->output = console_out;
@@ -223,7 +223,7 @@ int main(int argc, char **argv) {
                 CHECK(hv_vcpu_set_vtimer_mask(vcpu, false));
                 continue;
             }
-            fprintf(stderr, "hengevm-ref: exit reason %u\n", vexit->reason);
+            fprintf(stderr, "tuxvm-ref: exit reason %u\n", vexit->reason);
             break;
         }
         uint64_t esr = vexit->exception.syndrome;

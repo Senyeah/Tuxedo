@@ -1,5 +1,5 @@
-#ifndef HENGEVM_VIRTIO_GPU_H
-#define HENGEVM_VIRTIO_GPU_H
+#ifndef TUXVM_VIRTIO_GPU_H
+#define TUXVM_VIRTIO_GPU_H
 
 #include <pthread.h>
 

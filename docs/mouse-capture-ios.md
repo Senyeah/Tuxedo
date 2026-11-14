@@ -37,7 +37,7 @@ flowchart LR
     app --> gc[GCMouse handlers]
     app --> touch[Trackpad.Surface touches]
     at -->|simulated finger| touch
-    gc --> rel[henge_vm_mouse_move, button, scroll]
+    gc --> rel[tux_vm_mouse_move, button, scroll]
     touch --> pad[Magic Trackpad 2 emulation]
     rel --> guest[Guest pointer]
     pad --> guest
@@ -50,7 +50,7 @@ flowchart LR
 | Request for pointer lock. A block replaces `prefersPointerLocked` on the class of the root view controller. | `ios/Henge/Hardware.swift:121-137` |
 | The "refused" hint is for iPad only. The comment says "An iPhone never locks it". | `ios/Henge/Hardware.swift:139-146` |
 | `HardwareMouse.start()` attaches to each `GCMouse` and calls `PointerLock.set(true)`. | `ios/Henge/Hardware.swift:167-194` |
-| Movement: `mouseMovedHandler` gives raw deltas. Tuxedo scales them and calls `henge_vm_mouse_move`. There is no log line. | `ios/Henge/Hardware.swift:220`, `228-236` |
+| Movement: `mouseMovedHandler` gives raw deltas. Tuxedo scales them and calls `tux_vm_mouse_move`. There is no log line. | `ios/Henge/Hardware.swift:220`, `228-236` |
 | Buttons: the first 32 events are logged as `physical mouse button: raw=… guest=…`. | `ios/Henge/Hardware.swift:238-246` |
 | Scroll: the first 24 events are logged as `scroll raw: …`. | `ios/Henge/Hardware.swift:251-275` |
 | The touch surface ignores `.indirectPointer` touches. It hides the pointer with `UIPointerStyle.hidden()`. | `ios/Henge/Trackpad.swift:50-54`, `80`, `115`, `136` |

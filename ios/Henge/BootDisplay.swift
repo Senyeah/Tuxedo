@@ -31,11 +31,11 @@ struct BootDisplay: View {
             if let console, showConsole { ConsoleView(model: console, typing: typing) }
         }
         .task {
-            var generation = henge_vm_generation()
+            var generation = tux_vm_generation()
             // Keep watching the lifecycle after the GPU takes over. Removing
             // GPUScreen clears its last frame on both device and external screens.
             while !Task.isCancelled {
-                let next = henge_vm_generation(), state = henge_vm_state()
+                let next = tux_vm_generation(), state = tux_vm_state()
                 if next != generation {
                     generation = next
                     gpuLive = false
@@ -45,7 +45,7 @@ struct BootDisplay: View {
                     gpuLive = false
                 } else {
                     stopped = false
-                    if !gpuLive && henge_vm_gpu_frames() > 0 {
+                    if !gpuLive && tux_vm_gpu_frames() > 0 {
                         gpuLive = true
                     }
                 }
@@ -123,7 +123,7 @@ private struct GPUScreen: UIViewRepresentable {
             var size = screen.currentMode?.size ?? screen.nativeBounds.size
             if size.width < 1 || size.height < 1 { size = screen.nativeBounds.size } // zero mode would give a tiny guest
             let modes = screen.availableModes.map { "\(Int($0.size.width))x\(Int($0.size.height))" }.joined(separator: " ")
-            HengeLog.log("display", "external screen \(Int(size.width))x\(Int(size.height)) px, modes \(modes), overscan insets \(screen.overscanCompensationInsets)")
+            TuxLog.log("display", "external screen \(Int(size.width))x\(Int(size.height)) px, modes \(modes), overscan insets \(screen.overscanCompensationInsets)")
             return size
         }
 

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build henge-codec-dkms_<version>_all.deb (docs/guest-video-encode-plan.md, VE4.2) into $HENGE_LINUX_OUT/codec, in
+# Build henge-codec-dkms_<version>_all.deb (docs/guest-video-encode-plan.md, VE4.2) into $TUX_LINUX_OUT/codec, in
 # an arm64 debian:trixie container with the pinned snapshot. The module source is tools/linux/henge-codec-dkms with
 # host/vcodec_dev.h, the device's ABI. Before the package, the module is built against the pinned 16 KB kernel's
 # headers with -Werror, and DKMS installs the package in the container, so a source that does not build stops here.
@@ -9,7 +9,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 
 if [ "${1:-}" != "--inner" ]; then
-    OUT=${HENGE_LINUX_OUT:-$(cd "$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)/build/linux}
+    OUT=${TUX_LINUX_OUT:-$(cd "$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)/build/linux}
     mkdir -p "$OUT/codec"
     TTY=
     [ -t 0 ] && TTY=-t

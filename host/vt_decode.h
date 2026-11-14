@@ -1,8 +1,8 @@
 /* VideoToolbox decode helpers that hvcodec (host/vcodec.m) and the virgl video back end
    (tools/gfx/virglrenderer-videotoolbox.patch) both need: format descriptions from parameter sets,
    sample buffers, IOSurface pool attributes, synchronous decode and errors. Plain C interface. */
-#ifndef HENGEVM_VT_DECODE_H
-#define HENGEVM_VT_DECODE_H
+#ifndef TUXVM_VT_DECODE_H
+#define TUXVM_VT_DECODE_H
 
 #include <CoreMedia/CoreMedia.h>
 #include <CoreVideo/CoreVideo.h>

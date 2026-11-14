@@ -43,7 +43,7 @@ struct LogTail: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .task {
             while !Task.isCancelled {
-                lines = Array(HengeLog.recentLines(14))
+                lines = Array(TuxLog.recentLines(14))
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }

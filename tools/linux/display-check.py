@@ -85,7 +85,7 @@ def wait_randr(p, size, scale, limit):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--hengevm", default=os.path.join(smoke.ROOT, "build", "hengevm"))
+    ap.add_argument("--tuxvm", default=os.path.join(smoke.ROOT, "build", "tuxvm"))
     ap.add_argument("--linux-dir")
     ap.add_argument("--image", help="desktop disk to clone (default debian-desktop.img in the linux dir)")
     ap.add_argument("--work-dir", help="where the clone goes (the image's APFS volume)")
@@ -98,7 +98,7 @@ def main():
     pu = image[:-4] + ".partuuid"
     if not os.path.exists(pu):
         pu = os.path.join(d, "debian-desktop.partuuid")
-    for f in (args.hengevm, kernel, initrd, image, pu):
+    for f in (args.tuxvm, kernel, initrd, image, pu):
         if not os.path.exists(f):
             raise Fail(f"missing {f}")
     partuuid = open(pu).read().strip()
@@ -110,7 +110,7 @@ def main():
         r = subprocess.run(["/bin/cp", "-c", image, clone], capture_output=True, text=True)
         if r.returncode:
             raise Fail(f"cannot clone {image}: {r.stderr.strip()}")
-        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.hengevm, "--kernel", kernel,
+        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.tuxvm, "--kernel", kernel,
                 "--initrd", initrd, "--append", append, "--disk", clone, "--ram", "2048", "--cpus", str(args.cpus),
                 "--display", "1920x1080", "--share", share]
         p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200),

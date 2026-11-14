@@ -1,5 +1,5 @@
-#ifndef HENGEVM_VIRT_H
-#define HENGEVM_VIRT_H
+#ifndef TUXVM_VIRT_H
+#define TUXVM_VIRT_H
 
 #include <stdint.h>
 
@@ -76,7 +76,7 @@ typedef struct HvVirt {
     HvVirtioInput *touch;     /* before the balloon, so HV_BALLOON does not move it */
     HvVirtioBalloon *balloon; /* HV_BALLOON=MB */
     HvVirtioFs *fs;           /* the Files folders; last, so a machine with folders keeps every other slot */
-    HvVirtioHvcodec *codec;   /* only when asked for (hengevm --vcodec-dma): last, so no other device moves */
+    HvVirtioHvcodec *codec;   /* only when asked for (tuxvm --vcodec-dma): last, so no other device moves */
     uint8_t *flash0, *flash1;
     HvGuestRam mem;
     void (*poll)(void);       /* host device work on CPU 0 each tick */

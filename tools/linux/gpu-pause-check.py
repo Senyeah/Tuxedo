@@ -8,15 +8,15 @@
 The iOS app may not send Metal work from the background, so an accelerated machine always pauses whole there, even
 while its guest plays sound. hv_vm_pause stops the CPUs, waits for the renderer to finish what it holds, then stops the
 presenter. This check boots a clone of debian-desktop.img with --gpu-accel and runs glmark2 scenes in a loop. It then:
-  1. pauses with Ctrl-A s, with SIGTSTP (hengevm pauses and stops itself) and with Ctrl-A s again;
+  1. pauses with Ctrl-A s, with SIGTSTP (tuxvm pauses and stops itself) and with Ctrl-A s again;
   2. starts aplay, so the guest plays sound, and enters the app's background with Ctrl-A b (hv_vm_set_background): the
      machine must pause although it plays sound;
   3. restarts the guest (sudo reboot): the machine is built again after those pauses, and glmark2 runs on it;
   4. pauses the new machine and powers it off while paused (SIGTERM twice): it must end at once, without the renderer
      missing its time limit (which would leave guest RAM behind).
-hengevm prints how many requests the renderer has run when the pause is done and just before the resume. The two
+tuxvm prints how many requests the renderer has run when the pause is done and just before the resume. The two
 numbers must be equal and the state must be "held" in between; afterwards glmark2 must go on and dmesg must show no
-virtio_gpu or DRM error and no stall. On the Mac hengevm has no layer, so frames stay 0 and only the renderer half is
+virtio_gpu or DRM error and no stall. On the Mac tuxvm has no layer, so frames stay 0 and only the renderer half is
 checked here; test_vgpu_metal covers the presenter. The shared image never changes: the guest runs on an APFS clone.
 """
 import argparse
@@ -32,7 +32,7 @@ import time
 import pexpect
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-MARK = "HENGE_RC_"
+MARK = "TUX_RC_"
 SHELL = r"henge@henge:[^\n]*\$ "
 WAYLAND = "export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0"
 BAD = r"virtio_gpu|drm.*error|\[drm|WARNING:|BUG:|Oops|rcu: INFO|detected stall|soft lockup"
@@ -45,8 +45,8 @@ class Fail(Exception):
 
 
 def linux_dir():
-    if os.environ.get("HENGE_LINUX_OUT"):
-        return os.environ["HENGE_LINUX_OUT"]
+    if os.environ.get("TUX_LINUX_OUT"):
+        return os.environ["TUX_LINUX_OUT"]
     common = subprocess.run(["git", "-C", ROOT, "rev-parse", "--path-format=absolute", "--git-common-dir"],
                             capture_output=True, text=True, check=True).stdout.strip()
     return os.path.join(os.path.dirname(common), "build", "linux")
@@ -69,11 +69,11 @@ def scenes(p):
 
 
 def counts(errfile, when):
-    """The last '(held|running) <when>: N frames, M renderer requests' line of hengevm's stderr."""
+    """The last '(held|running) <when>: N frames, M renderer requests' line of tuxvm's stderr."""
     text = open(errfile, errors="replace").read()
     rows = re.findall(r"gpu (held|running) " + when + r": (\d+) frames, (\d+) renderer requests", text)
     if not rows:
-        raise Fail(f"hengevm printed no GPU counts {when}:\n{text[-1500:]}")
+        raise Fail(f"tuxvm printed no GPU counts {when}:\n{text[-1500:]}")
     state, frames, requests = rows[-1]
     return state, int(frames), int(requests)
 
@@ -88,7 +88,7 @@ def wait_stderr(errfile, pattern, limit):
         if stderr_has(errfile, pattern):
             return
         time.sleep(0.2)
-    raise Fail(f"hengevm did not print {pattern!r} in {limit} s")
+    raise Fail(f"tuxvm did not print {pattern!r} in {limit} s")
 
 
 def desktop_up(p, label):
@@ -128,7 +128,7 @@ def held_between(errfile, at, bt, what):
 def main():
     d = linux_dir()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--hengevm", default=os.path.join(ROOT, "build", "accel", "hengevm"), help="a GFX=1 build")
+    ap.add_argument("--tuxvm", default=os.path.join(ROOT, "build", "accel", "tuxvm"), help="a GFX=1 build")
     ap.add_argument("--cpus", type=int, default=4)
     ap.add_argument("--seconds", type=float, default=10, help="length of each pause (the plan's step 5 says 60)")
     ap.add_argument("--slow-us", type=int, default=400,
@@ -143,7 +143,7 @@ def main():
     p = None
     try:
         subprocess.run(["/bin/cp", "-c", image, disk], check=True)
-        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', errfile, args.hengevm, "--kernel",
+        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', errfile, args.tuxvm, "--kernel",
                 os.path.join(d, "Image"), "--initrd", os.path.join(d, "initrd.img"), "--append",
                 f"console=ttyAMA0 root=PARTUUID={partuuid} rw", "--disk", disk, "--ram", "3072", "--cpus", str(args.cpus),
                 "--display", "1280x720", "--gpu-accel", "--screenshot", os.path.join(tmp, "shot.png")]
@@ -175,13 +175,13 @@ def main():
             raise Fail("aplay does not run: " + out)
         before = scenes(p)
         p.send("\x01b")
-        wait_stderr(errfile, r"hengevm: background with the guest's sound \w+: ", 60)
+        wait_stderr(errfile, r"tuxvm: background with the guest's sound \w+: ", 60)
         time.sleep(args.seconds)
         p.send("\x01b")
-        wait_stderr(errfile, r"hengevm: foreground with ", 30)
+        wait_stderr(errfile, r"tuxvm: foreground with ", 30)
         time.sleep(1)
         text = open(errfile, errors="replace").read()
-        bg = re.findall(r"hengevm: background with the guest's sound (\w+): (\w+)", text)[-1]
+        bg = re.findall(r"tuxvm: background with the guest's sound (\w+): (\w+)", text)[-1]
         print(f"  Ctrl-A b: sound {bg[0]}, the machine was {bg[1]}")
         if bg[0] != "playing":
             raise Fail("the host did not play the guest's sound, so the policy was not tested: " + str(bg))
@@ -233,7 +233,7 @@ def main():
         print(f"gpu-pause-check: FAIL: {e}", file=sys.stderr)
         try:
             print("console tail:\n" + (p.before or "")[-2500:], file=sys.stderr)
-            print("hengevm stderr:\n" + open(errfile, errors="replace").read()[-2500:], file=sys.stderr)
+            print("tuxvm stderr:\n" + open(errfile, errors="replace").read()[-2500:], file=sys.stderr)
         except Exception:
             pass
         return 1

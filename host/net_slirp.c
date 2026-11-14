@@ -136,7 +136,7 @@ static slirp_ssize_t send_packet(const void *buf, size_t len, void *opaque) {
 
 static void guest_error(const char *msg, void *opaque) {
     (void)opaque;
-    fprintf(stderr, "hengevm: net: %s\n", msg);
+    fprintf(stderr, "tuxvm: net: %s\n", msg);
 }
 
 static int64_t clock_get_ns(void *opaque) {
@@ -234,7 +234,7 @@ static void fwd_remove(void *ctx, const HvFwdRule *r, uint32_t ip) {
     slirp_remove_hostxfwd(slirp, (struct sockaddr *)&h, sizeof h, 0);
 }
 
-/* HV_NET_FWD, the old debugging forward: an alias of hengevm's --forward, after the rules given. */
+/* HV_NET_FWD, the old debugging forward: an alias of tuxvm's --forward, after the rules given. */
 static int env_rule(HvFwdRule *r) {
     const char *e = getenv("HV_NET_FWD");
     return e && hv_fwd_parse(e, r) == 0;
@@ -264,8 +264,8 @@ static void fwd_apply(void) {
             HvFwdBind *b = &fwd.binds[i];
             char ip[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, &b->addr.ip, ip, sizeof ip);
-            if (b->err) fprintf(stderr, "hengevm: net: no forward from %s:%u: %s\n", ip, b->rule.host_port, strerror(b->err));
-            else fprintf(stderr, "hengevm: net: forward %s:%u -> guest port %u\n", ip, b->rule.host_port, b->rule.guest_port);
+            if (b->err) fprintf(stderr, "tuxvm: net: no forward from %s:%u: %s\n", ip, b->rule.host_port, strerror(b->err));
+            else fprintf(stderr, "tuxvm: net: forward %s:%u -> guest port %u\n", ip, b->rule.host_port, b->rule.guest_port);
         }
     pthread_mutex_unlock(&fwd_mu);
 }
@@ -434,15 +434,15 @@ int hv_net_attach(HvMachine *m, HvVirtioNet *n) {
     if (share_socket[0]) { /* 10.0.2.4:80 is the shared folder and clipboard: see share.c */
         struct in_addr addr;
         inet_pton(AF_INET, HV_SHARE_ADDR, &addr);
-        if (slirp_add_unix(slirp, share_socket, &addr, 80) != 0) fprintf(stderr, "hengevm: net: no route to the shared folder\n");
+        if (slirp_add_unix(slirp, share_socket, &addr, 80) != 0) fprintf(stderr, "tuxvm: net: no route to the shared folder\n");
         char wallet[sizeof share_socket + 8];
         if (hv_share_secrets_socket(share_socket, wallet, sizeof wallet) != 0 || slirp_add_unix(slirp, wallet, &addr, HV_SHARE_SECRETS_PORT) != 0)
-            fprintf(stderr, "hengevm: net: no route to the wallet\n");
+            fprintf(stderr, "tuxvm: net: no route to the wallet\n");
     }
     if (vcodec_socket[0]) { /* 10.0.2.4:8470 is hvcodec: see vcodec.m */
         struct in_addr addr;
         inet_pton(AF_INET, HV_SHARE_ADDR, &addr);
-        if (slirp_add_unix(slirp, vcodec_socket, &addr, HV_VC_PORT) != 0) fprintf(stderr, "hengevm: net: no route to the video codecs\n");
+        if (slirp_add_unix(slirp, vcodec_socket, &addr, HV_VC_PORT) != 0) fprintf(stderr, "tuxvm: net: no route to the video codecs\n");
     }
     net = n;
     n->transmit = transmit;

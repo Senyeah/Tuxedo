@@ -1,5 +1,5 @@
-#ifndef HENGEVM_VGPU_METAL_H
-#define HENGEVM_VGPU_METAL_H
+#ifndef TUXVM_VGPU_METAL_H
+#define TUXVM_VGPU_METAL_H
 
 #include <stdint.h>
 

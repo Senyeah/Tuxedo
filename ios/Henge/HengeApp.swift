@@ -2,20 +2,20 @@ import SwiftUI
 import AVFAudio
 
 @main
-struct HengeApp: App {
+struct TuxApp: App {
     /// Answers for external display scenes before iOS 27 (LegacyExternalDisplay.swift).
-    @UIApplicationDelegateAdaptor(HengeAppDelegate.self) private var appDelegate
+    @UIApplicationDelegateAdaptor(TuxAppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
-        // Order matters: HengeLog takes over stderr, so the engine's and the JIT
+        // Order matters: TuxLog takes over stderr, so the engine's and the JIT
         // allocator's first lines land in Documents/henge.log too.
-        HengeLog.start()
-        HengeLog.log("boot", "address space: \(henge_largest_reservation_gb()) GB can be reserved in one piece")
+        TuxLog.start()
+        TuxLog.log("boot", "address space: \(tux_largest_reservation_gb()) GB can be reserved in one piece")
         EngineTuning.apply()
-        HengeLog.logFootprint("app-launch")
+        TuxLog.logFootprint("app-launch")
         JITBootstrap.noteLaunchState()
-        HengeLog.log("app", "increased memory limit: \(Entitlements.increasedMemory ? "yes" : "no"); extended addressing: \(Entitlements.extendedAddressing ? "yes" : "no"); limit \(Entitlements.memoryLimitAtLaunch >> 20) MB")
+        TuxLog.log("app", "increased memory limit: \(Entitlements.increasedMemory ? "yes" : "no"); extended addressing: \(Entitlements.extendedAddressing ? "yes" : "no"); limit \(Entitlements.memoryLimitAtLaunch >> 20) MB")
         // Without the guard, a brk no debugger answers kills the app instead of failing.
         JITBootstrap.installTrapGuard()
         try? AVAudioSession.sharedInstance().setCategory(.playback, options: [.mixWithOthers])
@@ -25,7 +25,7 @@ struct HengeApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
-                .onOpenURL { url in HengeLog.log("app", "opened with \(url.absoluteString)") } // henge:// back from LocalDevVPN
+                .onOpenURL { url in TuxLog.log("app", "opened with \(url.absoluteString)") } // henge:// back from LocalDevVPN
         }
     }
 }
@@ -85,7 +85,7 @@ struct RootView: View {
             }
         }
         .onChange(of: jit.attachGeneration) { _ in JITBootstrap.prewarm() } // the built-in helper attached
-        .task { // testing only: HENGE_AUTOPILOT
+        .task { // testing only: TUX_AUTOPILOT
             await Autopilot.run { machine in
                 // A session still on screen (its machine stopped) is closed first: the same value again would start nothing.
                 guard running != nil else { running = machine; return }
@@ -98,7 +98,7 @@ struct RootView: View {
 
 extension View {
     /// Husk's screens are written against an iOS 15 shim; Tuxedo needs iOS 17, so this is the real thing.
-    func hengeDestination<D: Hashable, C: View>(for data: D.Type, @ViewBuilder destination: @escaping (D) -> C) -> some View {
+    func tuxDestination<D: Hashable, C: View>(for data: D.Type, @ViewBuilder destination: @escaping (D) -> C) -> some View {
         navigationDestination(for: data, destination: destination)
     }
 }

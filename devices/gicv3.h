@@ -1,5 +1,5 @@
-#ifndef HENGEVM_GICV3_H
-#define HENGEVM_GICV3_H
+#ifndef TUXVM_GICV3_H
+#define TUXVM_GICV3_H
 
 #include <pthread.h>
 #include <stdint.h>

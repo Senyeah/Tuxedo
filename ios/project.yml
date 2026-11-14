@@ -14,23 +14,23 @@ packages:
 settings:
   base:
     # The app and its JIT helper follow this together (the helper's id sits under the app's).
-    HENGE_BUNDLE_IDENTIFIER: com.henge.app
+    TUX_BUNDLE_IDENTIFIER: com.henge.app
     # The app's entitlements file. Override on the xcodebuild command line (the JIT helper doesn't use it, so a
     # personal team can sign the app with fewer entitlements without touching the helper).
-    HENGE_ENTITLEMENTS: Henge/Henge.entitlements
-    # Graphics acceleration (A9) is opt-in: HENGE_GFX=1 builds the engine with GFX=1 and links the libraries that
-    # tools/gfx/build-deps.sh put in HENGE_GFX_DIR. sim_build.sh and package_ipa.sh set both (ios/scripts/gfx_env.sh);
+    TUX_ENTITLEMENTS: Henge/Henge.entitlements
+    # Graphics acceleration (A9) is opt-in: TUX_GFX=1 builds the engine with GFX=1 and links the libraries that
+    # tools/gfx/build-deps.sh put in TUX_GFX_DIR. sim_build.sh and package_ipa.sh set both (ios/scripts/gfx_env.sh);
     # a build without them, such as CI, has no acceleration.
-    HENGE_GFX: ""
-    HENGE_GFX_DIR: $(SRCROOT)/../build/gfx
-    HENGE_GFX_LIBS_: ""
-    HENGE_GFX_LIBS_1: "$(HENGE_GFX_DIR)/$(HENGE_GFX_PLATFORM)/lib/libvirglrenderer.a $(HENGE_GFX_DIR)/$(HENGE_GFX_PLATFORM)/lib/libepoxy.a $(HENGE_GFX_DIR)/$(HENGE_GFX_PLATFORM)/lib/libEGL.a $(HENGE_GFX_DIR)/$(HENGE_GFX_PLATFORM)/lib/libGLESv2.a -framework VideoToolbox -framework CoreMedia -framework CoreVideo"
-    # The simulator's guest network: HENGE_SIM_NET=1 links the simulator builds of libslirp and glib in
-    # HENGE_SIM_NET_ROOT (tools/build_sim_net.sh). sim_build.sh sets both when they exist; else net_stub.c.
-    HENGE_SIM_NET: ""
-    HENGE_SIM_NET_ROOT: ""
-    HENGE_SIM_NET_LIBS_: ""
-    HENGE_SIM_NET_LIBS_1: "-L$(HENGE_SIM_NET_ROOT)/lib -lslirp -lglib-2.0 -lintl -lpcre2-8"
+    TUX_GFX: ""
+    TUX_GFX_DIR: $(SRCROOT)/../build/gfx
+    TUX_GFX_LIBS_: ""
+    TUX_GFX_LIBS_1: "$(TUX_GFX_DIR)/$(TUX_GFX_PLATFORM)/lib/libvirglrenderer.a $(TUX_GFX_DIR)/$(TUX_GFX_PLATFORM)/lib/libepoxy.a $(TUX_GFX_DIR)/$(TUX_GFX_PLATFORM)/lib/libEGL.a $(TUX_GFX_DIR)/$(TUX_GFX_PLATFORM)/lib/libGLESv2.a -framework VideoToolbox -framework CoreMedia -framework CoreVideo"
+    # The simulator's guest network: TUX_SIM_NET=1 links the simulator builds of libslirp and glib in
+    # TUX_SIM_NET_ROOT (tools/build_sim_net.sh). sim_build.sh sets both when they exist; else net_stub.c.
+    TUX_SIM_NET: ""
+    TUX_SIM_NET_ROOT: ""
+    TUX_SIM_NET_LIBS_: ""
+    TUX_SIM_NET_LIBS_1: "-L$(TUX_SIM_NET_ROOT)/lib -lslirp -lglib-2.0 -lintl -lpcre2-8"
     ARCHS: arm64
     ONLY_ACTIVE_ARCH: YES
     ENABLE_BITCODE: NO
@@ -64,13 +64,13 @@ targets:
       - path: Pad
     settings:
       base:
-        HENGE_GFX_PLATFORM: ios
-        PRODUCT_BUNDLE_IDENTIFIER: $(HENGE_BUNDLE_IDENTIFIER)
+        TUX_GFX_PLATFORM: ios
+        PRODUCT_BUNDLE_IDENTIFIER: $(TUX_BUNDLE_IDENTIFIER)
         PRODUCT_NAME: Henge
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic
         INFOPLIST_FILE: Henge/Info.plist
-        CODE_SIGN_ENTITLEMENTS: $(HENGE_ENTITLEMENTS)
+        CODE_SIGN_ENTITLEMENTS: $(TUX_ENTITLEMENTS)
         SWIFT_OBJC_BRIDGING_HEADER: Henge/HengeBridge.h
         TARGETED_DEVICE_FAMILY: "1,2"
         LD_RUNPATH_SEARCH_PATHS:
@@ -87,9 +87,9 @@ targets:
         OTHER_LDFLAGS:
           - "$(inherited)"
           # The engine (make ios-lib) and what its network needs (scripts/fetch_deps.sh).
-          - "-lhengevm"
-          # The renderer behind Graphics acceleration (A9), when HENGE_GFX=1.
-          - "$(HENGE_GFX_LIBS_$(HENGE_GFX))"
+          - "-ltuxvm"
+          # The renderer behind Graphics acceleration (A9), when TUX_GFX=1.
+          - "$(TUX_GFX_LIBS_$(TUX_GFX))"
           - "-lc++"
           - "-framework"
           - "QuartzCore"
@@ -127,7 +127,7 @@ targets:
         script: |
           set -e
           cd "$SRCROOT/.."
-          make ios-lib ${HENGE_GFX:+GFX=1}
+          make ios-lib ${TUX_GFX:+GFX=1}
         basedOnDependencyAnalysis: false
     postBuildScripts:
       - name: Embed StikJIT
@@ -172,7 +172,7 @@ targets:
           - "Info.plist"
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: $(HENGE_BUNDLE_IDENTIFIER).JITHelper
+        PRODUCT_BUNDLE_IDENTIFIER: $(TUX_BUNDLE_IDENTIFIER).JITHelper
         INFOPLIST_FILE: HengeJITHelper/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         APPLICATION_EXTENSION_API_ONLY: YES
@@ -210,10 +210,10 @@ targets:
       - path: HengeSim/sim_stubs.c
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: $(HENGE_BUNDLE_IDENTIFIER)
+        PRODUCT_BUNDLE_IDENTIFIER: $(TUX_BUNDLE_IDENTIFIER)
         PRODUCT_NAME: Henge
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        HENGE_GFX_PLATFORM: sim
+        TUX_GFX_PLATFORM: sim
         SDKROOT: iphonesimulator
         SUPPORTED_PLATFORMS: iphonesimulator
         ARCHS: arm64
@@ -238,9 +238,9 @@ targets:
           - "$(SRCROOT)/../build/ios-sim"
         OTHER_LDFLAGS:
           - "$(inherited)"
-          - "-lhengevm"
-          - "$(HENGE_GFX_LIBS_$(HENGE_GFX))"
-          - "$(HENGE_SIM_NET_LIBS_$(HENGE_SIM_NET))"
+          - "-ltuxvm"
+          - "$(TUX_GFX_LIBS_$(TUX_GFX))"
+          - "$(TUX_SIM_NET_LIBS_$(TUX_SIM_NET))"
           - "-lc++"
           - "-framework"
           - "QuartzCore"
@@ -270,5 +270,5 @@ targets:
         script: |
           set -e
           cd "$SRCROOT/.."
-          make ios-sim-lib ${HENGE_GFX:+GFX=1} ${HENGE_SIM_NET:+SIM_NET_ROOT=$HENGE_SIM_NET_ROOT}
+          make ios-sim-lib ${TUX_GFX:+GFX=1} ${TUX_SIM_NET:+SIM_NET_ROOT=$TUX_SIM_NET_ROOT}
         basedOnDependencyAnalysis: false

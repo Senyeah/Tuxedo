@@ -5,7 +5,7 @@
 # ///
 """hvcodec in the guest (docs/guest-video-encode-plan.md, VE0.4 and VE0.5).
 
-Boots a clone of the desktop image with `hengevm --vcodec --share DIR` and, over the serial console:
+Boots a clone of the desktop image with `tuxvm --vcodec --share DIR` and, over the serial console:
   1. installs the build tools and Debian's libavformat (apt; --image names an image that has them);
   2. builds tools/linux/hvcodec/henge-xcode.c and hvbench.c from the --share folder;
   3. `henge-xcode --query` must list an HEVC and an H.264 hardware encoder;
@@ -13,7 +13,7 @@ Boots a clone of the desktop image with `hengevm --vcodec --share DIR` and, over
      the frames on the host, and copies the output back through the share. On the Mac, ffprobe must count the
      clip's frames, ffmpeg must decode it with no error (the VE0.4 exit), and ffmpeg's psnr filter against the clip
      must reach MIN_PSNR on Y, U and V and MIN_FRAME_PSNR on the worst frame;
-  5. measures (VE0.5): henge-xcode's fps, its CPU time and the whole guest's, the MB/s on the socket, hengevm's CPU,
+  5. measures (VE0.5): henge-xcode's fps, its CPU time and the whole guest's, the MB/s on the socket, tuxvm's CPU,
      Debian's software decode of the same clip to -f null, and the guest memcpy speed (hvbench).
 With --ffmpeg DIR (VE2, the patched ffmpeg from tools/linux/build-ffmpeg.sh), it also copies DIR's ffmpeg, ffprobe and
 henge-codec-info to the guest, checks `henge-codec-info --json`, and runs the plan's main command on each clip:
@@ -43,7 +43,7 @@ import time
 import pexpect
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-MARK = "HENGE_RC_"
+MARK = "TUX_RC_"
 SHELL = r"henge@henge:[^\n]*\$ "
 PACKAGES = ["ffmpeg", "gcc", "libc6-dev", "pkg-config", "libavformat-dev", "libavcodec-dev", "libavutil-dev"]
 SIZES = {"4k": "3840x2160", "1080p": "1920x1080"}
@@ -258,7 +258,7 @@ def ffmpeg_case(p, share, tag, src, want, args, cmd_out="/tmp/ff-out.mp4", check
 def boot(args, disk, share, err_log):
     d = args.linux_dir
     partuuid = open(os.path.join(d, "debian-desktop.partuuid")).read().strip()
-    argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err_log, args.hengevm, "--kernel", os.path.join(d, "Image"), "--initrd", os.path.join(d, "initrd.img"),
+    argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err_log, args.tuxvm, "--kernel", os.path.join(d, "Image"), "--initrd", os.path.join(d, "initrd.img"),
             "--append", f"console=ttyAMA0 root=PARTUUID={partuuid} rw", "--disk", disk, "--ram", str(args.ram),
             "--cpus", str(args.cpus), "--display", "1280x800", "--share", share, "--vcodec"]
     print(f"--   booting {os.path.basename(disk)} (host load average {os.getloadavg()[0]:.1f})")
@@ -502,7 +502,7 @@ def apt_checks(p, share, tree, clips):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--hengevm", default=os.path.join(ROOT, "build", "hengevm"))
+    ap.add_argument("--tuxvm", default=os.path.join(ROOT, "build", "tuxvm"))
     ap.add_argument("--linux-dir", help="Image, initrd.img and the desktop partuuid (default: build/linux of the main checkout)")
     ap.add_argument("--image", help="a desktop image that has the packages (default: debian-desktop.img, then apt install)")
     ap.add_argument("--work-dir", help="where the disk clone and the clips go (the image's APFS volume)")
@@ -514,7 +514,7 @@ def main():
     ap.add_argument("--ram", type=int, default=3072)
     ap.add_argument("--speed", action="store_true", help="also transcode with speed over quality")
     ap.add_argument("--no-software", action="store_true", help="skip Debian's software decode")
-    ap.add_argument("--keep-log", help="copy hengevm's stderr here")
+    ap.add_argument("--keep-log", help="copy tuxvm's stderr here")
     ap.add_argument("--ffmpeg", help="VE2: a folder with the patched ffmpeg, ffprobe and henge-codec-info (build/linux/ffmpeg/bin)")
     ap.add_argument("--keep-disk", help="keep the guest's disk (with the packages installed) at this path, for --image next time")
     ap.add_argument("--no-xcode", action="store_true", help="with --ffmpeg: skip henge-xcode's transcodes")
@@ -522,7 +522,7 @@ def main():
     args = ap.parse_args()
     args.linux_dir = args.linux_dir or linux_dir()
     image = args.image or os.path.join(args.linux_dir, "debian-desktop.img")
-    for f in (args.hengevm, image, os.path.join(args.linux_dir, "Image"), os.path.join(args.linux_dir, "initrd.img")):
+    for f in (args.tuxvm, image, os.path.join(args.linux_dir, "Image"), os.path.join(args.linux_dir, "initrd.img")):
         if not os.path.exists(f):
             raise Fail(f"missing {f}")
     sizes = [s for s in args.sizes.split(",") if s]
@@ -558,7 +558,7 @@ def main():
                 make_clip(path, codec, SIZES[size], args.seconds)
                 clips.append((name, probe(path)))
                 print(f"     clip {name}: {clips[-1][1]}")
-        disk, err_log = os.path.join(tmp, "disk.img"), os.path.join(tmp, "hengevm.stderr")
+        disk, err_log = os.path.join(tmp, "disk.img"), os.path.join(tmp, "tuxvm.stderr")
         r = subprocess.run(["/bin/cp", "-c", image, disk], capture_output=True, text=True)
         if r.returncode:
             raise Fail(f"cannot clone {image}: {r.stderr.strip()}")
@@ -645,7 +645,7 @@ def main():
                             r.update(psnr_y=q["y"], psnr_u=q["u"], psnr_v=q["v"], psnr_min=q["min"])
                         print(f"     socket {r['sent']:.1f} MB up, {r['recv']:.1f} MB down, {r['mbs']:.1f} MB/s, {r['calls']} calls; "
                               f"henge-xcode CPU {r['cpu']:.2f} s ({r['cpu'] / r['secs'] * 100:.0f}% of one core), guest busy {r['guest_busy']:.0f}% "
-                              f"of {args.cpus} CPUs, hengevm {r['host_cpu']:.0f}% of one host core")
+                              f"of {args.cpus} CPUs, tuxvm {r['host_cpu']:.0f}% of one host core")
                         rows.append((tag, r))
                         os.remove(os.path.join(share, oname))
                     if not args.no_software:
@@ -657,7 +657,7 @@ def main():
         except pexpect.TIMEOUT:
             raise Fail("timeout waiting for the guest; tail:\n" + (p.before or "")[-1500:])
         except pexpect.EOF:
-            raise Fail("hengevm ended early; tail:\n" + (p.before or "")[-1500:] + "\nstderr:\n" + open(err_log, errors="replace").read()[-2000:])
+            raise Fail("tuxvm ended early; tail:\n" + (p.before or "")[-1500:] + "\nstderr:\n" + open(err_log, errors="replace").read()[-2000:])
         finally:
             if p.isalive():
                 p.sendline("sudo poweroff")
@@ -669,7 +669,7 @@ def main():
             if args.keep_disk:
                 os.replace(disk, args.keep_disk)
             log = open(err_log, errors="replace").read() if os.path.exists(err_log) else ""
-            for line in re.findall(r"hengevm: vcodec: [^\n]+", log)[-12:]:
+            for line in re.findall(r"tuxvm: vcodec: [^\n]+", log)[-12:]:
                 print(f"     {line}")
             if args.keep_log and os.path.exists(err_log):
                 shutil.copy(err_log, args.keep_log)

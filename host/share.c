@@ -968,14 +968,14 @@ static void *listener(void *arg) {
 static int listen_on(const char *socket_path, int wallet) {
     struct sockaddr_un addr = {.sun_family = AF_UNIX};
     if (strlen(socket_path) >= sizeof addr.sun_path) {
-        fprintf(stderr, "hengevm: share: socket path too long: %s\n", socket_path);
+        fprintf(stderr, "tuxvm: share: socket path too long: %s\n", socket_path);
         return -1;
     }
     strcpy(addr.sun_path, socket_path);
     unlink(socket_path);
     int server = socket(AF_UNIX, SOCK_STREAM, 0);
     if (server < 0 || bind(server, (struct sockaddr *)&addr, sizeof addr) != 0 || listen(server, 16) != 0) {
-        fprintf(stderr, "hengevm: share: %s: %s\n", socket_path, strerror(errno));
+        fprintf(stderr, "tuxvm: share: %s: %s\n", socket_path, strerror(errno));
         if (server >= 0) close(server);
         return -1;
     }
@@ -996,7 +996,7 @@ int hv_share_start(const char *folder, const char *socket_path) {
     char wallet[PATH_MAX];
     if (listen_on(socket_path, 0) != 0) return -1;
     if (hv_share_secrets_socket(socket_path, wallet, sizeof wallet) != 0 || listen_on(wallet, 1) != 0)
-        fprintf(stderr, "hengevm: share: no socket for the wallet\n");
+        fprintf(stderr, "tuxvm: share: no socket for the wallet\n");
     started = 1;
     return 0;
 }

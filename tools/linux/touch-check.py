@@ -5,7 +5,7 @@
 # ///
 """TS3: the virtio touchscreen reaches labwc (make test-linux-touch).
 
-Boots a clone of debian-desktop.img on `hengevm` at --display 1920x1080 with --share and drives the
+Boots a clone of debian-desktop.img on `tuxvm` at --display 1920x1080 with --share and drives the
 touchscreen with ts / tsframe / tscancel lines in HV_INPUT_FILE. In the guest it checks:
 - dmesg names "HengeVM Touchscreen" in PCI slot 9, udev marks it ID_INPUT_TOUCHSCREEN=1, and
   libinput lists it with the capability touch;
@@ -165,7 +165,7 @@ def positions(p, infile, size, label):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--hengevm", default=os.path.join(smoke.ROOT, "build", "hengevm"))
+    ap.add_argument("--tuxvm", default=os.path.join(smoke.ROOT, "build", "tuxvm"))
     ap.add_argument("--linux-dir")
     ap.add_argument("--image", help="desktop disk to clone (default debian-desktop.img in the linux dir)")
     ap.add_argument("--work-dir", help="where the clone goes (the image's APFS volume)")
@@ -179,7 +179,7 @@ def main():
     pu = image[:-4] + ".partuuid"
     if not os.path.exists(pu):
         pu = os.path.join(d, "debian-desktop.partuuid")
-    for f in (args.hengevm, kernel, initrd, image, pu):
+    for f in (args.tuxvm, kernel, initrd, image, pu):
         if not os.path.exists(f):
             raise Fail(f"missing {f}")
     partuuid = open(pu).read().strip()
@@ -191,21 +191,21 @@ def main():
         r = subprocess.run(["/bin/cp", "-c", image, clone], capture_output=True, text=True)
         if r.returncode:
             raise Fail(f"cannot clone {image}: {r.stderr.strip()}")
-        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.hengevm, "--kernel", kernel,
+        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.tuxvm, "--kernel", kernel,
                 "--initrd", initrd, "--append", append, "--disk", clone, "--ram", "2048", "--cpus", str(args.cpus),
                 "--display", "1920x1080", "--share", share]
         p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200),
                           env=dict(os.environ, HV_INPUT_FILE=infile))
         try:
             login(p, None, 200)
-            henge_caps = run(p, args, infile, err)
+            tux_caps = run(p, args, infile, err)
         except (pexpect.TIMEOUT, pexpect.EOF) as e:
             raise Fail(f"{type(e).__name__}; tail:\n" + (p.before or "")[-1500:])
         finally:
             if p.isalive():
                 p.terminate(force=True)
         if not args.no_qemu:
-            qemu_compare(args, image, kernel, initrd, partuuid, henge_caps)
+            qemu_compare(args, image, kernel, initrd, partuuid, tux_caps)
     print("PASS")
 
 
@@ -327,7 +327,7 @@ def run(p, args, infile, err):
     return caps
 
 
-def qemu_compare(args, image, kernel, initrd, partuuid, henge_caps):
+def qemu_compare(args, image, kernel, initrd, partuuid, tux_caps):
     """QEMU's virtio-multitouch-pci in the same guest: evcaps.py on both, and the differences."""
     if not os.path.exists(smoke.QEMU):
         print(f"skip QEMU comparison: no {smoke.QEMU}")
@@ -353,7 +353,7 @@ def qemu_compare(args, image, kernel, initrd, partuuid, henge_caps):
             p.terminate(force=True)
     print("--- evcaps (QEMU virtio-multitouch-pci) ---\n" + qcaps.strip())
     print("--- udev (QEMU) ---\n" + udev.strip())
-    h = [l for l in henge_caps.strip().splitlines() if not l.startswith("device ")]
+    h = [l for l in tux_caps.strip().splitlines() if not l.startswith("device ")]
     q = [l for l in qcaps.strip().splitlines() if not l.startswith("device ")]
     diff = [f"Henge only: {l}" for l in h if l not in q] + [f"QEMU only:  {l}" for l in q if l not in h]
     print("--- differences (names aside) ---\n" + ("\n".join(diff) if diff else "none"))

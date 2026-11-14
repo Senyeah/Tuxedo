@@ -1,5 +1,5 @@
-#ifndef HENGEVM_SYSREG_H
-#define HENGEVM_SYSREG_H
+#ifndef TUXVM_SYSREG_H
+#define TUXVM_SYSREG_H
 
 #include <stdint.h>
 

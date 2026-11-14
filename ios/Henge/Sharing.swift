@@ -13,12 +13,12 @@ enum Sharing {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         // A Unix socket's path can't be long, so the short temporary folder.
         let socket = (NSTemporaryDirectory() as NSString).appendingPathComponent("s.sock")
-        henge_vm_share(folder.path, socket)
+        tux_vm_share(folder.path, socket)
     }
 
     /// The helper asks the server for news at most 25 s apart.
     static var helperRunning: Bool {
-        let seen = henge_share_helper_seen()
+        let seen = tux_share_helper_seen()
         return seen >= 0 && seen < 40
     }
 
@@ -26,7 +26,7 @@ enum Sharing {
     /// asks for permission whenever an app reads the clipboard on its own.
     static func followGuestClipboard() async {
         while !Task.isCancelled {
-            if let text = henge_share_take_clipboard() {
+            if let text = tux_share_take_clipboard() {
                 UIPasteboard.general.string = String(cString: text)
                 free(text)
             }
@@ -47,16 +47,16 @@ enum Sharing {
         Task { @MainActor in
             if console {
                 let bytes = Array(text.utf8)
-                bytes.withUnsafeBufferPointer { henge_vm_console_write($0.baseAddress, $0.count) }
+                bytes.withUnsafeBufferPointer { tux_vm_console_write($0.baseAddress, $0.count) }
             } else if helperRunning {
-                henge_share_set_clipboard(text)
+                tux_share_set_clipboard(text)
                 try? await Task.sleep(nanoseconds: 800_000_000) // for the helper to put it on the guest's clipboard
                 if keys == .controlShift {
-                    henge_vm_key(Keys.control, 1)
-                    henge_vm_key(Keys.shift, 1)
+                    tux_vm_key(Keys.control, 1)
+                    tux_vm_key(Keys.shift, 1)
                     Keys.type("v")
-                    henge_vm_key(Keys.shift, 0)
-                    henge_vm_key(Keys.control, 0)
+                    tux_vm_key(Keys.shift, 0)
+                    tux_vm_key(Keys.control, 0)
                 } else {
                     Keys.chord(Keys.control, "v")
                 }

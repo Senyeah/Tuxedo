@@ -67,12 +67,12 @@ final class VolumeClicks: NSObject {
     func start() {
         guard !active else { return }
         guard Self.inputMode == .volumeButtons else {
-            HengeLog.log("input", "volume buttons: off (input mode is touchscreen)")
+            TuxLog.log("input", "volume buttons: off (input mode is touchscreen)")
             return
         }
         active = true
         haptic.prepare()
-        HengeLog.log("input", "volume buttons: mode \(mode.rawValue), swap \(swapButtons)")
+        TuxLog.log("input", "volume buttons: mode \(mode.rawValue), swap \(swapButtons)")
         switch mode {
         case .delayHold, .tapThenDrag: startVolumeKVO()
         case .intercept: startIntercept()
@@ -165,7 +165,7 @@ final class VolumeClicks: NSObject {
         if !(left ? leftDown : rightDown) {
             setDown(true, left: left)
             buzz()
-            HengeLog.log("input", "volume: \(left ? "left" : "right") down (delay hold)")
+            TuxLog.log("input", "volume: \(left ? "left" : "right") down (delay hold)")
         }
         let timer = Timer(timeInterval: releaseAfter, repeats: false) { [weak self] _ in
             self?.setDown(false, left: left)
@@ -193,13 +193,13 @@ final class VolumeClicks: NSObject {
             setTapState(.holding, left: left)
             setDown(true, left: left)
             buzz()
-            HengeLog.log("input", "volume: \(left ? "left" : "right") drag (tap then drag)")
+            TuxLog.log("input", "volume: \(left ? "left" : "right") drag (tap then drag)")
             armTapTimer(left: left, interval: releaseAfter) { [weak self] in self?.finishTapDrag(left: left) }
         case .idle:
             setDown(true, left: left)
             setDown(false, left: left)
             buzz()
-            HengeLog.log("input", "volume: \(left ? "left" : "right") tap (tap then drag)")
+            TuxLog.log("input", "volume: \(left ? "left" : "right") tap (tap then drag)")
             setTapState(.pending, left: left)
             armTapTimer(left: left, interval: pendingWindow) { [weak self] in self?.setTapState(.idle, left: left) }
         }
@@ -244,7 +244,7 @@ final class VolumeClicks: NSObject {
     }
 
     private func interceptFallback(_ why: String) {
-        HengeLog.log("input", "volume intercept: \(why); using delay hold instead")
+        TuxLog.log("input", "volume intercept: \(why); using delay hold instead")
         startVolumeKVO()
     }
 
@@ -267,12 +267,12 @@ final class VolumeClicks: NSObject {
         let output = AVCaptureVideoDataOutput()
         let discard = DiscardStream()
         streamDelegate = discard /* the output only holds its delegate weakly */
-        output.setSampleBufferDelegate(discard, queue: DispatchQueue(label: "henge.volume.stream"))
+        output.setSampleBufferDelegate(discard, queue: DispatchQueue(label: "tux.volume.stream"))
         if session.canAddOutput(output) { session.addOutput(output); streamOutput = output }
         session.commitConfiguration()
         captureSession = session
         DispatchQueue.global(qos: .userInitiated).async { session.startRunning() }
-        HengeLog.log("input", "volume intercept: camera capture with frame stream; the interaction is hosted by CaptureInteractionView in the session")
+        TuxLog.log("input", "volume intercept: camera capture with frame stream; the interaction is hosted by CaptureInteractionView in the session")
     }
 
     /// True press/release from the capture interaction: the physical button *is* the mouse
@@ -288,7 +288,7 @@ final class VolumeClicks: NSObject {
             self.setDown(down, left: left)
             if down && !wasDown {
                 self.buzz()
-                HengeLog.log("input", "volume intercept: \(left ? "left" : "right") down")
+                TuxLog.log("input", "volume intercept: \(left ? "left" : "right") down")
             }
         }
     }
@@ -330,7 +330,7 @@ struct CaptureInteractionView: UIViewRepresentable {
             )
             interaction.isEnabled = true
             view.addInteraction(interaction)
-            HengeLog.log("input", "volume intercept: interaction installed in the session view hierarchy")
+            TuxLog.log("input", "volume intercept: interaction installed in the session view hierarchy")
         }
         return view
     }

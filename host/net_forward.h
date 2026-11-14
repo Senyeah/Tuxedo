@@ -1,7 +1,7 @@
 /* TCP forwards from the host into the guest: the rules, the addresses they listen on, and what to add and remove when
    either changes. No libslirp here: net_slirp.c gives the add and remove calls (on its thread), tests give fakes. */
-#ifndef HENGEVM_NET_FORWARD_H
-#define HENGEVM_NET_FORWARD_H
+#ifndef TUXVM_NET_FORWARD_H
+#define TUXVM_NET_FORWARD_H
 
 #include <stdint.h>
 

@@ -176,7 +176,7 @@ enum DiskGrowth {
     }
 }
 
-/// Why a machine stopped (the app maps HengeVmOutcome to this) and what to tell the person.
+/// Why a machine stopped (the app maps TuxVmOutcome to this) and what to tell the person.
 enum StopKind { case shutdown, restart, hostStop, error }
 
 enum StopText {

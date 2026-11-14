@@ -3,9 +3,9 @@
 # requires-python = ">=3.9"
 # dependencies = ["pexpect"]
 # ///
-"""A10: how long a GL program takes to start on `hengevm --gpu-accel`, and what the shader cache does about it.
+"""A10: how long a GL program takes to start on `tuxvm --gpu-accel`, and what the shader cache does about it.
 
-For each hengevm process it boots the desktop image and starts glmark2 twice in the same boot, then restarts the guest
+For each tuxvm process it boots the desktop image and starts glmark2 twice in the same boot, then restarts the guest
 (same process) and starts it once more. A start is read from the Wayland trace (WAYLAND_DEBUG): ms from the first message
 to the first buffer attached, and to the first and the tenth frame callback after that. The terrain scene has a big shader
 whose compile holds the renderer's queue for about 0.8 s, so its tenth frame comes late; the build scene has none.
@@ -14,7 +14,7 @@ With --processes 2 the second process shows what the disk cache saves: its first
 --factor times faster. A gap sampler runs in the guest during the first start and reports the longest pause of a 5 ms
 sleep loop: if the renderer's compile held the device lock, the guest's timer and its input and sound devices would
 pause with it. The guest's own shader cache is off (MESA_SHADER_CACHE_DISABLE), so only the host's cache counts.
-The harness keeps reading the console: hengevm's log lines share the pty, and a full pty blocks the renderer thread.
+The harness keeps reading the console: tuxvm's log lines share the pty, and a full pty blocks the renderer thread.
 The shared image never changes: each guest runs on an APFS clone.
 """
 import argparse
@@ -29,7 +29,7 @@ import time
 import pexpect
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-MARK = "HENGE_RC_"
+MARK = "TUX_RC_"
 SHELL = r"henge@henge:[^\n]*\$ "
 ENVSET = "export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 MESA_SHADER_CACHE_DISABLE=true"
 GAP = """import os, sys, time
@@ -52,8 +52,8 @@ class Fail(Exception):
 
 
 def linux_dir():
-    if os.environ.get("HENGE_LINUX_OUT"):
-        return os.environ["HENGE_LINUX_OUT"]
+    if os.environ.get("TUX_LINUX_OUT"):
+        return os.environ["TUX_LINUX_OUT"]
     common = subprocess.run(["git", "-C", ROOT, "rev-parse", "--path-format=absolute", "--git-common-dir"],
                             capture_output=True, text=True, check=True).stdout.strip()
     return os.path.join(os.path.dirname(common), "build", "linux")
@@ -71,7 +71,7 @@ def sh(p, cmd, limit=60):
 
 
 def settle(p, secs):
-    # keeps reading: hengevm's stderr shares this pty, and a full pty blocks the renderer thread in a log write
+    # keeps reading: tuxvm's stderr shares this pty, and a full pty blocks the renderer thread in a log write
     p.expect(pexpect.TIMEOUT, timeout=secs)
 
 
@@ -124,7 +124,7 @@ def boot_process(args, d, tmp, cache, n):
     r = subprocess.run(["/bin/cp", "-c", image, clone], capture_output=True, text=True)
     if r.returncode:
         raise Fail(f"cannot clone {image}: {r.stderr.strip()}")
-    argv = [args.hengevm, "--kernel", os.path.join(d, "Image"), "--initrd", os.path.join(d, "initrd.img"),
+    argv = [args.tuxvm, "--kernel", os.path.join(d, "Image"), "--initrd", os.path.join(d, "initrd.img"),
             "--append", f"console=ttyAMA0 root=PARTUUID={partuuid} rw", "--disk", clone, "--ram", "3072",
             "--cpus", str(args.cpus), "--display", "1280x720", "--gpu-accel"]
     env = dict(os.environ, HV_VIRGL_STATS="1", HV_GL_CACHE=cache)
@@ -151,7 +151,7 @@ def boot_process(args, d, tmp, cache, n):
     except pexpect.TIMEOUT:
         raise Fail("timeout waiting for the guest; tail:\n" + (p.before or "")[-1500:])
     except pexpect.EOF:
-        raise Fail("hengevm ended early; tail:\n" + (p.before or "")[-1500:])
+        raise Fail("tuxvm ended early; tail:\n" + (p.before or "")[-1500:])
     finally:
         if p.isalive():
             p.sendline("sudo poweroff")
@@ -166,7 +166,7 @@ def boot_process(args, d, tmp, cache, n):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--hengevm", default=os.path.join(ROOT, "build", "accel", "hengevm"))
+    ap.add_argument("--tuxvm", default=os.path.join(ROOT, "build", "accel", "tuxvm"))
     ap.add_argument("--linux-dir")
     ap.add_argument("--cache", default="tmp", help="'off', 'tmp' (a fresh directory), or a directory to keep")
     ap.add_argument("--processes", type=int, default=2)
@@ -180,7 +180,7 @@ def main():
     if args.check and (args.cache == "off" or args.processes < 2 or "terrain" not in args.scenes):
         raise Fail("--check needs the cache on, two processes and the terrain scene")
     d = args.linux_dir or linux_dir()
-    for f in (args.hengevm, os.path.join(d, "debian-desktop.img"), os.path.join(d, "debian-desktop.partuuid"),
+    for f in (args.tuxvm, os.path.join(d, "debian-desktop.img"), os.path.join(d, "debian-desktop.partuuid"),
               os.path.join(d, "Image"), os.path.join(d, "initrd.img")):
         if not os.path.exists(f):
             raise Fail(f"missing {f}")

@@ -3,7 +3,7 @@
 A virtual machine without a hypervisor: arm64 guest code runs through an arm64-to-arm64
 JIT instead of hardware virtualization, so the same engine can run on iOS, where
 apps have no hypervisor access. The engine is built and tested on the Mac
-(`build/hengevm`) and linked into the iPhone app (`make ios-lib`).
+(`build/tuxvm`) and linked into the iPhone app (`make ios-lib`).
 
 The guest's terminal power requests and iOS session cleanup are described in
 [Guest shutdown](guest-shutdown.md). The guest is Debian Linux on the `virt` board,
@@ -74,7 +74,7 @@ clipboard and the display size. See [Sharing, sound and memory](#sharing-sound-a
 
 Debian runs on the `virt` board, which copies QEMU's machine of that name. U-Boot's
 `qemu_arm64` build has that layout compiled in, so a stock U-Boot starts on it with no
-patch. `hengevm` starts it, and the iOS app starts it for every machine. The tools that build the firmware
+patch. `tuxvm` starts it, and the iOS app starts it for every machine. The tools that build the firmware
 and the images are in [tools/linux](../tools/linux/README.md).
 
 ### The virt board
@@ -112,7 +112,7 @@ the wanted result, because U-Boot then boots from `extlinux.conf`.
 - Linux keeps the ASID in `TTBR1_EL1` (`TCR_EL1.A1`). The per-process TLB stash keys on that
   ASID, so a context switch does not flush the TLB.
 - PSCI 1.0 over `HVC` starts the other CPUs and ends the machine: `SYSTEM_OFF` exits
-  `hengevm` with status 0, and `SYSTEM_RESET` builds the machine again in the same process.
+  `tuxvm` with status 0, and `SYSTEM_RESET` builds the machine again in the same process.
 - A Debian 16 KB kernel runs with 47-bit virtual addresses and three table levels. Tuxedo
   does not offer LPA2, so the kernel falls back from its 52-bit configuration.
 - The debug registers read as zero and ignore writes, so a guest debugger cannot
@@ -150,9 +150,9 @@ number from an iPhone exists yet.
 ### The console
 
 The PL011 is the guest's serial console, and the kernel prints on it (`console=ttyAMA0`).
-`hv_vm_console_set_output` takes the bytes. `hengevm` sends them to stdout. In the app,
-`henge_vm_console_read` drains a 256 KB ring into a SwiftTerm terminal (`ConsoleView.swift`),
-and typed bytes go back through `henge_vm_console_write` and `hv_vm_console_input`. CPU 0's
+`hv_vm_console_set_output` takes the bytes. `tuxvm` sends them to stdout. In the app,
+`tux_vm_console_read` drains a 256 KB ring into a SwiftTerm terminal (`ConsoleView.swift`),
+and typed bytes go back through `tux_vm_console_write` and `hv_vm_console_input`. CPU 0's
 tick moves them into the UART as its FIFO has room. A Linux machine opens on the console and
 stays there until the user switches to the screen.
 

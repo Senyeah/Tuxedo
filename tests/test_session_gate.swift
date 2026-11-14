@@ -62,11 +62,11 @@ struct SessionGateTests {
         g.checked(restart, passed: true)
         precondition(g.secretsUnlocked)
 
-        // Which check a session gets: Face ID; HENGE_AUTOPILOT in the launch environment skips the check, and
+        // Which check a session gets: Face ID; TUX_AUTOPILOT in the launch environment skips the check, and
         // nothing else does.
         precondition(SessionGate.Check.for(environment: [:]) == .faceID)
-        precondition(SessionGate.Check.for(environment: ["HENGE_AUTOPILOT": "1"]) == .skippedForTest)
-        precondition(SessionGate.Check.for(environment: ["HENGE_AUTOPILOT_ONCE": "1"]) == .faceID)
+        precondition(SessionGate.Check.for(environment: ["TUX_AUTOPILOT": "1"]) == .skippedForTest)
+        precondition(SessionGate.Check.for(environment: ["TUX_AUTOPILOT_ONCE": "1"]) == .faceID)
 
         // Autopilot: the session opens with no check, but the wallet stays locked unless the test unlocks it.
         var auto = SessionGate(check: .skippedForTest)
@@ -79,8 +79,8 @@ struct SessionGateTests {
         var faceID = SessionGate()
         faceID.unlockForTest() // only a skipped check can be unlocked this way
         precondition(ticket(faceID.ask()) == 1 && !faceID.secretsUnlocked)
-        precondition(SessionGate.testUnlock(environment: ["HENGE_AUTOPILOT_WALLET": "unlocked"]))
-        precondition(!SessionGate.testUnlock(environment: ["HENGE_AUTOPILOT_WALLET": "1"]))
+        precondition(SessionGate.testUnlock(environment: ["TUX_AUTOPILOT_WALLET": "unlocked"]))
+        precondition(!SessionGate.testUnlock(environment: ["TUX_AUTOPILOT_WALLET": "1"]))
         precondition(!SessionGate.testUnlock(environment: [:]))
 
         // What hides the guest, on the phone and on every external screen: anything but an open session, and an

@@ -28,7 +28,7 @@ static void give_back(HvVirtioBalloon *b, uint64_t off, uint64_t len) {
         bad = madvise(b->ram + off, len, MADV_FREE_REUSABLE) != 0;
     }
     if (bad) {
-        if (b->failed++ < 4) fprintf(stderr, "hengevm: balloon: giving back %llu KB at +%llx failed: %s\n",
+        if (b->failed++ < 4) fprintf(stderr, "tuxvm: balloon: giving back %llu KB at +%llx failed: %s\n",
                                      (unsigned long long)(len >> 10), (unsigned long long)off, strerror(errno));
     } else {
         b->given_back += len / HOST_PAGE;
@@ -52,7 +52,7 @@ static void handle(HvVirtioBalloon *b, const HvVirtqElem *e, int inflate) {
         if (pfn[i] & 3) { whole_pages = 0; break; }
     if (!b->told_pattern && n) {
         b->told_pattern = 1;
-        fprintf(stderr, "hengevm: balloon: the guest lists %s (first %u: %x %x %x %x)\n",
+        fprintf(stderr, "tuxvm: balloon: the guest lists %s (first %u: %x %x %x %x)\n",
                 whole_pages ? "one page number per 16 KB page" : "4 KB page numbers", n,
                 pfn[0], n > 1 ? pfn[1] : 0, n > 2 ? pfn[2] : 0, n > 3 ? pfn[3] : 0);
     }
@@ -106,7 +106,7 @@ static void config_write(HvVirtio *v, uint32_t off, uint64_t val, unsigned size)
     /* every 256 MB of change, and the first */
     if (!last_told || (actual > last_told ? actual - last_told : last_told - actual) >= (256u << 20) >> PFN_SHIFT) {
         last_told = actual ? actual : 1;
-        fprintf(stderr, "hengevm: balloon: the guest has given %u MB of the %u MB asked; %llu MB back to the OS so far\n",
+        fprintf(stderr, "tuxvm: balloon: the guest has given %u MB of the %u MB asked; %llu MB back to the OS so far\n",
                 actual >> (20 - PFN_SHIFT), b->applied >> (20 - PFN_SHIFT),
                 (unsigned long long)((b->given_back - b->taken_back) * HOST_PAGE >> 20));
     }
@@ -155,6 +155,6 @@ void hv_virtio_balloon_poll(HvVirtioBalloon *b) {
     if (target == b->applied) return;
     b->applied = target;
     memcpy(b->vio.config + CFG_NUM_PAGES, &target, 4);
-    fprintf(stderr, "hengevm: balloon: asking the guest for %u MB\n", target >> (20 - PFN_SHIFT));
+    fprintf(stderr, "tuxvm: balloon: asking the guest for %u MB\n", target >> (20 - PFN_SHIFT));
     hv_virtio_config_changed(&b->vio);
 }

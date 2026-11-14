@@ -1,5 +1,5 @@
-#ifndef HENGEVM_LINUX_BOOT_H
-#define HENGEVM_LINUX_BOOT_H
+#ifndef TUXVM_LINUX_BOOT_H
+#define TUXVM_LINUX_BOOT_H
 
 #include <stddef.h>
 #include <stdint.h>

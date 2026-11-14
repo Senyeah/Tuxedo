@@ -1,5 +1,5 @@
-#ifndef HENGEVM_VIRTIO_BLK_H
-#define HENGEVM_VIRTIO_BLK_H
+#ifndef TUXVM_VIRTIO_BLK_H
+#define TUXVM_VIRTIO_BLK_H
 
 #include "disk.h"
 #include "virtio.h"

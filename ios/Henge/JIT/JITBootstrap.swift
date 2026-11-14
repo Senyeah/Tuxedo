@@ -38,9 +38,9 @@ enum JITBootstrap {
     /// Without this, a `brk` that StikDebug is not there to service is a fatal
     /// SIGTRAP rather than a failed call — the process simply dies.
     static func installTrapGuard() {
-        HengeLog.log("jit", "installing brk trap guard")
-        henge_ios_jit_install_trap_handler()
-        HengeLog.log("jit", "trap guard installed -- an unserviced brk will now "
+        TuxLog.log("jit", "installing brk trap guard")
+        tux_ios_jit_install_trap_handler()
+        TuxLog.log("jit", "trap guard installed -- an unserviced brk will now "
                          + "return 0 instead of killing the process")
     }
 
@@ -86,10 +86,10 @@ enum JITBootstrap {
         #if targetEnvironment(simulator)
         // The simulator runs the app as a macOS process: no debugger, no TXM; the region is made in-process.
         selfGrantTried = true
-        if henge_ios_jit_prewarm_self(jitBytes) {
+        if tux_ios_jit_prewarm_self(jitBytes) {
             prewarmed = true
             lastFailure = nil
-            HengeLog.log("jit", "JIT region made by Henge itself (simulator)")
+            TuxLog.log("jit", "JIT region made by Henge itself (simulator)")
             return true
         }
         lastFailure = "The simulator refused the JIT region; see henge.log."
@@ -100,7 +100,7 @@ enum JITBootstrap {
         // so it does not wait for CS_DEBUGGED there if jailbroken: Dopamine hides that flag from apps unless
         // "Allow JIT in Apps" is on, while still letting them run code they wrote.
         guard isDebuggerAttached || (canGrantOwnJIT && !selfGrantTried) else {
-            HengeLog.log("jit", "no debugger attached yet; not prewarming")
+            TuxLog.log("jit", "no debugger attached yet; not prewarming")
             return false
         }
         if !isDebuggerAttached { selfGrantTried = true }
@@ -111,27 +111,27 @@ enum JITBootstrap {
         if canGrantOwnJIT && !stikDebugMayServiceTraps {
             selfGrantTried = true
             if mapJITWorks {
-                HengeLog.log("jit", "not trapping for a JIT region (no StikDebug); MAP_JIT executes here")
+                TuxLog.log("jit", "not trapping for a JIT region (no StikDebug); MAP_JIT executes here")
                 lastFailure = nil
                 return true
             }
             // MAP_JIT refused (no dynamic-codesigning after all, or Dopamine): plain memory made executable, which a debugged
             // process or a jailbreak allows -- made here, with no brk for an attach that answers none (#148)
-            HengeLog.log("jit", "not trapping for a JIT region (no StikDebug); MAP_JIT does not execute here, trying plain memory")
+            TuxLog.log("jit", "not trapping for a JIT region (no StikDebug); MAP_JIT does not execute here, trying plain memory")
             prepareCompressedHeap()
-            if henge_ios_jit_prewarm_self(jitBytes) {
+            if tux_ios_jit_prewarm_self(jitBytes) {
                 prewarmed = true
                 lastFailure = nil
-                HengeLog.log("jit", "JIT region made by Henge itself (\(henge_ios_jit_self_route().map { String(cString: $0) } ?? "self"))")
+                TuxLog.log("jit", "JIT region made by Henge itself (\(tux_ios_jit_self_route().map { String(cString: $0) } ?? "self"))")
                 return true
             }
             releaseUnusedCompressedHeap()
             return false
         }
-        HengeLog.log("jit", "claiming \(jitBytes / (1024 * 1024)) MiB of JIT memory now, "
+        TuxLog.log("jit", "claiming \(jitBytes / (1024 * 1024)) MiB of JIT memory now, "
                          + "before the guest download -- StikDebug does not stay attached")
         prepareCompressedHeap()
-        let ok = henge_ios_jit_prewarm(jitBytes)
+        let ok = tux_ios_jit_prewarm(jitBytes)
         if !ok { releaseUnusedCompressedHeap() }
         if ok {
             prewarmed = true
@@ -143,7 +143,7 @@ enum JITBootstrap {
             // iOS that does not need a trap servicer. QEMU maps its own buffer
             // with MAP_JIT a moment later and runs exactly as well.
             lastFailure = nil
-            HengeLog.log("jit", "no trap servicer, but MAP_JIT executes here -- "
+            TuxLog.log("jit", "no trap servicer, but MAP_JIT executes here -- "
                              + "QEMU will map its own buffer")
         } else {
             lastFailure = "The debugger is attached but is not answering trap "
@@ -154,7 +154,7 @@ enum JITBootstrap {
                         + "from the Home Screen and tap Turn On JIT. It also happens "
                         + "inside another container app."
         }
-        HengeLog.log("jit", ok ? "JIT region secured; it will be handed to QEMU later"
+        TuxLog.log("jit", ok ? "JIT region secured; it will be handed to QEMU later"
                               : "JIT prewarm FAILED -- StikDebug is not servicing traps")
         return ok
         #endif
@@ -213,9 +213,9 @@ enum JITBootstrap {
     static func releaseLingeringDebugger() {
         guard detached, !keepDebuggerAttached, helperMayBeAttached, lingeringTries < 3, isTraced else { return }
         lingeringTries += 1
-        HengeLog.log("jit", "a debugger is still attached after the JIT region was held (a second helper?); detaching it")
-        henge_ios_jit_detach()
-        HengeLog.log("jit", isTraced ? "still traced after the detach request" : "debugger detached")
+        TuxLog.log("jit", "a debugger is still attached after the JIT region was held (a second helper?); detaching it")
+        tux_ios_jit_detach()
+        TuxLog.log("jit", isTraced ? "still traced after the detach request" : "debugger detached")
     }
 
     /// Whether a debugger traces this process right now (P_TRACED; CS_DEBUGGED stays set after a detach).
@@ -231,17 +231,17 @@ enum JITBootstrap {
     /// needed for anything, and leaving it attached is what froze the app.
     private static func detachIfDone() {
         guard prewarmed, !detached, !keepDebuggerAttached else { return }
-        HengeLog.log("jit", "JIT region held; detaching StikDebug so a suspended "
+        TuxLog.log("jit", "JIT region held; detaching StikDebug so a suspended "
                          + "debugger cannot stall the process later (traced: \(isTraced ? "yes" : "no"))")
-        henge_ios_jit_detach()
+        tux_ios_jit_detach()
         detached = true
-        HengeLog.log("jit", "after the detach request, traced: \(isTraced ? "yes" : "no")")
+        TuxLog.log("jit", "after the detach request, traced: \(isTraced ? "yes" : "no")")
     }
 
     /// Whether this device enforces TXM, so that only a trap servicer can grant
     /// executable memory. Uses the same rule as the "TXM expected" line in the
     /// log banner, so the two can never disagree.
-    static let deviceEnforcesTXM: Bool = HengeLog.expectsTXM(model: HengeLog.deviceModel)
+    static let deviceEnforcesTXM: Bool = TuxLog.expectsTXM(model: TuxLog.deviceModel)
 
     /// Why the last prewarm failed, for the UI to show.
     ///
@@ -264,10 +264,10 @@ enum JITBootstrap {
         if let known = mapJITResult { return known }
         let result: Bool
         if deviceEnforcesTXM {
-            HengeLog.log("jit", "TXM device: MAP_JIT cannot execute here, not probing")
+            TuxLog.log("jit", "TXM device: MAP_JIT cannot execute here, not probing")
             result = false
         } else {
-            result = henge_ios_jit_mapjit_works()
+            result = tux_ios_jit_mapjit_works()
         }
         mapJITResult = result
         return result
@@ -281,7 +281,7 @@ enum JITBootstrap {
     /// self-test — which happens inside `qemu_init`. It is therefore always false
     /// before the guest starts, and must NOT be used to decide whether to start it.
     /// Use `isDebuggerAttached` for that, and this afterwards to confirm it worked.
-    static var isLive: Bool { henge_ios_jit_is_available() }
+    static var isLive: Bool { tux_ios_jit_is_available() }
 
     /// The actual precondition for starting the guest: StikDebug has attached.
     ///
@@ -292,11 +292,11 @@ enum JITBootstrap {
     /// its answer is immediately acted on.
     static var isDebuggerAttached: Bool {
         guard let flags = csStatus() else {
-            HengeLog.log("jit", "csops failed (errno \(errno)); assuming no debugger")
+            TuxLog.log("jit", "csops failed (errno \(errno)); assuming no debugger")
             return false
         }
         let attached = (flags & CS_DEBUGGED) != 0
-        HengeLog.log("jit", String(format: "csops status = 0x%08x, CS_DEBUGGED = %@",
+        TuxLog.log("jit", String(format: "csops status = 0x%08x, CS_DEBUGGED = %@",
                                   flags, attached ? "set" : "clear"))
         return attached
     }
@@ -332,7 +332,7 @@ enum JITBootstrap {
         let launch = unsafeBitCast(sym, to: Launch.self)
         for id in ["com.opa334.TrollStore", "com.opa334.TrollStoreLite"] {
             let r = launch(id as NSString, nil, nil, nil, true)
-            HengeLog.log("jit", "SpringBoard on opening \(id): \(r)")
+            TuxLog.log("jit", "SpringBoard on opening \(id): \(r)")
             if r == 9 { return true }
         }
         return false
@@ -352,7 +352,7 @@ enum JITBootstrap {
 
     /// Whether Tuxedo was already marked as debugged when it was opened, before it asked anything of anyone. That is what a
     /// jailbreak that allows JIT in apps does to every app it launches (Dopamine's "Allow JIT in Apps" setting), and it needs
-    /// no hand-off at all. Read once, early (HengeApp.init), so a later attach is not mistaken for it.
+    /// no hand-off at all. Read once, early (TuxApp.init), so a later attach is not mistaken for it.
     nonisolated(unsafe) static var debuggedAtLaunch = false
     static func noteLaunchState() { debuggedAtLaunch = (csStatus() ?? 0) & CS_DEBUGGED != 0 }
 
@@ -380,26 +380,26 @@ enum JITBootstrap {
     /// this point happens in a *new* foreground pass of the app.
     @MainActor
     static func requestTrollStoreAttach() -> Bool {
-        HengeLog.log("jit", "requestTrollStoreAttach() -- handing off to TrollStore")
+        TuxLog.log("jit", "requestTrollStoreAttach() -- handing off to TrollStore")
         guard let bundleID = Bundle.main.bundleIdentifier else { return false }
         
         let url = "apple-magnifier://enable-jit?bundle-id=\(bundleID)"
         guard isTrollStoreInstalled, let launchURL = URL(string: url) else {
-            HengeLog.log("jit", "FAIL: TrollStore is not installed")
+            TuxLog.log("jit", "FAIL: TrollStore is not installed")
             return false
         }
         
-        HengeLog.log("jit", "opening apple-magnifier:// for bundle \(bundleID)")
+        TuxLog.log("jit", "opening apple-magnifier:// for bundle \(bundleID)")
         UIApplication.shared.open(launchURL)
         return true
     }
 
     @MainActor
     static func requestAttach() -> Bool {
-        HengeLog.log("jit", "requestAttach() -- handing off to StikDebug")
+        TuxLog.log("jit", "requestAttach() -- handing off to StikDebug")
 
         guard let bundleID = Bundle.main.bundleIdentifier else {
-            HengeLog.log("jit", "FAIL: no bundle identifier")
+            TuxLog.log("jit", "FAIL: no bundle identifier")
             return false
         }
 
@@ -412,28 +412,28 @@ enum JITBootstrap {
         // script-data unconditionally (HomeView.handleExternalURL), so we do not
         // depend on the user having assigned a script to Tuxedo in StikDebug's UI.
         if let script = loadScript(), let encoded = base64URLEncode(script) {
-            HengeLog.log("jit", "loaded henge-jit.js (\(script.count) chars, "
+            TuxLog.log("jit", "loaded henge-jit.js (\(script.count) chars, "
                              + "\(encoded.count) chars encoded); sending inline")
             url += "&script-data=\(encoded)"
         } else {
-            HengeLog.log("jit", "WARNING: could not load henge-jit.js from the bundle. "
+            TuxLog.log("jit", "WARNING: could not load henge-jit.js from the bundle. "
                              + "Falling back to whatever script StikDebug has assigned "
                              + "to this bundle id -- if none, JIT will not be enabled.")
         }
 
         guard let launchURL = URL(string: url) else {
-            HengeLog.log("jit", "FAIL: malformed StikDebug URL (\(url.count) chars)")
+            TuxLog.log("jit", "FAIL: malformed StikDebug URL (\(url.count) chars)")
             return false
         }
 
         // Not canOpenURL first: that needs LSApplicationQueriesSchemes for 'stikjit', which is
         // checked against whichever app iOS actually installed — a container app hosting Tuxedo
         // fails the query even when StikDebug is installed. open() has no such restriction.
-        HengeLog.log("jit", "opening stikjit:// for bundle \(bundleID), pid \(getpid()); "
+        TuxLog.log("jit", "opening stikjit:// for bundle \(bundleID), pid \(getpid()); "
                          + "Henge will be backgrounded and relaunched after attach")
         UIApplication.shared.open(launchURL, options: [:]) { success in
             if !success {
-                HengeLog.log("jit", "FAIL: open(stikjit://) did not succeed -- StikDebug is not installed")
+                TuxLog.log("jit", "FAIL: open(stikjit://) did not succeed -- StikDebug is not installed")
             }
         }
         return true

@@ -134,7 +134,7 @@ In Tuxedo:
 
 1. `tools/gfx/build-deps.sh:268` to `:269`: `-Dvideo=true`, the new patch, and its hash in `write_manifest`.
 2. `devices/vgpu_virgl.m:728`: pass `VIRGL_RENDERER_USE_VIDEO`, with `VIRGL_RENDERER_UNSTABLE_APIS` defined.
-3. Link VideoToolbox, CoreMedia and CoreVideo for the app and `hengevm`. No entitlement is needed for `VTDecompressionSession`.
+3. Link VideoToolbox, CoreMedia and CoreVideo for the app and `tuxvm`. No entitlement is needed for `VTDecompressionSession`.
 4. A setting to turn video off. VideoToolbox then parses bitstreams that the guest controls. The plan already keeps acceleration off for imported machines (`LINUX-PLAN-10-accelerated-graphics.md:415`).
 
 In the guest: `apt install mesa-va-drivers vainfo` (and `mpv`, `ffmpeg`, `gstreamer1.0-plugins-bad` for its `va` plugin). The kernel needs nothing new. The virtio-gpu device stays as it is: no blob resources, no context-init (`devices/virtio_gpu.c:46`, `:896`).
@@ -212,7 +212,7 @@ Keep path 2 as the later answer for HEVC, and for full coverage if path 1 shows 
 
 ### First spike
 
-Run it with `hengevm` on the Mac, because VideoToolbox exists there and no phone is needed.
+Run it with `tuxvm` on the Mac, because VideoToolbox exists there and no phone is needed.
 
 1. Patch virglrenderer: build with `-Dvideo=true` and a `virgl_video_vt.m` that does only H.264 decode. Copy the planes on the CPU (`CVPixelBufferLockBaseAddress`, then `glTexSubImage2D` into each plane resource's texture).
 2. Tuxedo: pass `VIRGL_RENDERER_USE_VIDEO` at `devices/vgpu_virgl.m:728`.
@@ -280,7 +280,7 @@ Run on 13/11/2026 on the Mac (Apple M4 Pro, 14 cores), branch `spike/video-decod
 What was built:
 
 - `tools/gfx/virglrenderer-videotoolbox.patch`, applied by `build-deps.sh` after the timestamp patch. It adds `src/vrend/virgl_video_vt.m` and builds `-Dvideo=true` with no `libva` and no `libdrm`. The back end writes the SPS and PPS from the parsed fields, reads the PPS id from each slice header, collects the slices between `BEGIN_FRAME` and `END_FRAME`, and decodes one `CMSampleBuffer` synchronously. `vrend_video.c` copies the output planes into the plane textures with `glTexSubImage2D`. The IOSurface pbuffer import (item 3 of [What changes](#what-changes)) is not in the spike.
-- Tuxedo: guest video is off by default. `hengevm --gpu-accel --gpu-video` passes `VIRGL_RENDERER_USE_VIDEO` (`devices/vgpu_virgl.m`). The iOS app has no setting for it, so it never turns video on. VideoToolbox, CoreMedia and CoreVideo are on the `hengevm` and iOS link lines. The iOS app was not built.
+- Tuxedo: guest video is off by default. `tuxvm --gpu-accel --gpu-video` passes `VIRGL_RENDERER_USE_VIDEO` (`devices/vgpu_virgl.m`). The iOS app has no setting for it, so it never turns video on. VideoToolbox, CoreMedia and CoreVideo are on the `tuxvm` and iOS link lines. The iOS app was not built.
 - `tools/linux/video-decode-check.py` (`make test-linux-video`) runs steps 3 to 5 on a clone of the desktop image.
 - `make test-vgpu-virgl` sends video commands with video off, and an oversized `DECODE_BITSTREAM` with video on under `libgmalloc`.
 
@@ -290,11 +290,11 @@ Guest: Debian desktop image with `mesa-va-drivers` 25.0.7-2+deb13u1, `vainfo` 2.
 |---|---|
 | `vainfo`, `VAEntrypointVLD` | `VAProfileH264Main`, `VAProfileH264High` |
 | framemd5, `-hwaccel vaapi` against `-hwaccel none` | 450 of 450 frames match, both clips |
-| `-hwaccel vaapi -hwaccel_output_format vaapi -f null -` | 374.4 fps, guest CPU 0.54 s, `hengevm` CPU 0.88 s (70% of one core) |
-| `-hwaccel none -f null -` | 160.7 fps, guest CPU 5.56 s, `hengevm` CPU 5.63 s (197% of one core) |
+| `-hwaccel vaapi -hwaccel_output_format vaapi -f null -` | 374.4 fps, guest CPU 0.54 s, `tuxvm` CPU 0.88 s (70% of one core) |
+| `-hwaccel none -f null -` | 160.7 fps, guest CPU 5.56 s, `tuxvm` CPU 5.63 s (197% of one core) |
 | `mpv --hwdec=vaapi --vo=gpu`, full screen on the desktop | `hwdec-current=vaapi`, 0 frames dropped by the VO and 0 by the decoder. `mpv`'s last sampled frame number was 447 (the sampler runs every 0.25 s); the host log shows that `mpv`'s codec decoded all 450 frames |
-| `hengevm`'s log | 4 VA-API runs (2 framemd5, the benchmark, `mpv`): 4 codecs, each 450 frames on the hardware decoder, 0 failed, 0 skipped, 1 session each |
-| `hengevm` without `--gpu-video` | `vainfo` lists no decode profile, and the VideoToolbox back end does not start |
+| `tuxvm`'s log | 4 VA-API runs (2 framemd5, the benchmark, `mpv`): 4 codecs, each 450 frames on the hardware decoder, 0 failed, 0 skipped, 1 session each |
+| `tuxvm` without `--gpu-video` | `vainfo` lists no decode profile, and the VideoToolbox back end does not start |
 | `make test-vgpu-virgl` | passes with video off (197 checks) and with video on under `libgmalloc` (217 checks) |
 | `make test-linux-accel` with the patched libraries (video off, the default) | passes: glmark2 1072 against 306 for llvmpipe (need 3x), median frame time 0.71 ms, p99 2.59 ms, no virtio_gpu errors |
 
@@ -306,9 +306,9 @@ What the spike showed:
 - A synchronous `VTDecompressionSessionDecodeFrame` gives one output frame for each call, in decode order, with B-frames. The checksums prove it.
 - Mesa 25.0 sends all the slices of a picture in one `DECODE_BITSTREAM` (4 slices in one call for the 4-slice clip). So the picture descriptor's active reference counts are the last slice's. The back end learns the PPS default counts only from the last slice of a call, and only when that slice does not override them.
 - The learnt default counts change the PPS once, at the first P picture. VideoToolbox accepted the new format description on the same session (1 parameter set update, 1 session per codec).
-- On the Mac the gain is CPU time, not frame rate: software decode is also faster than real time at 1080p (161 fps on 4 guest CPUs). Guest CPU time falls by a factor of 10. `hengevm`'s CPU time falls by a factor of 6.4 (0.88 s against 5.63 s). Its CPU rate falls by a factor of 2.8 (70% against 197% of one core), because the hardware run is shorter.
+- On the Mac the gain is CPU time, not frame rate: software decode is also faster than real time at 1080p (161 fps on 4 guest CPUs). Guest CPU time falls by a factor of 10. `tuxvm`'s CPU time falls by a factor of 6.4 (0.88 s against 5.63 s). Its CPU rate falls by a factor of 2.8 (70% against 197% of one core), because the hardware run is shorter.
 - Mesa creates video buffers in many formats when it probes, not only the decode target. The back end must accept all of them and refuse a format only at `BEGIN_FRAME`. An earlier version refused them at creation and logged errors.
-- When the back end fails to create a buffer, `ffmpeg` still ends with status 0 and writes frames. Only the framemd5 comparison finds it (one run had 450 of 450 frames wrong). The check script therefore uses the checksums and `hengevm`'s log, not the exit status.
+- When the back end fails to create a buffer, `ffmpeg` still ends with status 0 and writes frames. Only the framemd5 comparison finds it (one run had 450 of 450 frames wrong). The check script therefore uses the checksums and `tuxvm`'s log, not the exit status.
 - VideoToolbox sessions are 1920x1088 (the coded size). Each guest process makes its own session.
 - The desktop image has no `curl`. The script copies the clips from the `--share` folder with Python.
 
@@ -318,7 +318,7 @@ An independent review of runs 1 to 6 found these defects. The patch and Tuxedo n
 
 - Heap overflow (blocker). Upstream's `vrend_video_decode_bitstream` copied the guest's size into the bitstream resource's `width0` heap block. `-Dvideo=true` made this code reachable. The copy is now at most `width0` bytes, and only from a `VIRGL_BIND_CUSTOM` buffer. `test_vgpu_virgl` sends a 64 KiB size for a 16-byte buffer under `libgmalloc`: without the bound it crashes (status 139), with it it passes.
 - The off switch did not close the hole. The video commands ran even without `VIRGL_RENDERER_USE_VIDEO`. Now no context gets a video context unless `vrend_video_init` worked. Every video command then fails with `EINVAL`, as in a library built without video. `test_vgpu_virgl` checks this.
-- Video was on by default for every embedder. Now it is off, and only `hengevm --gpu-video` turns it on. The phone stays off until the phone checks are done.
+- Video was on by default for every embedder. Now it is off, and only `tuxvm --gpu-video` turns it on. The phone stays off until the phone checks are done.
 - The CPU plane copy trusted the guest's plane format. It now takes only a 2D `R8` or `R8G8` texture whose pixel size matches the plane, and it reads only inside the VideoToolbox plane.
 - The PPS default reference counts came from the descriptor for every slice. See above: now only from the last slice of each call.
 - No cap on memory. Now at most 16 codecs in a context and 16 MiB of slices in a picture; a larger buffer is freed after its frame.
@@ -339,7 +339,7 @@ What changed:
 - The back end gives `vrend_video.c` the decoded `CVPixelBuffer`'s IOSurface, not CPU pointers. `vrend_video.c` makes one ANGLE pbuffer for each IOSurface plane (`EGL_IOSURFACE_ANGLE`: `GL_RED` or `GL_RG`, 8 or 16 bits), binds it to a texture and copies it into the guest's plane texture with `glCopyTexSubImage2D`. The guest's plane resource must be a 2D texture of the plane's format. The copy stays inside the smaller of the two sizes.
 - The pbuffers are kept in a cache of 32 surfaces for each codec, keyed by IOSurface. VideoToolbox used 9 surfaces for `ffmpeg` and 12 for `mpv`. The cache is dropped when the pool may be new (see [Stage 6 review fixes](#stage-6-review-fixes)).
 - A fence follows each copy. Until it signals, the IOSurface's use count is raised. A test on the Mac showed that a `CVPixelBufferPool` does not give back a surface that is in use, and that a Metal texture on a surface does not raise the count. So the decoder cannot write a surface that the GPU still reads.
-- When ANGLE refuses a plane, that codec copies on the CPU from then on (`IOSurfaceLock`). `VREND_VIDEO_CPU_COPY=1` in `hengevm`'s environment forces the CPU copy. The script fails when a frame went to the CPU without that variable.
+- When ANGLE refuses a plane, that codec copies on the CPU from then on (`IOSurfaceLock`). `VREND_VIDEO_CPU_COPY=1` in `tuxvm`'s environment forces the CPU copy. The script fails when a frame went to the CPU without that variable.
 - `vrend_video.c` logs, for each codec, the frames copied on the GPU and on the CPU, the surfaces and the thread CPU time of the copies.
 
 The clips and the guest are the spike's. Each mode ran three times with `--bench 5` (15 runs of `ffmpeg -hwaccel vaapi -hwaccel_output_format vaapi -f null -` each), alternately, on one patched library. The host load average was 23 to 42, from other work on the Mac.
@@ -349,11 +349,11 @@ The clips and the guest are the spike's. Each mode ran three times with `--bench
 | framemd5 against `-hwaccel none` | 450 of 450, both clips, each run | 450 of 450, both clips, each run |
 | VA-API frame rate, median of 15 | 424.9 fps (343.0 to 442.9) | 384.9 fps (358.6 to 397.2) |
 | Guest CPU for 450 frames, median | 0.52 s | 0.52 s |
-| `hengevm` CPU for 450 frames, median | 0.74 s (0.70 to 0.89) | 0.86 s (0.79 to 0.95) |
+| `tuxvm` CPU for 450 frames, median | 0.74 s (0.70 to 0.89) | 0.86 s (0.79 to 0.95) |
 | Thread CPU in the plane copy, per frame | 81 µs | 296 µs |
 | `mpv --hwdec=vaapi --vo=gpu` | 0 frames dropped; all 450 frames decoded and copied on the GPU | (not run) |
 
-The GPU copy cuts the copy's CPU time by a factor of 3.7, and `hengevm`'s CPU time for the clip by 14%. The guest's CPU time does not change, because the copy is on the host. Most of `hengevm`'s remaining CPU time is the guest's emulated CPUs and the virgl command stream, not the copy.
+The GPU copy cuts the copy's CPU time by a factor of 3.7, and `tuxvm`'s CPU time for the clip by 14%. The guest's CPU time does not change, because the copy is on the host. Most of `tuxvm`'s remaining CPU time is the guest's emulated CPUs and the virgl command stream, not the copy.
 
 Not shown: the pbuffer path on the iPhone GPU, and 10-bit planes (no 10-bit H.264 decode). The CPU fallback ran only when forced.
 
@@ -376,10 +376,10 @@ Clips: made on the Mac with libvpx (FFmpeg 9.0.2), 1920x1080, 30 fps, 15 s, two 
 |---|---|
 | `vainfo` | `VAProfileVP9Profile0`, `VAProfileVP9Profile2` with `VAEntrypointVLD`, as well as H.264 |
 | framemd5 against `-hwaccel none` (`yuv420p`, `yuv420p10le`) | 450 of 450 frames, both clips |
-| `-hwaccel vaapi -hwaccel_output_format vaapi -f null -`, profile 0 | 356.0 fps, guest CPU 0.49 s, `hengevm` CPU 0.74 s |
-| `-hwaccel none -f null -`, profile 0 | 263.8 fps, guest CPU 2.52 s, `hengevm` CPU 2.58 s |
+| `-hwaccel vaapi -hwaccel_output_format vaapi -f null -`, profile 0 | 356.0 fps, guest CPU 0.49 s, `tuxvm` CPU 0.74 s |
+| `-hwaccel none -f null -`, profile 0 | 263.8 fps, guest CPU 2.52 s, `tuxvm` CPU 2.58 s |
 | `mpv --hwdec=vaapi --vo=gpu`, profile 0 | `hwdec-current=vaapi`, 0 frames dropped |
-| `hengevm`'s log | 4 VA-API runs, each 480 frames on the hardware VP9 decoder, 0 failed, 0 skipped, 1 session; all 1920 frames copied on the GPU |
+| `tuxvm`'s log | 4 VA-API runs, each 480 frames on the hardware VP9 decoder, 0 failed, 0 skipped, 1 session; all 1920 frames copied on the GPU |
 
 Not shown: VP9 on the phone, VP9 profile 1 and 3 (4:4:4; the guest driver does not offer them), resolution changes inside a stream, and `show_existing_frame` (FFmpeg shows the reference itself and sends nothing).
 
@@ -412,9 +412,9 @@ Clips: made on the Mac with SVT-AV1 4.2.0 (FFmpeg 9.0.2), 1920x1080, 30 fps, 15 
 | Check | Result |
 |---|---|
 | `vainfo` | `VAProfileAV1Profile0` with `VAEntrypointVLD` |
-| `-hwaccel vaapi -hwaccel_output_format vaapi -f null -`, `av1-main` | 562.5 fps, guest CPU 0.31 s, `hengevm` CPU 0.52 s |
-| `-hwaccel none -f null -` (libdav1d), `av1-main` | 228.7 fps, guest CPU 3.61 s, `hengevm` CPU 3.84 s |
-| `hengevm`'s log | 4 VA-API runs, each 450 frames on the hardware AV1 decoder, 0 failed, 0 skipped, 1 session; all 1800 frames copied on the GPU |
+| `-hwaccel vaapi -hwaccel_output_format vaapi -f null -`, `av1-main` | 562.5 fps, guest CPU 0.31 s, `tuxvm` CPU 0.52 s |
+| `-hwaccel none -f null -` (libdav1d), `av1-main` | 228.7 fps, guest CPU 3.61 s, `tuxvm` CPU 3.84 s |
+| `tuxvm`'s log | 4 VA-API runs, each 450 frames on the hardware AV1 decoder, 0 failed, 0 skipped, 1 session; all 1800 frames copied on the GPU |
 
 The second decode costs decoder time, not CPU time: 19% of the frames for preset 8, 64% for preset 4, where SVT-AV1 keeps 8 different references more often. The hardware path is still more than twice as fast as software decode.
 
@@ -424,9 +424,9 @@ Not shown: global motion and segmentation (the clips have none, so that code ran
 
 Run on 14/11/2026. This is stage 6 of [Stages](#stages): the machine setting, the guest documentation and the tests.
 
-- The iOS app has a "Video decode" switch for each Linux machine, under "Graphics acceleration" and shown only when that is on. It is off by default (`MachineModel.video`, missing means off). Its note says that the device's video decoder then parses data that the guest controls. `henge_vm_boot_linux` has a `video` argument; with acceleration it sets `HvVmConfig.video`, the flag that `hengevm --gpu-video` sets, which passes `VIRGL_RENDERER_USE_VIDEO`. `make test-machine-model` checks the default and that the switch has no effect without acceleration or on a Mac.
+- The iOS app has a "Video decode" switch for each Linux machine, under "Graphics acceleration" and shown only when that is on. It is off by default (`MachineModel.video`, missing means off). Its note says that the device's video decoder then parses data that the guest controls. `tux_vm_boot_linux` has a `video` argument; with acceleration it sets `HvVmConfig.video`, the flag that `tuxvm --gpu-video` sets, which passes `VIRGL_RENDERER_USE_VIDEO`. `make test-machine-model` checks the default and that the switch has no effect without acceleration or on a Mac.
 - `tools/linux/README.md` ("Video decode (VA-API)") tells the guest what to install, how to check it with `vainfo`, the players' options, and what stays in software.
-- `make test-linux-video` is the frame checksum test for each codec: two H.264, two VP9 and three AV1 clips, each decoded with `-hwaccel vaapi` and with `-hwaccel none`, every frame equal. It also checks the speed, `mpv`, and `hengevm`'s log.
+- `make test-linux-video` is the frame checksum test for each codec: two H.264, two VP9 and three AV1 clips, each decoded with `-hwaccel vaapi` and with `-hwaccel none`, every frame equal. It also checks the speed, `mpv`, and `tuxvm`'s log.
 - The patched virglrenderer is built for `ios` and `sim` into the shared `build/gfx` (the earlier libraries are in `build/gfx/ios.pre-video` and `build/gfx/sim.pre-video`). The Tuxedo device build and `make ios-lib` succeed with it. The phone was not run. Video stays off until the switch is on, so the phone's behaviour does not change. That build needs VideoToolbox, CoreMedia and CoreVideo on every app's link line; see [Stage 6 review fixes](#stage-6-review-fixes).
 
 The final run on the Mac, with one patched library and one boot:
@@ -437,7 +437,7 @@ The final run on the Mac, with one patched library and one boot:
 | framemd5 | 450 of 450 frames equal for each of the 7 clips |
 | VA-API frame rate | H.264 418.2 fps, VP9 356.9 fps, AV1 581.4 fps (software: 159.9, 266.1, 217.5) |
 | `mpv --hwdec=vaapi --vo=gpu`, H.264 | 0 frames dropped |
-| `hengevm`'s log | 11 VA-API runs: each decoded all its frames on a hardware decoder, 0 failed, 0 skipped; every frame copied on the GPU |
+| `tuxvm`'s log | 11 VA-API runs: each decoded all its frames on a hardware decoder, 0 failed, 0 skipped; every frame copied on the GPU |
 | Without `--gpu-video` | no decode profile, and the back end does not start |
 | `make test-vgpu-virgl` | passes with video off (197 checks) and on under `libgmalloc` (217 checks) |
 
@@ -458,7 +458,7 @@ An independent review of stages 2 to 6 found these defects. The patch now handle
 | framemd5 | 450 of 450 frames equal for each of the 7 clips |
 | VA-API frame rate | H.264 419.4 fps, VP9 334.3 fps, AV1 579.2 fps (software: 162.9, 267.9, 226.4); host load average about 46 |
 | `mpv --hwdec=vaapi --vo=gpu`, H.264 | 0 frames dropped |
-| `hengevm`'s log | 11 VA-API runs: each decoded all its frames on a hardware decoder, 0 failed, 0 skipped, 1 session; all 5,040 frames copied on the GPU, with 9 to 24 surfaces for each codec as before (the cache was never dropped in these streams); no frame refused by the new checks |
+| `tuxvm`'s log | 11 VA-API runs: each decoded all its frames on a hardware decoder, 0 failed, 0 skipped, 1 session; all 5,040 frames copied on the GPU, with 9 to 24 surfaces for each codec as before (the cache was never dropped in these streams); no frame refused by the new checks |
 | Without `--gpu-video` | no decode profile, and the back end does not start |
 | `make test-vgpu-virgl` | passes with video off (197 checks) and on under `libgmalloc` (217 checks), then runs `make test-vt-crafted` |
 | Tuxedo device build against the new `ios` library | succeeds, with and without the three frameworks in `ios/project.yml` |

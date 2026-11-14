@@ -26,7 +26,7 @@
 #include <limits.h>
 #include <unistd.h>
 
-HENGE_EXPORT HengeDualMapping *henge_ios_jit_get_mapping(void);
+TUX_EXPORT TuxDualMapping *tux_ios_jit_get_mapping(void);
 
 static _Atomic int state;
 static int exit_reason, exit_outcome;
@@ -40,11 +40,11 @@ static void on_exit(int reason) {
     state = 3;
     exit_reason = reason;
     int halt = hv_vm_cpu(0)->halted;
-    exit_outcome = HENGE_VM_OUTCOME_ERROR;
+    exit_outcome = TUX_VM_OUTCOME_ERROR;
     if (reason == HV_EXIT_HALT) switch (halt) {
-    case HV_HALT_SHUTDOWN: exit_outcome = HENGE_VM_OUTCOME_SHUTDOWN; break;
-    case HV_HALT_RESET: exit_outcome = HENGE_VM_OUTCOME_RESTART; break;
-    case HV_HALT_HOST: exit_outcome = HENGE_VM_OUTCOME_HOST_STOP; break;
+    case HV_HALT_SHUTDOWN: exit_outcome = TUX_VM_OUTCOME_SHUTDOWN; break;
+    case HV_HALT_RESET: exit_outcome = TUX_VM_OUTCOME_RESTART; break;
+    case HV_HALT_HOST: exit_outcome = TUX_VM_OUTCOME_HOST_STOP; break;
     }
     stopped_blocks = hv_vm_machine()->stats.blocks;
     stopped_tx = hv_net_tx_frames;
@@ -118,7 +118,7 @@ static struct {
     char id[HV_FS_NAME_MAX + 1], name[HV_FS_NAME_MAX + 1], path[1024];
 } folder_slots[HV_FS_MAX_FOLDERS];
 
-int henge_vm_folder_set(int index, const char *id, const char *name, const char *path, int mode, int kind) {
+int tux_vm_folder_set(int index, const char *id, const char *name, const char *path, int mode, int kind) {
     if (index < 0 || index >= HV_FS_MAX_FOLDERS || !path || strlen(path) >= sizeof folder_slots[0].path) {
         errno = EINVAL;
         return -1;
@@ -127,7 +127,7 @@ int henge_vm_folder_set(int index, const char *id, const char *name, const char 
     int rc = hv_fs_folder_set(index, id, name, path, mode); /* it checks the name, the mode and the path */
     if (rc == 0) {
         hv_fs_folder_kind(index, kind == 1 ? HV_FS_PROVIDER : HV_FS_LOCAL);
-        int online = folder_slots[index].used ? folder_slots[index].online : 1; /* only henge_vm_folder_online changes it */
+        int online = folder_slots[index].used ? folder_slots[index].online : 1; /* only tux_vm_folder_online changes it */
         folder_slots[index].used = 1;
         folder_slots[index].mode = mode;
         folder_slots[index].kind = kind;
@@ -141,7 +141,7 @@ int henge_vm_folder_set(int index, const char *id, const char *name, const char 
     return rc;
 }
 
-void henge_vm_folder_clear(int index) {
+void tux_vm_folder_clear(int index) {
     if (index < 0 || index >= HV_FS_MAX_FOLDERS) return;
     pthread_mutex_lock(&folders_mu);
     folder_slots[index].used = 0;
@@ -149,11 +149,11 @@ void henge_vm_folder_clear(int index) {
     pthread_mutex_unlock(&folders_mu);
 }
 
-void henge_vm_folders_clear(void) {
-    for (int i = 0; i < HV_FS_MAX_FOLDERS; i++) henge_vm_folder_clear(i);
+void tux_vm_folders_clear(void) {
+    for (int i = 0; i < HV_FS_MAX_FOLDERS; i++) tux_vm_folder_clear(i);
 }
 
-int henge_vm_folder_online(int index, int online) {
+int tux_vm_folder_online(int index, int online) {
     if (index < 0 || index >= HV_FS_MAX_FOLDERS) return -1;
     pthread_mutex_lock(&folders_mu);
     int rc = hv_fs_folder_online(index, online);
@@ -162,12 +162,12 @@ int henge_vm_folder_online(int index, int online) {
     return rc;
 }
 
-int henge_vm_folder_touch(int index) { return hv_fs_folder_touch(index); }
-long henge_vm_folder_ask(int index, int what) { return hv_fs_folder_ask(index, what); }
-int henge_vm_folder_answered(int index, long ask, int *ok, char **text) { return hv_fs_folder_answered(index, ask, ok, text); }
-void henge_vm_folders_hook(HengeFolderHook hook, void *user) { hv_fs_set_hook(hook, user); }
+int tux_vm_folder_touch(int index) { return hv_fs_folder_touch(index); }
+long tux_vm_folder_ask(int index, int what) { return hv_fs_folder_ask(index, what); }
+int tux_vm_folder_answered(int index, long ask, int *ok, char **text) { return hv_fs_folder_answered(index, ask, ok, text); }
+void tux_vm_folders_hook(TuxFolderHook hook, void *user) { hv_fs_set_hook(hook, user); }
 
-int henge_vm_folders_device(void) {
+int tux_vm_folders_device(void) {
     pthread_rwlock_rdlock(&api_lock);
     HvVirt *v = state == 1 ? hv_vm_virt() : NULL;
     int on = v && v->fs;
@@ -192,7 +192,7 @@ static const char *vcodec_socket(void) {
     return rc == 0 ? path : NULL;
 }
 
-int henge_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb, int cpus, int accel, int video, int encode,
+int tux_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb, int cpus, int accel, int video, int encode,
                         char *err, size_t errlen) {
     { extern void hv_prof_ios_start(void); hv_prof_ios_start(); }
     if (!firmware) {
@@ -200,7 +200,7 @@ int henge_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb,
         return -1;
     }
     if (begin_start(err, errlen)) return -1;
-    HengeDualMapping *jit = henge_ios_jit_get_mapping();
+    TuxDualMapping *jit = tux_ios_jit_get_mapping();
     if (!jit || !jit->rw_addr) {
         snprintf(err, errlen, "Henge has no JIT region. Turn on JIT first.");
         return failed_start();
@@ -238,29 +238,29 @@ int henge_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb,
     return started(err, errlen);
 }
 
-int henge_vm_state(void) { return state; }
-uint64_t henge_vm_generation(void) { return atomic_load(&generation); }
-int henge_vm_can_start(void) {
+int tux_vm_state(void) { return state; }
+uint64_t tux_vm_generation(void) { return atomic_load(&generation); }
+int tux_vm_can_start(void) {
     pthread_rwlock_rdlock(&api_lock);
     int ready = state == 0 || state == 2;
     pthread_rwlock_unlock(&api_lock);
     return ready;
 }
-int henge_vm_exit_outcome(void) {
+int tux_vm_exit_outcome(void) {
     pthread_rwlock_rdlock(&api_lock);
-    int outcome = state == 2 ? exit_outcome : HENGE_VM_OUTCOME_ERROR;
+    int outcome = state == 2 ? exit_outcome : TUX_VM_OUTCOME_ERROR;
     pthread_rwlock_unlock(&api_lock);
     return outcome;
 }
 static const char *exit_description(void) {
     switch (exit_outcome) {
-    case HENGE_VM_OUTCOME_SHUTDOWN: return "guest shut down";
-    case HENGE_VM_OUTCOME_RESTART: return "guest requested a restart";
-    case HENGE_VM_OUTCOME_HOST_STOP: return "stopped by host";
+    case TUX_VM_OUTCOME_SHUTDOWN: return "guest shut down";
+    case TUX_VM_OUTCOME_RESTART: return "guest requested a restart";
+    case TUX_VM_OUTCOME_HOST_STOP: return "stopped by host";
     default: return hv_vm_reason_name(exit_reason);
     }
 }
-const char *henge_vm_exit_reason(void) {
+const char *tux_vm_exit_reason(void) {
     pthread_rwlock_rdlock(&api_lock);
     const char *reason = state == 2 ? exit_description() : "running";
     pthread_rwlock_unlock(&api_lock);
@@ -273,14 +273,14 @@ static int lock_running(void) {
     pthread_rwlock_unlock(&api_lock);
     return 0;
 }
-void henge_vm_stop(void) {
+void tux_vm_stop(void) {
     if (!lock_running()) return;
     hv_vm_stop();
     state = 3;
     pthread_rwlock_unlock(&api_lock);
 }
 
-long henge_vm_balloon(long target_mb) {
+long tux_vm_balloon(long target_mb) {
     if (!lock_running()) return -1;
     HvVirtioBalloon *balloon = hv_vm_devs()->balloon;
     long actual = -1;
@@ -293,7 +293,7 @@ long henge_vm_balloon(long target_mb) {
 }
 
 /* Reads need no api_lock: the ring outlives the machine, so the last bytes before a stop stay readable. */
-size_t henge_vm_console_read(uint8_t *buf, size_t cap) {
+size_t tux_vm_console_read(uint8_t *buf, size_t cap) {
     pthread_mutex_lock(&console_mutex);
     size_t n = console_len < cap ? console_len : cap;
     for (size_t i = 0; i < n; i++) buf[i] = console_ring[(console_head + i) % CONSOLE_RING_BYTES];
@@ -302,7 +302,7 @@ size_t henge_vm_console_read(uint8_t *buf, size_t cap) {
     pthread_mutex_unlock(&console_mutex);
     return n;
 }
-void henge_vm_console_write(const uint8_t *buf, size_t n) {
+void tux_vm_console_write(const uint8_t *buf, size_t n) {
     if (!lock_running()) return;
     hv_vm_console_input(buf, n);
     pthread_rwlock_unlock(&api_lock);
@@ -321,7 +321,7 @@ static int power_pin(int level, uint64_t gen) {
     pthread_rwlock_unlock(&api_lock);
     return done;
 }
-void henge_vm_power_button(void) {
+void tux_vm_power_button(void) {
     if (lock_running()) { /* virt: the host's key, which hv_vm_destroy waits for */
         int done = hv_vm_power_button();
         pthread_rwlock_unlock(&api_lock);
@@ -333,7 +333,7 @@ void henge_vm_power_button(void) {
                    ^{ power_pin(0, gen); });
 }
 
-void henge_vm_set_background(int on) {
+void tux_vm_set_background(int on) {
     if (!on) { /* also when the machine stopped meanwhile: the flags must not pause the next one */
         hv_vcodec_set_background(0);
         hv_vm_set_background(0);
@@ -344,9 +344,9 @@ void henge_vm_set_background(int on) {
     hv_vm_set_background(1);
     pthread_rwlock_unlock(&api_lock);
 }
-int henge_vm_paused(void) { return hv_vm_paused(); }
+int tux_vm_paused(void) { return hv_vm_paused(); }
 
-int henge_vm_forwards_set(const uint16_t *phone_ports, const uint16_t *guest_ports, int n) {
+int tux_vm_forwards_set(const uint16_t *phone_ports, const uint16_t *guest_ports, int n) {
     HvFwdRule rules[HV_FWD_MAX_RULES];
     if (n < 0 || n > HV_FWD_MAX_RULES || (n && (!phone_ports || !guest_ports))) {
         errno = EINVAL;
@@ -361,9 +361,9 @@ int henge_vm_forwards_set(const uint16_t *phone_ports, const uint16_t *guest_por
     return hv_net_forward_set(rules, n);
 }
 
-void henge_vm_forwards_refresh(void) { hv_net_forward_refresh(); }
+void tux_vm_forwards_refresh(void) { hv_net_forward_refresh(); }
 
-int henge_vm_forward_state(uint16_t phone_port, char *addrs, size_t cap, int *err) {
+int tux_vm_forward_state(uint16_t phone_port, char *addrs, size_t cap, int *err) {
     HvFwdAddr a[HV_FWD_MAX_ADDRS];
     int e = 0;
     int n = hv_net_forward_state(phone_port, a, HV_FWD_MAX_ADDRS, &e);
@@ -385,31 +385,31 @@ int henge_vm_forward_state(uint16_t phone_port, char *addrs, size_t cap, int *er
     return n;
 }
 
-uint64_t henge_vm_dns(int which) {
+uint64_t tux_vm_dns(int which) {
     uint64_t n[3];
     hv_dns_proxy_stats(&n[0], &n[1], &n[2]);
     return which >= 0 && which < 3 ? n[which] : 0;
 }
 
-int henge_vm_knob(const char *name, int value) {
+int tux_vm_knob(const char *name, int value) {
     if (!lock_running()) return 0;
     int result = hv_knob_set(hv_vm_machine(), name, value);
     pthread_rwlock_unlock(&api_lock);
     return result;
 }
-uint64_t henge_vm_blocks(void) {
+uint64_t tux_vm_blocks(void) {
     pthread_rwlock_rdlock(&api_lock);
     uint64_t result = state == 1 ? hv_vm_machine()->stats.blocks : stopped_blocks;
     pthread_rwlock_unlock(&api_lock);
     return result;
 }
-uint64_t henge_vm_net_frames(int sent) {
+uint64_t tux_vm_net_frames(int sent) {
     pthread_rwlock_rdlock(&api_lock);
     uint64_t result = state == 1 ? (sent ? hv_net_tx_frames : hv_net_rx_frames) : (sent ? stopped_tx : stopped_rx);
     pthread_rwlock_unlock(&api_lock);
     return result;
 }
-int henge_vm_cpus_on(void) {
+int tux_vm_cpus_on(void) {
     if (!lock_running()) return 0;
     int n = 0;
     for (int i = 0; i < hv_vm_ncpus(); i++)
@@ -417,7 +417,7 @@ int henge_vm_cpus_on(void) {
     pthread_rwlock_unlock(&api_lock);
     return n;
 }
-int henge_vm_guest_el0(void) {
+int tux_vm_guest_el0(void) {
     if (!lock_running()) return 0;
     int found = 0;
     for (int i = 0; i < hv_vm_ncpus(); i++)
@@ -426,134 +426,134 @@ int henge_vm_guest_el0(void) {
     return found;
 }
 
-void henge_vm_share(const char *folder, const char *socket_path) {
+void tux_vm_share(const char *folder, const char *socket_path) {
     if (hv_share_start(folder, socket_path) == 0) hv_net_set_share_socket(socket_path);
 }
-void henge_share_set_clipboard(const char *text) { hv_share_set_clipboard(text); }
-char *henge_share_take_clipboard(void) { return hv_share_take_clipboard(); }
-long henge_share_helper_seen(void) { return hv_share_helper_seen(); }
-int henge_share_keyboard_wanted(unsigned long *seq) { return hv_share_keyboard_wanted(seq); }
-void henge_share_set_keyboard_height(double fraction) { hv_share_set_keyboard_height(fraction); }
+void tux_share_set_clipboard(const char *text) { hv_share_set_clipboard(text); }
+char *tux_share_take_clipboard(void) { return hv_share_take_clipboard(); }
+long tux_share_helper_seen(void) { return hv_share_helper_seen(); }
+int tux_share_keyboard_wanted(unsigned long *seq) { return hv_share_keyboard_wanted(seq); }
+void tux_share_set_keyboard_height(double fraction) { hv_share_set_keyboard_height(fraction); }
 
 /* vm.c keeps the mode and gives it to the board's display once one exists. */
-void henge_vm_set_battery(int level, int state) { hv_vm_set_battery(level, state); }
-void henge_vm_set_brightness(double level) { hv_vm_set_brightness(level); }
-void henge_vm_set_volume(double level) { hv_vm_set_volume(level); }
-int henge_vm_set_timezone(const char *name) { return hv_vm_set_timezone(name); }
-void henge_vm_status_touch(void) { hv_vm_status_touch(); }
+void tux_vm_set_battery(int level, int state) { hv_vm_set_battery(level, state); }
+void tux_vm_set_brightness(double level) { hv_vm_set_brightness(level); }
+void tux_vm_set_volume(double level) { hv_vm_set_volume(level); }
+int tux_vm_set_timezone(const char *name) { return hv_vm_set_timezone(name); }
+void tux_vm_status_touch(void) { hv_vm_status_touch(); }
 
-void henge_vm_secrets(const HvSecretStore *store, const char *machine_id) {
+void tux_vm_secrets(const HvSecretStore *store, const char *machine_id) {
     hv_secrets_set_store(store);
     hv_secrets_set_scope(machine_id);
 }
-void henge_vm_secrets_set_locked(int locked) { hv_secrets_set_locked(locked); }
+void tux_vm_secrets_set_locked(int locked) { hv_secrets_set_locked(locked); }
 
-int henge_vm_take_brightness_request(double *level) {
+int tux_vm_take_brightness_request(double *level) {
     if (!lock_running()) return 0;
     int got = hv_vm_take_brightness_request(level);
     pthread_rwlock_unlock(&api_lock);
     return got;
 }
 
-int henge_vm_take_volume_request(double *level, int *muted) {
+int tux_vm_take_volume_request(double *level, int *muted) {
     if (!lock_running()) return 0;
     int got = hv_vm_take_volume_request(level, muted);
     pthread_rwlock_unlock(&api_lock);
     return got;
 }
 
-void henge_vm_set_display(uint32_t width, uint32_t height) { hv_vm_set_display_mode(width, height); }
-void henge_vm_set_display_scale(double scale) { hv_vm_set_display_scale(scale); }
+void tux_vm_set_display(uint32_t width, uint32_t height) { hv_vm_set_display_mode(width, height); }
+void tux_vm_set_display_scale(double scale) { hv_vm_set_display_scale(scale); }
 
-void henge_vm_key(uint16_t code, int down) {
+void tux_vm_key(uint16_t code, int down) {
     if (!lock_running()) return;
     hv_vm_key(code, down);
     pthread_rwlock_unlock(&api_lock);
 }
-void henge_vm_key_hid(uint8_t usage, int down) {
+void tux_vm_key_hid(uint8_t usage, int down) {
     if (!lock_running()) return;
     hv_vm_key_hid(usage, down);
     pthread_rwlock_unlock(&api_lock);
 }
-void henge_vm_mouse_move(int dx, int dy) {
+void tux_vm_mouse_move(int dx, int dy) {
     if (!lock_running()) return;
     hv_vm_mouse_move(dx, dy);
     pthread_rwlock_unlock(&api_lock);
 }
-void henge_vm_mouse_button(int button, int down) {
+void tux_vm_mouse_button(int button, int down) {
     if (!lock_running()) return;
     hv_vm_mouse_button(button, down);
     pthread_rwlock_unlock(&api_lock);
 }
-void henge_vm_mouse_scroll(int dx, int dy) {
+void tux_vm_mouse_scroll(int dx, int dy) {
     if (!lock_running()) return;
     if (dy) hv_vm_mouse_wheel(dy);
     if (dx) hv_vm_mouse_hwheel(dx);
     pthread_rwlock_unlock(&api_lock);
 }
-int henge_vm_pointer(int *x, int *y) {
+int tux_vm_pointer(int *x, int *y) {
     if (!lock_running()) return -1;
     int result = hv_vm_pointer(x, y);
     pthread_rwlock_unlock(&api_lock);
     return result;
 }
-int henge_vm_snapshot(uint8_t *bgra, int width, int height) {
+int tux_vm_snapshot(uint8_t *bgra, int width, int height) {
     if (!lock_running()) return -1;
     int result = hv_vm_snapshot(bgra, width, height);
     pthread_rwlock_unlock(&api_lock);
     return result;
 }
-void henge_vm_touch(int finger, int phase, int x, int y, uint32_t ts_ms) {
+void tux_vm_touch(int finger, int phase, int x, int y, uint32_t ts_ms) {
     if (!lock_running()) return;
     hv_vm_touch(finger, phase, x, y, ts_ms);
     pthread_rwlock_unlock(&api_lock);
 }
-void henge_vm_touch_frame(uint32_t ts_ms) {
+void tux_vm_touch_frame(uint32_t ts_ms) {
     if (!lock_running()) return;
     hv_vm_touch_frame(ts_ms);
     pthread_rwlock_unlock(&api_lock);
 }
-void henge_vm_touch_button(int down) {
+void tux_vm_touch_button(int down) {
     if (!lock_running()) return;
     hv_vm_touch_button(down);
     pthread_rwlock_unlock(&api_lock);
 }
-void henge_vm_screen_touch(int slot, int phase, int x, int y) {
+void tux_vm_screen_touch(int slot, int phase, int x, int y) {
     if (!lock_running()) return;
     hv_vm_screen_touch(slot, phase, x, y);
     pthread_rwlock_unlock(&api_lock);
 }
-void henge_vm_screen_touch_frame(void) {
+void tux_vm_screen_touch_frame(void) {
     if (!lock_running()) return;
     hv_vm_screen_touch_frame();
     pthread_rwlock_unlock(&api_lock);
 }
-void henge_vm_screen_touch_cancel(void) {
+void tux_vm_screen_touch_cancel(void) {
     if (!lock_running()) return;
     hv_vm_screen_touch_cancel();
     pthread_rwlock_unlock(&api_lock);
 }
-void henge_vm_set_touch_mode(int on) { hv_vm_set_touch_mode(on); } /* kept for the next machine */
-void henge_vm_set_display_layer(void *layer) {
+void tux_vm_set_touch_mode(int on) { hv_vm_set_touch_mode(on); } /* kept for the next machine */
+void tux_vm_set_display_layer(void *layer) {
     /* vm.c serializes this with unpublishing the old display before free.
        Main-thread layer detachment need not wait for disk/GPU teardown. */
     hv_vm_set_display_layer(layer);
 }
-uint64_t henge_vm_gpu_frames(void) {
+uint64_t tux_vm_gpu_frames(void) {
     if (!lock_running()) return 0;
     uint64_t result = hv_vm_gpu_frames();
     pthread_rwlock_unlock(&api_lock);
     return result;
 }
 #if TARGET_OS_IPHONE
-size_t henge_available_memory(void) { return os_proc_available_memory(); }
+size_t tux_available_memory(void) { return os_proc_available_memory(); }
 #else
-size_t henge_available_memory(void) { return 0; } /* macOS has no per-app limit (the lifecycle test links this file) */
+size_t tux_available_memory(void) { return 0; } /* macOS has no per-app limit (the lifecycle test links this file) */
 #endif
 
 /* The most address space this app can reserve in one piece, in GB (measuring, for a fastmem window): PROT_NONE
    reservations cost no memory, and each is given back at once. */
-uint64_t henge_largest_reservation_gb(void) {
+uint64_t tux_largest_reservation_gb(void) {
     for (uint64_t gb = 4096; gb >= 4; gb /= 2) {
         void *p = mmap(NULL, gb << 30, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
         if (p != MAP_FAILED) {
@@ -564,7 +564,7 @@ uint64_t henge_largest_reservation_gb(void) {
     return 0;
 }
 
-uint64_t henge_largest_mapping_mb(void) {
+uint64_t tux_largest_mapping_mb(void) {
     for (uint64_t mb = 16896; mb >= 1024; mb -= 512) { /* 16 GB, the most a machine can ask for, plus what the caller keeps back */
         void *p = mmap(NULL, mb << 20, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
         if (p != MAP_FAILED) {

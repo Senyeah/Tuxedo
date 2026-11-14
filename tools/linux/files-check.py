@@ -36,7 +36,7 @@ import pexpect
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HERE = os.path.dirname(os.path.abspath(__file__))
 SHELL = r"henge@henge:\S*\$ "
-MARK = "HENGE_RC_"
+MARK = "TUX_RC_"
 MEDIA = "/media/henge"
 FSX_URL = "https://raw.githubusercontent.com/linux-test-project/ltp/20230127/testcases/kernel/fs/fsx-linux/fsx-linux.c"
 FSX_SHA = "cafcbd6a6afcf3486908a601f355c4824f99a2f4a9dbd5153ba5bfeddd738575"
@@ -54,8 +54,8 @@ class Fail(Exception):
 
 
 def linux_dir():
-    if os.environ.get("HENGE_LINUX_OUT"):
-        return os.environ["HENGE_LINUX_OUT"]
+    if os.environ.get("TUX_LINUX_OUT"):
+        return os.environ["TUX_LINUX_OUT"]
     common = subprocess.run(["git", "-C", ROOT, "rev-parse", "--path-format=absolute", "--git-common-dir"],
                             capture_output=True, text=True, check=True).stdout.strip()
     return os.path.join(os.path.dirname(common), "build", "linux")
@@ -148,7 +148,7 @@ class Vm:
 
     def boot(self, folders=()):
         a = self.args
-        cmd = ["/bin/sh", "-c", 'exec "$@" 2>>"$0"', self.err, a.hengevm, "--firmware", a.firmware,
+        cmd = ["/bin/sh", "-c", 'exec "$@" 2>>"$0"', self.err, a.tuxvm, "--firmware", a.firmware,
                "--ram", str(a.ram), "--cpus", str(a.cpus), "--disk", self.disk, "--share", self.share]
         for f in folders:
             cmd += ["--folder", f]
@@ -205,7 +205,7 @@ def ok(msg):
 def build_deb(tmp):
     out = os.path.join(tmp, "deb")
     os.makedirs(out)
-    r = subprocess.run(["sh", os.path.join(HERE, "build-guest-pkg.sh")], env=dict(os.environ, HENGE_LINUX_OUT=out),
+    r = subprocess.run(["sh", os.path.join(HERE, "build-guest-pkg.sh")], env=dict(os.environ, TUX_LINUX_OUT=out),
                        capture_output=True, text=True)
     debs = [f for f in os.listdir(out) if f.endswith(".deb")]
     if r.returncode != 0 or not debs:
@@ -416,12 +416,12 @@ def check_host_change(vm, dirs, times):
 
 
 def answer_of(vm, name, since, limit=60):
-    """The helper's answer to an ask from hengevm's log (folder_answer_wait), after byte since."""
+    """The helper's answer to an ask from tuxvm's log (folder_answer_wait), after byte since."""
     end = time.monotonic() + limit
     while time.monotonic() < end:
         with open(vm.err, errors="replace") as f:
             f.seek(since)
-            m = re.search(rf"hengevm: folder {re.escape(name)} (answer: (ok|failed): (.*)|: no answer)\n((?:.*\n)*)", f.read())
+            m = re.search(rf"tuxvm: folder {re.escape(name)} (answer: (ok|failed): (.*)|: no answer)\n((?:.*\n)*)", f.read())
         if m:
             return m.group(2), m.group(3), m.group(4)
         time.sleep(0.3)
@@ -663,7 +663,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", help="disk to clone (default debian-console.img)")
     ap.add_argument("--firmware", help="default u-boot.bin next to the image")
-    ap.add_argument("--hengevm", default=os.path.join(ROOT, "build", "hengevm"))
+    ap.add_argument("--tuxvm", default=os.path.join(ROOT, "build", "tuxvm"))
     ap.add_argument("--deb", help="henge-guest package to install (default: built from tools/linux/henge-guest)")
     ap.add_argument("--no-install", action="store_true", help="the image has henge-guest 1.8.0, the tools and fsx")
     ap.add_argument("--save-image", help="keep the disk after boot 0 here, for --image and --no-install")
@@ -687,7 +687,7 @@ def main():
     os.makedirs(work, exist_ok=True)
     tmp = tempfile.mkdtemp(prefix="files-check-", dir=work)
     disk = os.path.join(tmp, "disk.img")
-    # hengevm listens on "<share>.sock", and a unix socket path is limited to 103 characters
+    # tuxvm listens on "<share>.sock", and a unix socket path is limited to 103 characters
     share = tempfile.mkdtemp(prefix="fcs-", dir="/tmp")
     folders = tempfile.mkdtemp(prefix="fcf-", dir="/tmp")
     dirs = {n: os.path.join(folders, n) for n in "abc"}

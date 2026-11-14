@@ -48,12 +48,12 @@ final class FolderSession: ObservableObject {
         return dir
     }
 
-    /// Before a Linux machine boots: the engine's table for henge_vm_boot_linux.
+    /// Before a Linux machine boots: the engine's table for tux_vm_boot_linux.
     func start(_ machine: VirtualMachine) {
         end()
         self.machine = machine.id
         notices.reset()
-        henge_vm_folders_hook(folderHook, nil)
+        tux_vm_folders_hook(folderHook, nil)
         apply(machine.folders ?? [])
         watch = Task { [weak self] in
             while !Task.isCancelled {
@@ -70,8 +70,8 @@ final class FolderSession: ObservableObject {
         touches.values.forEach { $0.cancel() }
         touches.removeAll()
         for id in Array(open.keys) { close(id) }
-        henge_vm_folders_hook(nil, nil)
-        henge_vm_folders_clear()
+        tux_vm_folders_hook(nil, nil)
+        tux_vm_folders_clear()
         FolderHooks.shared.clear()
         slots.removeAll()
         states.removeAll()
@@ -87,13 +87,13 @@ final class FolderSession: ObservableObject {
         apply(machine.folders ?? [])
     }
 
-    var device: Bool { machine != nil && henge_vm_folders_device() != 0 }
+    var device: Bool { machine != nil && tux_vm_folders_device() != 0 }
 
     private func apply(_ list: [SharedFolder]) {
         let ids = list.prefix(FolderPolicy.maxFolders).map(\.id)
         for id in Array(open.keys) where !ids.contains(id) { close(id) }
         for (id, slot) in slots where !ids.contains(id) {
-            henge_vm_folder_clear(Int32(slot))
+            tux_vm_folder_clear(Int32(slot))
             states[id] = nil
             asks[id] = nil
         }
@@ -125,7 +125,7 @@ final class FolderSession: ObservableObject {
             try url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
         })
         guard let url else {
-            HengeLog.log("folders", "\(folder.name): the bookmark did not resolve: pick it again")
+            TuxLog.log("folders", "\(folder.name): the bookmark did not resolve: pick it again")
             save(folder.id) { $0.lost = true }
             return
         }
@@ -133,7 +133,7 @@ final class FolderSession: ObservableObject {
         if let newBookmark {
             bookmark = newBookmark
             save(folder.id) { $0.bookmark = newBookmark }
-            HengeLog.log("folders", "\(folder.name): the bookmark was stale: saved a new one")
+            TuxLog.log("folders", "\(folder.name): the bookmark was stale: saved a new one")
         }
         if folder.lost == true { save(folder.id) { $0.lost = nil } }
         let presenter = FolderPresenter(url: url, id: folder.id)
@@ -164,18 +164,18 @@ final class FolderSession: ObservableObject {
         let id = folder.id.uuidString
         if let o = open[folder.id] {
             let kind: Int32 = provider(o.url) ? 1 : 0
-            if henge_vm_folder_set(Int32(slot), id, folder.name, o.url.path, mode, kind) == 0 {
+            if tux_vm_folder_set(Int32(slot), id, folder.name, o.url.path, mode, kind) == 0 {
                 let there = reachable(o.url)
-                henge_vm_folder_online(Int32(slot), there ? 1 : 0)
+                tux_vm_folder_online(Int32(slot), there ? 1 : 0)
                 FolderHooks.shared.set(slot, url: o.url, presenter: o.presenter)
                 open[folder.id]?.placeholder = false
                 setState(folder, FolderPolicy.state(.resolved(path: o.url.path, stale: false), reachable: there))
                 return
             }
-            if !o.placeholder { HengeLog.log("folders", "\(folder.name): the engine refused it: \(String(cString: strerror(errno)))") }
+            if !o.placeholder { TuxLog.log("folders", "\(folder.name): the engine refused it: \(String(cString: strerror(errno)))") }
         }
-        if henge_vm_folder_set(Int32(slot), id, folder.name, Self.placeholder(folder.id), mode, 0) == 0 {
-            henge_vm_folder_online(Int32(slot), 0)
+        if tux_vm_folder_set(Int32(slot), id, folder.name, Self.placeholder(folder.id), mode, 0) == 0 {
+            tux_vm_folder_online(Int32(slot), 0)
         }
         open[folder.id]?.placeholder = true
         FolderHooks.shared.set(slot, url: nil, presenter: nil)
@@ -190,7 +190,7 @@ final class FolderSession: ObservableObject {
         let was = states[folder.id]
         states[folder.id] = state
         if state != .ready && was != state && notices.first(folder.id) { notice = FolderPolicy.unreachableNotice(folder.name) }
-        if was != nil && was != state { HengeLog.log("folders", "\(folder.name): \(FolderPolicy.label(state))") }
+        if was != nil && was != state { TuxLog.log("folders", "\(folder.name): \(FolderPolicy.label(state))") }
     }
 
     private var folders: [SharedFolder] {
@@ -208,7 +208,7 @@ final class FolderSession: ObservableObject {
                 put(folder, slot: slot) // the real folder in again, not the placeholder online
                 continue
             }
-            henge_vm_folder_online(Int32(slot), there ? 1 : 0)
+            tux_vm_folder_online(Int32(slot), there ? 1 : 0)
             setState(folder, there ? .ready : .unavailable)
         }
     }
@@ -234,17 +234,17 @@ final class FolderSession: ObservableObject {
                 o.bookmark = data
                 save(id) { $0.bookmark = data }
             } catch {
-                HengeLog.log("folders", "\(folder.name): no new bookmark after the move: \(error.localizedDescription)")
+                TuxLog.log("folders", "\(folder.name): no new bookmark after the move: \(error.localizedDescription)")
             }
         }
         open[id] = o
-        HengeLog.log("folders", "\(folder.name) moved in Files\(FolderPolicy.isTrash(path: o.url.path) ? " to Recently Deleted" : "")")
+        TuxLog.log("folders", "\(folder.name) moved in Files\(FolderPolicy.isTrash(path: o.url.path) ? " to Recently Deleted" : "")")
         put(folder, slot: slot) // the same folder: the guest's open files stay good
     }
 
     fileprivate func deleted(_ id: UUID) {
         guard let folder = folders.first(where: { $0.id == id }), let slot = slots[id] else { return }
-        henge_vm_folder_online(Int32(slot), 0)
+        tux_vm_folder_online(Int32(slot), 0)
         setState(folder, .unavailable)
     }
 
@@ -255,7 +255,7 @@ final class FolderSession: ObservableObject {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             guard let self, !Task.isCancelled else { return }
             self.touches[id] = nil
-            if let slot = self.slots[id] { henge_vm_folder_touch(Int32(slot)) }
+            if let slot = self.slots[id] { tux_vm_folder_touch(Int32(slot)) }
         }
     }
 
@@ -283,7 +283,7 @@ final class FolderSession: ObservableObject {
 
     private func ask(_ id: UUID, what: Int) {
         guard let slot = slots[id] else { return }
-        let n = henge_vm_folder_ask(Int32(slot), Int32(what))
+        let n = tux_vm_folder_ask(Int32(slot), Int32(what))
         guard n > 0 else {
             asks[id] = .failed("Only a Copy-on-write folder has changes of its own.")
             return
@@ -294,7 +294,7 @@ final class FolderSession: ObservableObject {
             while Date() < end {
                 var ok: Int32 = 0
                 var text: UnsafeMutablePointer<CChar>?
-                let rc = henge_vm_folder_answered(Int32(slot), n, &ok, &text)
+                let rc = tux_vm_folder_answered(Int32(slot), n, &ok, &text)
                 let answer = text.map { String(cString: $0) } ?? ""
                 free(text)
                 if rc != 0 {
@@ -304,7 +304,7 @@ final class FolderSession: ObservableObject {
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 if self?.slots[id] != slot { return }
             }
-            henge_vm_folder_ask(Int32(slot), 0)
+            tux_vm_folder_ask(Int32(slot), 0)
             await self?.answered(id, what: what, ok: false, text: "Linux did not answer. The machine needs henge-guest 1.8.0 or later (sudo apt install henge-guest).")
         }
     }
@@ -332,7 +332,7 @@ final class FolderSession: ObservableObject {
                 still = bytes == last ? still + 1 : 0
                 last = bytes
                 if still >= 60 { // 30 s with nothing new
-                    HengeLog.log("folders", "export to \(url.lastPathComponent): \(found.count) of \(want.files) files, \(bytes) of \(want.bytes) bytes")
+                    TuxLog.log("folders", "export to \(url.lastPathComponent): \(found.count) of \(want.files) files, \(bytes) of \(want.bytes) bytes")
                     asks[id] = .failed("Only part of the export reached Files, in Henge, Shared, Exports, \(url.lastPathComponent). Keep Henge open while it exports, then export again.")
                     return
                 }
@@ -343,7 +343,7 @@ final class FolderSession: ObservableObject {
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
         }
-        HengeLog.log("folders", "exported to \(url.lastPathComponent): \(summary)")
+        TuxLog.log("folders", "exported to \(url.lastPathComponent): \(summary)")
         asks[id] = .exported(url, summary)
     }
 
@@ -390,7 +390,7 @@ final class FolderHooks: @unchecked Sendable {
 /// The engine calls this for a folder of the File Provider kind (iCloud Drive, another app's), on a device worker.
 /// A coordinated read makes the provider fetch a file that is not downloaded; a coordinated write after a written
 /// file closes tells the provider and other apps of the change (not verified on a phone: FM1, FM11).
-private let folderHook: HengeFolderHook = { _, slot, path, event in
+private let folderHook: TuxFolderHook = { _, slot, path, event in
     guard let path, let entry = FolderHooks.shared.get(Int(slot)) else { return 0 }
     let url = entry.url.appendingPathComponent(String(cString: path))
     let coordinator = NSFileCoordinator(filePresenter: entry.presenter) // not our own presenter's news
@@ -413,7 +413,7 @@ private let folderHook: HengeFolderHook = { _, slot, path, event in
     if error.domain == NSCocoaErrorDomain && [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(error.code) {
         return 0 // the open gives its own ENOENT
     }
-    HengeLog.log("folders", "a coordinated read failed: \(error.domain) \(error.code)")
+    TuxLog.log("folders", "a coordinated read failed: \(error.domain) \(error.code)")
     return EIO
 }
 

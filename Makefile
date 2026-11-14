@@ -19,7 +19,7 @@ GFX_LDLIBS = $(if $(GFX),$(GFX_LIBS) $(GFX_FRAMEWORKS))
 # $(call GFX_CHECK,dir): stop with a plain message when the libraries are missing or libepoxy lacks the static-GL patch.
 define GFX_CHECK
 @test -f $(1)/lib/libvirglrenderer.a || { echo "graphics libraries missing in $(1): run tools/gfx/build-deps.sh" >&2; exit 1; }
-@nm $(1)/lib/libepoxy.a 2>/dev/null | grep -q _epoxy_henge_static_gl || { echo "$(1)/lib/libepoxy.a lacks the static-GL patch: run tools/gfx/build-deps.sh --only epoxy" >&2; exit 1; }
+@nm $(1)/lib/libepoxy.a 2>/dev/null | grep -q _epoxy_tux_static_gl || { echo "$(1)/lib/libepoxy.a lacks the static-GL patch: run tools/gfx/build-deps.sh --only epoxy" >&2; exit 1; }
 endef
 
 CORE = $(B)/classify.o $(B)/operands.o $(B)/translate.o $(B)/dispatch.o $(B)/mmu.o $(B)/memop.o \
@@ -30,7 +30,7 @@ DEV = $(B)/vgpu_metal.o $(B)/gicv3.o $(B)/timer.o $(B)/pl011.o $(B)/pl031.o $(B)
       $(B)/virtio_fs.o $(B)/fs_server.o $(B)/safe_path.o $(GFX_OBJ)
 ENGINE = $(CORE) $(HOST)
 VM = $(B)/vm.o $(B)/linux_boot.o $(B)/status.o
-# hvcodec, the guest's video codecs (host/vcodec.m, hengevm --vcodec), on VideoToolbox.
+# hvcodec, the guest's video codecs (host/vcodec.m, tuxvm --vcodec), on VideoToolbox.
 VT_FRAMEWORKS = -framework Foundation -framework VideoToolbox -framework CoreMedia -framework CoreVideo -framework CoreFoundation -framework IOSurface
 VT_OBJ = $(B)/vt_decode.o $(B)/vt_caps.o
 VCODEC_OBJ = $(B)/vcodec.o $(VT_OBJ)
@@ -40,10 +40,10 @@ TESTS = $(B)/test_classify $(B)/test_jit_region $(B)/test_operands $(B)/test_jit
         $(B)/test_mmu $(B)/test_exc $(B)/test_devices $(B)/test_virtio_hvcodec $(B)/test_shutdown $(B)/test_pause $(B)/test_big_lock $(B)/test_machine_rebuild $(B)/test_fdt $(B)/test_console $(B)/test_virt $(B)/test_cli \
         $(B)/test_status $(B)/test_secrets $(B)/test_share_paths $(B)/test_fs_server $(B)/test_virtio_fs $(B)/test_vgpu_metal $(B)/test_vcodec $(B)/test_net_forward $(if $(GFX),$(B)/test_vgpu_virgl)
 
-all: $(TESTS) $(B)/hengevm $(B)/hengevm-ref $(B)/hvsparse
+all: $(TESTS) $(B)/tuxvm $(B)/tuxvm-ref $(B)/hvsparse
 
 # Mac-only test tool: the same machine with the CPU on Hypervisor.framework, for comparing runs.
-$(B)/hengevm-ref: host/hvf_ref.c host/hvf_ref.entitlements $(ENGINE) $(DEV) $(B)/linux_boot.o
+$(B)/tuxvm-ref: host/hvf_ref.c host/hvf_ref.entitlements $(ENGINE) $(DEV) $(B)/linux_boot.o
 	$(CC) $(CFLAGS) host/hvf_ref.c $(ENGINE) $(DEV) $(B)/linux_boot.o -framework Hypervisor $(METAL_LIBS) -o $@
 	codesign -s - -f --entitlements host/hvf_ref.entitlements $@
 
@@ -69,7 +69,7 @@ $(B)/dns_proxy.o: host/dns_proxy.c host/dns_proxy.h core/machine.h | $(B)
 $(B)/share.o: host/share.c host/*.h devices/*.h core/*.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(B)/hengevm: host/main.c $(ENGINE) $(DEV) $(NET_OBJ) $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/virt_window.o $(VCODEC_OBJ) $(if $(GFX),$(wildcard $(GFX_LIBS)))
+$(B)/tuxvm: host/main.c $(ENGINE) $(DEV) $(NET_OBJ) $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/virt_window.o $(VCODEC_OBJ) $(if $(GFX),$(wildcard $(GFX_LIBS)))
 	$(CC) $(CFLAGS) host/main.c $(ENGINE) $(DEV) $(NET_OBJ) $(B)/dns_proxy.o $(B)/share.o $(B)/secrets.o $(B)/audio_mac.o $(VM) $(B)/virt_window.o $(VCODEC_OBJ) $(VT_FRAMEWORKS) -framework Foundation $(SLIRP_LIBS) -framework AudioToolbox -framework Metal -framework IOSurface \
 	    -framework Foundation -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers -framework CoreFoundation \
 	    -framework AppKit -framework QuartzCore $(GFX_LDLIBS) -o $@
@@ -132,8 +132,8 @@ $(B)/test_vm_lifecycle: tests/test_vm_lifecycle.c ios/Henge/Native/henge-vm.c $(
 $(B)/test_console: tests/test_console.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(NET_OBJ) $(B)/dns_proxy.o
 	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -o $@
 
-# Runs build/hengevm, so it is built first.
-$(B)/test_cli: tests/test_cli.c $(B)/hengevm | $(B)
+# Runs build/tuxvm, so it is built first.
+$(B)/test_cli: tests/test_cli.c $(B)/tuxvm | $(B)
 	$(CC) $(CFLAGS) tests/test_cli.c -o $@
 $(B)/test_virt: tests/test_virt.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(NET_OBJ) $(B)/dns_proxy.o
 	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -o $@
@@ -158,122 +158,122 @@ $(B)/test_secrets: tests/test_secrets.c $(B)/share.o $(B)/safe_path.o $(B)/fs_se
 	$(CC) $(CFLAGS) $^ -o $@
 
 # Tuxedo's virt device tree against QEMU's (needs qemu-system-aarch64, dtc and uv).
-test-linux-dtb: $(B)/hengevm
+test-linux-dtb: $(B)/tuxvm
 	uv run tools/linux/dtb-compare.py
 .PHONY: test-linux-dtb
 
-# Direct kernel boot to the initramfs prompt (needs build/linux/Image and initrd.img, or HENGE_LINUX_OUT, and uv).
-test-linux-direct: $(B)/hengevm
+# Direct kernel boot to the initramfs prompt (needs build/linux/Image and initrd.img, or TUX_LINUX_OUT, and uv).
+test-linux-direct: $(B)/tuxvm
 	uv run tools/linux/smoke.py --direct $(SMOKE_ARGS)
 	uv run tools/linux/smoke.py --direct --no-reboot $(SMOKE_ARGS)
 	uv run tools/linux/smoke.py --direct --fatal $(SMOKE_ARGS)
 .PHONY: test-linux-direct
 
 # The same kernel on a clone of debian-console.img: disk, network, entropy, and a write kept over a power off.
-test-linux-disk: $(B)/hengevm
+test-linux-disk: $(B)/tuxvm
 	uv run tools/linux/smoke.py --direct --disk $(SMOKE_ARGS)
 .PHONY: test-linux-disk
 
 # The same checks with U-Boot (build/linux/u-boot.bin) in flash, booting the disk through extlinux.conf.
-test-linux-uboot: $(B)/hengevm
+test-linux-uboot: $(B)/tuxvm
 	uv run tools/linux/smoke.py --uboot $(SMOKE_ARGS)
 .PHONY: test-linux-uboot
 
 # Four CPUs under stress-ng and make -j4 (E11). Installs stress-ng and gcc in the clone with apt unless
 # SMOKE_ARGS has --image with them already.
-test-linux-smp: $(B)/hengevm
+test-linux-smp: $(B)/tuxvm
 	uv run tools/linux/smoke.py --uboot --stress --cpus 4 $(SMOKE_ARGS)
 .PHONY: test-linux-smp
 
 # T3: the U-Boot boot, every check after login, then restart and the power key (E12). SMOKE_ARGS="--runs 5 --cpus 4" etc.
-test-linux-smoke: $(B)/hengevm
+test-linux-smoke: $(B)/tuxvm
 	uv run tools/linux/smoke.py --uboot --power $(SMOKE_ARGS)
 .PHONY: test-linux-smoke
 
 # D5: keys, pointer, buttons, wheel and trackpad reach the desktop image (libinput debug-events in the guest). INPUT_ARGS="--image FILE" skips the apt install.
-test-linux-input: $(B)/hengevm
+test-linux-input: $(B)/tuxvm
 	uv run tools/linux/input-check.py $(INPUT_ARGS)
 .PHONY: test-linux-input
 
 # TS3: the virtio touchscreen reaches labwc: udev, libinput, evtest order, and wl_touch positions before and after a mode change.
 # TOUCH_ARGS="--image FILE" skips the apt install; "--no-qemu" skips the comparison with QEMU's virtio-multitouch-pci.
-test-linux-touch: $(B)/hengevm
+test-linux-touch: $(B)/tuxvm
 	uv run tools/linux/touch-check.py $(TOUCH_ARGS)
 .PHONY: test-linux-touch
 
 # A8: the desktop image booted twice, with and without --gpu-accel: renderer string, virgl frame time (median <= 4 ms, p99 <= 16.7 ms), glmark2 against the same run software score, no virtio_gpu error.
-# Builds hengevm with GFX=1 in its own directory so the objects of a plain build are not mixed in. Skipped when GFX_DIR is missing.
+# Builds tuxvm with GFX=1 in its own directory so the objects of a plain build are not mixed in. Skipped when GFX_DIR is missing.
 # ACCEL_ARGS="--full" runs the whole default glmark2 benchmark instead of the short scene set.
 ACCEL_B ?= build/accel
 test-linux-accel:
 	@if [ ! -d "$(GFX_DIR)" ]; then echo "test-linux-accel: skipped: no graphics libraries in $(GFX_DIR)"; exit 0; fi; \
 	mkdir -p $(ACCEL_B) && \
-	$(MAKE) GFX=1 B=$(ACCEL_B) $(ACCEL_B)/hengevm && \
-	uv run tools/linux/accel-check.py --hengevm $(ACCEL_B)/hengevm $(ACCEL_ARGS)
+	$(MAKE) GFX=1 B=$(ACCEL_B) $(ACCEL_B)/tuxvm && \
+	uv run tools/linux/accel-check.py --tuxvm $(ACCEL_B)/tuxvm $(ACCEL_ARGS)
 .PHONY: test-linux-accel
 
 # Guest video decode (docs/guest-video-decode-research.md, first spike): vainfo lists H.264, ffmpeg -hwaccel vaapi gives the same
-# framemd5 as software decode for 1080p High clips with B-frames, and decodes faster than real time. Builds hengevm as test-linux-accel
+# framemd5 as software decode for 1080p High clips with B-frames, and decodes faster than real time. Builds tuxvm as test-linux-accel
 # does; the libraries need tools/gfx/virglrenderer-videotoolbox.patch. VIDEO_ARGS="--image FILE" names a desktop image with the packages.
 test-linux-video:
 	@if [ ! -d "$(GFX_DIR)" ]; then echo "test-linux-video: skipped: no graphics libraries in $(GFX_DIR)"; exit 0; fi; \
 	mkdir -p $(ACCEL_B) && \
-	$(MAKE) GFX=1 B=$(ACCEL_B) $(ACCEL_B)/hengevm && \
-	uv run tools/linux/video-decode-check.py --hengevm $(ACCEL_B)/hengevm $(VIDEO_ARGS)
+	$(MAKE) GFX=1 B=$(ACCEL_B) $(ACCEL_B)/tuxvm && \
+	uv run tools/linux/video-decode-check.py --tuxvm $(ACCEL_B)/tuxvm $(VIDEO_ARGS)
 .PHONY: test-linux-video
 
-# A9c: a paused accelerated machine sends no work to the renderer: the desktop runs glmark2 on virgl and hengevm pauses (Ctrl-A s,
-# SIGTSTP, Ctrl-A b with guest sound), restarts, and powers off while paused. Builds hengevm with GFX=1 as test-linux-accel does.
+# A9c: a paused accelerated machine sends no work to the renderer: the desktop runs glmark2 on virgl and tuxvm pauses (Ctrl-A s,
+# SIGTSTP, Ctrl-A b with guest sound), restarts, and powers off while paused. Builds tuxvm with GFX=1 as test-linux-accel does.
 # GPU_PAUSE_ARGS="--seconds 60" holds each pause for a minute.
 test-linux-gpu-pause:
 	@if [ ! -d "$(GFX_DIR)" ]; then echo "test-linux-gpu-pause: skipped: no graphics libraries in $(GFX_DIR)"; exit 0; fi; \
 	mkdir -p $(ACCEL_B) && \
-	$(MAKE) GFX=1 B=$(ACCEL_B) $(ACCEL_B)/hengevm && \
-	uv run tools/linux/gpu-pause-check.py --hengevm $(ACCEL_B)/hengevm $(GPU_PAUSE_ARGS)
+	$(MAKE) GFX=1 B=$(ACCEL_B) $(ACCEL_B)/tuxvm && \
+	uv run tools/linux/gpu-pause-check.py --tuxvm $(ACCEL_B)/tuxvm $(GPU_PAUSE_ARGS)
 .PHONY: test-linux-gpu-pause
 
-# A10: the shader cache. Two hengevm processes share one cache directory: the first writes it, the second reads it and starts the terrain scene at least 2 times faster.
+# A10: the shader cache. Two tuxvm processes share one cache directory: the first writes it, the second reads it and starts the terrain scene at least 2 times faster.
 # STALL_ARGS="--cache off --processes 1" measures without the cache (no check).
 test-linux-shader-cache:
 	@if [ ! -d "$(GFX_DIR)" ]; then echo "test-linux-shader-cache: skipped: no graphics libraries in $(GFX_DIR)"; exit 0; fi; \
 	mkdir -p $(ACCEL_B) && \
-	$(MAKE) GFX=1 B=$(ACCEL_B) $(ACCEL_B)/hengevm && \
-	uv run tools/linux/shader-stall.py --hengevm $(ACCEL_B)/hengevm $(if $(STALL_ARGS),$(STALL_ARGS),--check)
+	$(MAKE) GFX=1 B=$(ACCEL_B) $(ACCEL_B)/tuxvm && \
+	uv run tools/linux/shader-stall.py --tuxvm $(ACCEL_B)/tuxvm $(if $(STALL_ARGS),$(STALL_ARGS),--check)
 .PHONY: test-linux-shader-cache
 
 # R3: a mode line in HV_INPUT_FILE changes the guest's display mode (fbcon on the console image).
-test-linux-mode: $(B)/hengevm
+test-linux-mode: $(B)/tuxvm
 	uv run tools/linux/mode-check.py $(MODE_ARGS)
 .PHONY: test-linux-mode
 
 # R5: the desktop follows a mode line (labwc framebuffer size, wlr-randr scale). DISPLAY_ARGS="--image FILE" for a rebuilt desktop image.
-test-linux-display: $(B)/hengevm
+test-linux-display: $(B)/tuxvm
 	uv run tools/linux/display-check.py $(DISPLAY_ARGS)
 .PHONY: test-linux-display
 
 # VE0.4, VE0.5: hvcodec from a clone of the desktop image: henge-xcode built against Debian's libavformat transcodes
 # 4K60 and 1080p60 clips with the frames on the host, and the speeds are measured. VCODEC_ARGS="--image FILE --clips DIR".
-test-linux-vcodec: $(B)/hengevm
-	uv run tools/linux/vcodec-check.py --hengevm $(B)/hengevm $(VCODEC_ARGS)
+test-linux-vcodec: $(B)/tuxvm
+	uv run tools/linux/vcodec-check.py --tuxvm $(B)/tuxvm $(VCODEC_ARGS)
 .PHONY: test-linux-vcodec
 
 # VE2: the patched ffmpeg (tools/linux/build-ffmpeg.sh, in the arm64 container) and the plan's main command in the
 # guest, checked on the Mac against henge-xcode on the same clips.
 LINUX_OUT ?= $(dir $(shell git rev-parse --path-format=absolute --git-common-dir))build/linux
 linux-ffmpeg:
-	HENGE_LINUX_OUT=$(LINUX_OUT) tools/linux/build-ffmpeg.sh
-test-linux-ffmpeg: $(B)/hengevm
-	uv run tools/linux/vcodec-check.py --hengevm $(B)/hengevm --ffmpeg $(LINUX_OUT)/ffmpeg/bin --no-software $(VCODEC_ARGS)
+	TUX_LINUX_OUT=$(LINUX_OUT) tools/linux/build-ffmpeg.sh
+test-linux-ffmpeg: $(B)/tuxvm
+	uv run tools/linux/vcodec-check.py --tuxvm $(B)/tuxvm --ffmpeg $(LINUX_OUT)/ffmpeg/bin --no-software $(VCODEC_ARGS)
 .PHONY: linux-ffmpeg test-linux-ffmpeg
 
 # VE3: the henge-ffmpeg package, then the signed apt repository and the source offer in $(LINUX_OUT)/apt and /source
 # (publish-apt.sh; nothing leaves the Mac without its --rsync), then both packages from it in a clone of the desktop image.
 linux-ffmpeg-pkg:
-	HENGE_LINUX_OUT=$(LINUX_OUT) tools/linux/build-ffmpeg-pkg.sh
+	TUX_LINUX_OUT=$(LINUX_OUT) tools/linux/build-ffmpeg-pkg.sh
 linux-apt:
-	HENGE_LINUX_OUT=$(LINUX_OUT) tools/linux/publish-apt.sh
-test-linux-ffmpeg-pkg: $(B)/hengevm
-	uv run tools/linux/vcodec-check.py --hengevm $(B)/hengevm --apt $(LINUX_OUT)/apt --sizes 4k,1080p --codecs hevc8,h264 --no-software $(VCODEC_ARGS)
+	TUX_LINUX_OUT=$(LINUX_OUT) tools/linux/publish-apt.sh
+test-linux-ffmpeg-pkg: $(B)/tuxvm
+	uv run tools/linux/vcodec-check.py --tuxvm $(B)/tuxvm --apt $(LINUX_OUT)/apt --sizes 4k,1080p --codecs hevc8,h264 --no-software $(VCODEC_ARGS)
 .PHONY: linux-ffmpeg-pkg linux-apt test-linux-ffmpeg-pkg
 
 # VE4: the henge-codec-dkms package (the module is built against the pinned 16 KB kernel's headers with -Werror, and
@@ -281,47 +281,47 @@ test-linux-ffmpeg-pkg: $(B)/hengevm
 # --vcodec-dma: DKMS, /dev/hvcodec, 4K NV12 and P010 transfers in fps on it and on TCP, the ffmpeg chain, the fallback
 # and a kernel update. It takes the ffmpeg build from $(LINUX_OUT). CODEC_ARGS="--clips DIR --results FILE".
 linux-codec-dkms:
-	HENGE_LINUX_OUT=$(LINUX_OUT) tools/linux/build-codec-dkms-pkg.sh
-test-linux-codec-dma: $(B)/hengevm
-	uv run tools/linux/codec-dma-check.py --hengevm $(B)/hengevm --out $(LINUX_OUT) --kernel-update $(CODEC_ARGS)
+	TUX_LINUX_OUT=$(LINUX_OUT) tools/linux/build-codec-dkms-pkg.sh
+test-linux-codec-dma: $(B)/tuxvm
+	uv run tools/linux/codec-dma-check.py --tuxvm $(B)/tuxvm --out $(LINUX_OUT) --kernel-update $(CODEC_ARGS)
 .PHONY: linux-codec-dkms test-linux-codec-dma
 
 # The henge-va package: the VA-API driver in front of Mesa's virgl driver that offers NV12 decode surfaces only, so
 # Firefox keeps VA-API decode. The build tests it against a stand-in for Mesa's driver, then installs and removes it.
 linux-va-pkg:
-	HENGE_LINUX_OUT=$(LINUX_OUT) tools/linux/build-va-pkg.sh
+	TUX_LINUX_OUT=$(LINUX_OUT) tools/linux/build-va-pkg.sh
 .PHONY: linux-va-pkg
 
 # P6: the shared folder (~/Tuxedo, davfs2) against --share. SHARE_ARGS="--image FILE" for an image that has davfs2.
-test-linux-share: $(B)/hengevm
+test-linux-share: $(B)/tuxvm
 	uv run tools/linux/share-check.py $(SHARE_ARGS)
 .PHONY: test-linux-share
 
 # Port forwards: ssh and an http.server in a console clone through --forward, a port in use, --forward-addr local and
-# HV_NET_FWD. Installs openssh-server in the clone. FORWARD_ARGS="--keep-logs DIR" keeps hengevm's logs.
-test-linux-forward: $(B)/hengevm
+# HV_NET_FWD. Installs openssh-server in the clone. FORWARD_ARGS="--keep-logs DIR" keeps tuxvm's logs.
+test-linux-forward: $(B)/tuxvm
 	uv run tools/linux/forward-check.py $(FORWARD_ARGS)
 .PHONY: test-linux-forward
 
 # FM6: the folders from the Files app (virtio-fs, henge-files) at /media/henge against --folder. Installs henge-guest from
 # tools/linux/henge-guest in the clone (needs Docker); FILES_ARGS="--image FILE --no-install" for a disk saved with --save-image.
-test-linux-files: $(B)/hengevm
+test-linux-files: $(B)/tuxvm
 	uv run tools/linux/files-check.py $(FILES_ARGS)
 .PHONY: test-linux-files
 
 # FM7: pjdfstest's rename, unlink, link, symlink, chmod, open and mkdir groups on the Read-write folder, failures by cause.
-test-linux-files-posix: $(B)/hengevm
+test-linux-files-posix: $(B)/tuxvm
 	uv run tools/linux/files-check.py --pjdfstest $(FILES_ARGS)
 .PHONY: test-linux-files-posix
 
 # P7: the clipboard helper in the desktop image against the host's clipboard. CLIP_ARGS="--image FILE" for an image that has henge-guest 1.2.
-test-linux-clipboard: $(B)/hengevm
+test-linux-clipboard: $(B)/tuxvm
 	uv run tools/linux/clipboard-check.py $(CLIP_ARGS)
 .PHONY: test-linux-clipboard
 
 # The keyboard helper in the desktop image: the host hears "show" when the focused program wants text, then "hide".
 # KBD_ARGS="--image FILE" for an image that has henge-guest 1.2.2; "--gtk" adds a GTK entry (installs zenity in the clone).
-test-linux-keyboard: $(B)/hengevm
+test-linux-keyboard: $(B)/tuxvm
 	uv run tools/linux/keyboard-check.py $(KBD_ARGS)
 .PHONY: test-linux-keyboard
 
@@ -331,28 +331,28 @@ test-linux-keyboard-panel:
 .PHONY: test-linux-keyboard-panel
 
 # P10: the guest's virtio_balloon binds, inflate returns host memory, deflate restores it. BALLOON_ARGS="--load --overshoot --cpus 4" adds the package build and OOM runs.
-test-linux-balloon: $(B)/hengevm
+test-linux-balloon: $(B)/tuxvm
 	uv run tools/linux/balloon-check.py $(BALLOON_ARGS)
 .PHONY: test-linux-balloon
 
 # P8: snd_virtio binds, speaker-test and a 60 s file reach the host's audio backend whole and in time. SOUND_ARGS=--pipewire adds pw-play.
-test-linux-sound: $(B)/hengevm
+test-linux-sound: $(B)/tuxvm
 	uv run tools/linux/sound-check.py $(SOUND_ARGS)
 .PHONY: test-linux-sound
 
-# E15: hv_vm_pause hides a frozen hengevm from the guest (30 s and 120 s at 4 CPUs): no RCU stall, no clock jump, near zero host CPU while paused.
-test-linux-suspend: $(B)/hengevm
+# E15: hv_vm_pause hides a frozen tuxvm from the guest (30 s and 120 s at 4 CPUs): no RCU stall, no clock jump, near zero host CPU while paused.
+test-linux-suspend: $(B)/tuxvm
 	uv run tools/linux/suspend-check.py $(SUSPEND_ARGS)
 .PHONY: test-linux-suspend
 
 # DS6: the device's battery, brightness, volume, clock and time zone in a desktop guest (upower and brightnessctl are installed in the clone).
 # STATUS_ARGS="--image FILE" for an image with henge-guest 1.3.1.
-test-linux-status: $(B)/hengevm
+test-linux-status: $(B)/tuxvm
 	uv run tools/linux/status-check.py $(STATUS_ARGS)
 .PHONY: test-linux-status
 
-# The guest's wallet (henge-secrets) in hengevm's folder store, scoped to the machine; and with kwallet6 in a container.
-test-linux-secrets: $(B)/hengevm
+# The guest's wallet (henge-secrets) in tuxvm's folder store, scoped to the machine; and with kwallet6 in a container.
+test-linux-secrets: $(B)/tuxvm
 	uv run tools/linux/secrets-check.py $(SECRETS_ARGS)
 test-linux-secrets-container:
 	uv run tools/linux/secrets-check.py --container
@@ -400,7 +400,7 @@ clean: # keeps build/linux: guest artefacts take minutes to rebuild
 .PHONY: all test clean
 
 # ---- iOS: the engine as a static library for the Tuxedo app (ios/) ----
-# make ios-lib -> build/ios/libhengevm.a. Networking links the arm64 iOS builds
+# make ios-lib -> build/ios/libtuxvm.a. Networking links the arm64 iOS builds
 # of libslirp and glib from Husk's sysroot (scripts there make them); see ios/README.md.
 IOS_SDKNAME = iphoneos
 IOS_NET ?= host/net_slirp.c
@@ -439,13 +439,13 @@ $(IOS_VCODEC_OBJ): $(IB)/host/%.o: host/%.m host/*.h devices/virtio_hvcodec.h $(
 $(IB)/host/enter.o: host/enter.S
 	@mkdir -p $(dir $@)
 	$(IOS_CC) -c $< -o $@
-$(IB)/libhengevm.a: $(IOS_OBJ) $(IB)/.gfx-stamp
+$(IB)/libtuxvm.a: $(IOS_OBJ) $(IB)/.gfx-stamp
 	rm -f $@
 	xcrun --sdk $(IOS_SDKNAME) libtool -static -o $@ $(IOS_OBJ)
-ios-lib: $(IB)/libhengevm.a
+ios-lib: $(IB)/libtuxvm.a
 .PHONY: ios-lib
 
-# The same engine for the iOS Simulator: build/ios-sim/libhengevm.a.
+# The same engine for the iOS Simulator: build/ios-sim/libtuxvm.a.
 # SIM_NET_ROOT: the simulator builds of libslirp and glib (tools/build_sim_net.sh); without it host/net_stub.c, and no guest network.
 ios-sim-lib:
 	$(MAKE) ios-lib IB=build/ios-sim IOS_SDKNAME=iphonesimulator IOS_GFX_DIR=$(GFX_ROOT)/sim \
@@ -616,14 +616,14 @@ ios-gfx-probe:
 	$(MAKE) ios-lib GFX=1
 	$(MAKE) ios-sim-lib GFX=1
 	xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=17.0 -fobjc-arc -Icore -Ihost -Idevices tests/gfx_ios_probe.m \
-	  build/ios/libhengevm.a $(call IOS_GFX_LIBS,ios) $(IOS_GFX_FW) -o $(B)/gfx_probe_ios
+	  build/ios/libtuxvm.a $(call IOS_GFX_LIBS,ios) $(IOS_GFX_FW) -o $(B)/gfx_probe_ios
 	xcrun --sdk iphonesimulator clang -arch arm64 -target arm64-apple-ios17.0-simulator -fobjc-arc -Icore -Ihost -Idevices tests/gfx_ios_probe.m \
-	  build/ios-sim/libhengevm.a $(call IOS_GFX_LIBS,sim) $(IOS_GFX_FW) -o $(B)/gfx_probe_sim
+	  build/ios-sim/libtuxvm.a $(call IOS_GFX_LIBS,sim) $(IOS_GFX_FW) -o $(B)/gfx_probe_sim
 	@if xcrun simctl list devices booted | grep -q Booted; then xcrun simctl spawn booted $(CURDIR)/$(B)/gfx_probe_sim; \
 	else echo "ios-gfx-probe: no booted simulator: the simulator binary is linked, not run"; fi
 .PHONY: ios-gfx-probe
 
-# Link flags for an app that links libhengevm.a built with GFX=1 (IOS_GFX_TARGET=sim for the simulator).
+# Link flags for an app that links libtuxvm.a built with GFX=1 (IOS_GFX_TARGET=sim for the simulator).
 IOS_GFX_TARGET ?= ios
 ios-gfx-ldflags:
 	@echo "$(call IOS_GFX_LIBS,$(IOS_GFX_TARGET)) $(IOS_GFX_FW)"

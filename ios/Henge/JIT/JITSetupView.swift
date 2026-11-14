@@ -22,7 +22,7 @@ struct JITSetupFlow: View {
     var body: some View {
         NavigationStack(path: $path) {
             choose
-                .hengeDestination(for: Step.self) { step in
+                .tuxDestination(for: Step.self) { step in
                     switch step {
                     case .pairOnDevice: pairOnDevice
                     case .importFile: importFile
@@ -39,7 +39,7 @@ struct JITSetupFlow: View {
             switch result {
             case .success(let url): jit.importPairingFile(url)
             case .failure(let failure):
-                HengeLog.log("jit", "pairing import failed: \(failure.localizedDescription)")
+                TuxLog.log("jit", "pairing import failed: \(failure.localizedDescription)")
             }
         }
         .onAppear {
@@ -49,7 +49,7 @@ struct JITSetupFlow: View {
             if jit.error != nil, jit.hasPairing, jit.resolvedMethod == .builtIn {
                 path = [.enable]
             }
-            HengeLog.log("ui", "JIT walkthrough opened")
+            TuxLog.log("ui", "JIT walkthrough opened")
         }
         // Swiping the sheet away, or a copy shown from onboarding, must not
         // leave a request to show it again behind.
@@ -68,7 +68,7 @@ struct JITSetupFlow: View {
              subtitle: "A machine needs memory it can write and then run, which on iOS only an attached "
                      + "debugger can grant. Choose how your \(device) gets one.") {
             VStack(spacing: 10) {
-                let builtIn = HengeBuiltInJIT.unavailableReason
+                let builtIn = TuxBuiltInJIT.unavailableReason
                 way("Pair on this \(device)", symbol: "iphone.radiowaves.left.and.right",
                     detail: builtIn ?? (!OnDevicePairing.isSupported ? "Needs iOS 27 or later."
                         : jit.pairingSource == .onDevice ? "Paired on this \(device)."
@@ -94,7 +94,7 @@ struct JITSetupFlow: View {
                         : "Dopamine can give every app JIT with one setting.",
                     done: jit.method == .jailbreak || JITBootstrap.debuggedAtLaunch) { path.append(.jailbreak) }
             }
-            if jit.hasPairing && HengeBuiltInJIT.isAvailable {
+            if jit.hasPairing && TuxBuiltInJIT.isAvailable {
                 Button { path.append(.connect) } label: {
                     Label("Continue with the current pairing", systemImage: "arrow.right")
                         .font(.system(size: 14, weight: .semibold))
@@ -130,7 +130,7 @@ struct JITSetupFlow: View {
             }
             .padding(14)
             .contentShape(Rectangle())
-            .hengeCard()
+            .tuxCard()
         }
         .buttonStyle(CardButtonStyle())
         .disabled(!enabled)
@@ -159,7 +159,7 @@ struct JITSetupFlow: View {
                       done: pairedOnDevice)
                 point(4, "Come back to Henge.", done: pairedOnDevice)
             }
-            .padding(16).hengeCard()
+            .padding(16).tuxCard()
             pairingStatus
         } actions: {
             switch pairing.phase {
@@ -202,7 +202,7 @@ struct JITSetupFlow: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16).hengeCard()
+            .padding(16).tuxCard()
         case .pin(let pin):
             VStack(spacing: 8) {
                 Text("Enter this code on your \(device)").font(.system(size: 14))
@@ -213,7 +213,7 @@ struct JITSetupFlow: View {
                     .accessibilityLabel("Pairing code \(pin.map(String.init).joined(separator: " "))")
             }
             .frame(maxWidth: .infinity)
-            .padding(18).hengeCard(high: true)
+            .padding(18).tuxCard(high: true)
         case .paired(let name):
             outcome("Paired with \(name)", ok: true)
         case .failed(let message):
@@ -234,7 +234,7 @@ struct JITSetupFlow: View {
                       done: jit.pairingSource == .imported)
                 point(3, "Tap **Choose pairing file** and pick it.", done: jit.pairingSource == .imported)
             }
-            .padding(16).hengeCard()
+            .padding(16).tuxCard()
             Label("The pairing file stays in Henge's Documents folder and is only sent to Henge's own helper.",
                   systemImage: "lock.fill")
                 .font(.system(size: 13)).foregroundStyle(Theme.textDim)
@@ -263,7 +263,7 @@ struct JITSetupFlow: View {
                 point(2, "Tap **Connect LocalDevVPN**. It switches the VPN on and comes straight back to Henge.")
                 point(3, "Leave it connected whenever you turn JIT on.")
             }
-            .padding(16).hengeCard()
+            .padding(16).tuxCard()
         } actions: {
             Button(LocalDevVPN.actionTitle) { LocalDevVPN.open() }
                 .buttonStyle(PrimaryButtonStyle())
@@ -285,7 +285,7 @@ struct JITSetupFlow: View {
                       done: jit.prepared || attached)
                 point(2, "Tap **Enable JIT**. Henge's helper attaches and a machine can start.", done: attached)
             }
-            .padding(16).hengeCard()
+            .padding(16).tuxCard()
 
             if jit.busy {
                 HStack(spacing: 11) {
@@ -293,7 +293,7 @@ struct JITSetupFlow: View {
                     Text(jit.status ?? "Working…").font(.system(size: 14)).foregroundStyle(Theme.text)
                     Spacer(minLength: 0)
                 }
-                .padding(16).hengeCard(high: true)
+                .padding(16).tuxCard(high: true)
             } else if attached {
                 outcome("JIT is on. A machine can start.", ok: true)
             } else if let error = jit.error {
@@ -348,11 +348,11 @@ struct JITSetupFlow: View {
                 point(3, "Install and connect [LocalDevVPN](\(LocalDevVPN.appStore.absoluteString)).")
                 point(4, "Whenever you start a machine, Henge opens StikDebug, which attaches and comes back.")
             }
-            .padding(16).hengeCard()
+            .padding(16).tuxCard()
         } actions: {
             Button("Use StikDebug") {
                 jit.method = .stikDebug
-                HengeLog.log("ui", "JIT method set to StikDebug")
+                TuxLog.log("ui", "JIT method set to StikDebug")
                 close()
             }
             .buttonStyle(PrimaryButtonStyle())
@@ -373,7 +373,7 @@ struct JITSetupFlow: View {
                 point(3, "Whenever a machine starts, Henge asks TrollStore to enable JIT. TrollStore opens Henge, "
                        + "attaches to it for a moment and lets go, which leaves it allowed to run code it wrote.")
             }
-            .padding(16).hengeCard()
+            .padding(16).tuxCard()
             if !JITBootstrap.isTrollStoreInstalled {
                 Label("TrollStore was not found on this \(device). It installs on iOS 14.0 to 17.0.", systemImage: "info.circle")
                     .font(.system(size: 13)).foregroundStyle(Theme.textDim)
@@ -382,7 +382,7 @@ struct JITSetupFlow: View {
         } actions: {
             Button("Use TrollStore") {
                 jit.method = .trollStore
-                HengeLog.log("ui", "JIT method set to TrollStore")
+                TuxLog.log("ui", "JIT method set to TrollStore")
                 close()
             }
             .buttonStyle(PrimaryButtonStyle())
@@ -401,7 +401,7 @@ struct JITSetupFlow: View {
                 point(3, "Close Henge completely and open it again. The setting applies to apps as they start.",
                       done: JITBootstrap.debuggedAtLaunch)
             }
-            .padding(16).hengeCard()
+            .padding(16).tuxCard()
             if JITBootstrap.debuggedAtLaunch {
                 Label("Henge was marked as debugged when it opened, so JIT is on.", systemImage: "checkmark.circle.fill")
                     .font(.system(size: 13)).foregroundStyle(.green)
@@ -412,7 +412,7 @@ struct JITSetupFlow: View {
         } actions: {
             Button("Use the jailbreak") {
                 jit.method = .jailbreak
-                HengeLog.log("ui", "JIT method set to jailbreak")
+                TuxLog.log("ui", "JIT method set to jailbreak")
                 close()
             }
             .buttonStyle(PrimaryButtonStyle())
@@ -480,6 +480,6 @@ struct JITSetupFlow: View {
             .foregroundStyle(ok ? .green : .red)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14).hengeCard()
+            .padding(14).tuxCard()
     }
 }

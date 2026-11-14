@@ -20,7 +20,7 @@ final class KeychainStore {
     func attach(_ machine: VirtualMachine) {
         var store = HvSecretStore(ctx: nil, list: storeList, read: storeRead, write: storeWrite, remove: storeRemove)
         Self.dropOldLayout(machine: machine.id)
-        henge_vm_secrets(&store, WalletScope.id(machine.id))
+        tux_vm_secrets(&store, WalletScope.id(machine.id))
     }
 
     /// The session's check passed, or the wallet locks: in the background, or when the session ends.
@@ -28,7 +28,7 @@ final class KeychainStore {
         lock.lock()
         self.unlocked = unlocked
         lock.unlock()
-        henge_vm_secrets_set_locked(unlocked ? 0 : 1)
+        tux_vm_secrets_set_locked(unlocked ? 0 : 1)
     }
 
     private var isLocked: Bool {
@@ -42,7 +42,7 @@ final class KeychainStore {
         for service in [WalletScope.service(machine), WalletScope.oldService(machine)] {
             let status = SecItemDelete([kSecClass: kSecClassGenericPassword, kSecAttrService: service,
                                         kSecUseDataProtectionKeychain: true] as CFDictionary)
-            if status != errSecSuccess && status != errSecItemNotFound { HengeLog.log("wallet", "remove all: \(status)") }
+            if status != errSecSuccess && status != errSecItemNotFound { TuxLog.log("wallet", "remove all: \(status)") }
         }
     }
 
@@ -53,10 +53,10 @@ final class KeychainStore {
         let status = SecItemDelete([kSecClass: kSecClassGenericPassword, kSecAttrService: WalletScope.oldService(machine),
                                     kSecUseDataProtectionKeychain: true] as CFDictionary)
         if status == errSecSuccess || status == errSecItemNotFound {
-            if status == errSecSuccess { HengeLog.log("wallet", "removed the items of the old layout") }
+            if status == errSecSuccess { TuxLog.log("wallet", "removed the items of the old layout") }
             UserDefaults.standard.set(true, forKey: done)
         } else {
-            HengeLog.log("wallet", "old layout: keychain status \(status)") // tried again at the next start
+            TuxLog.log("wallet", "old layout: keychain status \(status)") // tried again at the next start
         }
     }
 
@@ -72,7 +72,7 @@ final class KeychainStore {
         case errSecSuccess: return Int32(HV_SECRET_OK)
         case errSecItemNotFound: return Int32(HV_SECRET_NOT_FOUND)
         default:
-            HengeLog.log("wallet", "\(op): keychain status \(status)") // a status code only, never an item
+            TuxLog.log("wallet", "\(op): keychain status \(status)") // a status code only, never an item
             // The phone's own lock (protected data unavailable) reads as locked.
             return status == errSecInteractionNotAllowed ? Int32(HV_SECRET_LOCKED) : Int32(HV_SECRET_FAILED)
         }

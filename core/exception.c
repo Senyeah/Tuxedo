@@ -141,7 +141,7 @@ static uint64_t psci(HvCpu *cpu, uint64_t fn, int *retry) {
     case 0x84000008:                                         /* SYSTEM_OFF */
     case 0x84000009:                                         /* SYSTEM_RESET */
         if (cpu->m->log)
-            fprintf(stderr, "hengevm: guest requested %s on cpu %u\n",
+            fprintf(stderr, "tuxvm: guest requested %s on cpu %u\n",
                     (uint32_t)fn == 0x84000008 ? "shutdown" : "restart", cpu->index);
         hv_machine_halt(cpu->m, (uint32_t)fn == 0x84000008 ? HV_HALT_SHUTDOWN : HV_HALT_RESET);
         return 0;
@@ -199,7 +199,7 @@ static uint64_t psci(HvCpu *cpu, uint64_t fn, int *retry) {
         return t->off ? 1 : 0;
     }
     default:
-        if (cpu->m->log) fprintf(stderr, "hengevm: unknown hypervisor call %#llx (x1 %#llx) at el%u\n",
+        if (cpu->m->log) fprintf(stderr, "tuxvm: unknown hypervisor call %#llx (x1 %#llx) at el%u\n",
                                  (unsigned long long)fn, (unsigned long long)cpu->x[1], cpu->el);
         return (uint64_t)-1;                                 /* NOT_SUPPORTED */
     }

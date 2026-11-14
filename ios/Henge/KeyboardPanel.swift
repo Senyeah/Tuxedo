@@ -79,19 +79,19 @@ struct KeyboardPanelProbe: UIViewRepresentable {
 
         func report() {
             guard !stopped, let window else {
-                henge_share_set_keyboard_height(0)
+                tux_share_set_keyboard_height(0)
                 return
             }
             let picture = TouchMapping.pictureRect(guest: guest, in: bounds)
             let keyboard = KeyboardFrame.memory.frame // not this view's own: the keyboard can be up before the view is
             let covered = keyboard.isNull ? CGRect.null : convert(keyboard, from: window.screen.coordinateSpace)
-            henge_share_set_keyboard_height(KeyboardPanel.fraction(keyboard: covered, picture: picture))
+            tux_share_set_keyboard_height(KeyboardPanel.fraction(keyboard: covered, picture: picture))
         }
 
         /// The picture is gone (the console, another screen, the session's end): no keyboard is over it.
         func stop() {
             stopped = true
-            henge_share_set_keyboard_height(0)
+            tux_share_set_keyboard_height(0)
         }
     }
 }

@@ -73,7 +73,7 @@ import UserNotifications
 
     private init() {}
 
-    private func log(_ line: String) { HengeLog.log("jit-pairing", line) }
+    private func log(_ line: String) { TuxLog.log("jit-pairing", line) }
 
     func start() {
         guard Self.isSupported, !active, session == nil else { return }

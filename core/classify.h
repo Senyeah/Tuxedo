@@ -1,5 +1,5 @@
-#ifndef HENGEVM_CLASSIFY_H
-#define HENGEVM_CLASSIFY_H
+#ifndef TUXVM_CLASSIFY_H
+#define TUXVM_CLASSIFY_H
 
 #include <stdint.h>
 

@@ -1,12 +1,12 @@
-#ifndef HENGEVM_SECRETS_H
-#define HENGEVM_SECRETS_H
+#ifndef TUXVM_SECRETS_H
+#define TUXVM_SECRETS_H
 
 #include <stddef.h>
 
 /* A Linux guest's wallet (henge-secrets) keeps its items in a store on the host, through /.henge/secrets on
    the share server (secrets.c). The host chooses the scope (the machine's id): the guest cannot name another
    machine's items. An item is an id, its metadata (labels, attributes: readable while locked) and its secret
-   (only while unlocked). The store on iOS is the Keychain (KeychainStore.swift); hengevm uses a folder. */
+   (only while unlocked). The store on iOS is the Keychain (KeychainStore.swift); tuxvm uses a folder. */
 
 enum { HV_SECRET_OK = 0, HV_SECRET_NOT_FOUND = 1, HV_SECRET_LOCKED = 2, HV_SECRET_FAILED = 3 };
 
@@ -37,7 +37,7 @@ int hv_secrets_locked(void);
 /* 1 for a valid id or scope. */
 int hv_secrets_valid_id(const char *id);
 
-/* A folder of files, one per item (dir/scope/id, mode 0600): hengevm and the tests. */
+/* A folder of files, one per item (dir/scope/id, mode 0600): tuxvm and the tests. */
 int hv_secrets_file_store(const char *dir, HvSecretStore *out);
 
 /* The HTTP side, for share.c. path is what follows "/.henge/secrets" ("", "/state", "/items", "/items/ID"). */

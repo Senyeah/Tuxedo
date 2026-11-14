@@ -4,9 +4,9 @@
 set -euo pipefail
 export HOMEBREW_NO_AUTO_UPDATE=1
 
-HENGE_ROOT="${BITRISE_SOURCE_DIR:?Bitrise must set BITRISE_SOURCE_DIR}"
-HUSK_ROOT="$(dirname "$HENGE_ROOT")/Husk"
-STIKJIT_ROOT="$(dirname "$HENGE_ROOT")/StikJIT"
+TUX_ROOT="${BITRISE_SOURCE_DIR:?Bitrise must set BITRISE_SOURCE_DIR}"
+HUSK_ROOT="$(dirname "$TUX_ROOT")/Husk"
+STIKJIT_ROOT="$(dirname "$TUX_ROOT")/StikJIT"
 HUSK_REV=afe83d45b31194c4cc9f7b3db7ec2c757db8346e
 
 missing=()
@@ -45,11 +45,11 @@ for dep in libslirp.a libglib-2.0.a libintl.a libpcre2-8.a; do
     }
 done
 
-cd "$HENGE_ROOT"
+cd "$TUX_ROOT"
 ./ios/scripts/fetch_deps.sh
 bash ci/build-stikjit.sh "$STIKJIT_ROOT"
-rm -rf "$HENGE_ROOT/ios/deps/StikJIT.xcframework"
-ditto "$STIKJIT_ROOT/StikJIT.xcframework" "$HENGE_ROOT/ios/deps/StikJIT.xcframework"
+rm -rf "$TUX_ROOT/ios/deps/StikJIT.xcframework"
+ditto "$STIKJIT_ROOT/StikJIT.xcframework" "$TUX_ROOT/ios/deps/StikJIT.xcframework"
 make ios-lib
 mkdir -p "$HOME/Desktop"
 ./ios/scripts/package_ipa.sh

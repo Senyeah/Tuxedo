@@ -85,7 +85,7 @@ int pipe2(int fds[2], int flags)
 /* Maximum verbosity by default: this path is nearly impossible to debug after the
  * fact on device, and every line here is printed at most a handful of times per
  * session. Goes to os_log (visible in Console.app) and stderr both. */
-static double henge_now_ms(void)
+static double tux_now_ms(void)
 {
     static double base = 0;
     struct timeval tv;
@@ -95,11 +95,11 @@ static double henge_now_ms(void)
     return t - base;
 }
 
-#define HENGE_LOG(fmt, ...)                                                     \
+#define TUX_LOG(fmt, ...)                                                     \
     do {                                                                       \
         os_log(OS_LOG_DEFAULT, "[henge-jit] " fmt, ##__VA_ARGS__);              \
         fprintf(stderr, "[%9.2fms][henge-jit] " fmt "\n",                       \
-                henge_now_ms(), ##__VA_ARGS__);                                 \
+                tux_now_ms(), ##__VA_ARGS__);                                 \
         fflush(stderr);                                                        \
     } while (0)
 
@@ -111,9 +111,9 @@ static double henge_now_ms(void)
  * rejected by AMFI at launch on sideloaded builds. See henge-brk.S for the
  * verification that our encoding matches theirs exactly.
  */
-extern void    *henge_brk_get_jit_mapping(void *addr, size_t len);
-extern void     henge_brk_jit_detach(void);
-extern uint64_t henge_brk_probe(void);
+extern void    *tux_brk_get_jit_mapping(void *addr, size_t len);
+extern void     tux_brk_jit_detach(void);
+extern uint64_t tux_brk_probe(void);
 
 /*
  * StikDebug answers brk #0x69 by writing a constant into x0. Two encodings are
@@ -132,8 +132,8 @@ extern uint64_t henge_brk_probe(void);
  * absent, our own SIGTRAP handler steps over the brk and sets x0 to exactly 0.
  * So any non-zero answer means something serviced the trap.
  */
-#define HENGE_PROBE_MAGIC    0xE0000069ull
-#define HENGE_PROBE_MAGIC_LE 0x690000E0ull
+#define TUX_PROBE_MAGIC    0xE0000069ull
+#define TUX_PROBE_MAGIC_LE 0x690000E0ull
 
 static atomic_bool           g_jit_available;
 static atomic_uint_least64_t g_alloc_counter;
@@ -151,7 +151,7 @@ static _Thread_local bool g_expecting_jit_trap;
 static struct sigaction g_prev_sigtrap;
 static struct sigaction g_prev_sigbus;
 
-static void henge_trap_handler(int sig, siginfo_t *info, void *ctx)
+static void tux_trap_handler(int sig, siginfo_t *info, void *ctx)
 {
     (void)info;
     if (g_expecting_jit_trap && ctx != NULL) {
@@ -170,21 +170,21 @@ static void henge_trap_handler(int sig, siginfo_t *info, void *ctx)
     raise(sig);
 }
 
-void henge_ios_jit_install_trap_handler(void)
+void tux_ios_jit_install_trap_handler(void)
 {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_flags = SA_SIGINFO | SA_ONSTACK; /* a CPU thread's SP may hold a guest address */
-    sa.sa_sigaction = henge_trap_handler;
+    sa.sa_sigaction = tux_trap_handler;
     sigemptyset(&sa.sa_mask);
 
     if (sigaction(SIGTRAP, &sa, &g_prev_sigtrap) != 0) {
-        HENGE_LOG("sigaction(SIGTRAP) failed: %s", strerror(errno));
+        TUX_LOG("sigaction(SIGTRAP) failed: %s", strerror(errno));
     }
     if (sigaction(SIGBUS, &sa, &g_prev_sigbus) != 0) {
-        HENGE_LOG("sigaction(SIGBUS) failed: %s", strerror(errno));
+        TUX_LOG("sigaction(SIGBUS) failed: %s", strerror(errno));
     }
-    HENGE_LOG("trap guard installed (SIGTRAP, SIGBUS)");
+    TUX_LOG("trap guard installed (SIGTRAP, SIGBUS)");
 }
 
 /* ---------------------------------------------------------------- footprint */
@@ -195,13 +195,13 @@ void henge_ios_jit_install_trap_handler(void)
  * device's cap, and a silent kill with no crash log is otherwise very hard to
  * tell apart from any other sudden death.
  */
-void henge_ios_jit_log_footprint(const char *tag)
+void tux_ios_jit_log_footprint(const char *tag)
 {
     task_vm_info_data_t info;
     mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
     if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&info, &count)
         != KERN_SUCCESS) {
-        HENGE_LOG("footprint[%s]: task_info failed", tag ? tag : "");
+        TUX_LOG("footprint[%s]: task_info failed", tag ? tag : "");
         return;
     }
     /*
@@ -214,7 +214,7 @@ void henge_ios_jit_log_footprint(const char *tag)
      */
     size_t avail = os_proc_available_memory();
 
-    HENGE_LOG("footprint[%s]: phys=%.1f MiB  resident=%.1f MiB  "
+    TUX_LOG("footprint[%s]: phys=%.1f MiB  resident=%.1f MiB  "
              "available-before-jetsam=%.1f MiB",
              tag ? tag : "",
              info.phys_footprint / (1024.0 * 1024.0),
@@ -222,7 +222,7 @@ void henge_ios_jit_log_footprint(const char *tag)
              avail / (1024.0 * 1024.0));
 }
 
-size_t henge_ios_available_memory(void)
+size_t tux_ios_available_memory(void)
 {
     return os_proc_available_memory();
 }
@@ -238,7 +238,7 @@ size_t henge_ios_available_memory(void)
  * So: write a two-instruction function through the RW alias, then CALL it
  * through the RX alias. If JIT works at all, this returns 42.
  */
-static bool henge_jit_selftest(const HengeDualMapping *m)
+static bool tux_jit_selftest(const TuxDualMapping *m)
 {
     /* movz w0, #42  ;  ret */
     static const uint32_t kCode[2] = { 0x52800540u, 0xD65F03C0u };
@@ -247,37 +247,37 @@ static bool henge_jit_selftest(const HengeDualMapping *m)
         return false;
     }
 
-    HENGE_LOG("selftest: writing %zu bytes through RW alias %p", sizeof(kCode),
+    TUX_LOG("selftest: writing %zu bytes through RW alias %p", sizeof(kCode),
              (void *)m->rw_addr);
     memcpy(m->rw_addr, kCode, sizeof(kCode));
 
     /* Flush the write through to the RX view before executing it. */
     sys_icache_invalidate(m->rx_addr, sizeof(kCode));
-    HENGE_LOG("selftest: icache invalidated on RX alias %p", (void *)m->rx_addr);
+    TUX_LOG("selftest: icache invalidated on RX alias %p", (void *)m->rx_addr);
 
     /* Read back through RX to confirm the two aliases really share pages. */
     uint32_t readback[2];
     memcpy(readback, m->rx_addr, sizeof(readback));
     if (readback[0] != kCode[0] || readback[1] != kCode[1]) {
-        HENGE_LOG("selftest: FAIL -- RX alias does not reflect RW writes "
+        TUX_LOG("selftest: FAIL -- RX alias does not reflect RW writes "
                  "(read 0x%08x 0x%08x, expected 0x%08x 0x%08x). The two mappings "
                  "are not backed by the same pages.",
                  readback[0], readback[1], kCode[0], kCode[1]);
         return false;
     }
-    HENGE_LOG("selftest: RX alias reflects RW writes (0x%08x 0x%08x) -- aliasing OK",
+    TUX_LOG("selftest: RX alias reflects RW writes (0x%08x 0x%08x) -- aliasing OK",
              readback[0], readback[1]);
 
-    HENGE_LOG("selftest: CALLING generated code at %p ...", (void *)m->rx_addr);
+    TUX_LOG("selftest: CALLING generated code at %p ...", (void *)m->rx_addr);
     int (*fn)(void) = (int (*)(void))(void *)m->rx_addr;
     int result = fn();
 
     if (result != 42) {
-        HENGE_LOG("selftest: FAIL -- generated code ran but returned %d, expected 42",
+        TUX_LOG("selftest: FAIL -- generated code ran but returned %d, expected 42",
                  result);
         return false;
     }
-    HENGE_LOG("selftest: PASS -- executed generated code from the RX alias, got 42. "
+    TUX_LOG("selftest: PASS -- executed generated code from the RX alias, got 42. "
              "JIT is genuinely live.");
     return true;
 }
@@ -303,33 +303,33 @@ static bool henge_jit_selftest(const HengeDualMapping *m)
 /* csops straight to the kernel: Dopamine hooks the libc function to hide CS_DEBUGGED (systemhook's csops_hook). */
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-static bool henge_kernel_debugged(void)
+static bool tux_kernel_debugged(void)
 {
     uint32_t flags = 0;
     return syscall(169 /* SYS_csops */, getpid(), 0 /* CS_OPS_STATUS */, &flags, sizeof(flags)) == 0 && (flags & 0x10000000u);
 }
 #pragma clang diagnostic pop
 
-static bool henge_page_is_executable(void *p);
+static bool tux_page_is_executable(void *p);
 
 static sigjmp_buf g_self_jump;
 static volatile sig_atomic_t g_self_running;
 
-static void henge_self_fault(int sig)
+static void tux_self_fault(int sig)
 {
     if (g_self_running) siglongjmp(g_self_jump, 1);
     signal(sig, SIG_DFL);
     raise(sig);
 }
 
-static bool henge_self_selftest(uint8_t *rx, uint8_t *rw)
+static bool tux_self_selftest(uint8_t *rx, uint8_t *rw)
 {
     /* movz w0, #0x5a5a ; ret */
     static const uint32_t code[2] = { 0x528B4B40u, 0xD65F03C0u };
-    if (!henge_page_is_executable(rx)) return false;
+    if (!tux_page_is_executable(rx)) return false;
     struct sigaction sa, ob, os, oi;
     memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = henge_self_fault;
+    sa.sa_handler = tux_self_fault;
     sigemptyset(&sa.sa_mask);
     sigaction(SIGBUS, &sa, &ob); sigaction(SIGSEGV, &sa, &os); sigaction(SIGILL, &sa, &oi);
     bool ok = false;
@@ -345,7 +345,7 @@ static bool henge_self_selftest(uint8_t *rx, uint8_t *rw)
 }
 
 /* A writable alias of [rx, rx + size), placed right after it if possible and within 2 GiB either way. */
-static uint8_t *henge_rw_alias(uint8_t *rx, size_t size, bool fixed)
+static uint8_t *tux_rw_alias(uint8_t *rx, size_t size, bool fixed)
 {
     vm_address_t alias = (vm_address_t)(rx + size);
     vm_prot_t cur, max;
@@ -353,13 +353,13 @@ static uint8_t *henge_rw_alias(uint8_t *rx, size_t size, bool fixed)
                                 fixed ? (VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE) : VM_FLAGS_ANYWHERE,
                                 mach_task_self(), (vm_address_t)rx, FALSE, &cur, &max, VM_INHERIT_NONE);
     if (kr != KERN_SUCCESS) {
-        HENGE_LOG("self: vm_remap failed: %d (%s)", (int)kr, mach_error_string(kr));
+        TUX_LOG("self: vm_remap failed: %d (%s)", (int)kr, mach_error_string(kr));
         return NULL;
     }
     long long dist = (long long)alias - (long long)(uintptr_t)rx;
     if (dist > (2LL << 30) || dist < -(2LL << 30) ||
         vm_protect(mach_task_self(), alias, size, FALSE, VM_PROT_READ | VM_PROT_WRITE) != KERN_SUCCESS) {
-        HENGE_LOG("self: writable alias unusable (distance %lld)", dist);
+        TUX_LOG("self: writable alias unusable (distance %lld)", dist);
         vm_deallocate(mach_task_self(), alias, size);
         return NULL;
     }
@@ -369,72 +369,72 @@ static uint8_t *henge_rw_alias(uint8_t *rx, size_t size, bool fixed)
 /* How the held region was made, for Settings: NULL until it is, then "MAP_JIT" or "plain". */
 static const char *volatile g_self_route;
 
-const char *henge_ios_jit_self_route(void) { return g_self_route; }
+const char *tux_ios_jit_self_route(void) { return g_self_route; }
 
-static void henge_ios_jit_release_low_hold(size_t bytes);
+static void tux_ios_jit_release_low_hold(size_t bytes);
 
-static HengeDualMapping henge_self_dual_mapping(size_t bytes)
+static TuxDualMapping tux_self_dual_mapping(size_t bytes)
 {
-    HengeDualMapping none = { NULL, NULL, 0 };
+    TuxDualMapping none = { NULL, NULL, 0 };
 #if TARGET_OS_SIMULATOR
     /* A simulator process is a macOS process: plain RW memory, an alias, then R-X (as host/jit_region.c open_split). */
     {
         size_t size = (bytes + 0x3fff) & ~(size_t)0x3fff;
         uint8_t *rx = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
         if (rx == MAP_FAILED) {
-            HENGE_LOG("self: simulator mmap failed (%s)", strerror(errno));
+            TUX_LOG("self: simulator mmap failed (%s)", strerror(errno));
             return none;
         }
-        uint8_t *rw = henge_rw_alias(rx, size, false);
-        if (rw && mprotect(rx, size, PROT_READ | PROT_EXEC) == 0 && henge_self_selftest(rx, rw)) {
-            HengeDualMapping m = { rw, rx, size };
+        uint8_t *rw = tux_rw_alias(rx, size, false);
+        if (rw && mprotect(rx, size, PROT_READ | PROT_EXEC) == 0 && tux_self_selftest(rx, rw)) {
+            TuxDualMapping m = { rw, rx, size };
             atomic_store(&g_jit_available, true);
             g_self_route = "simulator";
-            HENGE_LOG("self: PASS -- %zu MiB of simulator memory, rx=%p rw=%p", size >> 20, (void *)rx, (void *)rw);
+            TUX_LOG("self: PASS -- %zu MiB of simulator memory, rx=%p rw=%p", size >> 20, (void *)rx, (void *)rw);
             return m;
         }
-        HENGE_LOG("self: simulator region did not pass its test");
+        TUX_LOG("self: simulator region did not pass its test");
         if (rw) vm_deallocate(mach_task_self(), (vm_address_t)rw, size);
         munmap(rx, size);
         return none;
     }
 #endif
     if (__builtin_available(iOS 26.0, *)) {
-        HENGE_LOG("self: iOS 26 enforces TXM; only a debugger can grant executable memory here");
+        TUX_LOG("self: iOS 26 enforces TXM; only a debugger can grant executable memory here");
         return none;
     }
     size_t size = (bytes + 0x3fff) & ~(size_t)0x3fff;
     /* No debugger will take the reserved block on this route, and it would keep this mapping out of the low window. */
-    henge_ios_jit_release_low_hold(size);
+    tux_ios_jit_release_low_hold(size);
 
     /* 1. MAP_JIT: requires dynamic-codesigning. Refused with EPERM elsewhere, harmlessly. */
     uint8_t *rx = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
     if (rx == MAP_FAILED) {
-        HENGE_LOG("self: MAP_JIT refused (%s)", strerror(errno));
+        TUX_LOG("self: MAP_JIT refused (%s)", strerror(errno));
     } else {
-        uint8_t *rw = henge_rw_alias(rx, size, false);
-        if (rw && vm_protect(mach_task_self(), (vm_address_t)rx, size, FALSE, VM_PROT_READ | VM_PROT_EXECUTE) == KERN_SUCCESS && henge_self_selftest(rx, rw)) {
-            HengeDualMapping m = { rw, rx, size };
+        uint8_t *rw = tux_rw_alias(rx, size, false);
+        if (rw && vm_protect(mach_task_self(), (vm_address_t)rx, size, FALSE, VM_PROT_READ | VM_PROT_EXECUTE) == KERN_SUCCESS && tux_self_selftest(rx, rw)) {
+            TuxDualMapping m = { rw, rx, size };
             atomic_store(&g_jit_available, true);
             g_self_route = "MAP_JIT";
-            HENGE_LOG("self: PASS -- %zu MiB from MAP_JIT (dynamic-codesigning), rx=%p rw=%p", size >> 20, (void *)rx, (void *)rw);
+            TUX_LOG("self: PASS -- %zu MiB from MAP_JIT (dynamic-codesigning), rx=%p rw=%p", size >> 20, (void *)rx, (void *)rw);
             return m;
         }
-        HENGE_LOG("self: MAP_JIT region did not pass its test");
+        TUX_LOG("self: MAP_JIT region did not pass its test");
         if (rw) vm_deallocate(mach_task_self(), (vm_address_t)rw, size);
         munmap(rx, size);
     }
 
     /* 2. Plain memory made executable: only where invalid pages are known to be allowed. */
-    bool debugged = henge_kernel_debugged();
+    bool debugged = tux_kernel_debugged();
     bool jailbroken = access("/var/jb", F_OK) == 0;
     if (!debugged && !jailbroken) {
-        HENGE_LOG("self: not marked as debugged and not jailbroken; nothing else is safe to try");
+        TUX_LOG("self: not marked as debugged and not jailbroken; nothing else is safe to try");
         return none;
     }
     uint8_t *base = mmap(NULL, size * 2, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (base == MAP_FAILED) {
-        HENGE_LOG("self: could not reserve %zu MiB: %s", (size * 2) >> 20, strerror(errno));
+        TUX_LOG("self: could not reserve %zu MiB: %s", (size * 2) >> 20, strerror(errno));
         return none;
     }
     /* Two layouts: writable+executable asked for and then made read+execute (the kernel drops execute from the first), or
@@ -444,26 +444,26 @@ static HengeDualMapping henge_self_dual_mapping(size_t bytes)
     static const char *const layout[2] = { "rwx then rx", "rx" };
     for (int i = 0; i < 2; i++) {
         rx = mmap(base, size, first_prot[i], MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0);
-        if (rx == MAP_FAILED) { HENGE_LOG("self: plain (%s): mmap failed: %s", layout[i], strerror(errno)); continue; }
-        uint8_t *rw = henge_rw_alias(rx, size, true);
-        if (!rw) { HENGE_LOG("self: plain (%s): no writable alias", layout[i]); continue; }
+        if (rx == MAP_FAILED) { TUX_LOG("self: plain (%s): mmap failed: %s", layout[i], strerror(errno)); continue; }
+        uint8_t *rw = tux_rw_alias(rx, size, true);
+        if (!rw) { TUX_LOG("self: plain (%s): no writable alias", layout[i]); continue; }
         kern_return_t kr = vm_protect(mach_task_self(), (vm_address_t)rx, size, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
         if (kr != KERN_SUCCESS) {
-            HENGE_LOG("self: plain (%s): vm_protect r-x failed: %d (%s)", layout[i], (int)kr, mach_error_string(kr));
+            TUX_LOG("self: plain (%s): vm_protect r-x failed: %d (%s)", layout[i], (int)kr, mach_error_string(kr));
             continue;
         }
-        if (!henge_page_is_executable(rx)) { HENGE_LOG("self: plain (%s): the kernel did not keep execute on the page", layout[i]); continue; }
-        if (henge_self_selftest(rx, rw)) {
-            HengeDualMapping m = { rw, rx, size };
+        if (!tux_page_is_executable(rx)) { TUX_LOG("self: plain (%s): the kernel did not keep execute on the page", layout[i]); continue; }
+        if (tux_self_selftest(rx, rw)) {
+            TuxDualMapping m = { rw, rx, size };
             atomic_store(&g_jit_available, true);
             g_self_route = "plain";
-            HENGE_LOG("self: PASS -- %zu MiB of plain memory (%s, %s), rx=%p rw=%p", size >> 20,
+            TUX_LOG("self: PASS -- %zu MiB of plain memory (%s, %s), rx=%p rw=%p", size >> 20,
                      debugged ? "process is debugged" : "jailbreak allows invalid pages", layout[i], (void *)rx, (void *)rw);
             return m;
         }
-        HENGE_LOG("self: plain (%s): code written through the alias faulted or returned the wrong value", layout[i]);
+        TUX_LOG("self: plain (%s): code written through the alias faulted or returned the wrong value", layout[i]);
     }
-    HENGE_LOG("self: plain memory did not execute (%s)", debugged ? "debugged" : "jailbroken");
+    TUX_LOG("self: plain memory did not execute (%s)", debugged ? "debugged" : "jailbroken");
     munmap(base, size * 2);
     return none;
 }
@@ -493,23 +493,23 @@ static HengeDualMapping henge_self_dual_mapping(size_t bytes)
    room: a zero-fill block in __DATA, mapped with the executable before anything else can
    land in between, which costs nothing until it is touched. It is handed back just before
    the debugger allocates, and the debugger's first-fit allocation takes the hole. */
-#define HENGE_JIT_LOW_LIMIT 0x7000000000ull
-#define HENGE_JIT_HOLD_BYTES ((size_t)3 << 29) /* the largest JITBootstrap.jitBytes (1.5 GB); a 1 GB region takes part of the hole */
-__attribute__((used, aligned(16384))) static uint8_t g_jit_reserve[HENGE_JIT_HOLD_BYTES + (16u << 10)];
+#define TUX_JIT_LOW_LIMIT 0x7000000000ull
+#define TUX_JIT_HOLD_BYTES ((size_t)3 << 29) /* the largest JITBootstrap.jitBytes (1.5 GB); a 1 GB region takes part of the hole */
+__attribute__((used, aligned(16384))) static uint8_t g_jit_reserve[TUX_JIT_HOLD_BYTES + (16u << 10)];
 static bool g_jit_reserve_released;
 
 /* Give the reserved block back for the debugger's allocation, if it is the size asked for. */
-static void henge_ios_jit_release_low_hold(size_t bytes)
+static void tux_ios_jit_release_low_hold(size_t bytes)
 {
-    if (g_jit_reserve_released || bytes > HENGE_JIT_HOLD_BYTES) return;
+    if (g_jit_reserve_released || bytes > TUX_JIT_HOLD_BYTES) return;
     vm_address_t start = ((vm_address_t)g_jit_reserve + 16383) & ~(vm_address_t)16383;
-    kern_return_t kr = vm_deallocate(mach_task_self(), start, HENGE_JIT_HOLD_BYTES);
-    HENGE_LOG("released the reserved block at %#lx for the JIT region: %s", (unsigned long)start, mach_error_string(kr));
+    kern_return_t kr = vm_deallocate(mach_task_self(), start, TUX_JIT_HOLD_BYTES);
+    TUX_LOG("released the reserved block at %#lx for the JIT region: %s", (unsigned long)start, mach_error_string(kr));
     g_jit_reserve_released = true;
 }
 
 /* The address space, for working out where a JIT region can go: every mapping, and the gaps of 256 MiB or more. */
-static void henge_ios_jit_log_map(const char *tag)
+static void tux_ios_jit_log_map(const char *tag)
 {
     mach_vm_address_t addr = 0, prev_end = 0x100000000ull;
     for (int i = 0; i < 4096; i++) {
@@ -520,20 +520,20 @@ static void henge_ios_jit_log_map(const char *tag)
         mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
         if (vm_region_recurse_64(mach_task_self(), &a, &size, &depth, (vm_region_recurse_info_t)&info, &count) != KERN_SUCCESS) break;
         if (a > prev_end && a - prev_end >= (256ull << 20))
-            HENGE_LOG("map[%s]: gap %#llx-%#llx (%llu MiB)", tag, (unsigned long long)prev_end, (unsigned long long)a,
+            TUX_LOG("map[%s]: gap %#llx-%#llx (%llu MiB)", tag, (unsigned long long)prev_end, (unsigned long long)a,
                       (unsigned long long)((a - prev_end) >> 20));
         if (size >= (256ull << 20))
-            HENGE_LOG("map[%s]: big %#llx-%#llx prot %d/%d tag %u", tag, (unsigned long long)a, (unsigned long long)(a + size),
+            TUX_LOG("map[%s]: big %#llx-%#llx prot %d/%d tag %u", tag, (unsigned long long)a, (unsigned long long)(a + size),
                       info.protection, info.max_protection, info.user_tag);
         if (a + size > prev_end) prev_end = a + size;
         addr = a + size;
     }
-    HENGE_LOG("map[%s]: highest mapped end %#llx", tag, (unsigned long long)prev_end);
+    TUX_LOG("map[%s]: highest mapped end %#llx", tag, (unsigned long long)prev_end);
 }
 
 /* The mapped ranges in [from, to), in address order. -1 when there are more than cap. */
-typedef struct { uintptr_t lo, hi; } HengeSpan;
-static int henge_ios_jit_spans(uintptr_t from, uintptr_t to, HengeSpan *out, int cap)
+typedef struct { uintptr_t lo, hi; } TuxSpan;
+static int tux_ios_jit_spans(uintptr_t from, uintptr_t to, TuxSpan *out, int cap)
 {
     int n = 0;
     vm_address_t a = (vm_address_t)from;
@@ -545,55 +545,55 @@ static int henge_ios_jit_spans(uintptr_t from, uintptr_t to, HengeSpan *out, int
         if (vm_region_recurse_64(mach_task_self(), &a, &size, &depth, (vm_region_recurse_info_t)&info, &count) != KERN_SUCCESS) break;
         if (a >= to) break;
         if (n == cap) return -1;
-        out[n++] = (HengeSpan){(uintptr_t)a, (uintptr_t)a + size};
+        out[n++] = (TuxSpan){(uintptr_t)a, (uintptr_t)a + size};
         a += size;
     }
     return n;
 }
 
-static bool henge_ios_jit_overlaps(const HengeSpan *spans, int n, uintptr_t lo, uintptr_t hi)
+static bool tux_ios_jit_overlaps(const TuxSpan *spans, int n, uintptr_t lo, uintptr_t hi)
 {
     for (int i = 0; i < n; i++)
         if (spans[i].lo < hi && lo < spans[i].hi) return true;
     return false;
 }
 
-static HengeDualMapping henge_ios_jit_allocate_real(size_t bytes);
+static TuxDualMapping tux_ios_jit_allocate_real(size_t bytes);
 
-static HengeDualMapping henge_prewarmed;
-static bool henge_prewarm_done;
+static TuxDualMapping tux_prewarmed;
+static bool tux_prewarm_done;
 
-HENGE_EXPORT bool henge_ios_jit_prewarm(size_t bytes)
+TUX_EXPORT bool tux_ios_jit_prewarm(size_t bytes)
 {
-    if (henge_prewarm_done) {
-        return henge_prewarmed.rw_addr != NULL;
+    if (tux_prewarm_done) {
+        return tux_prewarmed.rw_addr != NULL;
     }
-    henge_prewarm_done = true;
-    henge_prewarmed = henge_ios_jit_allocate_real(bytes);
+    tux_prewarm_done = true;
+    tux_prewarmed = tux_ios_jit_allocate_real(bytes);
     fprintf(stderr, "[henge-jit] prewarm %s: %zu bytes\n",
-            henge_prewarmed.rw_addr ? "OK" : "FAILED", bytes);
-    return henge_prewarmed.rw_addr != NULL;
+            tux_prewarmed.rw_addr ? "OK" : "FAILED", bytes);
+    return tux_prewarmed.rw_addr != NULL;
 }
 
 /*
  * Before iOS 26, without a trap: the region made by this process itself (MAP_JIT, or plain memory where the process is marked as
  * debugged or the jailbreak allows invalid pages). For TrollStore's and Dopamine's attach, which answers no brk (#148).
  */
-HENGE_EXPORT bool henge_ios_jit_prewarm_self(size_t bytes)
+TUX_EXPORT bool tux_ios_jit_prewarm_self(size_t bytes)
 {
-    if (henge_prewarmed.rw_addr) return true;
-    HengeDualMapping m = henge_self_dual_mapping(bytes);
+    if (tux_prewarmed.rw_addr) return true;
+    TuxDualMapping m = tux_self_dual_mapping(bytes);
     if (!m.rw_addr) return false;
-    henge_prewarmed = m;
-    henge_prewarm_done = true;
+    tux_prewarmed = m;
+    tux_prewarm_done = true;
     fprintf(stderr, "[henge-jit] prewarm (self, %s) OK: %zu bytes\n", g_self_route ? g_self_route : "?", m.size);
     return true;
 }
 
 /* The held region, for the native runtime (translation-layer/henge-tl-load.c looks this up by name). */
-HENGE_EXPORT HengeDualMapping *henge_ios_jit_get_mapping(void)
+TUX_EXPORT TuxDualMapping *tux_ios_jit_get_mapping(void)
 {
-    return henge_prewarmed.rw_addr ? &henge_prewarmed : NULL;
+    return tux_prewarmed.rw_addr ? &tux_prewarmed : NULL;
 }
 
 /*
@@ -601,45 +601,45 @@ HENGE_EXPORT HengeDualMapping *henge_ios_jit_get_mapping(void)
  * started while Android itself runs (or Android started after one) does not write its code over the other's: that ended in
  * SIGILL inside cpu_tb_exec. Whichever comes second and does not fit gets a failure instead.
  */
-static pthread_mutex_t henge_share_lock = PTHREAD_MUTEX_INITIALIZER;
-static size_t henge_runtime_high;   /* bytes from the bottom the native runtime has taken */
-static size_t henge_qemu_top;       /* bytes at the top QEMU holds */
+static pthread_mutex_t tux_share_lock = PTHREAD_MUTEX_INITIALIZER;
+static size_t tux_runtime_high;   /* bytes from the bottom the native runtime has taken */
+static size_t tux_qemu_top;       /* bytes at the top QEMU holds */
 
-HENGE_EXPORT bool henge_ios_jit_reserve_bottom(size_t end)
+TUX_EXPORT bool tux_ios_jit_reserve_bottom(size_t end)
 {
-    pthread_mutex_lock(&henge_share_lock);
-    bool ok = end <= henge_prewarmed.size - henge_qemu_top;
-    if (ok && end > henge_runtime_high) henge_runtime_high = end;
-    pthread_mutex_unlock(&henge_share_lock);
+    pthread_mutex_lock(&tux_share_lock);
+    bool ok = end <= tux_prewarmed.size - tux_qemu_top;
+    if (ok && end > tux_runtime_high) tux_runtime_high = end;
+    pthread_mutex_unlock(&tux_share_lock);
     if (!ok) {
         fprintf(stderr, "[henge-jit] the native runtime wants %zu MiB of the JIT region, but QEMU holds its top %zu MiB\n",
-                end >> 20, henge_qemu_top >> 20);
+                end >> 20, tux_qemu_top >> 20);
     }
     return ok;
 }
 
-HengeDualMapping henge_ios_jit_allocate(size_t bytes)
+TuxDualMapping tux_ios_jit_allocate(size_t bytes)
 {
     /*
      * Hand back the prewarmed region when it is big enough. QEMU asks for
      * exactly tb-size, which is what prewarm was given, so this is the normal
      * path -- the fallback below only runs if prewarm never happened.
      */
-    if (henge_prewarmed.rw_addr && henge_prewarmed.size >= bytes) {
-        size_t off = (henge_prewarmed.size - bytes) & ~(size_t)0x3FFF;
-        pthread_mutex_lock(&henge_share_lock);
-        bool fits = henge_runtime_high <= off;
-        if (fits) henge_qemu_top = henge_prewarmed.size - off;
-        pthread_mutex_unlock(&henge_share_lock);
+    if (tux_prewarmed.rw_addr && tux_prewarmed.size >= bytes) {
+        size_t off = (tux_prewarmed.size - bytes) & ~(size_t)0x3FFF;
+        pthread_mutex_lock(&tux_share_lock);
+        bool fits = tux_runtime_high <= off;
+        if (fits) tux_qemu_top = tux_prewarmed.size - off;
+        pthread_mutex_unlock(&tux_share_lock);
         if (!fits) {
             fprintf(stderr, "[henge-jit] the native runtime already uses %zu MiB of the %zu MiB region; no room for %zu MiB of TCG\n",
-                    henge_runtime_high >> 20, henge_prewarmed.size >> 20, bytes >> 20);
-            HengeDualMapping none = { NULL, NULL, 0 };
+                    tux_runtime_high >> 20, tux_prewarmed.size >> 20, bytes >> 20);
+            TuxDualMapping none = { NULL, NULL, 0 };
             return none;
         }
         fprintf(stderr, "[henge-jit] using the top %zu MiB of the prewarmed region (%zu MiB)\n",
-                (henge_prewarmed.size - off) >> 20, henge_prewarmed.size >> 20);
-        HengeDualMapping top = { henge_prewarmed.rw_addr + off, henge_prewarmed.rx_addr + off, henge_prewarmed.size - off };
+                (tux_prewarmed.size - off) >> 20, tux_prewarmed.size >> 20);
+        TuxDualMapping top = { tux_prewarmed.rw_addr + off, tux_prewarmed.rx_addr + off, tux_prewarmed.size - off };
         return top;
     }
     /*
@@ -649,17 +649,17 @@ HengeDualMapping henge_ios_jit_allocate(size_t bytes)
      * stopped on the brk, so the app freezes. Failing here lets region.c
      * fall back to MAP_JIT, or lets qemu_init report the error.
      */
-    if (henge_prewarm_done) {
+    if (tux_prewarm_done) {
         fprintf(stderr, "[henge-jit] prewarm failed earlier; not trapping again\n");
-        HengeDualMapping none = { NULL, NULL, 0 };
+        TuxDualMapping none = { NULL, NULL, 0 };
         return none;
     }
-    return henge_ios_jit_allocate_real(bytes);
+    return tux_ios_jit_allocate_real(bytes);
 }
 
-static HengeDualMapping henge_ios_jit_allocate_real(size_t bytes)
+static TuxDualMapping tux_ios_jit_allocate_real(size_t bytes)
 {
-    HengeDualMapping region = { NULL, NULL, 0 };
+    TuxDualMapping region = { NULL, NULL, 0 };
     uint64_t n = atomic_fetch_add(&g_alloc_counter, 1) + 1;
 
     /* Cheap attach probe: brk #0x69 is answered with a constant when StikDebug
@@ -667,26 +667,26 @@ static HengeDualMapping henge_ios_jit_allocate_real(size_t bytes)
      * first turns "no debugger" into a clean diagnostic instead of three slow
      * retries of the real request. */
     g_expecting_jit_trap = true;
-    uint64_t probe = henge_brk_probe();
+    uint64_t probe = tux_brk_probe();
     g_expecting_jit_trap = false;
     if (probe == 0) {
-        HENGE_LOG("#%llu: StikDebug is NOT servicing traps -- probe returned 0, which "
+        TUX_LOG("#%llu: StikDebug is NOT servicing traps -- probe returned 0, which "
                  "is our own SIGTRAP handler stepping over an unanswered brk. "
                  "Trying to make %zu bytes without it.",
                  (unsigned long long)n, bytes);
-        return henge_self_dual_mapping(bytes);
+        return tux_self_dual_mapping(bytes);
     }
 
     uint32_t probe_lo = (uint32_t)probe;
-    if (probe_lo == (uint32_t)HENGE_PROBE_MAGIC ||
-        probe_lo == (uint32_t)HENGE_PROBE_MAGIC_LE) {
-        HENGE_LOG("#%llu: StikDebug attach probe OK (0x%llx)",
+    if (probe_lo == (uint32_t)TUX_PROBE_MAGIC ||
+        probe_lo == (uint32_t)TUX_PROBE_MAGIC_LE) {
+        TUX_LOG("#%llu: StikDebug attach probe OK (0x%llx)",
                  (unsigned long long)n, (unsigned long long)probe);
     } else {
         /* Serviced, but by something that answers differently. Proceed -- the
          * allocation itself is the real test -- and record the value so an
          * unfamiliar StikDebug build is identifiable from the log alone. */
-        HENGE_LOG("#%llu: trap was serviced but the answer is unrecognised (0x%llx). "
+        TUX_LOG("#%llu: trap was serviced but the answer is unrecognised (0x%llx). "
                  "Continuing anyway; the allocation below is the real test.",
                  (unsigned long long)n, (unsigned long long)probe);
     }
@@ -701,21 +701,21 @@ static HengeDualMapping henge_ios_jit_allocate_real(size_t bytes)
      * iOS) rather than permanently gone, and the two are indistinguishable from
      * here, so retry a few times before giving up.
      */
-    henge_ios_jit_log_map("before");
-    henge_ios_jit_release_low_hold(bytes);
+    tux_ios_jit_log_map("before");
+    tux_ios_jit_release_low_hold(bytes);
     enum { kMaxAttempts = 3 };
     void *rx = NULL;
     for (int attempt = 1; attempt <= kMaxAttempts; attempt++) {
-        HENGE_LOG("#%llu: requesting execute-capable region, size=%zu (%.1f MiB), "
+        TUX_LOG("#%llu: requesting execute-capable region, size=%zu (%.1f MiB), "
                  "attempt %d/%d",
                  (unsigned long long)n, bytes, (double)bytes / (1024.0 * 1024.0),
                  attempt, kMaxAttempts);
 
         g_expecting_jit_trap = true;
-        rx = henge_brk_get_jit_mapping(NULL, bytes);
+        rx = tux_brk_get_jit_mapping(NULL, bytes);
         g_expecting_jit_trap = false;
 
-        HENGE_LOG("#%llu: BreakGetJITMapping returned %p", (unsigned long long)n, rx);
+        TUX_LOG("#%llu: BreakGetJITMapping returned %p", (unsigned long long)n, rx);
         if (rx != NULL) {
             break;
         }
@@ -724,16 +724,16 @@ static HengeDualMapping henge_ios_jit_allocate_real(size_t bytes)
         }
     }
 
-    henge_ios_jit_log_map("after");
-    if (rx != NULL && (uint64_t)(uintptr_t)rx + bytes > HENGE_JIT_LOW_LIMIT) {
+    tux_ios_jit_log_map("after");
+    if (rx != NULL && (uint64_t)(uintptr_t)rx + bytes > TUX_JIT_LOW_LIMIT) {
         /* Calling into it would hang the app with the debugger still attached. */
-        HENGE_LOG("#%llu: the JIT region came back at %p, above %#llx where generated code does not run; "
-                  "giving it back. Quit Henge and open it again.", (unsigned long long)n, rx, HENGE_JIT_LOW_LIMIT);
+        TUX_LOG("#%llu: the JIT region came back at %p, above %#llx where generated code does not run; "
+                  "giving it back. Quit Henge and open it again.", (unsigned long long)n, rx, TUX_JIT_LOW_LIMIT);
         vm_deallocate(mach_task_self(), (vm_address_t)rx, bytes);
         return region;
     }
     if (rx == NULL) {
-        HENGE_LOG("#%llu: FAILED after %d attempts. StikDebug must be attached with "
+        TUX_LOG("#%llu: FAILED after %d attempts. StikDebug must be attached with "
                  "the Universal JIT script BEFORE the guest is started.",
                  (unsigned long long)n, kMaxAttempts);
         return region;
@@ -749,21 +749,21 @@ static HengeDualMapping henge_ios_jit_allocate_real(size_t bytes)
     kern_return_t kr = KERN_NO_SPACE;
     const uintptr_t step = 16u << 20, reach = (uintptr_t)2 << 30;
     /* Each failed 1.5 GiB vm_remap costs about 5 ms, and on an iPhone all 258 failed (1.5 s): ask only where a fit is possible. */
-    static HengeSpan spans[1024];
+    static TuxSpan spans[1024];
     uintptr_t from = (uintptr_t)rx > bytes + reach ? (uintptr_t)rx - bytes - reach : 0;
-    int nspans = henge_ios_jit_spans(from, (uintptr_t)rx + 2 * bytes + reach, spans, 1024);
+    int nspans = tux_ios_jit_spans(from, (uintptr_t)rx + 2 * bytes + reach, spans, 1024);
     for (uintptr_t off = 0; off <= reach && kr != KERN_SUCCESS; off += step) {
         for (int side = 0; side < 2 && kr != KERN_SUCCESS; side++) {
             uintptr_t want = side == 0 ? (uintptr_t)rx + bytes + off : (uintptr_t)rx - bytes - off;
             if (side == 1 && (uintptr_t)rx < bytes + off + step) continue;
-            if (nspans >= 0 && henge_ios_jit_overlaps(spans, nspans, want, want + bytes)) continue;
+            if (nspans >= 0 && tux_ios_jit_overlaps(spans, nspans, want, want + bytes)) continue;
             rw = (vm_address_t)want;
             kr = vm_remap(mach_task_self(), &rw, (vm_size_t)bytes, /*mask=*/0, VM_FLAGS_FIXED,
                           mach_task_self(), (vm_address_t)rx, /*copy=*/FALSE, &cur_prot, &max_prot, VM_INHERIT_NONE);
         }
     }
     if (kr != KERN_SUCCESS) {
-        HENGE_LOG("#%llu: no free space within 2 GiB of rx=%p for the writable view: placing it anywhere", (unsigned long long)n, rx);
+        TUX_LOG("#%llu: no free space within 2 GiB of rx=%p for the writable view: placing it anywhere", (unsigned long long)n, rx);
         rw = 0;
         kr = vm_remap(mach_task_self(), &rw, (vm_size_t)bytes,
                       /*mask=*/0, VM_FLAGS_ANYWHERE,
@@ -772,7 +772,7 @@ static HengeDualMapping henge_ios_jit_allocate_real(size_t bytes)
                       VM_INHERIT_NONE);
     }
     if (kr != KERN_SUCCESS) {
-        HENGE_LOG("#%llu: vm_remap failed for rx=%p size=%zu: %d (%s)",
+        TUX_LOG("#%llu: vm_remap failed for rx=%p size=%zu: %d (%s)",
                  (unsigned long long)n, rx, bytes, (int)kr, mach_error_string(kr));
         return region;
     }
@@ -780,7 +780,7 @@ static HengeDualMapping henge_ios_jit_allocate_real(size_t bytes)
     kr = vm_protect(mach_task_self(), rw, (vm_size_t)bytes, /*set_maximum=*/FALSE,
                     VM_PROT_READ | VM_PROT_WRITE);
     if (kr != KERN_SUCCESS) {
-        HENGE_LOG("#%llu: vm_protect(RW) failed for rw=%p size=%zu: %d (%s)",
+        TUX_LOG("#%llu: vm_protect(RW) failed for rw=%p size=%zu: %d (%s)",
                  (unsigned long long)n, (void *)rw, bytes, (int)kr,
                  mach_error_string(kr));
         vm_deallocate(mach_task_self(), rw, (vm_size_t)bytes);
@@ -792,24 +792,24 @@ static HengeDualMapping henge_ios_jit_allocate_real(size_t bytes)
     region.size    = bytes;
     atomic_store(&g_jit_available, true);
 
-    HENGE_LOG("#%llu: dual mapping established: rw=%p rx=%p size=%zu diff=%+lld",
+    TUX_LOG("#%llu: dual mapping established: rw=%p rx=%p size=%zu diff=%+lld",
              (unsigned long long)n, (void *)region.rw_addr, (void *)region.rx_addr,
              region.size, (long long)(region.rx_addr - region.rw_addr));
-    henge_ios_jit_log_footprint("after-jit-alloc");
+    tux_ios_jit_log_footprint("after-jit-alloc");
 
-    if (!henge_jit_selftest(&region)) {
-        HENGE_LOG("#%llu: SELFTEST FAILED -- the region is not usable as JIT memory. "
+    if (!tux_jit_selftest(&region)) {
+        TUX_LOG("#%llu: SELFTEST FAILED -- the region is not usable as JIT memory. "
                  "Refusing to hand it to TCG; QEMU would crash on its first "
                  "generated block instead of failing here.",
                  (unsigned long long)n);
-        henge_ios_jit_release(&region);
+        tux_ios_jit_release(&region);
         return region;
     }
 
     return region;
 }
 
-void henge_ios_jit_release(HengeDualMapping *m)
+void tux_ios_jit_release(TuxDualMapping *m)
 {
     if (m == NULL) {
         return;
@@ -825,16 +825,16 @@ void henge_ios_jit_release(HengeDualMapping *m)
     m->size = 0;
 }
 
-void henge_ios_jit_detach(void)
+void tux_ios_jit_detach(void)
 {
-    HENGE_LOG("detaching debugger; RX mappings persist after this");
+    TUX_LOG("detaching debugger; RX mappings persist after this");
     g_expecting_jit_trap = true;
-    henge_brk_jit_detach();
+    tux_brk_jit_detach();
     g_expecting_jit_trap = false;
-    HENGE_LOG("debugger detached");
+    TUX_LOG("debugger detached");
 }
 
-bool henge_ios_jit_is_available(void)
+bool tux_ios_jit_is_available(void)
 {
     return atomic_load(&g_jit_available);
 }
@@ -850,7 +850,7 @@ bool henge_ios_jit_is_available(void)
  * the page carries execute permission -- on a device where it does not, this
  * returns false without ever branching there.
  */
-static bool henge_page_is_executable(void *p)
+static bool tux_page_is_executable(void *p)
 {
     vm_address_t addr = (vm_address_t)p;
     vm_size_t size = 0;
@@ -861,10 +861,10 @@ static bool henge_page_is_executable(void *p)
     kern_return_t kr = vm_region_recurse_64(mach_task_self(), &addr, &size, &depth,
                                             (vm_region_recurse_info_t)&info, &count);
     if (kr != KERN_SUCCESS) {
-        HENGE_LOG("MAP_JIT probe: vm_region_recurse_64 failed: %s", mach_error_string(kr));
+        TUX_LOG("MAP_JIT probe: vm_region_recurse_64 failed: %s", mach_error_string(kr));
         return false;
     }
-    HENGE_LOG("MAP_JIT probe: kernel granted protection 0x%x (execute %s)",
+    TUX_LOG("MAP_JIT probe: kernel granted protection 0x%x (execute %s)",
              (unsigned)info.protection,
              (info.protection & VM_PROT_EXECUTE) ? "yes" : "NO");
     return (info.protection & VM_PROT_EXECUTE) != 0;
@@ -873,7 +873,7 @@ static bool henge_page_is_executable(void *p)
 static sigjmp_buf g_probe_jump;
 static volatile sig_atomic_t g_probe_running;
 
-static void henge_probe_handler(int sig)
+static void tux_probe_handler(int sig)
 {
     if (g_probe_running) {
         siglongjmp(g_probe_jump, 1);
@@ -900,7 +900,7 @@ static void henge_probe_handler(int sig)
  * guard catches the fault if it turns out not to. A probe meant to answer a
  * question must not become the thing that killed the app.
  */
-bool henge_ios_jit_mapjit_works(void)
+bool tux_ios_jit_mapjit_works(void)
 {
     static atomic_int cached;   /* 0 unknown, 1 yes, -1 no */
     int known = atomic_load(&cached);
@@ -916,15 +916,15 @@ bool henge_ios_jit_mapjit_works(void)
     void *p = mmap(NULL, len, PROT_READ | PROT_WRITE | PROT_EXEC,
                    MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
     if (p == MAP_FAILED) {
-        HENGE_LOG("MAP_JIT probe: mmap refused (%s) -- no executable memory this "
+        TUX_LOG("MAP_JIT probe: mmap refused (%s) -- no executable memory this "
                  "way; a trap servicer is the only route on this device",
                  strerror(errno));
         atomic_store(&cached, -1);
         return false;
     }
 
-    if (!henge_page_is_executable(p)) {
-        HENGE_LOG("MAP_JIT probe: the mapping came back without execute permission "
+    if (!tux_page_is_executable(p)) {
+        TUX_LOG("MAP_JIT probe: the mapping came back without execute permission "
                  "-- a trap servicer is the only route on this device");
         munmap(p, len);
         atomic_store(&cached, -1);
@@ -933,7 +933,7 @@ bool henge_ios_jit_mapjit_works(void)
 
     struct sigaction sa, prev_bus, prev_segv, prev_ill;
     memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = henge_probe_handler;
+    sa.sa_handler = tux_probe_handler;
     sigemptyset(&sa.sa_mask);
     sigaction(SIGBUS, &sa, &prev_bus);
     sigaction(SIGSEGV, &sa, &prev_segv);
@@ -953,7 +953,7 @@ bool henge_ios_jit_mapjit_works(void)
         int (*fn)(void) = (int (*)(void))p;
         ok = (fn() == 0x1234);
     } else {
-        HENGE_LOG("MAP_JIT probe: faulted while executing the page -- the mapping "
+        TUX_LOG("MAP_JIT probe: faulted while executing the page -- the mapping "
                  "was granted but is not executable");
     }
     g_probe_running = 0;
@@ -963,7 +963,7 @@ bool henge_ios_jit_mapjit_works(void)
     sigaction(SIGILL, &prev_ill, NULL);
     munmap(p, len);
 
-    HENGE_LOG("MAP_JIT probe: %s", ok
+    TUX_LOG("MAP_JIT probe: %s", ok
              ? "PASS -- this process can execute memory it wrote, so QEMU can "
                "run on MAP_JIT even without a trap servicer"
              : "FAIL -- MAP_JIT memory is not executable here");
@@ -973,26 +973,26 @@ bool henge_ios_jit_mapjit_works(void)
 
 #else /* !iOS: keep the symbols so host builds and tests link */
 
-void henge_ios_jit_install_trap_handler(void) {}
-static HengeDualMapping henge_ios_jit_allocate_real(size_t bytes)
+void tux_ios_jit_install_trap_handler(void) {}
+static TuxDualMapping tux_ios_jit_allocate_real(size_t bytes)
 {
     (void)bytes;
-    HengeDualMapping m = { NULL, NULL, 0 };
+    TuxDualMapping m = { NULL, NULL, 0 };
     return m;
 }
-HengeDualMapping henge_ios_jit_allocate(size_t bytes)
+TuxDualMapping tux_ios_jit_allocate(size_t bytes)
 {
-    return henge_ios_jit_allocate_real(bytes);
+    return tux_ios_jit_allocate_real(bytes);
 }
-bool henge_ios_jit_prewarm(size_t bytes) { (void)bytes; return false; }
-bool henge_ios_jit_prewarm_self(size_t bytes) { (void)bytes; return false; }
-bool henge_ios_jit_reserve_bottom(size_t end) { (void)end; return true; }
-void henge_ios_jit_release(HengeDualMapping *m) { (void)m; }
-void henge_ios_jit_detach(void) {}
-bool henge_ios_jit_is_available(void) { return false; }
-bool henge_ios_jit_mapjit_works(void) { return false; }
-const char *henge_ios_jit_self_route(void) { return 0; }
-void henge_ios_jit_log_footprint(const char *tag) { (void)tag; }
-size_t henge_ios_available_memory(void) { return 0; }
+bool tux_ios_jit_prewarm(size_t bytes) { (void)bytes; return false; }
+bool tux_ios_jit_prewarm_self(size_t bytes) { (void)bytes; return false; }
+bool tux_ios_jit_reserve_bottom(size_t end) { (void)end; return true; }
+void tux_ios_jit_release(TuxDualMapping *m) { (void)m; }
+void tux_ios_jit_detach(void) {}
+bool tux_ios_jit_is_available(void) { return false; }
+bool tux_ios_jit_mapjit_works(void) { return false; }
+const char *tux_ios_jit_self_route(void) { return 0; }
+void tux_ios_jit_log_footprint(const char *tag) { (void)tag; }
+size_t tux_ios_available_memory(void) { return 0; }
 
 #endif

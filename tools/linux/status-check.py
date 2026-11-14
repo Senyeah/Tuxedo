@@ -39,7 +39,7 @@ PW = "env XDG_RUNTIME_DIR=/run/user/1000"
 
 
 class Host:
-    """hengevm's input file and stderr."""
+    """tuxvm's input file and stderr."""
 
     def __init__(self, inp, err):
         self.inp, self.err = inp, err
@@ -53,7 +53,7 @@ class Host:
 
     def requests(self, what, since=0):
         """The guest's requests of one kind (brightness or volume) logged after offset since."""
-        return re.findall(rf"hengevm: status: guest {what} ([0-9.]+)( muted)?", self.log()[since:])
+        return re.findall(rf"tuxvm: status: guest {what} ([0-9.]+)( muted)?", self.log()[since:])
 
 
 def until(fn, limit, what, step=0.25):
@@ -71,7 +71,7 @@ def until(fn, limit, what, step=0.25):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--image", default=os.path.join(smoke.linux_dir(), "debian-desktop.img"))
-    ap.add_argument("--hengevm", default=os.path.join(smoke.ROOT, "build", "hengevm"))
+    ap.add_argument("--tuxvm", default=os.path.join(smoke.ROOT, "build", "tuxvm"))
     ap.add_argument("--cpus", type=int, default=4)
     ap.add_argument("--pause", type=int, default=60, help="seconds of the pause in step 5")
     ap.add_argument("--work-dir", help="where the clone goes (the image's APFS volume)")
@@ -88,7 +88,7 @@ def main():
         os.truncate(clone, 8 << 30)
         host = Host(inp, err)
         host.line("volume 0.3")  # before boot, as the app does
-        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.hengevm, "--kernel", kernel,
+        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.tuxvm, "--kernel", kernel,
                 "--initrd", initrd, "--append", append, "--disk", clone, "--ram", "2048", "--cpus", str(args.cpus),
                 "--share", share]
         env = dict(os.environ, HV_INPUT_FILE=inp, HV_STATUS_LOG="1", HV_SND_CAPTURE=cap)
@@ -98,7 +98,7 @@ def main():
         except (Fail, pexpect.ExceptionPexpect) as e:
             print(f"status-check: FAIL: {e}", file=sys.stderr)
             print("console tail:\n" + (p.before or "")[-2000:], file=sys.stderr)
-            print("hengevm stderr tail:\n" + host.log()[-2000:], file=sys.stderr)
+            print("tuxvm stderr tail:\n" + host.log()[-2000:], file=sys.stderr)
             return 1
         finally:
             if p.isalive():
@@ -245,10 +245,10 @@ def run(p, host, args, cap):
     # 5. Clock and RTC across a pause
     need("sudo journalctl -b -u henge-status --no-pager | tail -3")
     p.send("\x01s")
-    until(lambda: "hengevm: paused" in host.log(), 10, "hengevm pauses")
+    until(lambda: "tuxvm: paused" in host.log(), 10, "tuxvm pauses")
     time.sleep(args.pause)
     p.send("\x01s")
-    until(lambda: "hengevm: resumed" in host.log(), 10, "hengevm resumes")
+    until(lambda: "tuxvm: resumed" in host.log(), 10, "tuxvm resumes")
     t_resume = time.time()
 
     def offset():
@@ -274,7 +274,7 @@ def run(p, host, args, cap):
     host.line("tz Pacific/Auckland")
     until(lambda: value("timedatectl show -p Timezone --value") == "Pacific/Auckland", 2, "tz Pacific/Auckland")
     host.line("tz ../../etc/passwd")
-    until(lambda: "../../etc/passwd: not a time zone name" in host.log(), 3, "hengevm refuses a bad name")
+    until(lambda: "../../etc/passwd: not a time zone name" in host.log(), 3, "tuxvm refuses a bad name")
     need("python3 -c 'import urllib.request as u; print(u.urlopen(\"http://10.0.2.4/.henge/status\", timeout=5).read().decode())'",
          lambda o: "tz Pacific/Auckland" in o and "passwd" not in o, "the endpoint keeps the last good zone")
     host.line("tz Asia/Tokyo")

@@ -1,5 +1,5 @@
-#ifndef HENGEVM_DEVSTATUS_H
-#define HENGEVM_DEVSTATUS_H
+#ifndef TUXVM_DEVSTATUS_H
+#define TUXVM_DEVSTATUS_H
 
 #include <stdint.h>
 

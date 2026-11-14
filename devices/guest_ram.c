@@ -35,12 +35,12 @@ static uint8_t *alloc_no_footprint(uint64_t size, const char *what) {
         }
         if (entry != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), entry);
         if (kr != KERN_SUCCESS) {
-            if (what) fprintf(stderr, "hengevm: %s outside the footprint refused: %s\n", what, mach_error_string(kr));
+            if (what) fprintf(stderr, "tuxvm: %s outside the footprint refused: %s\n", what, mach_error_string(kr));
             vm_deallocate(mach_task_self(), base, size);
             return NULL;
         }
     }
-    if (what) fprintf(stderr, "hengevm: %s (%llu MB) is outside the footprint\n", what, (unsigned long long)(size >> 20));
+    if (what) fprintf(stderr, "tuxvm: %s (%llu MB) is outside the footprint\n", what, (unsigned long long)(size >> 20));
     return (uint8_t *)base;
 }
 
@@ -60,7 +60,7 @@ static void *prefault_thread(void *arg) {
     clock_gettime(CLOCK_MONOTONIC, &t0);
     for (uint64_t off = 0; off < a.size; off += 0x4000) __atomic_fetch_add((volatile uint64_t *)(a.ram + off), 0, __ATOMIC_RELAXED);
     clock_gettime(CLOCK_MONOTONIC, &t1);
-    fprintf(stderr, "hengevm: guest RAM file ready in %.1f s\n", (double)(t1.tv_sec - t0.tv_sec) + (double)(t1.tv_nsec - t0.tv_nsec) * 1e-9);
+    fprintf(stderr, "tuxvm: guest RAM file ready in %.1f s\n", (double)(t1.tv_sec - t0.tv_sec) + (double)(t1.tv_nsec - t0.tv_nsec) * 1e-9);
     return NULL;
 }
 
@@ -86,9 +86,9 @@ int hv_guest_ram_alloc(HvGuestRam *r, uint64_t size) {
             if (ram != MAP_FAILED) r->fd = fd; /* the balloon punches holes in it */
             else close(fd);
         }
-        if (ram == MAP_FAILED) fprintf(stderr, "hengevm: guest RAM file %s failed: %s; using anonymous memory\n", ram_file, strerror(errno));
+        if (ram == MAP_FAILED) fprintf(stderr, "tuxvm: guest RAM file %s failed: %s; using anonymous memory\n", ram_file, strerror(errno));
         else {
-            fprintf(stderr, "hengevm: guest RAM (%llu MB) is backed by a file\n", (unsigned long long)(size >> 20));
+            fprintf(stderr, "tuxvm: guest RAM (%llu MB) is backed by a file\n", (unsigned long long)(size >> 20));
             if (!getenv("HV_RAM_NO_PREFAULT")) {
                 struct PrefaultArgs *a = malloc(sizeof *a);
                 a->ram = ram, a->size = size;

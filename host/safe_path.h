@@ -1,5 +1,5 @@
-#ifndef HENGEVM_SAFE_PATH_H
-#define HENGEVM_SAFE_PATH_H
+#ifndef TUXVM_SAFE_PATH_H
+#define TUXVM_SAFE_PATH_H
 
 #include <stddef.h>
 #include <sys/stat.h>

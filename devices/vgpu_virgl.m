@@ -779,7 +779,7 @@ static void renderer_stop(HvVgpuVirgl *r) {
 
 static void *thread_main(void *arg) {
     HvVgpuVirgl *r = arg;
-    pthread_setname_np("henge-virgl");
+    pthread_setname_np("tux-virgl");
     int rc;
     @autoreleasepool { rc = renderer_start(r); }
     pthread_mutex_lock(&r->mu);

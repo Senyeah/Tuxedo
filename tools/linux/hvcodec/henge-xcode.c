@@ -108,7 +108,7 @@ static void connect_host(const char *host, int port) {
     struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons((uint16_t)port)};
     if (inet_pton(AF_INET, host, &a.sin_addr) != 1) die("bad address %s", host);
     sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0 || connect(sock, (struct sockaddr *)&a, sizeof a)) die("cannot connect to %s:%d: is hengevm running with --vcodec?", host, port);
+    if (sock < 0 || connect(sock, (struct sockaddr *)&a, sizeof a)) die("cannot connect to %s:%d: is tuxvm running with --vcodec?", host, port);
     int one = 1;
     setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
 }

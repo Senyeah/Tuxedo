@@ -81,7 +81,7 @@ struct FoldersSection: View {
                 list.append(f)
                 added = f
             }
-            if let added { HengeLog.log("folders", "added \(added.name) (\(FolderPolicy.title(added.mode)))") }
+            if let added { TuxLog.log("folders", "added \(added.name) (\(FolderPolicy.title(added.mode)))") }
             FolderPick.applyIfRunning(machine)
         }
     }

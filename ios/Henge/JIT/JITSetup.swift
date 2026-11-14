@@ -123,7 +123,7 @@ final class JITCoordinator: ObservableObject {
         guard method == .automatic else { return method }
         if JITBootstrap.isTrollStoreInstalled { return .trollStore }
         if JITBootstrap.isJailbroken { return .jailbreak }
-        if hasPairing && HengeBuiltInJIT.isAvailable { return .builtIn }
+        if hasPairing && TuxBuiltInJIT.isAvailable { return .builtIn }
         if JITBootstrap.isStikDebugInstalled { return .stikDebug }
         return .builtIn
     }
@@ -143,7 +143,7 @@ final class JITCoordinator: ObservableObject {
         pairingSource = JITPairingFileStore.source
     }
 
-    private func log(_ line: String) { HengeLog.log("jit", line) }
+    private func log(_ line: String) { TuxLog.log("jit", line) }
 
     /// Get a debugger attached with whichever method applies, or open the setup
     /// walkthrough when that method is not set up yet.
@@ -181,7 +181,7 @@ final class JITCoordinator: ObservableObject {
         guard !autoTried, UserDefaults.standard.bool(forKey: Self.autoEnableKey) else { return }
         autoTried = true
         guard !JITBootstrap.ready else { return }
-        guard HengeBuiltInJIT.isAvailable, hasPairing else {
+        guard TuxBuiltInJIT.isAvailable, hasPairing else {
             log("JIT at launch is on, but built-in StikJIT is not available or not paired; skipped")
             return
         }
@@ -237,7 +237,7 @@ final class JITCoordinator: ObservableObject {
             error = "Turn on Allow JIT in Apps in Dopamine's settings, then open Henge again."
             showSetup = true
         case .builtIn:
-            guard HengeBuiltInJIT.isAvailable, hasPairing else {
+            guard TuxBuiltInJIT.isAvailable, hasPairing else {
                 log("built-in JIT is not set up; opening the walkthrough")
                 showSetup = true
                 return
@@ -328,7 +328,7 @@ final class JITCoordinator: ObservableObject {
         advice = nil
         if attempt == 1 { status = "Checking LocalDevVPN and the Developer Disk Image…" }
         RemotePairingPortDiscovery.resolve { port in
-            HengeBuiltInJIT.send(.prepare(pairingData: pairing, rsdPort: port)) { [weak self] result in
+            TuxBuiltInJIT.send(.prepare(pairingData: pairing, rsdPort: port)) { [weak self] result in
                 guard let self else { return }
                 switch result {
                 case .success(let response):
@@ -389,7 +389,7 @@ final class JITCoordinator: ObservableObject {
         // No lookup first: it took 3 s to fail on an iPhone, and the helper finds the port itself when none is given.
         do {
             let port = RemotePairingPortDiscovery.known
-            HengeBuiltInJIT.send(
+            TuxBuiltInJIT.send(
                 .enable(targetPID: getpid(), pairingData: pairing, scriptBase64: script, rsdPort: port),
                 started: { [weak self] in
                     if attempt == 1 { self?.status = "Waiting for the helper to attach…" }
@@ -403,7 +403,7 @@ final class JITCoordinator: ObservableObject {
                     switch result {
                     case .success(let response):
                         self?.txmPresent = response.txmPresent
-                        HengeLog.log("jit", "helper: \(response.message)")
+                        TuxLog.log("jit", "helper: \(response.message)")
                         if !response.success {
                             guard let self else { return }
                             // Not finish(): a retry keeps the screen busy and the next attempt starts its own watch.
@@ -427,7 +427,7 @@ final class JITCoordinator: ObservableObject {
         busy = true
         error = nil
         status = "Resetting the Developer Disk Image cache…"
-        HengeBuiltInJIT.send(.resetDDI) { [weak self] result in
+        TuxBuiltInJIT.send(.resetDDI) { [weak self] result in
             guard let self else { return }
             busy = false
             prepared = false
@@ -443,7 +443,7 @@ final class JITCoordinator: ObservableObject {
     }
 
     private func builtInPairing() -> Data? {
-        if let reason = HengeBuiltInJIT.unavailableReason {
+        if let reason = TuxBuiltInJIT.unavailableReason {
             error = reason
             return nil
         }
@@ -516,7 +516,7 @@ enum LocalDevVPN {
             guard (ifa.ifa_flags & UInt32(IFF_UP)) != 0, let sa = ifa.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET) else { continue }
             let ip = sa.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { UInt32(bigEndian: $0.pointee.sin_addr.s_addr) }
             if ip >> 16 == 0x0a07, String(cString: ifa.ifa_name).hasPrefix("utun") {
-                HengeLog.log("jit", "LocalDevVPN tunnel on \(String(cString: ifa.ifa_name))")
+                TuxLog.log("jit", "LocalDevVPN tunnel on \(String(cString: ifa.ifa_name))")
                 return true
             }
         }
@@ -526,7 +526,7 @@ enum LocalDevVPN {
 
     @MainActor static func open() {
         let installed = isInstalled
-        HengeLog.log("jit", "LocalDevVPN \(installed ? "connect" : "app-store")")
+        TuxLog.log("jit", "LocalDevVPN \(installed ? "connect" : "app-store")")
         UIApplication.shared.open(installed ? connect : appStore)
     }
 }
@@ -574,7 +574,7 @@ enum RemotePairingPortDiscovery {
                 lastFailure = Date()
             }
             lock.unlock()
-            HengeLog.log("jit", "RemotePairing port "
+            TuxLog.log("jit", "RemotePairing port "
                         + (port.map { String($0) } ?? "not found; using StikJIT's default"))
             DispatchQueue.main.async { completion(port) }
         }

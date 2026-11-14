@@ -19,9 +19,9 @@ enum GuestMemory {
         let free = (try? machine.directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
             .volumeAvailableCapacityForImportantUsage ?? 0
         let room = free > 0 ? UInt64(max(free - (2 << 30), 0)) >> 20 : UInt64.max
-        let reach = henge_largest_mapping_mb()
+        let reach = tux_largest_mapping_mb()
         let ram = min(UInt64(machine.ramMB), room, reach > 512 ? reach - 512 : 0) / 512 * 512
-        HengeLog.log("session", "guest RAM \(ram) MB (asked \(machine.ramMB), disk room \(room), largest mapping \(reach))")
+        TuxLog.log("session", "guest RAM \(ram) MB (asked \(machine.ramMB), disk room \(room), largest mapping \(reach))")
         return ram
     }
 }
@@ -60,7 +60,7 @@ final class Machines: ObservableObject {
     /// removed when the list itself could not be read: every machine would look unreferenced.
     private func removeLeftovers() {
         if listUnreadable {
-            HengeLog.log("machines", "the list of machines could not be read: no machine folder is removed")
+            TuxLog.log("machines", "the list of machines could not be read: no machine folder is removed")
             return
         }
         let known = Set(all.map(\.id))
@@ -71,10 +71,10 @@ final class Machines: ObservableObject {
             if let machine = MachineList.recover(id: id, folder: item, defaultRAMMB: Device.suggestedRAMGB * 1024) {
                 all.append(machine)
                 save()
-                HengeLog.log("machines", "\(machine.name) finished installing but was not listed: listed again")
+                TuxLog.log("machines", "\(machine.name) finished installing but was not listed: listed again")
                 continue
             }
-            HengeLog.log("machines", "removing the unfinished machine \(id)")
+            TuxLog.log("machines", "removing the unfinished machine \(id)")
             try? fm.removeItem(at: item)
         }
     }
@@ -144,10 +144,10 @@ final class Machines: ObservableObject {
             machine.diskBytes = (try? fm.attributesOfItem(atPath: machine.disk.path)[.size] as? Int64) ?? 0
             all.append(machine)
             save()
-            HengeLog.log("machines", "imported \(machine.name) (\(machine.diskBytes >> 30) GB disk)")
+            TuxLog.log("machines", "imported \(machine.name) (\(machine.diskBytes >> 30) GB disk)")
         } catch {
             lastError = error.localizedDescription
-            HengeLog.log("machines", "import of \(folder.lastPathComponent) failed: \(error.localizedDescription)")
+            TuxLog.log("machines", "import of \(folder.lastPathComponent) failed: \(error.localizedDescription)")
         }
         importing = nil
     }
@@ -169,7 +169,7 @@ final class Machines: ObservableObject {
             }
             do { lastExport = try await writeExport(machine) } catch {
                 lastError = error.localizedDescription
-                HengeLog.log("machines", "export of \(machine.name) failed: \(error.localizedDescription)")
+                TuxLog.log("machines", "export of \(machine.name) failed: \(error.localizedDescription)")
             }
         }
     }
@@ -206,7 +206,7 @@ final class Machines: ObservableObject {
             try? fm.removeItem(at: partial)
             throw error
         }
-        HengeLog.log("machines", "exported \(machine.name) to \(final.path)")
+        TuxLog.log("machines", "exported \(machine.name) to \(final.path)")
         return final
     }
 
@@ -270,7 +270,7 @@ final class Machines: ObservableObject {
         guard let data = try? Data(contentsOf: listURL) else { return }
         guard let list = MachineList.decode(data) else {
             listUnreadable = true
-            HengeLog.log("machines", "machines.json (\(data.count) bytes) could not be read")
+            TuxLog.log("machines", "machines.json (\(data.count) bytes) could not be read")
             return
         }
         all = list

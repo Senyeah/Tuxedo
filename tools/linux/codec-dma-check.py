@@ -5,7 +5,7 @@
 # ///
 """The hvcodec DMA channel in the guest (docs/guest-video-encode-plan.md, VE4.2 to VE4.5).
 
-Boots a clone of the desktop image through U-Boot with `hengevm --vcodec-dma --share DIR` and, over the serial console:
+Boots a clone of the desktop image through U-Boot with `tuxvm --vcodec-dma --share DIR` and, over the serial console:
   1. the device is on the bus, and no driver has it before henge-codec-dkms;
   2. installs henge-codec-dkms (--out codec/) with apt, which brings dkms, gcc and the headers: DKMS must build the
      module, and /dev/hvcodec must be there at once, root:video 0660, with no restart;
@@ -44,7 +44,7 @@ TCP = "HENGE_VCODEC=10.0.2.4:8470"
 
 
 def boot(args, disk, share, err_log):
-    argv = ["/bin/sh", "-c", 'exec "$@" 2>>"$0"', err_log, args.hengevm, "--firmware", args.firmware,
+    argv = ["/bin/sh", "-c", 'exec "$@" 2>>"$0"', err_log, args.tuxvm, "--firmware", args.firmware,
             "--disk", disk, "--ram", str(args.ram), "--cpus", str(args.cpus), "--display", "1280x800", "--share", share,
             "--vcodec-dma"]
     print(f"--   booting {os.path.basename(disk)} through U-Boot (host load average {os.getloadavg()[0]:.1f})")
@@ -73,7 +73,7 @@ def hvxfer(p, chan, fmt, frames, pad=0):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--hengevm", default=os.path.join(ROOT, "build", "hengevm"))
+    ap.add_argument("--tuxvm", default=os.path.join(ROOT, "build", "tuxvm"))
     ap.add_argument("--linux-dir", help="u-boot.bin and the images (default: build/linux of the main checkout)")
     ap.add_argument("--image", help="default: KW-out/debian-desktop.img in --linux-dir")
     ap.add_argument("--firmware", help="default: u-boot.bin in --linux-dir")
@@ -87,13 +87,13 @@ def main():
     ap.add_argument("--no-ffmpeg", action="store_true")
     ap.add_argument("--kernel-update", action="store_true", help="VE4.5")
     ap.add_argument("--results", help="write the measurements here as JSON")
-    ap.add_argument("--keep-log", help="copy hengevm's stderr here")
+    ap.add_argument("--keep-log", help="copy tuxvm's stderr here")
     args = ap.parse_args()
     args.linux_dir = args.linux_dir or vc.linux_dir()
     image = args.image or os.path.join(args.linux_dir, "KW-out", "debian-desktop.img")
     args.firmware = args.firmware or os.path.join(args.linux_dir, "u-boot.bin")
     debs = sorted(f for f in os.listdir(os.path.join(args.out, "codec")) if f.startswith("henge-codec-dkms_") and f.endswith(".deb"))
-    for f in (args.hengevm, image, args.firmware):
+    for f in (args.tuxvm, image, args.firmware):
         if not os.path.exists(f):
             raise Fail(f"missing {f}")
     if not debs:
@@ -126,7 +126,7 @@ def main():
                 if args.clips and os.path.exists(os.path.join(args.clips, name)):
                     shutil.copy(os.path.join(args.clips, name), share)
                 vc.make_clip(os.path.join(share, name), "hevc8", vc.SIZES[size], 3)
-        disk, err_log = os.path.join(tmp, "disk.img"), os.path.join(tmp, "hengevm.stderr")
+        disk, err_log = os.path.join(tmp, "disk.img"), os.path.join(tmp, "tuxvm.stderr")
         r = subprocess.run(["/bin/cp", "-c", image, disk], capture_output=True, text=True)
         if r.returncode:
             raise Fail(f"cannot clone {image}: {r.stderr.strip()}")
@@ -250,7 +250,7 @@ def main():
             if p.isalive():
                 poweroff(p)
             log = open(err_log, errors="replace").read()
-            for line in re.findall(r"hengevm: vcodec: [^\n]+|virtio-hvcodec[^\n]+", log)[-12:]:
+            for line in re.findall(r"tuxvm: vcodec: [^\n]+|virtio-hvcodec[^\n]+", log)[-12:]:
                 print("     " + line)
             if args.keep_log:
                 shutil.copy(err_log, args.keep_log)

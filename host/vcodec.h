@@ -1,7 +1,7 @@
 /* hvcodec: the guest's video codecs on the host's VideoToolbox (docs/guest-video-encode-plan.md).
-   The protocol is in vcodec_proto.h. Off unless hengevm runs with --vcodec. */
-#ifndef HENGEVM_VCODEC_H
-#define HENGEVM_VCODEC_H
+   The protocol is in vcodec_proto.h. Off unless tuxvm runs with --vcodec. */
+#ifndef TUXVM_VCODEC_H
+#define TUXVM_VCODEC_H
 
 #include <stdint.h>
 

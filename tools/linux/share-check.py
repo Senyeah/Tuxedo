@@ -27,7 +27,7 @@ import pexpect
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SHELL = r"henge@henge:\S*\$ "
-MARK = "HENGE_RC_"
+MARK = "TUX_RC_"
 MB = 1 << 20
 
 
@@ -36,8 +36,8 @@ class Fail(Exception):
 
 
 def argv(args, disk, share):
-    # hengevm's stderr goes to a file so it cannot break the console parsing
-    cmd = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', disk + ".stderr", args.hengevm, "--firmware", args.firmware, "--ram", "2048", "--cpus", str(args.cpus), "--disk", disk]
+    # tuxvm's stderr goes to a file so it cannot break the console parsing
+    cmd = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', disk + ".stderr", args.tuxvm, "--firmware", args.firmware, "--ram", "2048", "--cpus", str(args.cpus), "--disk", disk]
     return cmd + (["--share", share] if share else [])
 
 
@@ -92,7 +92,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default=os.path.join(ROOT, "build", "linux", "debian-console.img"))
     ap.add_argument("--firmware", default=os.path.join(ROOT, "build", "linux", "u-boot.bin"))
-    ap.add_argument("--hengevm", default=os.path.join(ROOT, "build", "hengevm"))
+    ap.add_argument("--tuxvm", default=os.path.join(ROOT, "build", "tuxvm"))
     ap.add_argument("--cpus", type=int, default=2)
     ap.add_argument("--size-mb", type=int, default=100, help="size of the copy test in each direction")
     ap.add_argument("--work-dir", help="where the clone goes (the image's APFS volume; default TMPDIR)")
@@ -100,7 +100,7 @@ def main():
 
     tmp = tempfile.mkdtemp(prefix="share-check-", dir=args.work_dir)
     disk = os.path.join(tmp, "disk.img")
-    # hengevm listens on "<share>.sock", and a unix socket path is limited to 103 characters
+    # tuxvm listens on "<share>.sock", and a unix socket path is limited to 103 characters
     share = tempfile.mkdtemp(prefix="shc-", dir="/tmp")
     p = None
     try:
@@ -235,7 +235,7 @@ def main():
         try:
             print("console tail:\n" + (p.before or "")[-3000:], file=sys.stderr)
             err = open(disk + ".stderr").read()
-            print("hengevm stderr tail:\n" + err[-2000:], file=sys.stderr)
+            print("tuxvm stderr tail:\n" + err[-2000:], file=sys.stderr)
         except Exception:
             pass
         return 1

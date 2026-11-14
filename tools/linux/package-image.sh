@@ -6,7 +6,7 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-LINUX=${HENGE_LINUX_OUT:-$HOME/Repos/Henge/build/linux}
+LINUX=${TUX_LINUX_OUT:-$HOME/Repos/Henge/build/linux}
 IMAGE= KIND= OUT= FIRMWARE=$LINUX/u-boot.bin MANIFEST= VERIFY=1 MIN_BUILD= TOUCH=0
 DATE=$(TZ=Etc/GMT-12 date +%Y%m%d)
 

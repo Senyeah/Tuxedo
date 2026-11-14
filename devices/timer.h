@@ -1,5 +1,5 @@
-#ifndef HENGEVM_TIMER_H
-#define HENGEVM_TIMER_H
+#ifndef TUXVM_TIMER_H
+#define TUXVM_TIMER_H
 
 #include <stdint.h>
 

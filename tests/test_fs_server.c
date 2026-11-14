@@ -879,7 +879,7 @@ static int case_sensitive_image(char mnt[PATH_MAX]) {
     char cmd[3 * PATH_MAX];
     snprintf(mnt, PATH_MAX, "%s/cs", base);
     snprintf(cmd, sizeof cmd,
-             "hdiutil create -quiet -size 16m -fs 'Case-sensitive APFS' -volname HengeCS '%s/cs.dmg' && "
+             "hdiutil create -quiet -size 16m -fs 'Case-sensitive APFS' -volname TuxCS '%s/cs.dmg' && "
              "mkdir -p '%s' && hdiutil attach -quiet -nobrowse -noverify -mountpoint '%s' '%s/cs.dmg'",
              base, mnt, mnt, base);
     return system(cmd) == 0;

@@ -152,17 +152,17 @@ enum Keys {
     ]
 
     static func press(_ code: UInt16, shifted: Bool = false) {
-        if shifted { henge_vm_key(shift, 1) }
-        henge_vm_key(code, 1)
-        henge_vm_key(code, 0)
-        if shifted { henge_vm_key(shift, 0) }
+        if shifted { tux_vm_key(shift, 1) }
+        tux_vm_key(code, 1)
+        tux_vm_key(code, 0)
+        if shifted { tux_vm_key(shift, 0) }
     }
 
     /// A letter (or space) with a modifier held.
     static func chord(_ modifier: UInt16, _ c: Character) {
-        henge_vm_key(modifier, 1)
+        tux_vm_key(modifier, 1)
         type(c)
-        henge_vm_key(modifier, 0)
+        tux_vm_key(modifier, 0)
     }
 
     /// One character at a time, for what the guest has to keep up with.
@@ -188,17 +188,17 @@ final class StickyKeys: ObservableObject {
 
     func toggle(_ code: UInt16) {
         if down.contains(code) {
-            henge_vm_key(code, 0)
+            tux_vm_key(code, 0)
             down.remove(code)
         } else {
-            henge_vm_key(code, 1)
+            tux_vm_key(code, 1)
             down.insert(code)
         }
     }
 
     func releaseAll() {
         guard !down.isEmpty else { return }
-        for code in down { henge_vm_key(code, 0) }
+        for code in down { tux_vm_key(code, 0) }
         down.removeAll()
     }
 }
@@ -268,12 +268,12 @@ private struct HeldKey: View {
                     .onChanged { _ in
                         guard !down else { return }
                         down = true
-                        henge_vm_key(code, 1)
+                        tux_vm_key(code, 1)
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     }
                     .onEnded { _ in
                         down = false
-                        henge_vm_key(code, 0)
+                        tux_vm_key(code, 0)
                         StickyKeys.shared.releaseAll()
                     }
             )

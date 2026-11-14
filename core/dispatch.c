@@ -169,7 +169,7 @@ static HvBlock *lookup(HvCpu *cpu, uint64_t va, uint64_t pa, uint32_t flags, con
         goto flush;
     }
     if (m->gen_checks && nb.jit_gen != __atomic_load_n(&m->jit_gen, __ATOMIC_SEQ_CST))
-        fprintf(stderr, "hengevm: cpu %u translated across a flush: gen %u to %u, placed at rx+%llx, used %llx, active %d\n", cpu->index, nb.jit_gen, m->jit_gen, (unsigned long long)(nb.code - m->jit.base) * 4, (unsigned long long)m->jit.used * 4, cpu->pc_state->active);
+        fprintf(stderr, "tuxvm: cpu %u translated across a flush: gen %u to %u, placed at rx+%llx, used %llx, active %d\n", cpu->index, nb.jit_gen, m->jit_gen, (unsigned long long)(nb.code - m->jit.base) * 4, (unsigned long long)m->jit.used * 4, cpu->pc_state->active);
     block_dump(&nb, code);
     /* ...then take the lock only to publish it. */
     if (pthread_mutex_trylock(&m->tr_mu) != 0) {
@@ -421,7 +421,7 @@ void hv_debug_el0_in_kernel(HvCpu *cpu, const char *what) {
                 else hi = mid - 1;
             }
             HvBlock *b = m->nblocks ? &m->blocks[lo] : NULL;
-            fprintf(stderr, "hengevm: el0 runs kernel code: block %llx flags %u (index %d of %d), flushes %llu, last stub %llx, "
+            fprintf(stderr, "tuxvm: el0 runs kernel code: block %llx flags %u (index %d of %d), flushes %llu, last stub %llx, "
                             "miss site %llx\n  recent:", b ? (unsigned long long)b->va : 0ull, b ? b->flags : 0, lo, m->nblocks,
                     (unsigned long long)m->stats.block_flushes, (unsigned long long)cpu->last_stub,
                     (unsigned long long)cpu->miss_site);
@@ -762,7 +762,7 @@ static void print_stats(HvCpu *cpu, int force) {
 static void chain(HvMachine *m, uint64_t *slot, HvBlock *b) {
     uint32_t idx = (uint32_t)(slot - m->slots);
     if (m->gen_checks && (b->jit_gen != m->jit_gen || (m->slot_site[idx] && (uint64_t)(m->slot_site[idx] - m->jit.base) >= m->jit.used)))
-        fprintf(stderr, "hengevm: chain slot %u site %p to rx+%llx va %llx: block gen %u now %u\n", idx, (void *)m->slot_site[idx], (unsigned long long)(b->code - m->jit.base) * 4, (unsigned long long)b->va, b->jit_gen, m->jit_gen);
+        fprintf(stderr, "tuxvm: chain slot %u site %p to rx+%llx va %llx: block gen %u now %u\n", idx, (void *)m->slot_site[idx], (unsigned long long)(b->code - m->jit.base) * 4, (unsigned long long)b->va, b->jit_gen, m->jit_gen);
     uint64_t xa = m->slot_xa[idx];
     if (xa) {
         /* From another page: only to the block in the physical page the exit's
@@ -859,7 +859,7 @@ static void stop_the_world(HvCpu *cpu) {
             hv_cpu_process_requests(cpu); /* one of them may be waiting on a TLBI of ours */
             if (spins > 100) sched_yield();
         }
-        if (m->gen_checks) for (int i = 0; i < m->ncpus; i++) if (m->cpus[i] && m->cpus[i] != cpu && m->cpus[i]->pc_state->active) fprintf(stderr, "hengevm: flush while cpu %d is active\n", i);
+        if (m->gen_checks) for (int i = 0; i < m->ncpus; i++) if (m->cpus[i] && m->cpus[i] != cpu && m->cpus[i]->pc_state->active) fprintf(stderr, "tuxvm: flush while cpu %d is active\n", i);
         pthread_mutex_lock(&m->tr_mu);
         hv_flush_blocks(m);
         pthread_mutex_unlock(&m->tr_mu);
@@ -1034,7 +1034,7 @@ static int run_loop(HvCpu *cpu, int one) {
         if ((m->log || m->gen_checks) && cpu->el && (cpu->sctlr_el1 & 1) && !((cpu->pc >> 55) & 1) && cpu->pc >= 0x100000000ull) { /* EL1 at a user address: how did we get here? */
             static int reported;
             if (reported++ < 4) {
-                fprintf(stderr, "hengevm: el1 at user pc %llx: previous block %llx flags %x (%u insns), exit reason %u, why %d, "
+                fprintf(stderr, "tuxvm: el1 at user pc %llx: previous block %llx flags %x (%u insns), exit reason %u, why %d, "
                                 "miss site %llx, elr %llx spsr %llx x30 %llx, fast resumes %llu\n  recent:",
                         (unsigned long long)cpu->pc, (unsigned long long)prev_pc, prev_b ? prev_b->flags : 0, prev_b ? prev_b->ninsns : 0,
                         last_reason, why, (unsigned long long)cpu->miss_site, (unsigned long long)cpu->elr_el1,
@@ -1047,7 +1047,7 @@ static int run_loop(HvCpu *cpu, int one) {
         if (m->log && !cpu->el && ((cpu->pc >> 55) & 1)) { /* EL0 can never run kernel code: say how we got here */
             static int reported;
             if (reported++ < 4)
-                fprintf(stderr, "hengevm: el0 at kernel pc %llx: previous block %llx, exit reason %u, why %d, miss site %llx, "
+                fprintf(stderr, "tuxvm: el0 at kernel pc %llx: previous block %llx, exit reason %u, why %d, miss site %llx, "
                                 "elr %llx spsr %llx x30 %llx\n",
                         (unsigned long long)cpu->pc, (unsigned long long)prev_pc, last_reason, why,
                         (unsigned long long)cpu->miss_site, (unsigned long long)cpu->elr_el1,
@@ -1075,7 +1075,7 @@ static int run_loop(HvCpu *cpu, int one) {
             /* Everything is about to be dropped, or just was (another CPU may have
                done the flush this lookup asked for): try again after. */
             if (m->flush_pending || __atomic_load_n(&m->stw_active, __ATOMIC_SEQ_CST) || m->stats.block_flushes != flushes) continue;
-            fprintf(stderr, "hengevm: cannot translate block at %llx\n", (unsigned long long)cpu->pc);
+            fprintf(stderr, "tuxvm: cannot translate block at %llx\n", (unsigned long long)cpu->pc);
             park(cpu);
             return HV_EXIT_UNSUPPORTED;
         }
@@ -1168,7 +1168,7 @@ static int run_loop(HvCpu *cpu, int one) {
         m->stats.blocks++;
         if (m->stats_interval && cpu->index == 0 && (m->stats.blocks & 0xffff) == 0) print_stats(cpu, 0);
         if (m->gen_checks && ((uint64_t)(b->code - m->jit.base) >= m->jit.used || b->jit_gen != __atomic_load_n(&m->jit_gen, __ATOMIC_SEQ_CST)))
-            fprintf(stderr, "hengevm: cpu %u entering %p (rx+%llx, used %llx) for va %llx: block gen %u, now %u, maker %u\n", cpu->index, (void *)b->code, (unsigned long long)(b->code - m->jit.base) * 4, (unsigned long long)m->jit.used * 4, (unsigned long long)b->va, b->jit_gen, m->jit_gen, b->maker);
+            fprintf(stderr, "tuxvm: cpu %u entering %p (rx+%llx, used %llx) for va %llx: block gen %u, now %u, maker %u\n", cpu->index, (void *)b->code, (unsigned long long)(b->code - m->jit.base) * 4, (unsigned long long)m->jit.used * 4, (unsigned long long)b->va, b->jit_gen, m->jit_gen, b->maker);
         hv_enter(cpu, b->code);
 
         if (cpu->exit_reason == HV_EXIT_BRANCH && cpu->last_stub && m->chain) {

@@ -60,13 +60,13 @@ def wait_display(p, want, limit=15):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--hengevm", default=os.path.join(smoke.ROOT, "build", "hengevm"))
+    ap.add_argument("--tuxvm", default=os.path.join(smoke.ROOT, "build", "tuxvm"))
     ap.add_argument("--linux-dir")
     ap.add_argument("--work-dir", help="where the clone goes (the image's APFS volume)")
     args = ap.parse_args()
     d = args.linux_dir or smoke.linux_dir()
     kernel, initrd, image = (os.path.join(d, f) for f in ("Image", "initrd.img", "debian-console.img"))
-    for f in (args.hengevm, kernel, initrd, image, image[:-4] + ".partuuid"):
+    for f in (args.tuxvm, kernel, initrd, image, image[:-4] + ".partuuid"):
         if not os.path.exists(f):
             raise Fail(f"missing {f}")
     partuuid = open(image[:-4] + ".partuuid").read().strip()
@@ -79,7 +79,7 @@ def main():
         r = subprocess.run(["/bin/cp", "-c", image, clone], capture_output=True, text=True)
         if r.returncode:
             raise Fail(f"cannot clone {image}: {r.stderr.strip()}")
-        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.hengevm, "--kernel", kernel,
+        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.tuxvm, "--kernel", kernel,
                 "--initrd", initrd, "--append", append, "--disk", clone, "--ram", "1024", "--display", "1920x1080", "--share", share]
         p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200),
                           env=dict(os.environ, HV_INPUT_FILE=infile))

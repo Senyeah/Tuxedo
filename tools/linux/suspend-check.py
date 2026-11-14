@@ -3,7 +3,7 @@
 # requires-python = ">=3.9"
 # dependencies = ["pexpect"]
 # ///
-"""E15 check: the guest does not see a suspended hengevm.
+"""E15 check: the guest does not see a suspended tuxvm.
 
 The iOS app pauses the machine (hv_vm_pause) when its scene goes to the background, and iOS then freezes
 the process while the host counter keeps running. This check does the same on the Mac. It boots a clone
@@ -11,12 +11,12 @@ of --image through U-Boot at --cpus CPUs, starts a sampler in the guest that log
 its wall clock twice a second, and then, for each length in --seconds:
 
   odd runs:  Ctrl-A s (pause), 10 s of host CPU measured while paused, SIGSTOP for the rest, SIGCONT, Ctrl-A s;
-  even runs: SIGTSTP (hengevm pauses, then stops itself) and SIGCONT (it continues and resumes).
+  even runs: SIGTSTP (tuxvm pauses, then stops itself) and SIGCONT (it continues and resumes).
 
 After each run the guest must show no RCU stall or other kernel warning, its boot-time clock must have
 advanced by the host's time less the pause (within --slack s) with no step over 2 s between samples, and
 its wall clock may step only forward and only by about the pause: the step systemd-timesyncd makes.
-The paused hengevm must use under --max-cpu percent of one core. --no-pause sends only SIGSTOP and SIGCONT
+The paused tuxvm must use under --max-cpu percent of one core. --no-pause sends only SIGSTOP and SIGCONT
 (the old behaviour): with --expect-stall the check passes only if the guest reports the stall.
 """
 import argparse
@@ -33,7 +33,7 @@ import pexpect
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SHELL = r"henge@henge:\S*\$ "
-MARK = "HENGE_RC_"
+MARK = "TUX_RC_"
 KERNEL_BAD = (r"WARNING:|BUG:|Oops|Call trace:|soft lockup|hard LOCKUP|rcu: INFO|detected stall|"
               r"blocked for more than|watchdog|clocksource|Unable to handle|Internal error")
 SAMPLES = "/tmp/henge-clock"
@@ -44,8 +44,8 @@ class Fail(Exception):
 
 
 def linux_dir():
-    if os.environ.get("HENGE_LINUX_OUT"):
-        return os.environ["HENGE_LINUX_OUT"]
+    if os.environ.get("TUX_LINUX_OUT"):
+        return os.environ["TUX_LINUX_OUT"]
     try:
         common = subprocess.run(["git", "-C", ROOT, "rev-parse", "--path-format=absolute", "--git-common-dir"],
                                 capture_output=True, text=True, check=True).stdout.strip()
@@ -107,13 +107,13 @@ def samples(p):
 def main():
     d = linux_dir()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--hengevm", default=os.path.join(ROOT, "build", "hengevm"))
+    ap.add_argument("--tuxvm", default=os.path.join(ROOT, "build", "tuxvm"))
     ap.add_argument("--image", default=os.path.join(d, "debian-console.img"))
     ap.add_argument("--firmware", default=os.path.join(d, "u-boot.bin"))
     ap.add_argument("--cpus", type=int, default=4)
     ap.add_argument("--seconds", default="30,120", help="pause lengths, comma separated")
     ap.add_argument("--slack", type=float, default=2.0, help="seconds the boot-time clock may be off")
-    ap.add_argument("--max-cpu", type=float, default=1.0, help="percent of one core a paused hengevm may use")
+    ap.add_argument("--max-cpu", type=float, default=1.0, help="percent of one core a paused tuxvm may use")
     ap.add_argument("--settle", type=float, default=15.0, help="seconds to watch the guest after a resume")
     ap.add_argument("--sync-wait", type=float, default=0, help="seconds to wait at the end for timesyncd's step")
     ap.add_argument("--no-pause", action="store_true", help="SIGSTOP and SIGCONT only (no hv_vm_pause)")
@@ -128,7 +128,7 @@ def main():
     stalls = 0
     try:
         subprocess.run(["/bin/cp", "-c", args.image, disk], check=True)
-        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', disk + ".stderr", args.hengevm, "--firmware", args.firmware, "--ram", "2048", "--cpus", str(args.cpus), "--disk", disk]
+        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', disk + ".stderr", args.tuxvm, "--firmware", args.firmware, "--ram", "2048", "--cpus", str(args.cpus), "--disk", disk]
         p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200))
         p.expect(r"\(automatic login\)", timeout=180)
         p.expect(SHELL, timeout=60)
@@ -194,7 +194,7 @@ def main():
             print(f"  {how} {length:.0f} s: host {host:.1f} s, paused {paused:.1f} s, guest boot-time clock "
                   f"{guest:.1f} s (want {want:.1f}), largest step {up_step:.2f} s; wall clock off "
                   f"{skew0:+.2f} s before, {skew1:+.2f} s after, steps {[round(s, 2) for s in wall_steps]}"
-                  + (f"; paused hengevm {cpu_pct:.2f}% of a core" if cpu_pct is not None else ""))
+                  + (f"; paused tuxvm {cpu_pct:.2f}% of a core" if cpu_pct is not None else ""))
             for l in bad[:12]:
                 print(f"    dmesg: {l}")
             if args.no_pause:
@@ -211,7 +211,7 @@ def main():
                     raise Fail(f"the guest's wall clock stepped {s:+.2f} s with {lag:.2f} s to put back")
                 lag -= s
             if cpu_pct is not None and cpu_pct > args.max_cpu:
-                raise Fail(f"the paused hengevm used {cpu_pct:.2f}% of a core")
+                raise Fail(f"the paused tuxvm used {cpu_pct:.2f}% of a core")
         if args.no_pause and args.expect_stall and not stalls:
             raise Fail("no RCU stall without the pause: the reproduction failed")
         if args.sync_wait and not args.no_pause:  # how long the guest's wall clock stays behind
@@ -226,14 +226,14 @@ def main():
         p.expect(pexpect.EOF, timeout=60)
         p.close()
         if p.exitstatus != 0:
-            raise Fail(f"hengevm exit status {p.exitstatus} after poweroff")
+            raise Fail(f"tuxvm exit status {p.exitstatus} after poweroff")
         print("suspend-check: PASS" + (f" ({stalls} stalls without the pause, as expected)" if args.no_pause else ""))
         return 0
     except (Fail, pexpect.ExceptionPexpect) as e:
         print(f"suspend-check: FAIL: {e}", file=sys.stderr)
         try:
             print("console tail:\n" + (p.before or "")[-3000:], file=sys.stderr)
-            print("hengevm stderr:\n" + open(disk + ".stderr", errors="replace").read()[-3000:], file=sys.stderr)
+            print("tuxvm stderr:\n" + open(disk + ".stderr", errors="replace").read()[-3000:], file=sys.stderr)
         except Exception:
             pass
         return 1

@@ -1,5 +1,5 @@
-#ifndef HENGEVM_PL061_H
-#define HENGEVM_PL061_H
+#ifndef TUXVM_PL061_H
+#define TUXVM_PL061_H
 
 #include <stdint.h>
 

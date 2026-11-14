@@ -27,7 +27,7 @@ enum PointerWatch {
         let rtldDefault = UnsafeMutableRawPointer(bitPattern: -2)
         guard let tp = dlsym(rtldDefault, "IOHIDEventGetType"), let fp = dlsym(rtldDefault, "IOHIDEventGetFloatValue"),
               let cp = dlsym(rtldDefault, "IOHIDEventGetChildren") else {
-            HengeLog.log("input", "pointer watch: no IOHIDEvent functions")
+            TuxLog.log("input", "pointer watch: no IOHIDEvent functions")
             return
         }
         let getType = unsafeBitCast(tp, to: GetType.self), getFloat = unsafeBitCast(fp, to: GetFloat.self)
@@ -49,20 +49,20 @@ enum PointerWatch {
             onPosition?(x, y)
             guard logging else { return }
             positions += 1
-            if logged < 30 { logged += 1; HengeLog.log("input", "pointer watch: \(x), \(y)") }
+            if logged < 30 { logged += 1; TuxLog.log("input", "pointer watch: \(x), \(y)") }
             guard Date().timeIntervalSince(last) >= 1 else { return }
-            HengeLog.log("input", "pointer watch: \(positions) positions, last \(Int(x)),\(Int(y)), types \(types.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }.joined(separator: " "))")
+            TuxLog.log("input", "pointer watch: \(positions) positions, last \(Int(x)),\(Int(y)), types \(types.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }.joined(separator: " "))")
             types = [:]
             positions = 0
             last = Date()
         }
         let sel = NSSelectorFromString("_setHIDEventObserver:onQueue:")
         guard UIApplication.shared.responds(to: sel) else {
-            HengeLog.log("input", "pointer watch: no _setHIDEventObserver:onQueue:")
+            TuxLog.log("input", "pointer watch: no _setHIDEventObserver:onQueue:")
             return
         }
         let set = unsafeBitCast(UIApplication.shared.method(for: sel), to: SetObserver.self)
         set(UIApplication.shared, sel, unsafeBitCast(observer, to: AnyObject.self), DispatchQueue.main)
-        HengeLog.log("input", "pointer watch: on")
+        TuxLog.log("input", "pointer watch: on")
     }
 }

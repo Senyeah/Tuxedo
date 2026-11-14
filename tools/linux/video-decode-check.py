@@ -5,23 +5,23 @@
 # ///
 """Guest video decode (docs/guest-video-decode-research.md): VA-API in the guest on VideoToolbox, for H.264, VP9 and AV1.
 
-Boots a clone of the desktop image with `hengevm --gpu-accel --gpu-video` (built with GFX=1 against a virglrenderer that has
+Boots a clone of the desktop image with `tuxvm --gpu-accel --gpu-video` (built with GFX=1 against a virglrenderer that has
 tools/gfx/virglrenderer-videotoolbox.patch) and checks, over the serial console:
   1. packages: mesa-va-drivers, vainfo, ffmpeg and mpv (apt install when missing; --image names an image that has them).
   2. vainfo lists each codec's profiles (PROFILES) with VAEntrypointVLD.
   3. correctness, the frame checksum test: each test clip (CLIPS) decoded by `ffmpeg -hwaccel vaapi -f framemd5` and by
      `-hwaccel none`. Every frame must match. The clips are made on the Mac with FFmpeg (libx264, libvpx-vp9, libsvtav1;
-     1080p30, 8 and 10 bits) and reach the guest through hengevm's --share folder.
+     1080p30, 8 and 10 bits) and reach the guest through tuxvm's --share folder.
   4. speed, for each codec's first clip: `ffmpeg -benchmark -hwaccel vaapi -hwaccel_output_format vaapi -f null -`
      against `-hwaccel none`: frames per second and the guest CPU time. The hardware path must beat the clip's frame rate.
   5. mpv --hwdec=vaapi --vo=gpu on the desktop, with the first clip: dropped frames (printed; not a gate).
-  6. hengevm's log: VideoToolbox sessions on the hardware decoder, no decode error, and one codec per VA-API run that
+  6. tuxvm's log: VideoToolbox sessions on the hardware decoder, no decode error, and one codec per VA-API run that
      decoded every frame of the clip on VideoToolbox (the back end logs its totals when the guest destroys it).
-  7. hengevm's log: every frame's planes went to the guest's textures on the GPU (IOSurface pbuffers). With
-     VREND_VIDEO_CPU_COPY=1 in the environment hengevm copies them on the CPU instead, to measure against.
+  7. tuxvm's log: every frame's planes went to the guest's textures on the GPU (IOSurface pbuffers). With
+     VREND_VIDEO_CPU_COPY=1 in the environment tuxvm copies them on the CPU instead, to measure against.
 --codecs picks the codecs (default all), --bench N repeats step 4's VA-API run N times and reports the median, and
 --clips DIR keeps the clips between runs.
-With --no-video, hengevm runs without --gpu-video: vainfo must list no decode profile and the back end must not start.
+With --no-video, tuxvm runs without --gpu-video: vainfo must list no decode profile and the back end must not start.
 The shared image never changes: the guest runs on an APFS clone. Exit 1 on a failed check.
 """
 import argparse
@@ -36,14 +36,14 @@ import time
 import pexpect
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-MARK = "HENGE_RC_"
+MARK = "TUX_RC_"
 SHELL = r"henge@henge:[^\n]*\$ "
 WAYLAND = "export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0"
 PACKAGES = ["mesa-va-drivers", "vainfo", "ffmpeg", "mpv"]
 # Debian's ffmpeg has VA-API; henge-ffmpeg, first in PATH when installed, does not (it decodes with -hwaccel henge).
 FFMPEG = "/usr/bin/ffmpeg"
 RENDER = "/dev/dri/renderD128"
-# VREND_VIDEO_CPU_COPY=1 in the environment: hengevm copies the planes on the CPU (the spike's path), to measure against
+# VREND_VIDEO_CPU_COPY=1 in the environment: tuxvm copies the planes on the CPU (the spike's path), to measure against
 CPU_COPY = os.environ.get("VREND_VIDEO_CPU_COPY") == "1"
 FPS = 30
 # codec: the VA profiles vainfo must list with VAEntrypointVLD
@@ -81,8 +81,8 @@ class Fail(Exception):
 
 
 def linux_dir():
-    if os.environ.get("HENGE_LINUX_OUT"):
-        return os.environ["HENGE_LINUX_OUT"]
+    if os.environ.get("TUX_LINUX_OUT"):
+        return os.environ["TUX_LINUX_OUT"]
     common = subprocess.run(["git", "-C", ROOT, "rev-parse", "--path-format=absolute", "--git-common-dir"],
                             capture_output=True, text=True, check=True).stdout.strip()
     return os.path.join(os.path.dirname(common), "build", "linux")
@@ -151,7 +151,7 @@ def make_clips(share, seconds, names):
 def boot(args, disk, share, err_log):
     d = args.linux_dir
     partuuid = open(os.path.join(d, "debian-desktop.partuuid")).read().strip()
-    argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err_log, args.hengevm, "--kernel", os.path.join(d, "Image"), "--initrd", os.path.join(d, "initrd.img"),
+    argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err_log, args.tuxvm, "--kernel", os.path.join(d, "Image"), "--initrd", os.path.join(d, "initrd.img"),
             "--append", f"console=ttyAMA0 root=PARTUUID={partuuid} rw", "--disk", disk, "--ram", str(args.ram),
             "--cpus", str(args.cpus), "--display", "1920x1080", "--gpu-accel", "--share", share]
     if not args.no_video:
@@ -249,7 +249,7 @@ def bench(p, pid, name, hw):
     host = c1 - c0 if c0 is not None and c1 is not None else float("nan")
     fps = n / real
     line = (f"{tag}: {n} frames in {real:.2f} s = {fps:.1f} fps, guest CPU {user + syst:.2f} s "
-            f"(user {user:.2f}, sys {syst:.2f}), hengevm CPU {host:.2f} s ({100 * host / (t1 - t0):.0f}% of one core)")
+            f"(user {user:.2f}, sys {syst:.2f}), tuxvm CPU {host:.2f} s ({100 * host / (t1 - t0):.0f}% of one core)")
     print(f"     [{name}] {line}")
     return fps, line
 
@@ -305,12 +305,12 @@ def host_log(err_log):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--hengevm", default=os.path.join(ROOT, "build", "accel", "hengevm"))
+    ap.add_argument("--tuxvm", default=os.path.join(ROOT, "build", "accel", "tuxvm"))
     ap.add_argument("--linux-dir", help="Image, initrd.img and the desktop partuuid (default: build/linux of the main checkout)")
     ap.add_argument("--image", help="a desktop image that has the packages (default: debian-desktop.img, then apt install)")
     ap.add_argument("--work-dir", help="where the disk clone and the clips go (the image's APFS volume)")
     ap.add_argument("--keep-image", help="save the guest disk here after the run (has the packages)")
-    ap.add_argument("--keep-log", help="copy hengevm's stderr (HV_VIRGL_VERBOSE=1) here")
+    ap.add_argument("--keep-log", help="copy tuxvm's stderr (HV_VIRGL_VERBOSE=1) here")
     ap.add_argument("--seconds", type=int, default=15, help="clip length")
     ap.add_argument("--clips", help="keep the clips in this directory and use the ones already there")
     ap.add_argument("--cpus", type=int, default=4)
@@ -326,7 +326,7 @@ def main():
     names = [n for n in CLIPS if CLIPS[n][0] in codecs]
     args.linux_dir = args.linux_dir or linux_dir()
     image = args.image or os.path.join(args.linux_dir, "debian-desktop.img")
-    for f in (args.hengevm, image, os.path.join(args.linux_dir, "Image"), os.path.join(args.linux_dir, "initrd.img"),
+    for f in (args.tuxvm, image, os.path.join(args.linux_dir, "Image"), os.path.join(args.linux_dir, "initrd.img"),
               os.path.join(args.linux_dir, "debian-desktop.partuuid")):
         if not os.path.exists(f):
             raise Fail(f"missing {f}")
@@ -335,7 +335,7 @@ def main():
         share = args.clips or os.path.join(tmp, "share")
         os.makedirs(share, exist_ok=True)
         make_clips(share, args.seconds, names)
-        disk, err_log = os.path.join(tmp, "disk.img"), os.path.join(tmp, "hengevm.stderr")
+        disk, err_log = os.path.join(tmp, "disk.img"), os.path.join(tmp, "tuxvm.stderr")
         r = subprocess.run(["/bin/cp", "-c", image, disk], capture_output=True, text=True)
         if r.returncode:
             raise Fail(f"cannot clone {image}: {r.stderr.strip()}")
@@ -384,7 +384,7 @@ def main():
         except pexpect.TIMEOUT:
             raise Fail("timeout waiting for the guest; tail:\n" + (p.before or "")[-1500:])
         except pexpect.EOF:
-            raise Fail("hengevm ended early; tail:\n" + (p.before or "")[-1500:] + "\nstderr:\n" + open(err_log, errors="replace").read()[-2000:])
+            raise Fail("tuxvm ended early; tail:\n" + (p.before or "")[-1500:] + "\nstderr:\n" + open(err_log, errors="replace").read()[-2000:])
         finally:
             if p.isalive():
                 p.sendline("sudo poweroff")
@@ -396,26 +396,26 @@ def main():
             sessions, done, bad, started, copies = host_log(err_log)
             if args.keep_log and os.path.exists(err_log):
                 shutil.copy(err_log, args.keep_log)
-            print(f"     hengevm: {len(sessions)} VideoToolbox session(s): " + ", ".join(f"{c} {s} {k}" for c, s, k in sessions[:8]))
+            print(f"     tuxvm: {len(sessions)} VideoToolbox session(s): " + ", ".join(f"{c} {s} {k}" for c, s, k in sessions[:8]))
             for c in done:
-                print(f"     hengevm {c[0]} codec: {c[1]} frames decoded on VideoToolbox, {c[2]} failed, {c[3]} skipped, "
+                print(f"     tuxvm {c[0]} codec: {c[1]} frames decoded on VideoToolbox, {c[2]} failed, {c[3]} skipped, "
                       f"{c[4]} session(s), {c[5]} format updates, at most {c[6]} slice(s) per decode call")
             if copies:
                 n = sum(c[0] + c[1] for c in copies)
-                print(f"     hengevm plane copies: {sum(c[0] for c in copies):.0f} frames on the GPU, {sum(c[1] for c in copies):.0f} "
+                print(f"     tuxvm plane copies: {sum(c[0] for c in copies):.0f} frames on the GPU, {sum(c[1] for c in copies):.0f} "
                       f"on the CPU, at most {max(c[2] for c in copies):.0f} output surfaces per codec, "
                       f"{1000 * sum(c[3] for c in copies) / max(n, 1):.0f} us CPU per frame in the copies")
             if copies and not CPU_COPY and any(c[1] for c in copies):
                 print("FAIL some frames were copied on the CPU: the IOSurface pbuffer path failed")
                 ok = False
             if bad:
-                print(f"FAIL hengevm logged {len(bad)} video errors, first: {bad[0].strip()}")
+                print(f"FAIL tuxvm logged {len(bad)} video errors, first: {bad[0].strip()}")
                 ok = False
             if args.keep_image:
                 shutil.move(disk, args.keep_image)
                 print(f"     kept the guest disk as {args.keep_image}")
         if p.exitstatus != 0:
-            raise Fail(f"hengevm exit status {p.exitstatus}, expected 0 after poweroff")
+            raise Fail(f"tuxvm exit status {p.exitstatus}, expected 0 after poweroff")
         print("ok   power off: exit status 0")
         if args.no_video:
             if started or sessions or done:

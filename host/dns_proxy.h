@@ -1,5 +1,5 @@
-#ifndef HENGEVM_DNS_PROXY_H
-#define HENGEVM_DNS_PROXY_H
+#ifndef TUXVM_DNS_PROXY_H
+#define TUXVM_DNS_PROXY_H
 
 #include <stdint.h>
 

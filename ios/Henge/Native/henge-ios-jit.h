@@ -38,12 +38,12 @@
  * natural fit -- TCG sizes its translation buffer once at init from
  * `-accel tcg,tb-size=N` and flushes rather than grows when it fills.
  *
- * henge_ios_jit_install_trap_handler() must be called early in app startup so
+ * tux_ios_jit_install_trap_handler() must be called early in app startup so
  * that a missed trap degrades into a NULL return instead of killing the process.
  */
 
-#ifndef HENGE_IOS_JIT_H
-#define HENGE_IOS_JIT_H
+#ifndef TUX_IOS_JIT_H
+#define TUX_IOS_JIT_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -54,27 +54,27 @@ extern "C" {
 #endif
 
 /* See henge-display.h for why this is necessary. */
-#define HENGE_EXPORT __attribute__((visibility("default")))
+#define TUX_EXPORT __attribute__((visibility("default")))
 
-typedef struct HengeDualMapping {
+typedef struct TuxDualMapping {
     uint8_t *rw_addr;   /* writable alias  -- emit code here            */
     uint8_t *rx_addr;   /* executable alias -- branch here              */
     size_t   size;
-} HengeDualMapping;
+} TuxDualMapping;
 
 /*
  * Install SIGTRAP/SIGBUS handlers that skip an unserviced BreakpointJIT trap
  * (pc += 4, x0 = 0) instead of letting it kill the process. Call once, early,
  * before any JIT allocation. Safe to call when StikDebug is absent.
  */
-HENGE_EXPORT void henge_ios_jit_install_trap_handler(void);
+TUX_EXPORT void tux_ios_jit_install_trap_handler(void);
 
 /*
  * Allocate one dual-mapped region of `bytes`. Returns a mapping whose rw_addr is
  * NULL on failure. `bytes` is rounded up to a 16 KiB page multiple by the caller's
  * contract -- StikDebug prepares whole pages.
  */
-HengeDualMapping henge_ios_jit_allocate(size_t bytes);
+TuxDualMapping tux_ios_jit_allocate(size_t bytes);
 
 /*
  * Claim the JIT region now, at app launch, and hold it until QEMU asks.
@@ -83,26 +83,26 @@ HengeDualMapping henge_ios_jit_allocate(size_t bytes);
  * let go and no executable memory can be had at all. Pass the same size QEMU
  * will ask for (tb-size).
  */
-HENGE_EXPORT bool henge_ios_jit_prewarm(size_t bytes);
-HENGE_EXPORT bool henge_ios_jit_prewarm_self(size_t bytes);
+TUX_EXPORT bool tux_ios_jit_prewarm(size_t bytes);
+TUX_EXPORT bool tux_ios_jit_prewarm_self(size_t bytes);
 
 /*
  * The native runtime shares the prewarmed region with QEMU: it takes bytes from the bottom, QEMU the top. Call before
  * writing anything below `end` (an offset from the region's start); false means QEMU holds that part.
  */
-HENGE_EXPORT bool henge_ios_jit_reserve_bottom(size_t end);
+TUX_EXPORT bool tux_ios_jit_reserve_bottom(size_t end);
 
-/* Release a mapping obtained from henge_ios_jit_allocate(). */
-void henge_ios_jit_release(HengeDualMapping *m);
+/* Release a mapping obtained from tux_ios_jit_allocate(). */
+void tux_ios_jit_release(TuxDualMapping *m);
 
 /*
  * Tell StikDebug to detach. RX mappings already obtained stay valid and
  * executable; no further allocation is possible afterwards.
  */
-HENGE_EXPORT void henge_ios_jit_detach(void);
+TUX_EXPORT void tux_ios_jit_detach(void);
 
 /* True once a successful allocation has happened -- i.e. JIT is genuinely live. */
-HENGE_EXPORT bool henge_ios_jit_is_available(void);
+TUX_EXPORT bool tux_ios_jit_is_available(void);
 
 /*
  * Whether this process can execute memory it wrote itself, through a plain
@@ -120,28 +120,28 @@ HENGE_EXPORT bool henge_ios_jit_is_available(void);
  * is wrong on at least one real combination -- iOS 26, where StikDebug attaches
  * but services no traps because MAP_JIT works and it does not need to.
  */
-HENGE_EXPORT bool henge_ios_jit_mapjit_works(void);
+TUX_EXPORT bool tux_ios_jit_mapjit_works(void);
 
 /*
  * When the region was made without a trap servicer (before iOS 26: TrollStore, a jailbreak, or a debugger that has let go),
  * which way: "MAP_JIT" or "plain". NULL otherwise.
  */
-HENGE_EXPORT const char *henge_ios_jit_self_route(void);
+TUX_EXPORT const char *tux_ios_jit_self_route(void);
 
 /*
  * Log the process's phys_footprint -- the number jetsam actually kills on.
  * `tag` labels the call site in the log.
  */
-HENGE_EXPORT void henge_ios_jit_log_footprint(const char *tag);
+TUX_EXPORT void tux_ios_jit_log_footprint(const char *tag);
 
 /*
  * Bytes this process may still allocate before jetsam kills it. Used to size the
  * guest's RAM to the device rather than to a guess.
  */
-HENGE_EXPORT size_t henge_ios_available_memory(void);
+TUX_EXPORT size_t tux_ios_available_memory(void);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* HENGE_IOS_JIT_H */
+#endif /* TUX_IOS_JIT_H */

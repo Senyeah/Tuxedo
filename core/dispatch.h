@@ -1,5 +1,5 @@
-#ifndef HENGEVM_DISPATCH_H
-#define HENGEVM_DISPATCH_H
+#ifndef TUXVM_DISPATCH_H
+#define TUXVM_DISPATCH_H
 
 #include "cpu.h"
 #include "machine.h"

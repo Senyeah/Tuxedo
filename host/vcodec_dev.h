@@ -9,8 +9,8 @@
    request drops it.
 
    Shared with the kernel module, so plain C with no host types. Little-endian, as the guest. */
-#ifndef HENGE_VCODEC_DEV_H
-#define HENGE_VCODEC_DEV_H
+#ifndef TUX_VCODEC_DEV_H
+#define TUX_VCODEC_DEV_H
 
 #ifdef __KERNEL__
 #include <linux/types.h>

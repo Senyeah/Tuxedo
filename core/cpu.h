@@ -1,5 +1,5 @@
-#ifndef HENGEVM_CPU_H
-#define HENGEVM_CPU_H
+#ifndef TUXVM_CPU_H
+#define TUXVM_CPU_H
 
 #include <stddef.h>
 #include <stdint.h>

@@ -1,5 +1,5 @@
-#ifndef HENGEVM_VGPU_VIRGL_H
-#define HENGEVM_VGPU_VIRGL_H
+#ifndef TUXVM_VGPU_VIRGL_H
+#define TUXVM_VGPU_VIRGL_H
 
 #include <stdint.h>
 

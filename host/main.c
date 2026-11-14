@@ -3,7 +3,7 @@
 #include "net_slirp.h"
 #include "vcodec.h"
 #include <time.h>
-/* hengevm: boots a Linux guest on the macOS host. See usage() for the flags. */
+/* tuxvm: boots a Linux guest on the macOS host. See usage() for the flags. */
 #include <CoreFoundation/CoreFoundation.h>
 #include <mach/mach.h>
 #include <pthread.h>
@@ -285,15 +285,15 @@ static int folder_put(const char *name, const char *path, int mode, int live) {
         if (!folder_list[i].name && hole < 0) hole = i;
     if (i == nfolders && hole >= 0) i = hole;
     if (i == HV_FS_MAX_FOLDERS) {
-        fprintf(stderr, "hengevm: at most %d folders\n", HV_FS_MAX_FOLDERS);
+        fprintf(stderr, "tuxvm: at most %d folders\n", HV_FS_MAX_FOLDERS);
         return -1;
     }
     if (strlen(name) > HV_FS_NAME_MAX || strlen(path) >= sizeof folder_paths[0]) {
-        fprintf(stderr, "hengevm: folder %s: name or path too long\n", name);
+        fprintf(stderr, "tuxvm: folder %s: name or path too long\n", name);
         return -1;
     }
     if (live && hv_fs_folder_set(i, NULL, name, path, mode) != 0) {
-        fprintf(stderr, "hengevm: folder %s: %s\n", name, strerror(errno));
+        fprintf(stderr, "tuxvm: folder %s: %s\n", name, strerror(errno));
         return -1;
     }
     snprintf(folder_names[i], sizeof folder_names[i], "%s", name);
@@ -309,7 +309,7 @@ static int folder_arg(const char *arg) {
     const char *eq = strchr(arg, '=');
     char name[HV_FS_NAME_MAX + 2], path[1024];
     if (!eq || eq == arg || (size_t)(eq - arg) > HV_FS_NAME_MAX || strlen(eq + 1) >= sizeof path) {
-        fprintf(stderr, "hengevm: --folder %s: want NAME=DIR[:ro|cow|rw]\n", arg);
+        fprintf(stderr, "tuxvm: --folder %s: want NAME=DIR[:ro|cow|rw]\n", arg);
         return -1;
     }
     snprintf(name, sizeof name, "%.*s", (int)(eq - arg), arg);
@@ -327,14 +327,14 @@ typedef struct FolderAsk {
     char name[HV_FS_NAME_MAX + 1];
 } FolderAsk;
 
-/* Prints the helper's answer as "hengevm: folder NAME answer: ok|failed: TEXT" (files-check waits for it). */
+/* Prints the helper's answer as "tuxvm: folder NAME answer: ok|failed: TEXT" (files-check waits for it). */
 static void *folder_answer_wait(void *arg) {
     FolderAsk *a = arg;
     int ok = 0, rc = 0;
     char *text = NULL;
     for (int t = 0; t < 1800 && (rc = hv_fs_folder_answered(a->index, a->ask, &ok, &text)) == 0; t++) usleep(100000);
-    if (rc == 1) fprintf(stderr, "hengevm: folder %s answer: %s: %s\n", a->name, ok ? "ok" : "failed", text ? text : "");
-    else fprintf(stderr, "hengevm: folder %s: no answer\n", a->name);
+    if (rc == 1) fprintf(stderr, "tuxvm: folder %s answer: %s: %s\n", a->name, ok ? "ok" : "failed", text ? text : "");
+    else fprintf(stderr, "tuxvm: folder %s: no answer\n", a->name);
     free(text);
     free(a);
     return NULL;
@@ -346,7 +346,7 @@ static void folder_line(const char *line) {
     char name[HV_FS_NAME_MAX + 2] = "";
     if (!strcmp(line, "folders")) {
         char *j = hv_fs_folders_json(NULL);
-        fprintf(stderr, "hengevm: folders: %s", j ? j : "?\n");
+        fprintf(stderr, "tuxvm: folders: %s", j ? j : "?\n");
         free(j);
         return;
     }
@@ -354,14 +354,14 @@ static void folder_line(const char *line) {
         const char *p = line + 11, *sp = strchr(p, ' '), *last = strrchr(p, ' ');
         int mode = last && last > sp ? hv_fs_mode_parse(last + 1) : -1;
         if (!sp || mode < 0 || sp - p > HV_FS_NAME_MAX) {
-            fprintf(stderr, "hengevm: input: %s: want folder add NAME PATH ro|cow|rw\n", line);
+            fprintf(stderr, "tuxvm: input: %s: want folder add NAME PATH ro|cow|rw\n", line);
             return;
         }
         char path[1024];
         snprintf(name, sizeof name, "%.*s", (int)(sp - p), p);
         snprintf(path, sizeof path, "%.*s", (int)(last - sp - 1), sp + 1);
         if (folder_put(name, path, mode, 1) == 0 && (!hv_vm_virt() || !hv_vm_virt()->fs))
-            fprintf(stderr, "hengevm: folder %s is in the table, but this machine has no virtio-fs device (boot with --folder)\n", name);
+            fprintf(stderr, "tuxvm: folder %s is in the table, but this machine has no virtio-fs device (boot with --folder)\n", name);
         return;
     }
     static const char *const verbs[] = {"folder remove ", "folder offline ", "folder online ", "folder touch ",
@@ -370,7 +370,7 @@ static void folder_line(const char *line) {
         if (strncmp(line, verbs[k], strlen(verbs[k]))) continue;
         snprintf(name, sizeof name, "%s", line + strlen(verbs[k]));
         int i = hv_fs_folder_find(name);
-        if (i < 0) fprintf(stderr, "hengevm: input: no folder %s\n", name);
+        if (i < 0) fprintf(stderr, "tuxvm: input: no folder %s\n", name);
         else if (k == 0) {
             hv_fs_folder_clear(i);
             folder_list[i].name = NULL; /* a hole: the others keep their indexes, so the guest's nodes stay good */
@@ -380,7 +380,7 @@ static void folder_line(const char *line) {
             long ask = hv_fs_folder_ask(i, k == 4 ? HV_FS_ASK_EXPORT : HV_FS_ASK_DISCARD);
             FolderAsk *a = ask > 0 ? malloc(sizeof *a) : NULL;
             pthread_t t;
-            if (ask < 0) fprintf(stderr, "hengevm: folder %s: %s\n", name, strerror(errno));
+            if (ask < 0) fprintf(stderr, "tuxvm: folder %s: %s\n", name, strerror(errno));
             else if (a) {
                 *a = (FolderAsk){i, ask, ""};
                 snprintf(a->name, sizeof a->name, "%s", name);
@@ -390,7 +390,7 @@ static void folder_line(const char *line) {
         }
         return;
     }
-    fprintf(stderr, "hengevm: input: %s: want folder add|remove|offline|online|touch|export|discard\n", line);
+    fprintf(stderr, "tuxvm: input: %s: want folder add|remove|offline|online|touch|export|discard\n", line);
 }
 
 /* HV_INPUT_FILE lines for the virt board: rel DX DY, rclick, msleep MS, tpframe (ends a touch batch), mode WxH [SCALE] (live display mode).
@@ -410,7 +410,7 @@ static int virt_input(const char *line) {
         unsigned w, h;
         double scale;
         int n = sscanf(line + 5, "%ux%u %lf", &w, &h, &scale);
-        if (n < 2 || !w || !h) fprintf(stderr, "hengevm: input: %s: want mode WxH [SCALE]\n", line);
+        if (n < 2 || !w || !h) fprintf(stderr, "tuxvm: input: %s: want mode WxH [SCALE]\n", line);
         else {
             hv_vm_set_display_mode(w, h);
             if (n == 3) hv_vm_set_display_scale(scale);
@@ -422,20 +422,20 @@ static int virt_input(const char *line) {
         if (sscanf(line + 8, "%d %15s", &a, state) == 2)
             for (int k = 0; k < 4; k++)
                 if (!strcmp(state, states[k])) s = k;
-        if (s < 0) fprintf(stderr, "hengevm: input: %s: want battery LEVEL unplugged|charging|full|unknown\n", line);
+        if (s < 0) fprintf(stderr, "tuxvm: input: %s: want battery LEVEL unplugged|charging|full|unknown\n", line);
         else hv_vm_set_battery(a, s);
     } else if (!strncmp(line, "brightness ", 11)) {
         hv_vm_set_brightness(atof(line + 11));
     } else if (!strncmp(line, "volume ", 7)) {
         hv_vm_set_volume(atof(line + 7));
     } else if (!strncmp(line, "tz ", 3)) {
-        if (hv_vm_set_timezone(line + 3) != 0) fprintf(stderr, "hengevm: input: %s: not a time zone name\n", line);
+        if (hv_vm_set_timezone(line + 3) != 0) fprintf(stderr, "tuxvm: input: %s: not a time zone name\n", line);
     } else if (!strncmp(line, "folder ", 7) || !strcmp(line, "folders")) {
         folder_line(line);
     } else if (!strcmp(line, "status")) {
         HvStatusView v;
         hv_status_get(&v);
-        fprintf(stderr, "hengevm: status: battery %d state %d current %d mA, brightness %.3f, volume %.2f%s, tz %s, seq %lu\n",
+        fprintf(stderr, "tuxvm: status: battery %d state %d current %d mA, brightness %.3f, volume %.2f%s, tz %s, seq %lu\n",
                 v.battery_level, v.battery_state, v.current_ma, v.brightness, v.volume, v.muted ? " muted" : "",
                 v.tz[0] ? v.tz : "-", v.seq);
     } else if (sscanf(line, "msleep %d", &a) == 1) {
@@ -471,7 +471,7 @@ static int virt_input(const char *line) {
     } else if (!strncmp(line, "ts ", 3)) { /* touchscreen: ts SLOT 0|1|2 X Y (0 to 32767), then tsframe */
         int slot, phase, px, py;
         if (sscanf(line + 3, "%d %d %d %d", &slot, &phase, &px, &py) != 4) {
-            fprintf(stderr, "hengevm: input: %s: want ts SLOT 0|1|2 X Y\n", line);
+            fprintf(stderr, "tuxvm: input: %s: want ts SLOT 0|1|2 X Y\n", line);
             return 1;
         }
         hv_virt_machine_lock();
@@ -484,7 +484,7 @@ static int virt_input(const char *line) {
         hv_virt_machine_unlock();
     } else if (!strncmp(line, "tsmode ", 7)) { /* 1: touch mode (the pointer image hides at a touch), 0: pointer */
         hv_vm_set_touch_mode(atoi(line + 7));
-        fprintf(stderr, "hengevm: touch mode %d, pointer image hidden %d\n", atoi(line + 7) != 0, hv_vm_pointer_hidden());
+        fprintf(stderr, "tuxvm: touch mode %d, pointer image hidden %d\n", atoi(line + 7) != 0, hv_vm_pointer_hidden());
     } else
         return 0;
     return 1;
@@ -517,13 +517,13 @@ static void *input_thread(void *unused) {
         else if (!strncmp(line, "pointer", 7)) {
             int px = -1, py = -1;
             int rc = hv_vm_pointer(&px, &py);
-            fprintf(stderr, "hengevm: pointer %d: %d, %d\n", rc, px, py);
+            fprintf(stderr, "tuxvm: pointer %d: %d, %d\n", rc, px, py);
         }
         else if (!strncmp(line, "snapshot ", 9)) { /* FILE, a 32-bit BMP of what hv_vm_snapshot gives the app */
             enum { W = 640, H = 360 };
             static uint8_t px[W * H * 4];
             int rc = hv_vm_snapshot(px, W, H);
-            fprintf(stderr, "hengevm: snapshot %d\n", rc);
+            fprintf(stderr, "tuxvm: snapshot %d\n", rc);
             FILE *bf = rc == 0 ? fopen(line + 9, "wb") : NULL;
             if (bf) {
                 uint32_t size = W * H * 4;
@@ -543,14 +543,14 @@ static void *input_thread(void *unused) {
         else if (!strncmp(line, "clip ", 5)) hv_share_set_clipboard(line + 5);
         else if (!strncmp(line, "getclip", 7)) {
             char *text = hv_share_take_clipboard();
-            fprintf(stderr, "hengevm: guest clipboard: %s (helper seen %ld s ago)\n", text ? text : "(nothing new)", hv_share_helper_seen());
+            fprintf(stderr, "tuxvm: guest clipboard: %s (helper seen %ld s ago)\n", text ? text : "(nothing new)", hv_share_helper_seen());
             free(text);
         }
         else if (!strncmp(line, "kbdheight ", 10)) hv_share_set_keyboard_height(atof(line + 10)); /* the device keyboard's part of the screen */
         else if (!strncmp(line, "getkbd", 6)) { /* what henge-keyboard in a Linux desktop last asked for */
             unsigned long seq;
             int wanted = hv_share_keyboard_wanted(&seq);
-            fprintf(stderr, "hengevm: guest keyboard: %s (request %lu)\n", wanted ? "show" : "hide", seq);
+            fprintf(stderr, "tuxvm: guest keyboard: %s (request %lu)\n", wanted ? "show" : "hide", seq);
         }
         else if (sscanf(line, "hiddown %i", &x) == 1) hid_locked((uint8_t)x, 1);
         else if (sscanf(line, "hidup %i", &x) == 1) hid_locked((uint8_t)x, 0);
@@ -562,7 +562,7 @@ static void *input_thread(void *unused) {
         else if (!strncmp(line, "secrets", 7)) { /* "secrets lock|unlock": the app's Face ID check (testing) */
             if (!strcmp(line + 7, " lock")) hv_secrets_set_locked(1);
             else if (!strcmp(line + 7, " unlock")) hv_secrets_set_locked(0);
-            fprintf(stderr, "hengevm: secrets %s\n", hv_secrets_locked() ? "locked" : "unlocked");
+            fprintf(stderr, "tuxvm: secrets %s\n", hv_secrets_locked() ? "locked" : "unlocked");
         }
         else if (sscanf(line, "key %d", &x) == 1) key_press(x, 0);
         else if (sscanf(line, "shiftkey %d", &x) == 1) key_press(x, 1);
@@ -578,10 +578,10 @@ static void *input_thread(void *unused) {
         else if (!strncmp(line, "prof ", 5)) prof_dump(line + 5);
         else if (!strncmp(line, "balloon ", 8) || !strncmp(line, "balloonstat", 11)) { /* "balloon MB": target (HV_BALLOON set at boot); both print the counters */
             HvVirtioBalloon *bl = hv_vm_devs()->balloon;
-            if (!bl) fprintf(stderr, "hengevm: no balloon (set HV_BALLOON)\n");
+            if (!bl) fprintf(stderr, "tuxvm: no balloon (set HV_BALLOON)\n");
             else {
                 if (line[7] == ' ') hv_virtio_balloon_set_target(bl, (uint64_t)atoll(line + 8) << 20);
-                fprintf(stderr, "hengevm: balloon: actual %llu MB, given back %llu MB, taken back %llu MB, partial %llu, out of ram %llu, failed %llu\n",
+                fprintf(stderr, "tuxvm: balloon: actual %llu MB, given back %llu MB, taken back %llu MB, partial %llu, out of ram %llu, failed %llu\n",
                         (unsigned long long)(hv_virtio_balloon_actual(bl) >> 20), (unsigned long long)(bl->given_back * 16 >> 10),
                         (unsigned long long)(bl->taken_back * 16 >> 10), (unsigned long long)bl->partial,
                         (unsigned long long)bl->out_of_ram, (unsigned long long)bl->failed);
@@ -590,9 +590,9 @@ static void *input_thread(void *unused) {
         else if (!strncmp(line, "knob ", 5)) {
             char name[32];
             if (sscanf(line, "knob %31s %d", name, &x) == 2 && !hv_knob_set(hv_vm_machine(), name, x))
-                fprintf(stderr, "hengevm: no knob %s\n", name);
+                fprintf(stderr, "tuxvm: no knob %s\n", name);
         }
-        fprintf(stderr, "hengevm: input: %s\n", line);
+        fprintf(stderr, "tuxvm: input: %s\n", line);
     }
     return NULL;
 }
@@ -706,7 +706,7 @@ static void sigterm_as_power_key(void) {
     static int taken;
     signal(SIGTERM, SIG_IGN);
     src = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGTERM, 0,
-                                 dispatch_queue_create("henge.sigterm", DISPATCH_QUEUE_SERIAL));
+                                 dispatch_queue_create("tux.sigterm", DISPATCH_QUEUE_SERIAL));
     dispatch_source_set_event_handler(src, ^{
         /* the source merges signals that come before the handler runs; count them all */
         taken += (int)dispatch_source_get_data(src);
@@ -720,18 +720,18 @@ static void sigterm_as_power_key(void) {
 static void say_gpu(const char *when) {
     uint64_t frames, requests;
     int g = hv_vm_gpu_counts(&frames, &requests);
-    if (g >= 0) fprintf(stderr, "hengevm: gpu %s %s: %llu frames, %llu renderer requests\n", g ? "held" : "running", when,
+    if (g >= 0) fprintf(stderr, "tuxvm: gpu %s %s: %llu frames, %llu renderer requests\n", g ? "held" : "running", when,
                         (unsigned long long)frames, (unsigned long long)requests);
 }
 
 static void toggle_pause(void) {
     if (hv_vm_paused()) {
         say_gpu("before the resume");
-        fprintf(stderr, "hengevm: resumed; %.1f s hidden from the guest\n", hv_vm_resume());
+        fprintf(stderr, "tuxvm: resumed; %.1f s hidden from the guest\n", hv_vm_resume());
     } else if (hv_vm_pause() == 0) {
-        fprintf(stderr, "hengevm: paused (Ctrl-A s resumes)\n");
+        fprintf(stderr, "tuxvm: paused (Ctrl-A s resumes)\n");
         say_gpu("after the pause");
-    } else fprintf(stderr, "hengevm: cannot pause\n");
+    } else fprintf(stderr, "tuxvm: cannot pause\n");
 }
 
 /* Ctrl-A b: the app's background policy (hv_vm_set_background), so a check can run it with the guest playing sound. */
@@ -741,7 +741,7 @@ static void toggle_background(void) {
     if (!away) say_gpu("before the foreground");
     int sound = hv_audio_playing();
     hv_vm_set_background(away);
-    fprintf(stderr, "hengevm: %s with the guest's sound %s: %s\n", away ? "background" : "foreground",
+    fprintf(stderr, "tuxvm: %s with the guest's sound %s: %s\n", away ? "background" : "foreground",
             sound ? "playing" : "silent", hv_vm_paused() ? "paused" : "running");
     if (away) say_gpu("after the background");
 }
@@ -750,14 +750,14 @@ static void toggle_background(void) {
 static void sigtstp_as_suspend(void) {
     static dispatch_source_t tstp, cont;
     static _Atomic int stopped;
-    dispatch_queue_t q = dispatch_queue_create("henge.suspend", DISPATCH_QUEUE_SERIAL);
+    dispatch_queue_t q = dispatch_queue_create("tux.suspend", DISPATCH_QUEUE_SERIAL);
     signal(SIGTSTP, SIG_IGN);
     signal(SIGCONT, SIG_IGN); /* still continues the process; the source below sees it */
     tstp = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGTSTP, 0, q);
     dispatch_source_set_event_handler(tstp, ^{
         if (hv_vm_paused() || hv_vm_pause() != 0) return;
         say_gpu("after the pause");
-        fprintf(stderr, "hengevm: paused and stopped (SIGCONT resumes)\n");
+        fprintf(stderr, "tuxvm: paused and stopped (SIGCONT resumes)\n");
         atomic_store(&stopped, 1);
         kill(getpid(), SIGSTOP);
     });
@@ -765,7 +765,7 @@ static void sigtstp_as_suspend(void) {
     dispatch_source_set_event_handler(cont, ^{
         if (atomic_exchange(&stopped, 0) && hv_vm_paused()) {
             say_gpu("before the resume");
-            fprintf(stderr, "hengevm: resumed; %.1f s hidden from the guest\n", hv_vm_resume());
+            fprintf(stderr, "tuxvm: resumed; %.1f s hidden from the guest\n", hv_vm_resume());
         }
     });
     dispatch_resume(tstp);
@@ -815,7 +815,7 @@ static int stop_status(int r, int halted, const char **why) {
 }
 
 static void finish(const char *why, int status) {
-    fprintf(stderr, "hengevm: stopped: %s\n", why);
+    fprintf(stderr, "tuxvm: stopped: %s\n", why);
     exit(status);
 }
 
@@ -839,7 +839,7 @@ static void *rebuild_thread(void *unused) {
     int made = hv_vm_create(&boot_cfg, err, sizeof err);
     pthread_mutex_unlock(&machine_mu);
     if (made != 0) {
-        fprintf(stderr, "hengevm: %s\n", err);
+        fprintf(stderr, "tuxvm: %s\n", err);
         finish("cannot rebuild the machine", EXIT_FAULT);
     }
     hv_vm_console_set_output(console_out, NULL); /* hv_vm_destroy cleared it */
@@ -855,7 +855,7 @@ static void virt_exit(int r) {
     const char *why;
     int status = stop_status(r, halted, &why);
     if (halted == HV_HALT_RESET && !no_reboot && !quit_req && !interrupted) {
-        fprintf(stderr, "hengevm: guest restart: building the machine again\n");
+        fprintf(stderr, "tuxvm: guest restart: building the machine again\n");
         pthread_t t;
         if (pthread_create(&t, NULL, rebuild_thread, NULL) != 0) finish("cannot rebuild the machine", EXIT_FAULT);
         pthread_detach(t);
@@ -884,7 +884,7 @@ static void *cpu_thread(void *unused) {
         m.stop_pc = a->brk;
     }
     if (cpu.pc == a->brk) {
-        fprintf(stderr, "hengevm: breakpoint %llx, x30 %llx:", (unsigned long long)a->brk, (unsigned long long)cpu.x[30]);
+        fprintf(stderr, "tuxvm: breakpoint %llx, x30 %llx:", (unsigned long long)a->brk, (unsigned long long)cpu.x[30]);
         hv_debug_args(&cpu);
         fprintf(stderr, "  stack:");
         for (int i = 0; i < 8; i++) {
@@ -900,7 +900,7 @@ static void *cpu_thread(void *unused) {
                     (unsigned long long)pa, fsc);
         }
     }
-    fprintf(stderr, "\nhengevm: stopped (%s) after %llu blocks, %d translated\n", interrupted ? "interrupted" : reason_name(r),
+    fprintf(stderr, "\ntuxvm: stopped (%s) after %llu blocks, %d translated\n", interrupted ? "interrupted" : reason_name(r),
             (unsigned long long)cpu.icount, m.nblocks);
     fprintf(stderr, "  pc %016llx el%u sp %016llx insn %08x\n", (unsigned long long)cpu.pc, cpu.el,
             (unsigned long long)cpu.sp, cpu.exit_insn);
@@ -916,7 +916,7 @@ static void *cpu_thread(void *unused) {
         void *p = hv_phys_ptr(&m, a->dump_pa, a->dump_len);
         if (f && p) fwrite(p, 1, a->dump_len, f);
         if (f) fclose(f);
-        fprintf(stderr, "hengevm: %s %llu bytes at %llx to %s\n", p ? "wrote" : "cannot dump", (unsigned long long)a->dump_len,
+        fprintf(stderr, "tuxvm: %s %llu bytes at %llx to %s\n", p ? "wrote" : "cannot dump", (unsigned long long)a->dump_len,
                 (unsigned long long)a->dump_pa, a->dump_path);
     }
     hv_vm_flush_disks();
@@ -929,7 +929,7 @@ static void *cpu_thread(void *unused) {
 }
 
 static void usage(void) {
-    fprintf(stderr, "usage: hengevm (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N] [--display WxH] [--gpu-accel [--gpu-video]] [--vcodec | --vcodec-dma] [--screenshot PNG] [--window [--touch]] [--folder NAME=DIR[:ro|cow|rw]]... [--forward HOSTPORT:GUESTPORT]... [--forward-addr IPV4|local]\n"
+    fprintf(stderr, "usage: tuxvm (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N] [--display WxH] [--gpu-accel [--gpu-video]] [--vcodec | --vcodec-dma] [--screenshot PNG] [--window [--touch]] [--folder NAME=DIR[:ro|cow|rw]]... [--forward HOSTPORT:GUESTPORT]... [--forward-addr IPV4|local]\n"
                     "       (Ctrl-A x quits, Ctrl-A p and SIGTERM press the power key, Ctrl-A s pauses and resumes, Ctrl-A b is the app's background, SIGTSTP pauses and stops until SIGCONT; exit status 0 shutdown, 3 restart with --no-reboot, 4 panic or engine error)\n");
     exit(2);
 }
@@ -1005,7 +1005,7 @@ int main(int argc, char **argv) {
         }
         else if (!strcmp(argv[i], "--forward")) { /* HOSTPORT:GUESTPORT, TCP into the guest (HV_NET_FWD adds one more) */
             if (nforwards == HV_FWD_MAX_RULES || hv_fwd_parse(argv[++i], &forwards[nforwards]) != 0) {
-                fprintf(stderr, "hengevm: --forward %s: want HOSTPORT:GUESTPORT, at most %d\n", argv[i], HV_FWD_MAX_RULES);
+                fprintf(stderr, "tuxvm: --forward %s: want HOSTPORT:GUESTPORT, at most %d\n", argv[i], HV_FWD_MAX_RULES);
                 usage();
             }
             nforwards++;
@@ -1045,7 +1045,7 @@ int main(int argc, char **argv) {
         else if (dump_dtb && initrd) bad = "--dump-dtb writes no initrd range; leave out --initrd";
         else if (gpu_accel && dump_dtb) bad = "--gpu-accel makes no device tree";
         if (bad) {
-            fprintf(stderr, "hengevm: %s\n", bad);
+            fprintf(stderr, "tuxvm: %s\n", bad);
             usage();
         }
         virt_shot_path = screenshot;
@@ -1068,31 +1068,31 @@ int main(int argc, char **argv) {
         if (hv_share_start(share_folder, sock) == 0) hv_net_set_share_socket(sock);
     }
     if (hv_net_forward_listen(forward_addr) != 0 || hv_net_forward_set(forwards, nforwards) != 0) {
-        fprintf(stderr, "hengevm: --forward-addr %s or a --forward port given twice\n", forward_addr);
+        fprintf(stderr, "tuxvm: --forward-addr %s or a --forward port given twice\n", forward_addr);
         return 2;
     }
     if (vcodec) {
         static char sock[104];
         const char *tmp = getenv("TMPDIR");
-        snprintf(sock, sizeof sock, "%s/hengevm-vcodec-%d.sock", tmp && *tmp ? tmp : "/tmp", (int)getpid());
+        snprintf(sock, sizeof sock, "%s/tuxvm-vcodec-%d.sock", tmp && *tmp ? tmp : "/tmp", (int)getpid());
         if (hv_vcodec_start(sock) == 0) {
             hv_net_set_vcodec_socket(sock);
             atexit(hv_vcodec_stop);
         } else {
-            fprintf(stderr, "hengevm: vcodec: cannot listen on %s\n", sock);
+            fprintf(stderr, "tuxvm: vcodec: cannot listen on %s\n", sock);
         }
     }
     if (secrets_dir) {
         HvSecretStore store;
         if (hv_secrets_file_store(secrets_dir, &store) != 0 || hv_secrets_set_scope(machine_id) != 0) {
-            fprintf(stderr, "hengevm: secrets: bad folder or machine id\n");
+            fprintf(stderr, "tuxvm: secrets: bad folder or machine id\n");
             return 1;
         }
         hv_secrets_set_store(&store);
         hv_secrets_set_locked(getenv("HV_SECRETS_LOCKED") != NULL); /* no Face ID here: unlocked unless asked */
     }
     if (hv_vm_create(&vc, err, sizeof err) != 0) {
-        fprintf(stderr, "hengevm: %s\n", err);
+        fprintf(stderr, "tuxvm: %s\n", err);
         return 1;
     }
     if (dump_dtb) { /* the tree for this board, with no firmware or kernel placed */
@@ -1101,7 +1101,7 @@ int main(int argc, char **argv) {
         FILE *df = blob ? fopen(dump_dtb, "wb") : NULL;
         int ok = df && fwrite(blob, 1, size, df) == size;
         if (df && fclose(df) != 0) ok = 0;
-        if (!ok) fprintf(stderr, "hengevm: cannot write %s\n", dump_dtb);
+        if (!ok) fprintf(stderr, "tuxvm: cannot write %s\n", dump_dtb);
         free(blob);
         hv_vm_destroy();
         return ok ? 0 : 1;
@@ -1125,7 +1125,7 @@ int main(int argc, char **argv) {
         /* hv_vm_start runs CPU 0 and rebuilds the machine on a restart request. */
         if (hv_vm_start(1, virt_exit) != 0) {
             tty_restore();
-            fprintf(stderr, "hengevm: cannot start the machine\n");
+            fprintf(stderr, "tuxvm: cannot start the machine\n");
             return 1;
         }
         pthread_create(&t, NULL, stdin_thread, NULL);

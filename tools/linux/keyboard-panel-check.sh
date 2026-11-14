@@ -4,7 +4,7 @@
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-IMAGE=${HENGE_KWIN_IMAGE:-henge-kwin-panel}
+IMAGE=${TUX_KWIN_IMAGE:-henge-kwin-panel}
 
 docker build -q --platform linux/arm64 -t "$IMAGE" "$HERE/kwin-panel" >/dev/null
 

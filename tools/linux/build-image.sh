@@ -34,13 +34,13 @@ if [ "$DESKTOP" = 1 ]; then
     WORK=/work/G6
     # Variant A: labwc on Wayland. The GL libraries let henge-session pick gles2 when virgl is present (A7)
     PKGS="$PKGS,labwc,foot,fonts-dejavu-core,libpam-systemd,xkb-data,mesa-utils,mesa-utils-bin,glmark2-es2-wayland,libgl1-mesa-dri,libgles2,libegl1,wlr-randr,wl-clipboard,xclip,python3,pipewire,pipewire-bin,pipewire-alsa,wireplumber,python3-cryptography,libsecret-tools"
-    PARTUUID=${HENGE_PARTUUID:-9c4e7a21-3d58-4b0f-a6c2-1f8d5e90b3a7}
-    FSUUID=${HENGE_FSUUID:-6d0b8e35-c1a2-47f9-9e64-b7a13c52d80f}
+    PARTUUID=${TUX_PARTUUID:-9c4e7a21-3d58-4b0f-a6c2-1f8d5e90b3a7}
+    FSUUID=${TUX_FSUUID:-6d0b8e35-c1a2-47f9-9e64-b7a13c52d80f}
 else
     NAME=debian-console
     WORK=/work
-    PARTUUID=${HENGE_PARTUUID:-5e1d9a4c-0c1e-4c7b-9f1a-6a3c0d2b7e11}
-    FSUUID=${HENGE_FSUUID:-a3f1c2d4-7b6e-4d58-8c91-2e0b5f4a9d33}
+    PARTUUID=${TUX_PARTUUID:-5e1d9a4c-0c1e-4c7b-9f1a-6a3c0d2b7e11}
+    FSUUID=${TUX_FSUUID:-a3f1c2d4-7b6e-4d58-8c91-2e0b5f4a9d33}
 fi
 export PARTUUID
 
@@ -58,7 +58,7 @@ sh /tools/build-guest-pkg.sh --inner "$WORK" >/dev/null
 GUEST_DEB=$(ls "$WORK"/henge-guest_*.deb)
 
 # From build-ffmpeg-pkg.sh, which refuses a build that is not from the current sources
-FFMPEG_DEB=/out/ffmpeg/henge-ffmpeg_${FFMPEG_VERSION}-henge${FFMPEG_HENGE_REV}_arm64.deb
+FFMPEG_DEB=/out/ffmpeg/henge-ffmpeg_${FFMPEG_VERSION}-henge${FFMPEG_TUX_REV}_arm64.deb
 if [ ! -f "$FFMPEG_DEB" ]; then
     echo "build-image.sh: no $FFMPEG_DEB; run make linux-ffmpeg linux-ffmpeg-pkg first" >&2
     exit 1

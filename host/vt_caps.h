@@ -1,7 +1,7 @@
 /* The codec table: what VideoToolbox can encode and decode on this device, found at run time
    (docs/guest-video-encode-plan.md, "Encoders and run-time detection", steps 1 to 6). */
-#ifndef HENGEVM_VT_CAPS_H
-#define HENGEVM_VT_CAPS_H
+#ifndef TUXVM_VT_CAPS_H
+#define TUXVM_VT_CAPS_H
 
 #include <CoreVideo/CoreVideo.h>
 #include <stdint.h>

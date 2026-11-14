@@ -1,5 +1,5 @@
-#ifndef HENGEVM_OPERANDS_H
-#define HENGEVM_OPERANDS_H
+#ifndef TUXVM_OPERANDS_H
+#define TUXVM_OPERANDS_H
 
 #include <stdint.h>
 

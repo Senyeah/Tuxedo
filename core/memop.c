@@ -291,7 +291,7 @@ int hv_vmem_xfer(HvCpu *cpu, uint64_t va, void *buf, uint32_t len, int write, in
     if (write && w && w - va < len) {
         uint64_t v = 0;
         memcpy(&v, b + (w - va), len - (w - va) < 8 ? len - (w - va) : 8);
-        fprintf(stderr, "hengevm: watch: write to %llx = %llx (%u-byte store at %llx) by pc %llx x30 %llx\n",
+        fprintf(stderr, "tuxvm: watch: write to %llx = %llx (%u-byte store at %llx) by pc %llx x30 %llx\n",
                 (unsigned long long)w, (unsigned long long)v, len, (unsigned long long)va, (unsigned long long)pc,
                 (unsigned long long)cpu->x[30]);
     }

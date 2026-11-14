@@ -63,9 +63,9 @@ There is no default image host yet, so one of these:
 
 ### What works
 
-The Mac tool (`build/hengevm`) runs all of this under `make test-linux-*`. The app was run in the iOS Simulator. Nothing in this list has had its iPhone check yet.
+The Mac tool (`build/tuxvm`) runs all of this under `make test-linux-*`. The app was run in the iOS Simulator. Nothing in this list has had its iPhone check yet.
 
-- Boot through U-Boot to a login in about 5 to 7 s on the Mac tool at one CPU, restart, power off, and a power key (Shut Down in the app, `SIGTERM` or Ctrl-A p in `hengevm`). In the simulator the console prompt took about 12 s.
+- Boot through U-Boot to a login in about 5 to 7 s on the Mac tool at one CPU, restart, power off, and a power key (Shut Down in the app, `SIGTERM` or Ctrl-A p in `tuxvm`). In the simulator the console prompt took about 12 s.
 - 1 to 4 CPUs, virtio disk (with discard), network (user-mode NAT, `10.0.2.15`), entropy, USB keyboard and Magic Trackpad 2, sound, and the memory balloon device (off by default and not driven by the app).
 - A screen that follows the phone's size and rotation, or an external display up to 4K, a shared folder at `~/Henge` and a shared clipboard (desktop image).
 - Graphics acceleration, off by default: virgl on ANGLE and Metal, with OpenGL ES 3.0. It takes more memory on the phone, and a graphics fault can stop the machine.
@@ -95,7 +95,7 @@ ios/scripts/package_ipa.sh
 
 That produces `~/Desktop/Henge.ipa`, and `package_ipa.sh --trollstore` writes `Henge.tipa`.
 
-`make` builds the engine for the Mac, `build/hengevm`, and `make test` runs its tests. `make test-linux-smoke` boots Debian on it, after `tools/linux` has built the firmware and an image. Graphics acceleration needs the libraries from `tools/gfx/build-deps.sh` and `make GFX=1`.
+`make` builds the engine for the Mac, `build/tuxvm`, and `make test` runs its tests. `make test-linux-smoke` boots Debian on it, after `tools/linux` has built the firmware and an image. Graphics acceleration needs the libraries from `tools/gfx/build-deps.sh` and `make GFX=1`.
 
 ## Licence
 

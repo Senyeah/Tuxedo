@@ -27,9 +27,9 @@ import time
 import pexpect
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-OUT = os.environ.get("HENGE_LINUX_OUT", "$HOME/Repos/Henge/build/linux")
+OUT = os.environ.get("TUX_LINUX_OUT", "$HOME/Repos/Henge/build/linux")
 SHELL = r"henge@henge:\S*\$ "
-MARK = "HENGE_RC_"
+MARK = "TUX_RC_"
 CPROJECT = os.path.join(ROOT, "tools", "linux", "cproject.sh")
 BAD_LOG = r"Out of memory|oom-kill|oom_reaper|Killed process|invoked oom|page allocation failure|Call trace|BUG:|WARNING:"
 
@@ -42,7 +42,7 @@ class Vm:
     def __init__(self, args, disk, tmp):
         self.args, self.disk = args, disk
         self.input = os.path.join(tmp, "input.txt")
-        self.err = os.path.join(tmp, "hengevm.stderr")
+        self.err = os.path.join(tmp, "tuxvm.stderr")
         open(self.input, "w").close()
 
     def boot(self):
@@ -51,7 +51,7 @@ class Vm:
         if a.ram_file:
             env["HV_RAM_FILE"] = os.path.join(os.path.dirname(self.input), "ram")
             env["HV_RAM_NO_LEDGER"] = "1"
-        cmd = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', self.err, a.hengevm, "--firmware", a.firmware, "--ram", str(a.ram), "--cpus", str(a.cpus), "--disk", self.disk]
+        cmd = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', self.err, a.tuxvm, "--firmware", a.firmware, "--ram", str(a.ram), "--cpus", str(a.cpus), "--disk", self.disk]
         self.p = p = pexpect.spawn(cmd[0], cmd[1:], encoding="utf-8", timeout=60, env=env)
         p.expect(r"\(automatic login\)", timeout=120)
         p.expect(SHELL, timeout=30)
@@ -78,7 +78,7 @@ class Vm:
         return int(self.need(f"awk '/^{key}:/ {{print $2}}' /proc/meminfo", str.isdigit, key)) // 1024  # MB
 
     def stat(self):
-        """Ask hengevm for the balloon counters (HV_INPUT_FILE is polled every 200 ms)."""
+        """Ask tuxvm for the balloon counters (HV_INPUT_FILE is polled every 200 ms)."""
         pat = re.compile(r"balloon: actual (\d+) MB, given back (\d+) MB, taken back (\d+) MB, partial (\d+), "
                          r"out of ram (\d+), failed (\d+)")
         seen = len(pat.findall(open(self.err).read()))
@@ -89,7 +89,7 @@ class Vm:
             found = pat.findall(open(self.err).read())
             if len(found) > seen:
                 return dict(zip(("actual", "given", "taken", "partial", "oor", "failed"), map(int, found[-1])))
-        raise Fail("hengevm did not answer balloonstat: " + open(self.err).read()[-800:])
+        raise Fail("tuxvm did not answer balloonstat: " + open(self.err).read()[-800:])
 
     def target(self, mb):
         with open(self.input, "a") as f:
@@ -106,7 +106,7 @@ class Vm:
 
     def footprint(self):
         """The host process's physical footprint in MB (what iOS's memory limit counts)."""
-        pid = self.p.pid  # sh execs hengevm
+        pid = self.p.pid  # sh execs tuxvm
         fp = self.err + ".fp.json"
         subprocess.run(["footprint", "-j", fp, "-p", str(pid)], capture_output=True)
         try:
@@ -183,7 +183,7 @@ def load(vm, args):
         vm.need("command -v gcc make stress-ng", lambda o: o.count("/") >= 3, "tools installed")
     vm.need("mkdir -p /var/tmp/proj", lambda o: True, "dir")
     src = subprocess.check_output(["/bin/cat", CPROJECT]).decode()
-    vm.p.sendline("cat > /var/tmp/cproject.sh <<'HENGE_EOF'\n" + src + "HENGE_EOF")
+    vm.p.sendline("cat > /var/tmp/cproject.sh <<'TUX_EOF'\n" + src + "TUX_EOF")
     vm.need("sh /var/tmp/cproject.sh /var/tmp/proj 48 && echo ok", lambda o: o.endswith("ok"), "project", 60)
     want = subprocess.check_output(["/bin/sh", "-c", f"d=$(mktemp -d) && sh {CPROJECT} $d 48 && make -s -C $d -j4 "
                                     f">/dev/null 2>&1 && $d/prog"], text=True).strip()
@@ -248,7 +248,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default=os.path.join(OUT, "debian-console.img"))
     ap.add_argument("--firmware", default=os.path.join(OUT, "u-boot.bin"))
-    ap.add_argument("--hengevm", default=os.path.join(ROOT, "build", "hengevm"))
+    ap.add_argument("--tuxvm", default=os.path.join(ROOT, "build", "tuxvm"))
     ap.add_argument("--size-gb", type=int, default=6)
     ap.add_argument("--mb", type=int, default=512, help="size of the first inflate")
     ap.add_argument("--ram", type=int, default=2048)
@@ -284,7 +284,7 @@ def main():
         if vm:
             print("console tail:\n" + (vm.p.before or "")[-3000:], file=sys.stderr)
             try:
-                print("hengevm stderr tail:\n" + open(vm.err).read()[-1500:], file=sys.stderr)
+                print("tuxvm stderr tail:\n" + open(vm.err).read()[-1500:], file=sys.stderr)
             except OSError:
                 pass
         return 1

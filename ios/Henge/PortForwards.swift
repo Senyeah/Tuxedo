@@ -24,13 +24,13 @@ final class ForwardSession: ObservableObject {
         apply(machine.forwards ?? [])
         let m = NWPathMonitor()
         m.pathUpdateHandler = { _ in
-            henge_vm_forwards_refresh() // the engine's own poll would see it within 5 s
+            tux_vm_forwards_refresh() // the engine's own poll would see it within 5 s
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 300_000_000)
                 ForwardSession.shared.read()
             }
         }
-        m.start(queue: DispatchQueue(label: "henge.forwards"))
+        m.start(queue: DispatchQueue(label: "tux.forwards"))
         monitor = m
         poll = Task { [weak self] in
             while !Task.isCancelled {
@@ -45,7 +45,7 @@ final class ForwardSession: ObservableObject {
         monitor = nil
         poll?.cancel()
         poll = nil
-        henge_vm_forwards_set(nil, nil, 0)
+        tux_vm_forwards_set(nil, nil, 0)
         active = []
         states = [:]
         machine = nil
@@ -61,11 +61,11 @@ final class ForwardSession: ObservableObject {
     private func apply(_ list: [PortForward]) {
         active = ForwardPolicy.active(list)
         let phone = active.map { UInt16($0.phonePort) }, guest = active.map { UInt16($0.guestPort) }
-        if henge_vm_forwards_set(phone, guest, Int32(active.count)) != 0 {
-            HengeLog.log("forwards", "the engine refused \(active.count) forwards")
+        if tux_vm_forwards_set(phone, guest, Int32(active.count)) != 0 {
+            TuxLog.log("forwards", "the engine refused \(active.count) forwards")
             active = []
         } else if !active.isEmpty {
-            HengeLog.log("forwards", active.map { "\($0.phonePort) -> \($0.guestPort)" }.joined(separator: ", "))
+            TuxLog.log("forwards", active.map { "\($0.phonePort) -> \($0.guestPort)" }.joined(separator: ", "))
         }
     }
 
@@ -75,7 +75,7 @@ final class ForwardSession: ObservableObject {
         var buf = [CChar](repeating: 0, count: 1024)
         for f in active {
             var err: Int32 = 0
-            let n = henge_vm_forward_state(UInt16(f.phonePort), &buf, buf.count, &err)
+            let n = tux_vm_forward_state(UInt16(f.phonePort), &buf, buf.count, &err)
             next[f.id] = ForwardPolicy.shown(count: n, err: err, text: String(cString: buf), phonePort: f.phonePort, device: Device.name)
         }
         if next != states { states = next }

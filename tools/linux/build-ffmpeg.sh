@@ -2,7 +2,7 @@
 # Build the patched ffmpeg for the guest (docs/guest-video-encode-plan.md, VE2.6): FFmpeg $FFMPEG_VERSION with
 # tools/linux/hvcodec/ffmpeg-henge.patch, libhvcodec and henge-codec-info, for arm64 Debian trixie.
 # Runs on the Mac; builds natively in an arm64 debian:trixie container with packages from the pinned snapshot.
-# Output in $HENGE_LINUX_OUT/ffmpeg: bin/ffmpeg, bin/ffprobe, bin/henge-codec-info, ffmpeg.manifest.
+# Output in $TUX_LINUX_OUT/ffmpeg: bin/ffmpeg, bin/ffprobe, bin/henge-codec-info, ffmpeg.manifest.
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -10,8 +10,8 @@ ROOT=$(cd "$HERE/../.." && pwd)
 
 if [ "${1:-}" != "--inner" ]; then
     . "$HERE/versions.env"
-    OUT=${HENGE_LINUX_OUT:-$HOME/Repos/Henge/build/linux}
-    VOLUME=${HENGE_LINUX_VOLUME:-henge-linux-work}
+    OUT=${TUX_LINUX_OUT:-$HOME/Repos/Henge/build/linux}
+    VOLUME=${TUX_LINUX_VOLUME:-henge-linux-work}
     TARBALL="$OUT/ffmpeg/src/ffmpeg-$FFMPEG_VERSION.tar.xz"
     mkdir -p "$OUT/ffmpeg/src"
     if [ ! -f "$TARBALL" ]; then
@@ -51,7 +51,7 @@ cp "$HV/libhvcodec/hvcodec.h" /src/host/vcodec_proto.h /src/host/vcodec_dev.h "$
 cc -O2 -g -Wall -Wextra -fPIC -I"$STAGE/include" -c "$HV/libhvcodec/hvcodec.c" -o "$STAGE/hvcodec.o"
 ar rcs "$STAGE/lib/libhvcodec.a" "$STAGE/hvcodec.o"
 
-CONFIGURE="--prefix=/usr/lib/henge/ffmpeg --extra-version=henge$FFMPEG_HENGE_REV \
+CONFIGURE="--prefix=/usr/lib/henge/ffmpeg --extra-version=henge$FFMPEG_TUX_REV \
 --disable-autodetect --disable-shared --enable-static --disable-doc --disable-ffplay --disable-debug \
 --enable-gpl --enable-pthreads --enable-zlib --enable-iconv --enable-gnutls \
 --enable-libx264 --enable-libx265 --enable-libdav1d --enable-libopus --enable-libmp3lame \
@@ -73,7 +73,7 @@ RUNTIME=$(for f in "$OUTDIR"/bin/*; do ldd "$f"; done | awk '/=>/ {print $3}' | 
     xargs -r dpkg -S 2>/dev/null | cut -d: -f1 | sort -u | tr '\n' ' ')
 {
     echo "release=$FFMPEG_VERSION"
-    echo "henge_rev=$FFMPEG_HENGE_REV"
+    echo "henge_rev=$FFMPEG_TUX_REV"
     echo "tarball=$NAME.tar.xz"
     echo "tarball_sha256=$FFMPEG_SHA256"
     echo "patch_sha256=$(sha256sum /src/tools/linux/hvcodec/ffmpeg-henge.patch | cut -d' ' -f1)"

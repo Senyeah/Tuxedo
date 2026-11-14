@@ -3,7 +3,7 @@
 # requires-python = ">=3.9"
 # dependencies = ["pexpect", "pillow"]
 # ///
-"""A8: the desktop image with and without `hengevm --gpu-accel` (make test-linux-accel).
+"""A8: the desktop image with and without `tuxvm --gpu-accel` (make test-linux-accel).
 
 Boots a clone of debian-desktop.img twice by direct kernel boot, back to back: first with the virgl renderer behind the
 virtio GPU (henge-session picks gles2), then without it (pixman, llvmpipe). Both sets of numbers come from the same run at
@@ -18,7 +18,7 @@ Each boot measures:
   - glmark2: the virgl score is at least 3 x the llvmpipe score. The gate runs a short scene set; --full runs the whole
     default benchmark at 1280x720 and prints every scene's FPS and frame time.
   - the foot terminal time (seq 1 3000000), printed only: it measures pty throughput, not frame time.
-  - hengevm's CPU use (cputime over wall time, from ps) per phase, and the host load average.
+  - tuxvm's CPU use (cputime over wall time, from ps) per phase, and the host load average.
 The shared image never changes: each guest runs on an APFS clone.
 """
 import argparse
@@ -34,7 +34,7 @@ import pexpect
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PROBE = os.path.join(ROOT, "tools", "linux", "wlprobe.py")
-MARK = "HENGE_RC_"
+MARK = "TUX_RC_"
 SHELL = r"henge@henge:[^\n]*\$ "
 WAYLAND = "export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0"
 SCENE = "build:duration=10.0"  # the gate's short scene set
@@ -50,8 +50,8 @@ class Fail(Exception):
 
 
 def linux_dir():
-    if os.environ.get("HENGE_LINUX_OUT"):
-        return os.environ["HENGE_LINUX_OUT"]
+    if os.environ.get("TUX_LINUX_OUT"):
+        return os.environ["TUX_LINUX_OUT"]
     common = subprocess.run(["git", "-C", ROOT, "rev-parse", "--path-format=absolute", "--git-common-dir"],
                             capture_output=True, text=True, check=True).stdout.strip()
     return os.path.join(os.path.dirname(common), "build", "linux")
@@ -86,7 +86,7 @@ def cpu_secs(pid):
 
 
 class Phase:
-    """hengevm's CPU use over one stretch of the run."""
+    """tuxvm's CPU use over one stretch of the run."""
 
     def __init__(self, pid, cpu_log, name):
         self.pid, self.cpu_log, self.name = pid, cpu_log, name
@@ -163,7 +163,7 @@ def boot(args, accel, d, tmp):
     r = subprocess.run(["/bin/cp", "-c", image, clone], capture_output=True, text=True)
     if r.returncode:
         raise Fail(f"cannot clone {image}: {r.stderr.strip()}")
-    argv = [args.hengevm, "--kernel", os.path.join(d, "Image"), "--initrd", os.path.join(d, "initrd.img"),
+    argv = [args.tuxvm, "--kernel", os.path.join(d, "Image"), "--initrd", os.path.join(d, "initrd.img"),
             "--append", f"console=ttyAMA0 root=PARTUUID={partuuid} rw", "--disk", clone, "--ram", "3072",
             "--cpus", str(args.cpus), "--display", SIZE, "--screenshot", shot]
     if accel:
@@ -181,7 +181,7 @@ def boot(args, accel, d, tmp):
     except pexpect.TIMEOUT:
         raise Fail(f"[{tag}] timeout waiting for the guest; tail:\n" + (p.before or "")[-1500:])
     except pexpect.EOF:
-        raise Fail(f"[{tag}] hengevm ended early; tail:\n" + (p.before or "")[-1500:])
+        raise Fail(f"[{tag}] tuxvm ended early; tail:\n" + (p.before or "")[-1500:])
     finally:
         if p.isalive():
             p.sendline("sudo poweroff")
@@ -191,7 +191,7 @@ def boot(args, accel, d, tmp):
                 p.terminate(force=True)
         p.close()
     if p.exitstatus != 0:
-        raise Fail(f"[{tag}] hengevm exit status {p.exitstatus}, expected 0 after poweroff")
+        raise Fail(f"[{tag}] tuxvm exit status {p.exitstatus}, expected 0 after poweroff")
     print(f"ok   [{tag}] power off: exit status 0")
     res["load_end"] = os.getloadavg()[0]
     return res
@@ -242,7 +242,7 @@ def measure(p, args, accel, tag, shot, res):
         res["term_ms"], runs = term_ms(p)
     print(f"     [{tag}] terminal ({TERM_CMD}): median {res['term_ms']:g} ms of {runs} (printed only)")
     for name, pct in cpu.items():
-        print(f"     [{tag}] hengevm CPU during {name}: {pct:.0f}% of one core")
+        print(f"     [{tag}] tuxvm CPU during {name}: {pct:.0f}% of one core")
 
     out, _ = sh(p, "sudo dmesg | grep -i -E 'virtio_gpu.*(error|fail|timed? ?out)|\\[drm.*(error|fail)|\\*ERROR\\*'")
     if out.strip():
@@ -253,7 +253,7 @@ def measure(p, args, accel, tag, shot, res):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--hengevm", default=os.path.join(ROOT, "build", "hengevm"))
+    ap.add_argument("--tuxvm", default=os.path.join(ROOT, "build", "tuxvm"))
     ap.add_argument("--linux-dir")
     ap.add_argument("--work-dir", help="where the clones go (the image's APFS volume)")
     ap.add_argument("--factor", type=float, default=3.0, help="the least virgl glmark2 score over the llvmpipe score")
@@ -264,7 +264,7 @@ def main():
     ap.add_argument("--keep-shot", help="copy the screenshots here (suffixed)")
     args = ap.parse_args()
     d = args.linux_dir or linux_dir()
-    for f in (args.hengevm, os.path.join(d, "debian-desktop.img"), os.path.join(d, "debian-desktop.partuuid"),
+    for f in (args.tuxvm, os.path.join(d, "debian-desktop.img"), os.path.join(d, "debian-desktop.partuuid"),
               os.path.join(d, "Image"), os.path.join(d, "initrd.img"), PROBE):
         if not os.path.exists(f):
             raise Fail(f"missing {f}")

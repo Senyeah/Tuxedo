@@ -32,10 +32,10 @@ import Foundation
 /// files they do not rewrite, and iOS registered none for a renamed Tuxedo
 /// ("Failed to add observer").
 ///
-/// One extension request per HengeJITRequest. For `enable` the request lasts
+/// One extension request per TuxJITRequest. For `enable` the request lasts
 /// until Tuxedo detaches. Log category "jit-helper".
 @MainActor
-enum HengeBuiltInJIT {
+enum TuxBuiltInJIT {
     static let helperFile = "HengeJITHelper.appex"
 
     /// Requests that have started and not finished, kept alive until they do.
@@ -63,11 +63,11 @@ enum HengeBuiltInJIT {
         return Bundle(url: url)?.bundleIdentifier
     }
 
-    static func send(_ request: HengeJITRequest,
+    static func send(_ request: TuxJITRequest,
                      started: @escaping () -> Void = {},
-                     completion: @escaping (Result<HengeJITRequest.Response, Error>) -> Void) {
+                     completion: @escaping (Result<TuxJITRequest.Response, Error>) -> Void) {
         func fail(_ code: Int, _ message: String) {
-            HengeLog.log("jit-helper", message)
+            TuxLog.log("jit-helper", message)
             completion(.failure(HelperRequest.error(code, message)))
         }
         guard unavailableReason == nil else {
@@ -115,10 +115,10 @@ private final class HelperRequest {
     private let shim: NSExtensionShim
     private let `extension`: AnyObject   // the NSExtension, kept alive for the request
     private let operation: String
-    private var completion: ((Result<HengeJITRequest.Response, Error>) -> Void)?
+    private var completion: ((Result<TuxJITRequest.Response, Error>) -> Void)?
 
     init(extension found: AnyObject, operation: String,
-         completion: @escaping (Result<HengeJITRequest.Response, Error>) -> Void) {
+         completion: @escaping (Result<TuxJITRequest.Response, Error>) -> Void) {
         self.extension = found
         self.shim = unsafeBitCast(found, to: NSExtensionShim.self)
         self.operation = operation
@@ -129,7 +129,7 @@ private final class HelperRequest {
         // The blocks can arrive on any queue; everything below runs on the main thread.
         shim.setRequestCompletionBlock { [weak self] _, items in
             let info = (items?.first as? NSExtensionItem)?.userInfo
-            let payload = info?[HengeJITRequest.Response.itemKey] as? Data
+            let payload = info?[TuxJITRequest.Response.itemKey] as? Data
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.returned(payload) } }
         }
         shim.setRequestCancellationBlock { [weak self] _, error in
@@ -144,7 +144,7 @@ private final class HelperRequest {
             } }
         }
         let item = NSExtensionItem()
-        item.userInfo = [HengeJITRequest.itemKey: data]
+        item.userInfo = [TuxJITRequest.itemKey: data]
         shim.beginExtensionRequest(withInputItems: [item]) { [weak self] uuid in
             DispatchQueue.main.async { MainActor.assumeIsolated {
                 guard let self else { return }
@@ -153,7 +153,7 @@ private final class HelperRequest {
                                                   + "keep its app extensions if your sideloader asks.")))
                     return
                 }
-                HengeLog.log("jit-helper", "\(self.operation): started \(identifier) as pid "
+                TuxLog.log("jit-helper", "\(self.operation): started \(identifier) as pid "
                                         + "\(self.shim.pid(forRequestIdentifier: uuid))")
                 started()
             } }
@@ -162,21 +162,21 @@ private final class HelperRequest {
 
     private func returned(_ payload: Data?) {
         guard let payload,
-              let response = try? JSONDecoder().decode(HengeJITRequest.Response.self, from: payload) else {
+              let response = try? JSONDecoder().decode(TuxJITRequest.Response.self, from: payload) else {
             end(.failure(Self.error(8, "Henge's JIT helper finished without an answer.")))
             return
         }
-        HengeLog.log("jit-helper", "\(operation): finished success=\(response.success ? 1 : 0)")
+        TuxLog.log("jit-helper", "\(operation): finished success=\(response.success ? 1 : 0)")
         end(.success(response))
     }
 
-    private func end(_ result: Result<HengeJITRequest.Response, Error>) {
+    private func end(_ result: Result<TuxJITRequest.Response, Error>) {
         guard let completion else { return }   // the first result counts
         self.completion = nil
         if case .failure(let error) = result {
-            HengeLog.log("jit-helper", "\(operation): \(error.localizedDescription)")
+            TuxLog.log("jit-helper", "\(operation): \(error.localizedDescription)")
         }
-        HengeBuiltInJIT.finished(self)
+        TuxBuiltInJIT.finished(self)
         completion(result)
     }
 

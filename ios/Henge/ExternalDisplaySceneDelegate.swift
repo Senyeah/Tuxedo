@@ -13,14 +13,14 @@ final class ExternalDisplaySceneDelegate: UIResponder, UIWindowSceneDelegate, Ex
         windowScene = scene
         scene.screen.overscanCompensation = .none // the monitor must not resample the guest again
         let mode = scene.screen.currentMode
-        HengeLog.log("display", "external display connected: \(Int(scene.screen.nativeBounds.width))x\(Int(scene.screen.nativeBounds.height)) px, "
+        TuxLog.log("display", "external display connected: \(Int(scene.screen.nativeBounds.width))x\(Int(scene.screen.nativeBounds.height)) px, "
                    + "mode \(mode.map { "\(Int($0.size.width))x\(Int($0.size.height))" } ?? "unknown"), "
                    + "scale \(scene.screen.nativeScale), \(scene.screen.maximumFramesPerSecond) Hz")
         LegacyExternalDisplay.shared.connect(self)
     }
 
     func sceneDidDisconnect(_ scene: UIScene) {
-        HengeLog.log("display", "external display disconnected")
+        TuxLog.log("display", "external display disconnected")
         LegacyExternalDisplay.shared.disconnect(self)
         windowScene = nil
     }
@@ -32,7 +32,7 @@ final class ExternalDisplaySceneDelegate: UIResponder, UIWindowSceneDelegate, Ex
         window.rootViewController = UIHostingController(rootView: ExternalDisplay(presentation: presentation, surface: surface))
         window.isHidden = false
         self.window = window
-        HengeLog.log("display", "the machine is on the external display")
+        TuxLog.log("display", "the machine is on the external display")
     }
 
     /// Takes the guest off this display: no window of ours, so iOS mirrors the phone (or the display is gone).
@@ -41,6 +41,6 @@ final class ExternalDisplaySceneDelegate: UIResponder, UIWindowSceneDelegate, Ex
         window.rootViewController = nil // lets SwiftUI take the screen view down, which detaches its layer
         window.isHidden = true
         self.window = nil
-        HengeLog.log("display", "the machine left the external display")
+        TuxLog.log("display", "the machine left the external display")
     }
 }

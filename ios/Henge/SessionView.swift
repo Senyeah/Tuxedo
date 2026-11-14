@@ -227,7 +227,7 @@ struct SessionView: View {
                     }
                 }
                 if state == 2 {
-                    StoppedMachineView(outcome: henge_vm_exit_outcome(), reason: String(cString: henge_vm_exit_reason()),
+                    StoppedMachineView(outcome: tux_vm_exit_outcome(), reason: String(cString: tux_vm_exit_reason()),
                                    start: { bootAttempt += 1 }, close: close)
                         .frame(width: min(layout.touch.width - 32, 360))
                         .position(x: layout.touch.midX, y: layout.fillsPhone ? layout.touch.midY : layout.pad.midY)
@@ -311,7 +311,7 @@ struct SessionView: View {
                 setBackground(false)
                 return
             }
-            henge_vm_screen_touch_cancel()
+            tux_vm_screen_touch_cancel()
             HardwareKeys.releaseAll()
             HardwareMouse.shared.releaseButtons()
             VolumeClicks.shared.releaseButtons()
@@ -347,15 +347,15 @@ struct SessionView: View {
             UIApplication.shared.isIdleTimerDisabled = true
             HardwareMouse.shared.start()
             VolumeClicks.shared.start()
-            henge_vm_set_touch_mode(touchActive ? 1 : 0)
+            tux_vm_set_touch_mode(touchActive ? 1 : 0)
         }
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
             zoomFollowing?.cancel()
             modeTask?.cancel()
             console.stop()
-            henge_vm_screen_touch_cancel()
-            henge_vm_set_touch_mode(0)
+            tux_vm_screen_touch_cancel()
+            tux_vm_set_touch_mode(0)
             StickyKeys.shared.releaseAll()
             HardwareKeys.releaseAll()
             HardwareMouse.shared.stop()
@@ -595,24 +595,24 @@ struct SessionView: View {
 
     /// A switch between the trackpad and touch: nothing stays down in the guest across it.
     private func touchModeChanged(_ on: Bool) {
-        HengeLog.log("input", "touch input \(on ? "on" : "off")")
-        henge_vm_set_touch_mode(on ? 1 : 0)
+        TuxLog.log("input", "touch input \(on ? "on" : "off")")
+        tux_vm_set_touch_mode(on ? 1 : 0)
         if on {
             liftEverything()
         } else {
-            henge_vm_screen_touch_cancel()
+            tux_vm_screen_touch_cancel()
         }
     }
 
     /// Every pad finger up and every button let go, as a surface goes away.
     private func liftEverything() {
         let ms = UInt32(truncatingIfNeeded: Int(ProcessInfo.processInfo.systemUptime * 1000))
-        for id in Int32(1)...5 { henge_vm_touch(id, 2, 0, 0, ms) }
-        henge_vm_touch_frame(ms)
+        for id in Int32(1)...5 { tux_vm_touch(id, 2, 0, 0, ms) }
+        tux_vm_touch_frame(ms)
         externalPad.surface.reset()
         panelPad.surface.reset()
         PointerButtons.guest.releaseAll()
-        henge_vm_mouse_button(0, 0) // a drag in progress ends
+        tux_vm_mouse_button(0, 0) // a drag in progress ends
     }
 
     /// Hides the session's controls; four fingers on the screen bring them back. The first few times say so.
@@ -629,10 +629,10 @@ struct SessionView: View {
     private func followGuestKeyboard() async {
         KeyboardFrame.start() // before the console can hide the probe
         var seq: UInt = 0
-        _ = henge_share_keyboard_wanted(&seq)
+        _ = tux_share_keyboard_wanted(&seq)
         keyboardFollow = KeyboardFollow(seq: seq)
         while !Task.isCancelled {
-            let wanted = henge_share_keyboard_wanted(&seq) != 0
+            let wanted = tux_share_keyboard_wanted(&seq) != 0
             // The console has the keys while it shows. A hardware keyboard needs no keyboard on the screen.
             let allowed = keyboardFollows && state == 1 && !consoleShown && GCKeyboard.coalesced == nil
             // Nor during a drag: the keyboard would cover the pad's keys under the finger. It moves when the drag ends.
@@ -764,7 +764,7 @@ struct SessionView: View {
         var tick = 0
         while !Task.isCancelled {
             var x: Int32 = 0, y: Int32 = 0
-            if henge_vm_pointer(&x, &y) == 0 {
+            if tux_vm_pointer(&x, &y) == 0 {
                 moveZoom(toward: CGPoint(x: CGFloat(x) / CGFloat(guestScreen.width), y: CGFloat(y) / CGFloat(guestScreen.height)))
             }
             if tick % 60 == 0, let image = MachinePreview.capture(width: 224, height: Int(224 / layoutAspect)) { map = UIImage(cgImage: image) }
@@ -784,7 +784,7 @@ struct SessionView: View {
                                                whole: wholeScreen(landscape: full.width > full.height))
         let mode = DisplayModePolicy.phoneMode(window: full, insets: room, nativeScale: Device.nativeScale)
         guard mode != windowMode else { return }
-        HengeLog.log("display", "window \(Int(full.width))x\(Int(full.height)) pt, safe insets t\(insets.top) l\(insets.left) b\(insets.bottom) (used \(bottom)) r\(insets.right), typing \(typing), "
+        TuxLog.log("display", "window \(Int(full.width))x\(Int(full.height)) pt, safe insets t\(insets.top) l\(insets.left) b\(insets.bottom) (used \(bottom)) r\(insets.right), typing \(typing), "
                    + "scale \(Device.nativeScale) -> \(mode.w)x\(mode.h)")
         windowMode = mode
         guard var f = follower else { return }
@@ -796,7 +796,7 @@ struct SessionView: View {
     /// An external screen came or went: the guest follows its size, and the machine remembers it.
     private func externalChanged(_ pixels: CGSize?) {
         saveExternalScreen(pixels)
-        HengeLog.log("display", "external screen \(pixels.map { "\(Int($0.width))x\(Int($0.height))" } ?? "gone")")
+        TuxLog.log("display", "external screen \(pixels.map { "\(Int($0.width))x\(Int($0.height))" } ?? "gone")")
         applyLinuxScreen()
     }
 
@@ -813,7 +813,7 @@ struct SessionView: View {
                                                  remembered: m.lastExternalScreen.map { CGSize(width: $0.width, height: $0.height) },
                                                  wantsExternal: m.screenFollowsExternal == true)
         externalMode = mode
-        HengeLog.log("display", "linux screen choice -> guest \(mode.map { "\($0.w)x\($0.h)" } ?? "phone mode")")
+        TuxLog.log("display", "linux screen choice -> guest \(mode.map { "\($0.w)x\($0.h)" } ?? "phone mode")")
         guard var f = follower else { return } // before boot, run() reads it
         let pending = f.externalDisplay(mode, now: ProcessInfo.processInfo.systemUptime)
         follower = f
@@ -839,9 +839,9 @@ struct SessionView: View {
                     follower = f
                     liveMode = m
                     let scale = guestScale(for: m)
-                    henge_vm_set_display_scale(scale) // before the mode: the guest reads both when the mode event comes
-                    henge_vm_set_display(UInt32(m.w), UInt32(m.h))
-                    HengeLog.log("session", "linux screen \(m.w)x\(m.h) scale \(scale) (\(externalMode != nil ? "external" : "phone"))")
+                    tux_vm_set_display_scale(scale) // before the mode: the guest reads both when the mode event comes
+                    tux_vm_set_display(UInt32(m.w), UInt32(m.h))
+                    TuxLog.log("session", "linux screen \(m.w)x\(m.h) scale \(scale) (\(externalMode != nil ? "external" : "phone"))")
                     return
                 }
                 if f?.pending == nil { return }
@@ -908,7 +908,7 @@ struct SessionView: View {
                 Text("\(machine.name) is taking a while. You can turn it off now; anything not saved on it is lost.")
                     .font(.system(size: 14)).foregroundStyle(Desk.dim)
                 Button("Turn off now") {
-                    henge_vm_stop()
+                    tux_vm_stop()
                     close()
                 }
                 .font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.bad)
@@ -925,7 +925,7 @@ struct SessionView: View {
         case 0: return error == nil ? "Starting…" : "Not started"
         case 1: return userCode ? "Debian is running" : "Booting"
         case 3: return "Finishing shutdown…"
-        default: return "Stopped (\(String(cString: henge_vm_exit_reason())))"
+        default: return "Stopped (\(String(cString: tux_vm_exit_reason())))"
         }
     }
 
@@ -1008,7 +1008,7 @@ struct SessionView: View {
         framesOut = 0
         framesIn = 0
         zoomed = false
-        henge_vm_screen_touch_cancel()
+        tux_vm_screen_touch_cancel()
         controlsHidden = false
         showRevealHint = false
         zoomCentre = CGPoint(x: 0.5, y: 0.5)
@@ -1018,7 +1018,7 @@ struct SessionView: View {
         consoleChoice = current.showsConsole == true ? .console : .screen
         console.reset()
         console.start()
-        while henge_vm_state() == 3 && !Task.isCancelled {
+        while tux_vm_state() == 3 && !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         guard !Task.isCancelled else { return }
@@ -1032,7 +1032,7 @@ struct SessionView: View {
         UIApplication.shared.isIdleTimerDisabled = true
         HardwareMouse.shared.start()
         let ram = GuestMemory.prepare(machine)
-        HengeLog.log("session", "available memory \(henge_available_memory() >> 20) MB")
+        TuxLog.log("session", "available memory \(tux_available_memory() >> 20) MB")
         guard ram >= 1024 else {
             error = "There is not room for this machine's memory: it needs a few GB of free storage."
             return
@@ -1065,11 +1065,11 @@ struct SessionView: View {
         externalMode = external
         liveMode = boot
         follower = ModeFollower(initial: boot, phone: phone, external: external)
-        henge_vm_set_display_scale(guestScale(for: boot))
-        henge_vm_set_display(UInt32(boot.w), UInt32(boot.h))
+        tux_vm_set_display_scale(guestScale(for: boot))
+        tux_vm_set_display(UInt32(boot.w), UInt32(boot.h))
         let rc: Int32
-        HengeLog.log("session", "linux screen \(guestScreen.width)x\(guestScreen.height)\(current.followsPhoneScreen ? " (phone native, scale 2)" : "")\(machine.accel == true ? ", graphics acceleration" : "")\(machine.decodesVideo ? ", video decode" : "")\(machine.encodesVideo ? ", video encode" : "")")
-        rc = henge_vm_boot_linux(machine.firmware.path, machine.disk.path, ram, Int32(cpus), machine.accel == true ? 1 : 0,
+        TuxLog.log("session", "linux screen \(guestScreen.width)x\(guestScreen.height)\(current.followsPhoneScreen ? " (phone native, scale 2)" : "")\(machine.accel == true ? ", graphics acceleration" : "")\(machine.decodesVideo ? ", video decode" : "")\(machine.encodesVideo ? ", video encode" : "")")
+        rc = tux_vm_boot_linux(machine.firmware.path, machine.disk.path, ram, Int32(cpus), machine.accel == true ? 1 : 0,
                                 machine.decodesVideo ? 1 : 0, machine.encodesVideo ? 1 : 0, &buffer, buffer.count)
         if rc != 0 {
             error = String(cString: buffer)
@@ -1081,31 +1081,31 @@ struct SessionView: View {
         var used = Machines.shared.all.first { $0.id == machine.id } ?? machine // keeps lastExternalScreen
         used.lastUsed = started
         Machines.shared.update(used)
-        var lastBlocks = henge_vm_blocks()
+        var lastBlocks = tux_vm_blocks()
         var lastTime = Date()
-        var lastGPUFrames = henge_vm_gpu_frames()
+        var lastGPUFrames = tux_vm_gpu_frames()
         var tick = 0
         while !Task.isCancelled {
-            state = henge_vm_state()
+            state = tux_vm_state()
             if state == 3 {
                 try? await Task.sleep(nanoseconds: 100_000_000)
                 continue
             }
             if let asked = shutdownAsked, Date().timeIntervalSince(asked) >= 30 { shutdownOverdue = true }
-            cpusOn = henge_vm_cpus_on()
-            userCode = userCode || henge_vm_guest_el0() != 0
-            let now = Date(), blocks = henge_vm_blocks()
+            cpusOn = tux_vm_cpus_on()
+            userCode = userCode || tux_vm_guest_el0() != 0
+            let now = Date(), blocks = tux_vm_blocks()
             blocksPerSecond = Double(blocks &- lastBlocks) / max(now.timeIntervalSince(lastTime), 0.001)
             lastBlocks = blocks
             lastTime = now
-            framesOut = henge_vm_net_frames(1)
-            framesIn = henge_vm_net_frames(0)
+            framesOut = tux_vm_net_frames(1)
+            framesIn = tux_vm_net_frames(0)
             helperRunning = Sharing.helperRunning
-            log = Array(HengeLog.recentLines(200))
+            log = Array(TuxLog.recentLines(200))
             let heat = ProcessInfo.processInfo.thermalState
             if heat.rawValue != thermalState.rawValue {
                 thermalState = heat
-                HengeLog.log("session", "thermal state: \(Self.thermalLabel(heat))")
+                TuxLog.log("session", "thermal state: \(Self.thermalLabel(heat))")
             }
             if state == 2 {
                 typing = false
@@ -1120,27 +1120,27 @@ struct SessionView: View {
                 KeychainStore.shared.setUnlocked(false)
                 FolderSession.shared.end()
                 ForwardSession.shared.end()
-                let outcome = henge_vm_exit_outcome()
-                if shutdownAsked != nil && outcome == Int32(HENGE_VM_OUTCOME_SHUTDOWN.rawValue) {
+                let outcome = tux_vm_exit_outcome()
+                if shutdownAsked != nil && outcome == Int32(TUX_VM_OUTCOME_SHUTDOWN.rawValue) {
                     close() // the person asked for it: no stopped card
                     break
                 }
-                HengeLog.log("session", "showing stopped machine: \(String(cString: henge_vm_exit_reason()))")
-                if outcome == Int32(HENGE_VM_OUTCOME_RESTART.rawValue) && henge_vm_can_start() != 0 {
+                TuxLog.log("session", "showing stopped machine: \(String(cString: tux_vm_exit_reason()))")
+                if outcome == Int32(TUX_VM_OUTCOME_RESTART.rawValue) && tux_vm_can_start() != 0 {
                     bootAttempt += 1
                 }
                 break
             }
             tick += 1
             if tick % 10 == 0 {
-                let gpuFrames = henge_vm_gpu_frames()
-                HengeLog.log("perf", "blocks/s \(String(format: "%.0f", blocksPerSecond)), GPU frames/10s \(gpuFrames &- lastGPUFrames), "
-                             + "network tx \(framesOut), rx \(framesIn), dns \(henge_vm_dns(0)) answered \(henge_vm_dns(2)) unanswered, "
+                let gpuFrames = tux_vm_gpu_frames()
+                TuxLog.log("perf", "blocks/s \(String(format: "%.0f", blocksPerSecond)), GPU frames/10s \(gpuFrames &- lastGPUFrames), "
+                             + "network tx \(framesOut), rx \(framesIn), dns \(tux_vm_dns(0)) answered \(tux_vm_dns(2)) unanswered, "
                              + "thermal \(Self.thermalLabel(heat))")
                 lastGPUFrames = gpuFrames
                 JITBootstrap.releaseLingeringDebugger()
             }
-            if tick % 30 == 0 { HengeLog.logFootprint("session") } // how close to the limit, for a memory kill leaves no crash report
+            if tick % 30 == 0 { TuxLog.logFootprint("session") } // how close to the limit, for a memory kill leaves no crash report
             if tick % 60 == 0 { MachinePreview.save(for: machine) }
             try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
@@ -1162,10 +1162,10 @@ struct SessionView: View {
         } else if gate.covered {
             return
         }
-        let was = henge_vm_paused() != 0
-        henge_vm_set_background(away ? 1 : 0) // sound keeps only a machine without acceleration running; it pauses when the sound stops
-        let now = henge_vm_paused() != 0
-        if now != was { HengeLog.log("session", now ? "paused in the background" : "resumed") }
+        let was = tux_vm_paused() != 0
+        tux_vm_set_background(away ? 1 : 0) // sound keeps only a machine without acceleration running; it pauses when the sound stops
+        let now = tux_vm_paused() != 0
+        if now != was { TuxLog.log("session", now ? "paused in the background" : "resumed") }
     }
 
     /// The wallet locks and the next return asks again (SessionGate.away).
@@ -1179,9 +1179,9 @@ struct SessionView: View {
         switch gate.ask() {
         case .nothing:
             return
-        case .opened: // HENGE_AUTOPILOT
+        case .opened: // TUX_AUTOPILOT
             if gate.check == .skippedForTest {
-                HengeLog.log("session", "face id: skipped (HENGE_AUTOPILOT); wallet \(gate.secretsUnlocked ? "unlocked by the test" : "locked")")
+                TuxLog.log("session", "face id: skipped (TUX_AUTOPILOT); wallet \(gate.secretsUnlocked ? "unlocked by the test" : "locked")")
             }
             KeychainStore.shared.setUnlocked(gate.secretsUnlocked)
             setBackground(false)
@@ -1217,7 +1217,7 @@ struct SessionView: View {
                     HStack(spacing: 24) {
                         Button("Try Again") { askToOpen() }.foregroundStyle(Desk.accentLight)
                         Button(state == 1 ? "Turn Off" : "Close") {
-                            if state == 1 { henge_vm_stop() }
+                            if state == 1 { tux_vm_stop() }
                             close()
                         }
                         .foregroundStyle(state == 1 ? Desk.bad : Desk.accentLight)
@@ -1237,7 +1237,7 @@ struct SessionView: View {
     private func finish() {
         if state == 1 {
             MachinePreview.saveNow(for: machine)
-            henge_vm_power_button()
+            tux_vm_power_button()
             shutdownAsked = Date()
             shutdownOverdue = false
             return // the run loop closes the view when the guest is off

@@ -9,9 +9,9 @@ struct StoppedMachineView: View {
 
     private var stop: StopKind {
         switch outcome {
-        case Int32(HENGE_VM_OUTCOME_SHUTDOWN.rawValue): return .shutdown
-        case Int32(HENGE_VM_OUTCOME_RESTART.rawValue): return .restart
-        case Int32(HENGE_VM_OUTCOME_HOST_STOP.rawValue): return .hostStop
+        case Int32(TUX_VM_OUTCOME_SHUTDOWN.rawValue): return .shutdown
+        case Int32(TUX_VM_OUTCOME_RESTART.rawValue): return .restart
+        case Int32(TUX_VM_OUTCOME_HOST_STOP.rawValue): return .hostStop
         default: return .error
         }
     }

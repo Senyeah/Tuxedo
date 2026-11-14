@@ -4,7 +4,7 @@
 # ///
 """Compares Henge's virt device tree with QEMU's, node by node.
 
-QEMU: -M virt,gic-version=3,highmem=off,dumpdtb. Henge: build/hengevm --dump-dtb.
+QEMU: -M virt,gic-version=3,highmem=off,dumpdtb. Henge: build/tuxvm --dump-dtb.
 Exit 1 on any difference that is not in the allow lists below.
 """
 import argparse
@@ -23,7 +23,7 @@ QEMU_MAX_MB = 3072  # highmem=off keeps RAM below 4 GB, so QEMU refuses -m 4096
 QEMU_ONLY_NODES = {"platform-bus@c000000", "fw-cfg@9020000", "pmu", "flash@0"}
 QEMU_ONLY_PREFIXES = ("virtio_mmio@",)
 # Top-level nodes only Tuxedo has: the device's battery, mains and backlight (LINUX-PLAN-13).
-HENGE_ONLY_NODES = {"i2c@90c0000", "ac-power"}
+TUX_ONLY_NODES = {"i2c@90c0000", "ac-power"}
 # Subtrees only QEMU has: the ITS (no MSI) and the CPU topology.
 QEMU_ONLY_PATHS = {"/intc@8000000/its@8080000", "/cpus/cpu-map"}
 # Properties that differ by design: path -> names.
@@ -100,12 +100,12 @@ def qemu_dtb(path, ncpus, ram_mb):
         raise RuntimeError("qemu failed: " + r.stderr.strip())
 
 
-def henge_dtb(path, ncpus, ram_mb):
-    tool = os.path.join(ROOT, "build", "hengevm")
+def tux_dtb(path, ncpus, ram_mb):
+    tool = os.path.join(ROOT, "build", "tuxvm")
     cmd = [tool, "--dump-dtb", path, "--cpus", str(ncpus), "--ram", str(ram_mb)]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
-        raise RuntimeError("hengevm --dump-dtb failed: " + r.stderr.strip())
+        raise RuntimeError("tuxvm --dump-dtb failed: " + r.stderr.strip())
 
 
 def fmt(v):
@@ -130,7 +130,7 @@ def compare(q, h, ncpus, ram_mb):
             (allowed if is_qemu_only(path) else errors).append(f"{path}: only in QEMU")
             continue
         if path not in q:
-            (allowed if path.split("/")[1] in HENGE_ONLY_NODES else errors).append(f"{path}: only in Henge")
+            (allowed if path.split("/")[1] in TUX_ONLY_NODES else errors).append(f"{path}: only in Henge")
             continue
         ignored = set(IGNORED_PROPS.get(path, ()))
         if re.fullmatch(r"/cpus/cpu@\d+", path):
@@ -170,7 +170,7 @@ def run_case(tmp, ncpus, ram_mb, verbose):
     hd = os.path.join(tmp, f"h{ncpus}-{ram_mb}.dtb")
     if not os.path.exists(qd):
         qemu_dtb(qd, ncpus, qmb)
-    henge_dtb(hd, ncpus, ram_mb)
+    tux_dtb(hd, ncpus, ram_mb)
     errors, allowed = compare(dtb_to_nodes(qd), dtb_to_nodes(hd), ncpus, ram_mb)
     note = f" (QEMU reference at {qmb} MB; memory size checked by rule)" if qmb != ram_mb else ""
     print(f"{ncpus} CPUs, {ram_mb} MB{note}: {'FAIL' if errors else 'ok'}, {len(allowed)} allowed differences")
@@ -184,7 +184,7 @@ def run_case(tmp, ncpus, ram_mb, verbose):
 
 def check_options(tmp):
     """--dump-dtb keeps --append in /chosen and refuses --initrd, which it cannot place."""
-    tool = os.path.join(ROOT, "build", "hengevm")
+    tool = os.path.join(ROOT, "build", "tuxvm")
     path, append = os.path.join(tmp, "append.dtb"), "console=ttyAMA0 break=top"
     r = subprocess.run([tool, "--dump-dtb", path, "--append", append], capture_output=True, text=True)
     dts = subprocess.run(["dtc", "-I", "dtb", "-O", "dts", path], capture_output=True, text=True).stdout if r.returncode == 0 else ""
@@ -206,9 +206,9 @@ def main():
     ap.add_argument("--ram-mb", type=int, nargs="+", default=[1024, 4096])
     ap.add_argument("-v", "--verbose", action="store_true", help="list allowed differences")
     args = ap.parse_args()
-    for tool in ("dtc", QEMU, os.path.join(ROOT, "build", "hengevm")):
+    for tool in ("dtc", QEMU, os.path.join(ROOT, "build", "tuxvm")):
         if not (shutil.which(tool) or os.path.exists(tool)):
-            sys.exit(f"missing tool: {tool} (run make build/hengevm)")
+            sys.exit(f"missing tool: {tool} (run make build/tuxvm)")
     with tempfile.TemporaryDirectory() as tmp:
         results = [run_case(tmp, c, r, args.verbose) for c in args.cpus for r in args.ram_mb]
         results.append(check_options(tmp))

@@ -127,7 +127,7 @@ static NSString *const shaders = @"#include <metal_stdlib>\n"
 @end
 
 static void print_stats(const HvVgpuStats *s) {
-    fprintf(stderr, "hengevm: vgpu-stats pulls=%llu pull_wait_us=%.0f pull_hold_us=%.0f pull_hold_max_us=%.0f pull_mb=%.1f uploads=%llu upload_us=%.0f upload_max_us=%.0f upload_mb=%.1f\n",
+    fprintf(stderr, "tuxvm: vgpu-stats pulls=%llu pull_wait_us=%.0f pull_hold_us=%.0f pull_hold_max_us=%.0f pull_mb=%.1f uploads=%llu upload_us=%.0f upload_max_us=%.0f upload_mb=%.1f\n",
             (unsigned long long)s->pulls, s->pulls ? s->pull_wait_ns / 1e3 / s->pulls : 0, s->pulls ? s->pull_hold_ns / 1e3 / s->pulls : 0,
             s->pull_hold_max_ns / 1e3, s->pull_bytes / 1e6, (unsigned long long)s->uploads, s->uploads ? s->upload_ns / 1e3 / s->uploads : 0,
             s->upload_max_ns / 1e3, s->upload_bytes / 1e6);
@@ -491,7 +491,7 @@ HvVgpuMetal *hv_vgpu_metal_create(HvVirtioGpu *g) {
         NSError *err = nil;
         id<MTLLibrary> lib = [dev newLibraryWithSource:shaders options:nil error:&err];
         if (!lib) {
-            fprintf(stderr, "hengevm: vgpu-metal: shaders: %s\n", err.localizedDescription.UTF8String);
+            fprintf(stderr, "tuxvm: vgpu-metal: shaders: %s\n", err.localizedDescription.UTF8String);
             return NULL;
         }
         HvVgpuPresenter *p = [HvVgpuPresenter new];
@@ -519,7 +519,7 @@ HvVgpuMetal *hv_vgpu_metal_create(HvVirtioGpu *g) {
         ct.storageMode = MTLStorageModeShared;
         p->cursor_tex = [dev newTextureWithDescriptor:ct];
         if (!p->queue || !p->screen_pipe || !p->cursor_pipe || !p->linear || !p->nearest || !p->cursor_tex) {
-            fprintf(stderr, "hengevm: vgpu-metal: pipelines: %s\n", err ? err.localizedDescription.UTF8String : "no memory");
+            fprintf(stderr, "tuxvm: vgpu-metal: pipelines: %s\n", err ? err.localizedDescription.UTF8String : "no memory");
             return NULL;
         }
         p->stats_env = getenv("HV_VGPU_STATS") != NULL;
@@ -528,7 +528,7 @@ HvVgpuMetal *hv_vgpu_metal_create(HvVirtioGpu *g) {
         p->no_direct = YES; /* the simulator asserts on a linear texture over a shared buffer */
 #endif
         p->linear_align = [dev minimumLinearTextureAlignmentForPixelFormat:MTLPixelFormatBGRA8Unorm];
-        p->work = dispatch_queue_create("hengevm.vgpu", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
+        p->work = dispatch_queue_create("tuxvm.vgpu", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
         p->completions = dispatch_group_create();
         p->layer_lock = OS_UNFAIR_LOCK_INIT;
         pthread_mutex_init(&p->shadow_mu, NULL);

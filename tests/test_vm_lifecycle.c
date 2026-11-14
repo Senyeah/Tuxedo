@@ -18,10 +18,10 @@
 
 /* Real native bridge and device workers; only the debugger allocation is replaced. */
 static HvJitRegion jit;
-static HengeDualMapping mapping;
+static TuxDualMapping mapping;
 static int failures;
 static _Atomic int reader_done;
-HengeDualMapping *henge_ios_jit_get_mapping(void) { return &mapping; }
+TuxDualMapping *tux_ios_jit_get_mapping(void) { return &mapping; }
 void hv_prof_ios_start(void) {}
 static void check(const char *what, int ok) {
     if (!ok) { fprintf(stderr, "FAIL: %s\n", what); failures++; }
@@ -114,9 +114,9 @@ static int vc_call(int fd, uint32_t type, const void *payload, uint32_t len, voi
 static size_t drain(char *out, size_t cap, const char *stop_on, int until_stopped, int ms) {
     size_t n = 0;
     for (int t = 0; t < ms; t++) {
-        n += henge_vm_console_read((uint8_t *)out + n, cap - n);
+        n += tux_vm_console_read((uint8_t *)out + n, cap - n);
         if (stop_on && memmem(out, n, stop_on, strlen(stop_on))) break;
-        if (until_stopped && henge_vm_state() == 2) { n += henge_vm_console_read((uint8_t *)out + n, cap - n); break; }
+        if (until_stopped && tux_vm_state() == 2) { n += tux_vm_console_read((uint8_t *)out + n, cap - n); break; }
         usleep(1000);
     }
     return n;
@@ -126,13 +126,13 @@ static void *read_ui(void *unused) {
     while (!atomic_load(&reader_done)) {
         uint8_t image[16];
         int x, y;
-        henge_vm_snapshot(image, 2, 2);
-        henge_vm_pointer(&x, &y);
-        henge_vm_cpus_on();
-        henge_vm_gpu_frames();
-        henge_vm_balloon(-1);
-        henge_vm_console_write((const uint8_t *)"", 0);
-        henge_vm_set_display_layer(NULL);
+        tux_vm_snapshot(image, 2, 2);
+        tux_vm_pointer(&x, &y);
+        tux_vm_cpus_on();
+        tux_vm_gpu_frames();
+        tux_vm_balloon(-1);
+        tux_vm_console_write((const uint8_t *)"", 0);
+        tux_vm_set_display_layer(NULL);
         usleep(500);
     }
     return NULL;
@@ -148,7 +148,7 @@ int main(void) {
     setenv("HV_RAM_NO_LEDGER", "1", 1);
     setenv("HV_BALLOON", "0", 1);
     write_file(disk, NULL, 1 << 20);
-    mapping = (HengeDualMapping){.rx_addr = (uint8_t *)jit.base,
+    mapping = (TuxDualMapping){.rx_addr = (uint8_t *)jit.base,
         .rw_addr = (uint8_t *)jit.base + jit.rw_diff, .size = jit.capacity * 4};
     pthread_t reader;
     if (pthread_create(&reader, NULL, read_ui, NULL)) return 1;
@@ -169,7 +169,7 @@ int main(void) {
         check("virt board builds", hv_vm_create(&virt, error, sizeof error) == 0 && hv_vm_virt());
         check("virt board has a display", hv_vm_devs()->display != NULL);
         hv_vm_destroy();
-        check("virt release leaves nothing behind", !hv_vm_virt() && henge_vm_can_start() && fds() == initial_fds &&
+        check("virt release leaves nothing behind", !hv_vm_virt() && tux_vm_can_start() && fds() == initial_fds &&
                                                      threads_settled());
     }
     /* The virt board through the bridge: a tiny firmware prints to the PL011 and ends in PSCI or a host stop. */
@@ -177,18 +177,18 @@ int main(void) {
         static char text[1 << 19];
         int base = 0, runs = 0;
         struct { const char *name; int how, key, outcome; const char *say; } cases[] = {
-            {"off", FW_OFF, 0, HENGE_VM_OUTCOME_SHUTDOWN, "HENGE OFF\n"},
-            {"reset", FW_RESET, 0, HENGE_VM_OUTCOME_RESTART, "HENGE RESET\n"},
-            {"host stop", FW_SPIN, 0, HENGE_VM_OUTCOME_HOST_STOP, "HENGE SPIN\n"},
-            {"power key", FW_OFF, 1, HENGE_VM_OUTCOME_SHUTDOWN, "KEY\n"},
+            {"off", FW_OFF, 0, TUX_VM_OUTCOME_SHUTDOWN, "TUX OFF\n"},
+            {"reset", FW_RESET, 0, TUX_VM_OUTCOME_RESTART, "TUX RESET\n"},
+            {"host stop", FW_SPIN, 0, TUX_VM_OUTCOME_HOST_STOP, "TUX SPIN\n"},
+            {"power key", FW_OFF, 1, TUX_VM_OUTCOME_SHUTDOWN, "KEY\n"},
         };
         check("the background policy: silent pauses, sound keeps a plain machine running, acceleration always pauses",
               hv_vm_background_pauses(0, 0) && !hv_vm_background_pauses(0, 1) && hv_vm_background_pauses(1, 0) &&
                   hv_vm_background_pauses(1, 1));
-        check("missing firmware file fails", henge_vm_boot_linux("/nonexistent/u-boot.bin", disk, 64, 2, 0, 0, 0, error, sizeof error) != 0 &&
-                                                henge_vm_state() == 0 && henge_vm_can_start() && fds() == initial_fds &&
+        check("missing firmware file fails", tux_vm_boot_linux("/nonexistent/u-boot.bin", disk, 64, 2, 0, 0, 0, error, sizeof error) != 0 &&
+                                                tux_vm_state() == 0 && tux_vm_can_start() && fds() == initial_fds &&
                                                 threads_settled());
-        check("no firmware fails", henge_vm_boot_linux(NULL, disk, 64, 2, 0, 0, 0, error, sizeof error) != 0 && henge_vm_state() == 0);
+        check("no firmware fails", tux_vm_boot_linux(NULL, disk, 64, 2, 0, 0, 0, error, sizeof error) != 0 && tux_vm_state() == 0);
 #ifndef HV_GFX
         {
             Fw f = {0};
@@ -196,8 +196,8 @@ int main(void) {
             write_file(rom, f.w, f.n * sizeof f.w[0]);
             error[0] = 0;
             check("acceleration without a GFX engine fails cleanly",
-                  henge_vm_boot_linux(rom, disk, 64, 2, 1, 0, 0, error, sizeof error) != 0 && strstr(error, "no graphics acceleration") &&
-                      henge_vm_state() == 0 && henge_vm_can_start() && fds() == initial_fds && threads_settled());
+                  tux_vm_boot_linux(rom, disk, 64, 2, 1, 0, 0, error, sizeof error) != 0 && strstr(error, "no graphics acceleration") &&
+                      tux_vm_state() == 0 && tux_vm_can_start() && fds() == initial_fds && threads_settled());
         }
 #endif
         for (unsigned i = 0; i < sizeof cases / sizeof *cases; i++) {
@@ -207,48 +207,48 @@ int main(void) {
                 fw_print(&f, cases[i].say);
                 fw_end(&f, cases[i].how);
                 write_file(rom, f.w, f.n * sizeof f.w[0]);
-                int rc = henge_vm_boot_linux(rom, disk, 64, 2, 0, 0, 0, error, sizeof error);
+                int rc = tux_vm_boot_linux(rom, disk, 64, 2, 0, 0, 0, error, sizeof error);
                 if (rc) fprintf(stderr, "virt %s: %s\n", cases[i].name, error);
                 check("virt boots through the bridge", rc == 0);
                 if (rc) break;
                 runs++;
-                check("a second start is refused while running", henge_vm_boot_linux(rom, disk, 64, 2, 0, 0, 0, error, sizeof error) != 0 &&
-                                                                  henge_vm_state() == 1);
-                henge_vm_console_write((const uint8_t *)"x", 1); /* nobody reads it; it must not hurt */
+                check("a second start is refused while running", tux_vm_boot_linux(rom, disk, 64, 2, 0, 0, 0, error, sizeof error) != 0 &&
+                                                                  tux_vm_state() == 1);
+                tux_vm_console_write((const uint8_t *)"x", 1); /* nobody reads it; it must not hurt */
                 size_t n;
                 if (cases[i].how == FW_SPIN) {
                     n = drain(text, sizeof text, cases[i].say, 0, 3000);
-                    henge_vm_set_background(1);
-                    check("the background pauses a silent machine", henge_vm_paused());
-                    henge_vm_stop(); /* a stop must end the pause */
-                    for (int w = 0; w < 3000 && henge_vm_state() != 2; w++) usleep(1000);
+                    tux_vm_set_background(1);
+                    check("the background pauses a silent machine", tux_vm_paused());
+                    tux_vm_stop(); /* a stop must end the pause */
+                    for (int w = 0; w < 3000 && tux_vm_state() != 2; w++) usleep(1000);
                     n += drain(text + n, sizeof text - n, NULL, 0, 1);
-                    check("a stopped machine is not paused", !henge_vm_paused());
-                    henge_vm_set_background(0);
+                    check("a stopped machine is not paused", !tux_vm_paused());
+                    tux_vm_set_background(0);
                 } else if (cases[i].key) {
-                    henge_vm_set_background(1);
-                    check("background pauses", henge_vm_paused());
-                    henge_vm_set_background(1);
+                    tux_vm_set_background(1);
+                    check("background pauses", tux_vm_paused());
+                    tux_vm_set_background(1);
                     usleep(20000);
-                    henge_vm_set_background(0);
-                    check("foreground resumes", !henge_vm_paused());
+                    tux_vm_set_background(0);
+                    check("foreground resumes", !tux_vm_paused());
                     usleep(100000);
-                    check("the key text is not out before the key", henge_vm_console_read((uint8_t *)text, sizeof text) == 0);
-                    henge_vm_power_button();
+                    check("the key text is not out before the key", tux_vm_console_read((uint8_t *)text, sizeof text) == 0);
+                    tux_vm_power_button();
                     n = drain(text, sizeof text, NULL, 1, 3000);
                 } else {
                     n = drain(text, sizeof text, NULL, 1, 3000);
                 }
                 text[n] = 0;
-                check("virt stopped", henge_vm_state() == 2);
-                if (henge_vm_state() != 2) exit(1);
+                check("virt stopped", tux_vm_state() == 2);
+                if (tux_vm_state() != 2) exit(1);
                 check("console text arrives", strstr(text, cases[i].say) != NULL);
                 if (!strstr(text, cases[i].say)) fprintf(stderr, "virt %s: got \"%s\"\n", cases[i].name, text);
-                check("virt outcome", henge_vm_exit_outcome() == cases[i].outcome);
-                check("virt released", hv_vm_virt() == NULL && henge_vm_can_start());
-                check("virt generation", henge_vm_generation() == (uint64_t)base + runs);
-                check("console empty after the drain", henge_vm_console_read((uint8_t *)text, sizeof text) == 0);
-                henge_vm_power_button(); /* no machine: nothing to press */
+                check("virt outcome", tux_vm_exit_outcome() == cases[i].outcome);
+                check("virt released", hv_vm_virt() == NULL && tux_vm_can_start());
+                check("virt generation", tux_vm_generation() == (uint64_t)base + runs);
+                check("console empty after the drain", tux_vm_console_read((uint8_t *)text, sizeof text) == 0);
+                tux_vm_power_button(); /* no machine: nothing to press */
                 check("virt leaves no descriptors", fds() == initial_fds);
                 check("virt leaves no threads", threads_settled());
                 check("no leaked CPU thread ports", dead_ports() == initial_dead_ports);
@@ -260,24 +260,24 @@ int main(void) {
         fw_flood(&f);
         fw_end(&f, FW_OFF);
         write_file(rom, f.w, f.n * sizeof f.w[0]);
-        check("virt flood boots", henge_vm_boot_linux(rom, disk, 64, 2, 0, 0, 0, error, sizeof error) == 0);
-        for (int w = 0; w < 10000 && henge_vm_state() != 2; w++) usleep(1000);
+        check("virt flood boots", tux_vm_boot_linux(rom, disk, 64, 2, 0, 0, 0, error, sizeof error) == 0);
+        for (int w = 0; w < 10000 && tux_vm_state() != 2; w++) usleep(1000);
         size_t total = 0, got;
         static uint8_t flood[(1 << 18) + 64];
-        while ((got = henge_vm_console_read(flood + total, 4096)) > 0) total += got;
+        while ((got = tux_vm_console_read(flood + total, 4096)) > 0) total += got;
         check("ring keeps 256 KB", total == 1 << 18);
         check("ring dropped the oldest bytes", total && flood[0] == (uint8_t)(1 << 18)); /* countdown 262144 */
         check("ring kept the newest byte", total && flood[total - 1] == 1);
-        check("flood outcome", henge_vm_exit_outcome() == HENGE_VM_OUTCOME_SHUTDOWN);
+        check("flood outcome", tux_vm_exit_outcome() == TUX_VM_OUTCOME_SHUTDOWN);
         runs++;
     }
     /* Video encode, last: its listener stays for the process, as the shared folder's does. */
     {
         Fw f = {0};
-        fw_print(&f, "HENGE SPIN\n");
+        fw_print(&f, "TUX SPIN\n");
         fw_end(&f, FW_SPIN);
         write_file(rom, f.w, f.n * sizeof f.w[0]);
-        int rc = henge_vm_boot_linux(rom, disk, 64, 2, 0, 0, 1, error, sizeof error);
+        int rc = tux_vm_boot_linux(rom, disk, 64, 2, 0, 0, 1, error, sizeof error);
         if (rc) fprintf(stderr, "virt with video encode: %s\n", error);
         check("virt boots with video encode", rc == 0);
         check("video encode adds the hvcodec device", hv_vm_virt() && hv_vm_virt()->codec);
@@ -293,7 +293,7 @@ int main(void) {
         int st = vc_call(fd, HV_VC_ENC_OPEN, &o, sizeof o, &open, sizeof open);
         if (st == HV_VC_E_NOSUP) {
             printf("VM lifecycle: no hardware H.264 encoder here: the background loss is not checked\n");
-            henge_vm_set_background(1);
+            tux_vm_set_background(1);
         } else {
             check("an encoder opens", st == 0);
             HvVcFrameAlloc fa = {.width = 256, .height = 144, .format = HV_VC_FMT_NV12};
@@ -301,21 +301,21 @@ int main(void) {
             check("a frame", vc_call(fd, HV_VC_FRAME_ALLOC, &fa, sizeof fa, &fr, sizeof fr) == 0 && fr.handle);
             HvVcEncFrame ef = {open.session, fr.handle, 0, 1, 0, 0};
             check("it encodes in the foreground", vc_call(fd, HV_VC_ENC_FRAME, &ef, sizeof ef, NULL, 0) == 0);
-            henge_vm_set_background(1);
+            tux_vm_set_background(1);
             ef.pts = 1;
             check("the background ends the encoder: one clear error", vc_call(fd, HV_VC_ENC_FRAME, &ef, sizeof ef, NULL, 0) == HV_VC_E_LOST);
             check("and opens no new encoder", vc_call(fd, HV_VC_ENC_OPEN, &o, sizeof o, NULL, 0) == HV_VC_E_LOST);
         }
         HvVcDecOpen d = {.codec = HV_VC_H264, .width = 256, .height = 144};
         check("nor a new decoder", vc_call(fd, HV_VC_DEC_OPEN, &d, sizeof d, NULL, 0) == HV_VC_E_LOST);
-        check("the background pauses it", henge_vm_paused());
-        henge_vm_stop();
-        for (int w = 0; w < 3000 && henge_vm_state() != 2; w++) usleep(1000);
-        henge_vm_set_background(0);
+        check("the background pauses it", tux_vm_paused());
+        tux_vm_stop();
+        for (int w = 0; w < 3000 && tux_vm_state() != 2; w++) usleep(1000);
+        tux_vm_set_background(0);
         check("the foreground after the stop allows a session again", vc_call(fd, HV_VC_DEC_OPEN, &d, sizeof d, NULL, 0) != HV_VC_E_LOST);
         if (st != HV_VC_E_NOSUP) check("an encoder opens again", vc_call(fd, HV_VC_ENC_OPEN, &o, sizeof o, NULL, 0) == 0);
         if (fd >= 0) close(fd);
-        check("video encode machine stopped and released", henge_vm_state() == 2 && hv_vm_virt() == NULL);
+        check("video encode machine stopped and released", tux_vm_state() == 2 && hv_vm_virt() == NULL);
         HvVcodecStats vs;
         for (int w = 0; w < 1000; w++) {
             hv_vcodec_stats(&vs);
@@ -323,11 +323,11 @@ int main(void) {
             usleep(1000);
         }
         check("no codec context is left", vs.open == 0 && vs.live_frames == 0 && vs.live_sessions == 0);
-        check("virt boots without video encode after it", henge_vm_boot_linux(rom, disk, 64, 2, 0, 0, 0, error, sizeof error) == 0);
+        check("virt boots without video encode after it", tux_vm_boot_linux(rom, disk, 64, 2, 0, 0, 0, error, sizeof error) == 0);
         check("and has no hvcodec device", hv_vm_virt() && !hv_vm_virt()->codec);
-        henge_vm_stop();
-        for (int w = 0; w < 3000 && henge_vm_state() != 2; w++) usleep(1000);
-        check("stopped", henge_vm_state() == 2);
+        tux_vm_stop();
+        for (int w = 0; w < 3000 && tux_vm_state() != 2; w++) usleep(1000);
+        check("stopped", tux_vm_state() == 2);
     }
     hv_vm_destroy();
     atomic_store(&reader_done, 1);

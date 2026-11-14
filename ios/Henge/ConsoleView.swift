@@ -53,13 +53,13 @@ final class ConsoleModel: NSObject, ObservableObject, TerminalViewDelegate {
     }
 
     private func discardPending() {
-        while scratch.withUnsafeMutableBufferPointer({ henge_vm_console_read($0.baseAddress, $0.count) }) > 0 {}
+        while scratch.withUnsafeMutableBufferPointer({ tux_vm_console_read($0.baseAddress, $0.count) }) > 0 {}
     }
 
     private func drain() {
         var chunk: [UInt8] = []
         while chunk.count < 65536 { // a cap so a flood cannot hold the main thread
-            let n = scratch.withUnsafeMutableBufferPointer { henge_vm_console_read($0.baseAddress, $0.count) }
+            let n = scratch.withUnsafeMutableBufferPointer { tux_vm_console_read($0.baseAddress, $0.count) }
             if n == 0 { break }
             chunk.append(contentsOf: scratch[0..<n])
         }
@@ -75,7 +75,7 @@ final class ConsoleModel: NSObject, ObservableObject, TerminalViewDelegate {
     }
 
     private func write(_ bytes: [UInt8]) {
-        bytes.withUnsafeBufferPointer { henge_vm_console_write($0.baseAddress, $0.count) }
+        bytes.withUnsafeBufferPointer { tux_vm_console_write($0.baseAddress, $0.count) }
     }
 
     // MARK: TerminalViewDelegate

@@ -8,12 +8,12 @@
 # and henge-guest (built now)
 # to the pool. A pool file is never replaced
 # with other content: raise the version instead. Each henge-ffmpeg in the pool must have its source directory.
-# The private key is only in $HENGE_APT_GNUPGHOME (default ~/.henge-apt-key), never in the repository.
+# The private key is only in $TUX_APT_GNUPGHOME (default ~/.henge-apt-key), never in the repository.
 #
 #   publish-apt.sh [--new-key] [--rsync] [--check-remote]
 #     --new-key       make the signing key if there is none, and write its public part into the repository
-#     --rsync         copy apt/ and source/ to $HENGE_APT_REMOTE with rsync over ssh, then --check-remote
-#     --check-remote  download InRelease from $HENGE_APT_URL, check its signature, and compare each .deb and SHA256SUMS
+#     --rsync         copy apt/ and source/ to $TUX_APT_REMOTE with rsync over ssh, then --check-remote
+#     --check-remote  download InRelease from $TUX_APT_URL, check its signature, and compare each .deb and SHA256SUMS
 # Without --rsync or --check-remote nothing leaves the Mac.
 set -eu
 
@@ -21,7 +21,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 . "$HERE/versions.env"
 SUITE=$DEBIAN_SUITE
-VER=$FFMPEG_VERSION-henge$FFMPEG_HENGE_REV
+VER=$FFMPEG_VERSION-henge$FFMPEG_TUX_REV
 die() { echo "publish-apt.sh: $*" >&2; exit 1; }
 
 if [ "${1:-}" = --inner ]; then
@@ -69,7 +69,7 @@ ffmpeg.manifest             the hashes of each part, the configure line, and the
 SHA256SUMS                  the SHA-256 of each file here
 
 To build: unpack henge-ffmpeg-src.tar.xz, put ffmpeg-$FFMPEG_VERSION.tar.xz in build/linux/ffmpeg/src/, and run
-HENGE_LINUX_OUT=\$PWD/build/linux tools/linux/build-ffmpeg.sh, then tools/linux/build-ffmpeg-pkg.sh. They need Docker
+TUX_LINUX_OUT=\$PWD/build/linux tools/linux/build-ffmpeg.sh, then tools/linux/build-ffmpeg-pkg.sh. They need Docker
 with arm64 containers. The Debian packages come from snapshot.debian.org at the time in versions.env.
 EOF
     (cd "$N" && sha256sum ffmpeg-$FFMPEG_VERSION.tar.xz ffmpeg-henge.patch build-ffmpeg.sh henge-ffmpeg-src.tar.xz ffmpeg.manifest README.txt > SHA256SUMS)
@@ -78,7 +78,7 @@ EOF
         # of versions.env) keeps the published directory: it is still the source of those binaries.
         # A changed man page or package script changes the .deb, and the pool step above stops that.
         cmp -s "$N/ffmpeg.manifest" "$S/ffmpeg.manifest" ||
-            die "$S has another ffmpeg.manifest; the build changed, so raise FFMPEG_HENGE_REV"
+            die "$S has another ffmpeg.manifest; the build changed, so raise FFMPEG_TUX_REV"
         cmp -s "$N/SHA256SUMS" "$S/SHA256SUMS" ||
             echo "kept $S (same binaries; these files of the offer changed since:" \
                 "$(grep -vxF -f "$S/SHA256SUMS" "$N/SHA256SUMS" | awk '{print $2}' | tr '\n' ' '| sed 's/ $//'))"
@@ -125,10 +125,10 @@ for a in "$@"; do
     esac
 done
 
-OUT=${HENGE_LINUX_OUT:-$HOME/Repos/Henge/build/linux}
-GNUPGHOME=${HENGE_APT_GNUPGHOME:-$HOME/.henge-apt-key}
-REMOTE=${HENGE_APT_REMOTE:-root@walkies.site:/home/USER/henge-linux-catalogue/files}
-URL=${HENGE_APT_URL:-https://walkies.site/henge-linux-catalogue}
+OUT=${TUX_LINUX_OUT:-$HOME/Repos/Henge/build/linux}
+GNUPGHOME=${TUX_APT_GNUPGHOME:-$HOME/.henge-apt-key}
+REMOTE=${TUX_APT_REMOTE:-root@walkies.site:/home/USER/henge-linux-catalogue/files}
+URL=${TUX_APT_URL:-https://walkies.site/henge-linux-catalogue}
 PUBKEY=$HERE/henge-archive.asc
 KEYRING=$HERE/henge-guest/usr/share/keyrings/henge-archive.gpg
 FFDEB=$OUT/ffmpeg/henge-ffmpeg_${VER}_arm64.deb
@@ -148,7 +148,7 @@ if [ $NEW_KEY = 1 ] && ! hgpg --list-secret-keys --with-colons 2>/dev/null | gre
     echo "new key $F in $GNUPGHOME; its public part is in $PUBKEY and $KEYRING (commit those two)"
 fi
 FPR=$(hgpg --list-secret-keys --with-colons 2>/dev/null | awk -F: '$1 == "fpr" {print $10; exit}')
-[ -n "$FPR" ] || die "no signing key in $GNUPGHOME; run with --new-key, or set HENGE_APT_GNUPGHOME"
+[ -n "$FPR" ] || die "no signing key in $GNUPGHOME; run with --new-key, or set TUX_APT_GNUPGHOME"
 [ "$(fpr_of "$PUBKEY")" = "$FPR" ] && [ "$(fpr_of "$KEYRING")" = "$FPR" ] ||
     die "$PUBKEY or $KEYRING is not the key in $GNUPGHOME ($FPR)"
 
@@ -160,7 +160,7 @@ else
     [ -f "$VADEB" ] || die "no $VADEB; run make linux-va-pkg"
     STAGE=$OUT/apt-stage
     rm -rf "$STAGE" && mkdir -p "$STAGE"
-    HENGE_LINUX_OUT=$STAGE "$HERE/build-guest-pkg.sh" >/dev/null
+    TUX_LINUX_OUT=$STAGE "$HERE/build-guest-pkg.sh" >/dev/null
     cp "$FFDEB" "$CODECDEB" "$VADEB" "$STAGE/"
     docker run --rm -i --platform linux/arm64 -v "$OUT":/out -v "$STAGE":/stage -v "$ROOT":/src:ro \
         debian:trixie sh /src/tools/linux/publish-apt.sh --inner

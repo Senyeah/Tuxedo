@@ -7,7 +7,7 @@
 
 Boot 1: clone grown to --size-gb. Boot 2: nothing changed (the first-boot unit must not run again).
 Boot 3: the disk grown by --extra-gb more (the grow unit runs on a later boot).
-Runs on hengevm (--firmware) or, with --qemu, on QEMU TCG. Exit 1 on a failed check.
+Runs on tuxvm (--firmware) or, with --qemu, on QEMU TCG. Exit 1 on a failed check.
 """
 import argparse
 import os
@@ -23,7 +23,7 @@ import pexpect
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 QEMU = os.environ.get("QEMU", "/opt/homebrew/bin/qemu-system-aarch64")
 SHELL = r"henge@henge:\S*\$ "
-MARK = "HENGE_RC_"
+MARK = "TUX_RC_"
 
 
 class Fail(Exception):
@@ -37,8 +37,8 @@ def argv(args, disk):
                 "-drive", f"if=none,file={disk},format=raw,id=d0", "-device", "virtio-blk-pci,drive=d0",
                 "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-device", "virtio-rng-pci",
                 "-device", "qemu-xhci", "-device", "usb-kbd"]
-    # hengevm's stderr goes to a file so it cannot break the console parsing
-    return ["/bin/sh", "-c", 'exec "$@" 2>"$0"', disk + ".stderr", args.hengevm, "--firmware", args.firmware, "--ram", "2048", "--cpus", str(args.cpus), "--disk", disk]
+    # tuxvm's stderr goes to a file so it cannot break the console parsing
+    return ["/bin/sh", "-c", 'exec "$@" 2>"$0"', disk + ".stderr", args.tuxvm, "--firmware", args.firmware, "--ram", "2048", "--cpus", str(args.cpus), "--disk", disk]
 
 
 def sh(p, cmd, limit=30):
@@ -89,7 +89,7 @@ def main():
     ap.add_argument("--qemu", action="store_true")
     ap.add_argument("--image", default=os.path.join(ROOT, "build", "linux", "debian-console.img"))
     ap.add_argument("--firmware", default=os.path.join(ROOT, "build", "linux", "u-boot.bin"))
-    ap.add_argument("--hengevm", default=os.path.join(ROOT, "build", "hengevm"))
+    ap.add_argument("--tuxvm", default=os.path.join(ROOT, "build", "tuxvm"))
     ap.add_argument("--size-gb", type=int, default=16)
     ap.add_argument("--extra-gb", type=int, default=4)
     ap.add_argument("--cpus", type=int, default=1)

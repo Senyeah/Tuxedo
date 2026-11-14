@@ -1,5 +1,5 @@
-#ifndef HENGEVM_DISK_H
-#define HENGEVM_DISK_H
+#ifndef TUXVM_DISK_H
+#define TUXVM_DISK_H
 
 #include <stdint.h>
 

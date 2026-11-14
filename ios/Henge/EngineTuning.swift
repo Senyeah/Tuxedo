@@ -34,7 +34,7 @@ enum EngineTuning {
         }
         for (k, v) in env.sorted(by: { $0.key < $1.key }) {
             setenv(k, v, 1)
-            HengeLog.log("tuning", "\(k)=\(v)")
+            TuxLog.log("tuning", "\(k)=\(v)")
         }
     }
 }

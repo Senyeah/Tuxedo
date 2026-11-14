@@ -3,16 +3,16 @@
 # requires-python = ">=3.9"
 # dependencies = ["pexpect"]
 # ///
-"""Port forwards into the guest (hengevm --forward, host/net_forward.c), on a clone of the console image.
+"""Port forwards into the guest (tuxvm --forward, host/net_forward.c), on a clone of the console image.
 
-Boot 1 listens on 127.0.0.1 (hengevm's default) with three rules: SSH to the guest's port 22, HTTP to a
+Boot 1 listens on 127.0.0.1 (tuxvm's default) with three rules: SSH to the guest's port 22, HTTP to a
 python3 -m http.server on 8000, and two whose ports the Mac holds already: one on 127.0.0.1, one on 0.0.0.0. It installs openssh-server and a
 throwaway key in the guest, then: ssh logs in through the forward and carries 16 MB both ways; curl gets the page;
-each held port is an error in hengevm's log, the machine runs anyway, and the forward comes up once the port is
+each held port is an error in tuxvm's log, the machine runs anyway, and the forward comes up once the port is
 free; nothing listens on the Mac's other addresses. Boot 2 has --forward-addr local (the app's: every local network
 address and loopback) and HV_NET_FWD (the old variable, an alias of --forward): ssh on 127.0.0.1 and on the Mac's
 LAN address (only listed when the Mac's application firewall is on: it holds such connections to an unsigned
-hengevm), and curl through the alias's port. The key pair is made for the run in a temporary folder and goes
+tuxvm), and curl through the alias's port. The key pair is made for the run in a temporary folder and goes
 with it. Exit 1 on a failed check.
 """
 import argparse
@@ -53,7 +53,7 @@ def lan_address():
 
 
 def firewall_on():
-    """macOS's application firewall holds connections from other addresses to an unsigned listener such as hengevm."""
+    """macOS's application firewall holds connections from other addresses to an unsigned listener such as tuxvm."""
     r = subprocess.run(["/usr/libexec/ApplicationFirewall/socketfilterfw", "--getglobalstate"], capture_output=True, text=True)
     return "enabled" in r.stdout
 
@@ -76,7 +76,7 @@ class Run:
 
     def boot(self, name, forwards, extra=(), env=None):
         self.err = os.path.join(self.tmp, f"{name}.stderr")
-        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', self.err, self.args.hengevm, "--firmware",
+        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', self.err, self.args.tuxvm, "--firmware",
                 self.args.firmware, "--disk", self.disk, "--ram", "2048", "--cpus", str(self.args.cpus)]
         for f in forwards:
             argv += ["--forward", f]
@@ -106,7 +106,7 @@ class Run:
             if re.search(pattern, self.log()):
                 return
             time.sleep(0.25)
-        raise Fail(f"{what}: {pattern!r} not in hengevm's log within {limit} s")
+        raise Fail(f"{what}: {pattern!r} not in tuxvm's log within {limit} s")
 
     def ssh(self, addr, port, command, data=None, limit=60):
         env = {k: v for k, v in os.environ.items() if k != "SSH_AUTH_SOCK"}  # only the run's own key
@@ -188,7 +188,7 @@ def check(args, run):
 
     if lan:
         if not refused(lan, ssh_port) or not refused(lan, http_port):
-            raise Fail(f"a forward listens on {lan}: hengevm's default is 127.0.0.1 only")
+            raise Fail(f"a forward listens on {lan}: tuxvm's default is 127.0.0.1 only")
         print(f"ok: nothing listens on the Mac's {lan}")
     else:
         print("note: the Mac has no LAN address; the 127.0.0.1-only check is skipped")
@@ -211,7 +211,7 @@ def check(args, run):
         run.wait_log(rf"net: forward {re.escape(lan)}:{ssh_port} -> guest port 22\n", 10, "the SSH forward on the LAN")
     if lan and firewall_on():
         print(f"ok: --forward-addr local listens on {lan} and 127.0.0.1; ssh on 127.0.0.1 (the Mac's application firewall "
-              f"holds connections to {lan} for hengevm, so that one is not tried)")
+              f"holds connections to {lan} for tuxvm, so that one is not tried)")
     elif lan:
         out = run.ssh(lan, ssh_port, "echo forward-ok").decode().strip()
         if out != "forward-ok":
@@ -229,10 +229,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--image", default=os.path.join(smoke.linux_dir(), "debian-console.img"))
     ap.add_argument("--firmware", default=os.path.join(smoke.linux_dir(), "u-boot.bin"))
-    ap.add_argument("--hengevm", default=os.path.join(smoke.ROOT, "build", "hengevm"))
+    ap.add_argument("--tuxvm", default=os.path.join(smoke.ROOT, "build", "tuxvm"))
     ap.add_argument("--cpus", type=int, default=2)
     ap.add_argument("--work-dir", help="where the clone goes (the image's APFS volume; default TMPDIR)")
-    ap.add_argument("--keep-logs", help="copy hengevm's logs here")
+    ap.add_argument("--keep-logs", help="copy tuxvm's logs here")
     args = ap.parse_args()
     tmp = tempfile.mkdtemp(prefix="forward-check-", dir=args.work_dir)
     run = Run(args, tmp)
@@ -246,7 +246,7 @@ def main():
         print(f"forward-check: FAIL: {e}", file=sys.stderr)
         if run.p is not None:
             print("console tail:\n" + (run.p.before or "")[-3000:], file=sys.stderr)
-        print("hengevm stderr tail:\n" + run.log()[-2000:], file=sys.stderr)
+        print("tuxvm stderr tail:\n" + run.log()[-2000:], file=sys.stderr)
         return 1
     finally:
         if run.p is not None and run.p.isalive():

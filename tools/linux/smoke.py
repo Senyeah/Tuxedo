@@ -7,10 +7,10 @@
 
 --direct: direct kernel boot (Image and initrd.img) to the (initramfs) prompt,
 then cat /proc/cpuinfo, uname -m, reboot -f to the prompt again, and poweroff -f,
-which must end hengevm with status 0. With --no-reboot, reboot -f must end it
-with status 3 instead. --fatal sends hengevm SIGILL at the prompt instead: its
+which must end tuxvm with status 0. With --no-reboot, reboot -f must end it
+with status 3 instead. --fatal sends tuxvm SIGILL at the prompt instead: its
 crash report must still reach stderr with the terminal in raw mode. --qemu runs
-the same checks on QEMU's virt machine (hvf), and --qemu --henge-dtb gives QEMU
+the same checks on QEMU's virt machine (hvf), and --qemu --tux-dtb gives QEMU
 Henge's device tree (E8 step 1).
 --direct --disk: the same kernel with an APFS clone of debian-console.img as the
 root disk (E9). After autologin it checks systemd, the disk, the page size, the
@@ -28,7 +28,7 @@ checksum that the same project gives on the Mac. No kernel warning may appear. s
 are installed with apt (network through slirp) when the image has none.
 --power, with --uboot or --direct --disk (E12): after the --disk checks, four boots of a fresh clone. Each writes 64 MB
 without sync and then ends the machine a different way, and the next boot must find the file whole and the root filesystem
-clean (no journal recovery): sudo reboot (hengevm builds the machine again; the guest comes back), the power key as SIGTERM
+clean (no journal recovery): sudo reboot (tuxvm builds the machine again; the guest comes back), the power key as SIGTERM
 (Debian shuts down by itself, exit status 0), the power key as Ctrl-A p, and two SIGTERMs (the second stops the machine at
 once). --qemu has no power key (see power_key), no Ctrl-A p and no second SIGTERM: sudo poweroff takes their place.
 Exit 1 on any failed check; the last 200 lines of console output go to stderr.
@@ -59,7 +59,7 @@ PROMPT = r"\(initramfs\) "
 LIMITS = {"prompt": 9, "command": 5, "poweroff": 5}
 
 SHELL = r"henge@henge:\S*\$ "  # not anchored: a kernel line can follow it in the same read
-MARK = "HENGE_RC_"  # ends each --disk command; its echo shows "$?", never digits
+MARK = "TUX_RC_"  # ends each --disk command; its echo shows "$?", never digits
 # Add a pattern only with a note in the findings log.
 DMESG_ALLOW = [
     # E9: port 2 says speed ID 2 (low speed in xHCI), and a low-speed ep0 must be 8 bytes; the trackpad is D5's.
@@ -91,9 +91,9 @@ STRESS_ALLOW = DMESG_ALLOW + [r"kauditd_printk_skb: \d+ callbacks suppressed"]
 
 
 def linux_dir():
-    """HENGE_LINUX_OUT, else build/linux in the main checkout (worktrees share it)."""
-    if os.environ.get("HENGE_LINUX_OUT"):
-        return os.environ["HENGE_LINUX_OUT"]
+    """TUX_LINUX_OUT, else build/linux in the main checkout (worktrees share it)."""
+    if os.environ.get("TUX_LINUX_OUT"):
+        return os.environ["TUX_LINUX_OUT"]
     try:
         common = subprocess.run(["git", "-C", ROOT, "rev-parse", "--path-format=absolute", "--git-common-dir"],
                                 capture_output=True, text=True, check=True).stdout.strip()
@@ -125,7 +125,7 @@ class Fail(Exception):
 
 
 def command(args, kernel, initrd, tmp, append=APPEND, disk=None, firmware=None):
-    """argv for the machine under test. hengevm's stderr goes to a file so the console stays clean."""
+    """argv for the machine under test. tuxvm's stderr goes to a file so the console stays clean."""
     if args.qemu and firmware:
         return [QEMU, "-M", "virt,gic-version=3,highmem=off,its=off", "-accel", "tcg", "-cpu", "max",
                 "-smp", str(args.cpus), "-m", str(args.ram), "-nographic", "-bios", firmware,
@@ -139,17 +139,17 @@ def command(args, kernel, initrd, tmp, append=APPEND, disk=None, firmware=None):
         if disk:
             argv += ["-drive", f"if=none,file={disk},format=raw,id=d0", "-device", "virtio-blk-pci,drive=d0",
                      "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-device", "virtio-rng-pci"]
-        if not args.henge_dtb:
+        if not args.tux_dtb:
             return argv + ["-append", append]
         # Tuxedo's tree carries the command line; QEMU adds only the initrd range.
         dtb = os.path.join(tmp, "henge.dtb")
-        r = subprocess.run([args.hengevm, "--dump-dtb", dtb, "--append", append,
+        r = subprocess.run([args.tuxvm, "--dump-dtb", dtb, "--append", append,
                             "--ram", str(args.ram), "--cpus", str(args.cpus)], capture_output=True, text=True)
         if r.returncode != 0:
-            raise Fail(f"hengevm --dump-dtb failed: {r.stderr.strip()}")
+            raise Fail(f"tuxvm --dump-dtb failed: {r.stderr.strip()}")
         return argv + ["-dtb", dtb]
     boot = ["--firmware", firmware] if firmware else ["--kernel", kernel, "--initrd", initrd, "--append", append]
-    argv = [args.hengevm] + boot + ["--ram", str(args.ram), "--cpus", str(args.cpus),
+    argv = [args.tuxvm] + boot + ["--ram", str(args.ram), "--cpus", str(args.cpus),
                                                         "--log", str(args.log)]
     if disk:
         argv += ["--disk", disk]
@@ -178,13 +178,13 @@ def run_cmd(p, cmd, limit):
 
 
 def stopped(p, status_want, line, stderr, args):
-    """The machine has ended: check its exit status and hengevm's stop line."""
+    """The machine has ended: check its exit status and tuxvm's stop line."""
     p.close()
     status = p.exitstatus if p.exitstatus is not None else 128 + (p.signalstatus or 0)
     if status != status_want:
         raise Fail(f"exit status {status}, expected {status_want}")
-    if not args.qemu and f"hengevm: stopped: {line}" not in stderr():
-        raise Fail(f"no 'hengevm: stopped: {line}' line on stderr")
+    if not args.qemu and f"tuxvm: stopped: {line}" not in stderr():
+        raise Fail(f"no 'tuxvm: stopped: {line}' line on stderr")
 
 
 def boot(p):
@@ -197,7 +197,7 @@ def direct(args, times):
     kernel, initrd = os.path.join(d, "Image"), os.path.join(d, "initrd.img")
     for f in (kernel, initrd):
         if not os.path.exists(f):
-            raise Fail(f"missing {f} (set HENGE_LINUX_OUT or --linux-dir)")
+            raise Fail(f"missing {f} (set TUX_LINUX_OUT or --linux-dir)")
     tail = Tail()
     with tempfile.TemporaryDirectory(prefix="smoke-") as tmp:
         argv = command(args, kernel, initrd, tmp)
@@ -214,7 +214,7 @@ def direct(args, times):
                 p.close()
                 if p.signalstatus != signal.SIGILL:
                     raise Fail(f"exit status {p.exitstatus}, signal {p.signalstatus}; expected death by SIGILL")
-                if "hengevm: signal 4 in translated code" not in stderr():
+                if "tuxvm: signal 4 in translated code" not in stderr():
                     raise Fail("no crash report from vm.c's handler on stderr")
                 return
             t = time.monotonic()
@@ -255,7 +255,7 @@ def report(p, tail, stderr):
         p.terminate(force=True)
         p.close()
     tail.write("\n")
-    print(f"--- last console lines ---\n{tail.text()}\n--- hengevm stderr (end) ---\n{stderr()[-4000:]}",
+    print(f"--- last console lines ---\n{tail.text()}\n--- tuxvm stderr (end) ---\n{stderr()[-4000:]}",
           file=sys.stderr)
 
 
@@ -364,7 +364,7 @@ def disk(args, times):
     firmware = os.path.join(d, "u-boot.bin") if args.uboot else None
     for f in [image, image[:-4] + ".partuuid"] + ([firmware] if args.uboot else [kernel, initrd]):
         if not os.path.exists(f):
-            raise Fail(f"missing {f} (set HENGE_LINUX_OUT or --linux-dir)")
+            raise Fail(f"missing {f} (set TUX_LINUX_OUT or --linux-dir)")
     partuuid = open(image[:-4] + ".partuuid").read().strip()
     append = f"console=ttyAMA0 earlycon=pl011,0x9000000 root=PARTUUID={partuuid} rw"
     scale = QEMU_TCG_SCALE if args.uboot and args.qemu else 1
@@ -457,7 +457,7 @@ def disk(args, times):
 
 
 def power_key(p, args, how):
-    """Presses the guest's power key: SIGTERM or Ctrl-A p for hengevm. On the -bios path QEMU has no gpio-keys
+    """Presses the guest's power key: SIGTERM or Ctrl-A p for tuxvm. On the -bios path QEMU has no gpio-keys
     (it builds an ACPI GED), so there the guest powers itself off."""
     if args.qemu:
         p.sendline("sudo poweroff")
@@ -481,7 +481,7 @@ def power(args, times):
     firmware = os.path.join(d, "u-boot.bin") if args.uboot else None
     for f in [image, image[:-4] + ".partuuid"] + ([firmware] if args.uboot else [kernel, initrd]):
         if not os.path.exists(f):
-            raise Fail(f"missing {f} (set HENGE_LINUX_OUT or --linux-dir)")
+            raise Fail(f"missing {f} (set TUX_LINUX_OUT or --linux-dir)")
     partuuid = open(image[:-4] + ".partuuid").read().strip()
     append = f"console=ttyAMA0 earlycon=pl011,0x9000000 root=PARTUUID={partuuid} rw"
     scale = QEMU_TCG_SCALE if args.uboot and args.qemu else 1
@@ -524,7 +524,7 @@ def power(args, times):
             return out.split()[0]
 
         def ends(how, key, want_line, what_t):
-            """Ends the running machine; it must exit 0 with hengevm's stop line."""
+            """Ends the running machine; it must exit 0 with tuxvm's stop line."""
             p = st["p"]
             if not args.qemu:
                 wait_for_logind_keys(p)
@@ -552,8 +552,8 @@ def power(args, times):
                 times["reboot to kernel"] = time.monotonic() - t
                 login(p, None)
             times["reboot to login"] = time.monotonic() - t
-            if not args.qemu and "hengevm: guest restart" not in stderr():
-                raise Fail("no 'hengevm: guest restart' line on stderr")
+            if not args.qemu and "tuxvm: guest restart" not in stderr():
+                raise Fail("no 'tuxvm: guest restart' line on stderr")
             clean(p, "r1", digest)
 
             what, digest = "the power key (SIGTERM)", write(p, "r2")
@@ -618,7 +618,7 @@ def stress(args, times):
     firmware = os.path.join(d, "u-boot.bin") if args.uboot else None
     for f in [image, partuuid] + ([firmware] if args.uboot else [kernel, initrd]):
         if not os.path.exists(f):
-            raise Fail(f"missing {f} (set HENGE_LINUX_OUT or --linux-dir)")
+            raise Fail(f"missing {f} (set TUX_LINUX_OUT or --linux-dir)")
     append = f"console=ttyAMA0 earlycon=pl011,0x9000000 root=PARTUUID={open(partuuid).read().strip()} rw"
     n, scale = args.cpus, QEMU_TCG_SCALE if args.uboot and args.qemu else 1
     cmd = DISK_LIMITS["command"]
@@ -691,26 +691,26 @@ def main():
     ap.add_argument("--image", help="--stress: the disk to clone (default debian-console.img)")
     ap.add_argument("--work-dir", help="--disk, --uboot: where the clone goes (the image's APFS volume; default TMPDIR)")
     ap.add_argument("--power", action="store_true", help="with --uboot or --direct --disk: the E12 checks")
-    ap.add_argument("--qemu", action="store_true", help="run the checks on QEMU instead of hengevm")
-    ap.add_argument("--henge-dtb", action="store_true", help="with --qemu: boot QEMU with hengevm --dump-dtb's tree")
+    ap.add_argument("--qemu", action="store_true", help="run the checks on QEMU instead of tuxvm")
+    ap.add_argument("--tux-dtb", action="store_true", help="with --qemu: boot QEMU with tuxvm --dump-dtb's tree")
     ap.add_argument("--cpus", type=int, default=1)
     ap.add_argument("--ram", type=int, default=2048, help="MB")
-    ap.add_argument("--phone", action="store_true", help="pass --phone to hengevm")
-    ap.add_argument("--no-reboot", action="store_true", help="reboot -f must stop the machine (hengevm: status 3)")
+    ap.add_argument("--phone", action="store_true", help="pass --phone to tuxvm")
+    ap.add_argument("--no-reboot", action="store_true", help="reboot -f must stop the machine (tuxvm: status 3)")
     ap.add_argument("--fatal", action="store_true", help="SIGILL at the prompt must give vm.c's crash report")
-    ap.add_argument("--log", type=int, default=1, help="hengevm --log level")
+    ap.add_argument("--log", type=int, default=1, help="tuxvm --log level")
     ap.add_argument("--runs", type=int, default=1, help="boot this many times; all must pass")
     ap.add_argument("--linux-dir", help="directory with Image, initrd.img, u-boot.bin and debian-console.img")
-    ap.add_argument("--hengevm", default=os.path.join(ROOT, "build", "hengevm"))
+    ap.add_argument("--tuxvm", default=os.path.join(ROOT, "build", "tuxvm"))
     args = ap.parse_args()
     if args.direct == args.uboot:
         ap.error("give one of --direct and --uboot")
-    if args.uboot and (args.disk or args.henge_dtb):
-        ap.error("--uboot boots the disk already, and --henge-dtb is for --qemu --direct")
-    if args.henge_dtb and not args.qemu:
-        ap.error("--henge-dtb needs --qemu")
+    if args.uboot and (args.disk or args.tux_dtb):
+        ap.error("--uboot boots the disk already, and --tux-dtb is for --qemu --direct")
+    if args.tux_dtb and not args.qemu:
+        ap.error("--tux-dtb needs --qemu")
     if args.fatal and args.qemu:
-        ap.error("--fatal is for hengevm")
+        ap.error("--fatal is for tuxvm")
     if args.stress and not (args.disk or args.uboot):
         ap.error("--stress needs --uboot or --direct --disk")
     if args.power and not (args.disk or args.uboot):

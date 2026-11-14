@@ -1,5 +1,5 @@
-#ifndef HENGEVM_HVSPARSE_H
-#define HENGEVM_HVSPARSE_H
+#ifndef TUXVM_HVSPARSE_H
+#define TUXVM_HVSPARSE_H
 
 #include <stdint.h>
 

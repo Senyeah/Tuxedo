@@ -29,9 +29,9 @@ import numpy as np
 import pexpect
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-OUT = os.environ.get("HENGE_LINUX_OUT", "$HOME/Repos/Henge/build/linux")
+OUT = os.environ.get("TUX_LINUX_OUT", "$HOME/Repos/Henge/build/linux")
 SHELL = r"henge@henge:\S*\$ "
-MARK = "HENGE_RC_"
+MARK = "TUX_RC_"
 FMT = {5: np.dtype("<i2"), 17: np.dtype("<i4"), 19: np.dtype("<f4")}
 SCALE = {5: 32768.0, 17: 2147483648.0, 19: 1.0}
 
@@ -43,13 +43,13 @@ class Fail(Exception):
 class Vm:
     def __init__(self, args, disk, tmp):
         self.args, self.disk = args, disk
-        self.err = os.path.join(tmp, "hengevm.stderr")
+        self.err = os.path.join(tmp, "tuxvm.stderr")
         self.cap = os.path.join(tmp, "capture.raw")
 
     def boot(self):
         a = self.args
         env = dict(os.environ, HV_SND_CAPTURE=self.cap, HV_SND_LOG="1")
-        cmd = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', self.err, a.hengevm, "--firmware", a.firmware, "--ram", str(a.ram), "--cpus", str(a.cpus), "--disk", self.disk]
+        cmd = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', self.err, a.tuxvm, "--firmware", a.firmware, "--ram", str(a.ram), "--cpus", str(a.cpus), "--disk", self.disk]
         self.p = p = pexpect.spawn(cmd[0], cmd[1:], encoding="utf-8", timeout=60, env=env)
         self.login()
 
@@ -260,7 +260,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default=os.path.join(OUT, "debian-console.img"))
     ap.add_argument("--firmware", default=os.path.join(OUT, "u-boot.bin"))
-    ap.add_argument("--hengevm", default=os.path.join(ROOT, "build", "hengevm"))
+    ap.add_argument("--tuxvm", default=os.path.join(ROOT, "build", "tuxvm"))
     ap.add_argument("--size-gb", type=int, default=6)
     ap.add_argument("--ram", type=int, default=2048)
     ap.add_argument("--cpus", type=int, default=2)
@@ -300,7 +300,7 @@ def main():
         if vm:
             print("console tail:\n" + (vm.p.before or "")[-3000:], file=sys.stderr)
             try:
-                print("hengevm stderr tail:\n" + open(vm.err).read()[-1500:], file=sys.stderr)
+                print("tuxvm stderr tail:\n" + open(vm.err).read()[-1500:], file=sys.stderr)
             except OSError:
                 pass
         return 1

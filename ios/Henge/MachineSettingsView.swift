@@ -261,14 +261,14 @@ struct MachineSettingsView: View {
     private func grow() {
         growError = nil
         guard growTarget > diskGB else { return }
-        let state = henge_vm_state()
+        let state = tux_vm_state()
         guard state != 1 && state != 3 else { growError = "Turn this machine off first."; return }
         do {
             try DiskGrowth.grow(machine.disk, toBytes: Int64(growTarget) << 30)
             machine.diskBytes = machine.logicalDiskBytes
             growToGB = 0
             save()
-            HengeLog.log("machines", "grew \(machine.name)'s disk to \(machine.diskBytes >> 30) GB")
+            TuxLog.log("machines", "grew \(machine.name)'s disk to \(machine.diskBytes >> 30) GB")
         } catch {
             growError = error.localizedDescription
         }

@@ -124,7 +124,7 @@ int hv_status_valid_timezone(const char *name) {
 
 int hv_status_set_timezone(const char *name) {
     if (!hv_status_valid_timezone(name)) {
-        if (logging()) fprintf(stderr, "hengevm: status: time zone refused\n");
+        if (logging()) fprintf(stderr, "tuxvm: status: time zone refused\n");
         return -1;
     }
     pthread_mutex_lock(&mu);
@@ -207,7 +207,7 @@ void hv_status_guest_brightness(int value) {
         brightness_req = 1, brightness_req_level = published;
     }
     pthread_mutex_unlock(&mu);
-    if (request && logging()) fprintf(stderr, "hengevm: status: guest brightness %.3f (%d)\n", value / 255.0, value);
+    if (request && logging()) fprintf(stderr, "tuxvm: status: guest brightness %.3f (%d)\n", value / 255.0, value);
 }
 
 void hv_status_guest_volume(int percent, int mute) {
@@ -219,7 +219,7 @@ void hv_status_guest_volume(int percent, int mute) {
         volume_req = 1, volume_req_level = volume, volume_req_muted = muted;
     }
     pthread_mutex_unlock(&mu);
-    if (request && logging()) fprintf(stderr, "hengevm: status: guest volume %.2f%s\n", percent / 100.0, mute ? " muted" : "");
+    if (request && logging()) fprintf(stderr, "tuxvm: status: guest volume %.2f%s\n", percent / 100.0, mute ? " muted" : "");
 }
 
 int hv_status_take_brightness(double *v) {

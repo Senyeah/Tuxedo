@@ -3,9 +3,9 @@
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-OUT=${HENGE_LINUX_OUT:-$HOME/Repos/Henge/build/linux}
-IMAGE=${HENGE_LINUX_IMAGE:-henge-linux-builder}
-VOLUME=${HENGE_LINUX_VOLUME:-henge-linux-work}
+OUT=${TUX_LINUX_OUT:-$HOME/Repos/Henge/build/linux}
+IMAGE=${TUX_LINUX_IMAGE:-henge-linux-builder}
+VOLUME=${TUX_LINUX_VOLUME:-henge-linux-work}
 
 mkdir -p "$OUT"
 

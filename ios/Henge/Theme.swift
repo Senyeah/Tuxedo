@@ -155,7 +155,7 @@ enum MachinePreview {
 
     static func capture(width: Int, height: Int) -> CGImage? {
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
-        guard henge_vm_snapshot(&pixels, Int32(width), Int32(height)) == 0 else { return nil }
+        guard tux_vm_snapshot(&pixels, Int32(width), Int32(height)) == 0 else { return nil }
         guard let provider = CGDataProvider(data: Data(pixels) as CFData) else { return nil }
         let info = CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
         return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
@@ -203,7 +203,7 @@ enum Theme {
 
 extension View {
     /// high: a card raised above the others (a result, an outcome).
-    func hengeCard(high: Bool = false) -> some View {
+    func tuxCard(high: Bool = false) -> some View {
         background(high ? Desk.raised : Desk.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(Desk.hairline, lineWidth: 1))
     }

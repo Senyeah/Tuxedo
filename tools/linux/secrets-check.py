@@ -5,11 +5,11 @@
 # ///
 """Check: henge-secrets keeps the guest's wallet in the host's store (host/secrets.c), scoped to the machine.
 
-Default: boots a clone of the desktop image on hengevm with --share, --secrets DIR and --machine-id, and drives
+Default: boots a clone of the desktop image on tuxvm with --share, --secrets DIR and --machine-id, and drives
 the device's lock with HV_INPUT_FILE ("secrets lock|unlock", in place of the app's Face ID check). In the guest,
 secrets-probe.py stores, reads, lists and deletes through secret-tool, a Diffie-Hellman session and the KWallet
 API; each item must land in DIR/MACHINE/ (mode 0600), and not show while locked; the same item shows through
-both APIs; a prompt completes when the device unlocks; no secret is in the journal or hengevm's log. A second
+both APIs; a prompt completes when the device unlocks; no secret is in the journal or tuxvm's log. A second
 boot with another machine id must not see the first machine's items. The image needs henge-guest 1.6.1.
 
 --container: the same probe in a Debian trixie container (Docker) against secrets-mock-host.py, with kwallet6
@@ -407,7 +407,7 @@ def container(args):
         raise Fail("in the container")
 
 
-# ---- on hengevm ----
+# ---- on tuxvm ----
 
 class Host:
     def __init__(self, inp, err):
@@ -422,10 +422,10 @@ class Host:
         self.line("secrets")
         for _ in range(40):
             time.sleep(0.25)
-            m = re.search(r"hengevm: secrets (locked|unlocked)\n", open(self.err, errors="replace").read()[before:])
+            m = re.search(r"tuxvm: secrets (locked|unlocked)\n", open(self.err, errors="replace").read()[before:])
             if m:
                 return m.group(1)
-        raise Fail("secrets: hengevm did not answer")
+        raise Fail("secrets: tuxvm did not answer")
 
 
 def boot(args, image, store, machine, steps):
@@ -434,7 +434,7 @@ def boot(args, image, store, machine, steps):
     import smoke
     from smoke import login, sh
     kernel, initrd = (os.path.join(smoke.linux_dir(), f) for f in ("Image", "initrd.img"))
-    for f in (args.hengevm, kernel, initrd, image):
+    for f in (args.tuxvm, kernel, initrd, image):
         if not os.path.exists(f):
             raise Fail(f"missing {f}")
     partuuid = open(args.image[:-4] + ".partuuid").read().strip()
@@ -445,7 +445,7 @@ def boot(args, image, store, machine, steps):
     open(inp, "w").close()
     open(err, "w").close()
     host = Host(inp, err)
-    argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.hengevm, "--kernel", kernel, "--initrd", initrd,
+    argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.tuxvm, "--kernel", kernel, "--initrd", initrd,
             "--append", append, "--disk", image, "--ram", "2048", "--cpus", str(args.cpus), "--display", "1280x720",
             "--share", share, "--secrets", store, "--machine-id", machine]
     p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200), env=dict(os.environ, HV_INPUT_FILE=inp))
@@ -517,7 +517,7 @@ def vm(args):
 
         def first(host, need, probe, err):
             if host.state() != "unlocked":
-                raise Fail("hengevm did not start unlocked")
+                raise Fail("tuxvm did not start unlocked")
             probe("store", A, stdin=value)
             have = files(store, "check-a")
             mine = [v for v in have.values() if v[0].get("attributes") == {ATTR: A}]
@@ -597,13 +597,13 @@ def vm(args):
             if {ATTR: A} in left or any(a.get("user") == K1 for a in left):
                 raise Fail(f"deleted items are still in the host's store: {left}")
             print("ok: deleted items leave the host's store", flush=True)
-            # Every log this check reads: the guest's whole journal (system and user) and hengevm's stderr
+            # Every log this check reads: the guest's whole journal (system and user) and tuxvm's stderr
             journal = need("sudo journalctl -b --no-pager -o cat | base64 -w0", limit=120).splitlines()[-1]
             import base64
             found = leaks(base64.b64decode(journal).decode(errors="replace") + open(err, errors="replace").read(), stored_words(value))
             if found:
-                raise Fail(f"in the journal or hengevm's log: {found}")
-            print(f"ok: none of the {len(stored_words(value))} stored secrets, labels and attributes is in the journal or hengevm's log", flush=True)
+                raise Fail(f"in the journal or tuxvm's log: {found}")
+            print(f"ok: none of the {len(stored_words(value))} stored secrets, labels and attributes is in the journal or tuxvm's log", flush=True)
 
         def sh_probe(need, step):
             try:
@@ -637,10 +637,10 @@ def main():
     sys.path.insert(0, HERE)
     import smoke
     ap.add_argument("--image", default=os.path.join(smoke.linux_dir(), "debian-desktop.img"))
-    ap.add_argument("--hengevm", default=os.path.join(smoke.ROOT, "build", "hengevm"))
+    ap.add_argument("--tuxvm", default=os.path.join(smoke.ROOT, "build", "tuxvm"))
     ap.add_argument("--cpus", type=int, default=4)
     ap.add_argument("--work-dir", help="where the clone goes (the image's APFS volume)")
-    ap.add_argument("--container", action="store_true", help="the probe in a Debian trixie container with kwallet6, not on hengevm")
+    ap.add_argument("--container", action="store_true", help="the probe in a Debian trixie container with kwallet6, not on tuxvm")
     args = ap.parse_args()
     if args.container:
         container(args)

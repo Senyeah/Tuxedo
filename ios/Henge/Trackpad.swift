@@ -77,7 +77,7 @@ struct Trackpad: UIViewRepresentable {
             guard hoversLogged < 40 else { return }
             hoversLogged += 1
             let p = g.location(in: self)
-            HengeLog.log("input", "hover \(g.state.rawValue) at \(Int(p.x)),\(Int(p.y))")
+            TuxLog.log("input", "hover \(g.state.rawValue) at \(Int(p.x)),\(Int(p.y))")
         }
 
         /// Over the guest there is only the guest's pointer, if iPadOS hasn't locked its own away.
@@ -109,7 +109,7 @@ struct Trackpad: UIViewRepresentable {
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
             for t in touches where typesLogged < 200 {
                 typesLogged += 1
-                HengeLog.log("input", "touch began: type \(t.type.rawValue), buttons \(event?.buttonMask.rawValue ?? 0)")
+                TuxLog.log("input", "touch began: type \(t.type.rawValue), buttons \(event?.buttonMask.rawValue ?? 0)")
             }
             let touches = touches.filter { $0.type != .indirectPointer }
             guard !touches.isEmpty else { return }
@@ -130,13 +130,13 @@ struct Trackpad: UIViewRepresentable {
                 freeIds.remove(id)
                 fingers.append(Finger(touch: t, id: id))
                 let (x, y) = sensor(t)
-                henge_vm_touch(id, 0, x, y, Self.ms(t.timestamp))
+                tux_vm_touch(id, 0, x, y, Self.ms(t.timestamp))
                 let p = t.location(in: self)
                 if firstPoints.count < 2 { firstPoints.append(p) }
                 downs.append((id, p, t.timestamp, first && t == touches.first))
                 if touchesLogged < 12 {
                     touchesLogged += 1
-                    HengeLog.log("input", "trackpad: finger \(id) down at \(x),\(y)")
+                    TuxLog.log("input", "trackpad: finger \(id) down at \(x),\(y)")
                 }
             }
             mostFingers = max(mostFingers, fingers.count)
@@ -161,7 +161,7 @@ struct Trackpad: UIViewRepresentable {
                 let now = t.location(in: self), before = t.previousLocation(in: self)
                 travelled += abs(now.x - before.x) + abs(now.y - before.y)
                 let (x, y) = sensor(t)
-                henge_vm_touch(fingers[i].id, 1, x, y, ts)
+                tux_vm_touch(fingers[i].id, 1, x, y, ts)
                 moved.append((fingers[i].id, t))
             }
             /* Moving means pointing or a gesture, not a tap or a press-to-drag. */
@@ -169,7 +169,7 @@ struct Trackpad: UIViewRepresentable {
             /* One frame with every finger that moved, so the guest sees a gesture's
                fingers move together rather than one at a time. */
             guard !moved.isEmpty else { return }
-            henge_vm_touch_frame(ts)
+            tux_vm_touch_frame(ts)
             guard let feedback else { return }
             for (id, t) in moved { // the coalesced samples draw a smoother trail; the guest keeps one each
                 let all = event?.coalescedTouches(for: t) ?? [t]
@@ -192,7 +192,7 @@ struct Trackpad: UIViewRepresentable {
             guard !lifted.isEmpty else { return }
             let time = touches.map(\.timestamp).max() ?? 0
             let ts = Self.ms(time)
-            for id in lifted { henge_vm_touch(id, 2, 0, 0, ts) }
+            for id in lifted { tux_vm_touch(id, 2, 0, 0, ts) }
             for id in lifted { feedback?.padFingerUp(Int(id), time: time) }
             buttons.padFingers(fingers.count)
             guard fingers.isEmpty else { return } /* fingers still down: the gesture goes on */
@@ -268,7 +268,7 @@ struct Trackpad: UIViewRepresentable {
 extension PointerButtons {
     /// The guest's mouse buttons: the pad, its keys, the volume buttons and a mouse share the owners.
     static let guest = PointerButtons { b, down in
-        henge_vm_mouse_button(Int32(b), down ? 1 : 0)
+        tux_vm_mouse_button(Int32(b), down ? 1 : 0)
         if !down { StickyKeys.shared.releaseAll() } // a tapped ⌘, ⌥ or ⌃ is for one click
     }
 }

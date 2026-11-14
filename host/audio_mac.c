@@ -71,7 +71,7 @@ static int start(void *opaque, unsigned channels, unsigned format, unsigned rate
         if (AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &f, sizeof f) != noErr ||
             AudioUnitSetProperty(unit, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0, &cb, sizeof cb) != noErr ||
             AudioUnitInitialize(unit) != noErr) {
-            fprintf(stderr, "hengevm: sound: the output device refused %u ch, format %u, %u Hz\n", channels, format, rate_hz);
+            fprintf(stderr, "tuxvm: sound: the output device refused %u ch, format %u, %u Hz\n", channels, format, rate_hz);
             AudioComponentInstanceDispose(unit);
             unit = NULL;
             return -1;

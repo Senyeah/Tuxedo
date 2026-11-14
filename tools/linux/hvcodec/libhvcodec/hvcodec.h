@@ -9,8 +9,8 @@
    "HOST" (port 8470). NULL or "" takes $HENGE_VCODEC, then /dev/hvcodec if it opens, then 10.0.2.4:8470, the address
    that libslirp gives the host service. On /dev/hvcodec raw frames cross with no copy in the guest; on TCP they are
    packed into messages, which is slow for 4K. */
-#ifndef HENGE_HVCODEC_H
-#define HENGE_HVCODEC_H
+#ifndef TUX_HVCODEC_H
+#define TUX_HVCODEC_H
 
 #include <stddef.h>
 #include <stdint.h>

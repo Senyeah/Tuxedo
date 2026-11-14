@@ -3,7 +3,7 @@
 # Usage: serve.sh [--dir DIR] [--bind ADDR] [--port N] [--yes]
 set -euo pipefail
 
-DIR=${HENGE_LINUX_OUT:-$HOME/Repos/Henge/build/linux}/dist
+DIR=${TUX_LINUX_OUT:-$HOME/Repos/Henge/build/linux}/dist
 BIND= PORT=8000 YES=0
 while [ $# -gt 0 ]; do
     case $1 in

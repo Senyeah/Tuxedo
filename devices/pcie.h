@@ -1,5 +1,5 @@
-#ifndef HENGEVM_PCIE_H
-#define HENGEVM_PCIE_H
+#ifndef TUXVM_PCIE_H
+#define TUXVM_PCIE_H
 
 #include <stdint.h>
 

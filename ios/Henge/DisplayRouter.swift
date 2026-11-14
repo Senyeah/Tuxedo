@@ -50,6 +50,6 @@ final class DisplayRouter: ObservableObject {
 
     private func sendTarget() {
         let layer = selected.flatMap { layers[$0] }
-        henge_vm_set_display_layer(layer.map { Unmanaged.passUnretained($0).toOpaque() })
+        tux_vm_set_display_layer(layer.map { Unmanaged.passUnretained($0).toOpaque() })
     }
 }

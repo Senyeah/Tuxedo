@@ -6,7 +6,7 @@
 """K2: what the initrd costs at boot (LINUX-PLAN-04, K2 item 3).
 
 Boots Debian's 16 KB kernel from an APFS clone of debian-console.img on QEMU (TCG, no hvf) and on
-hengevm, by direct kernel boot or through U-Boot, with and without the initrd. Kernel
+tuxvm, by direct kernel boot or through U-Boot, with and without the initrd. Kernel
 messages carry timestamps (printk.time=1, no quiet), so the tool reads these marks from the console:
 
   unpack     "Freeing initrd memory": the initramfs is unpacked
@@ -23,7 +23,7 @@ U-Boot runs load the kernel (and initrd) with ext4load and start it with booti, 
 as the direct run, so the two paths differ only in who loads the files. The wall time of each ext4load
 is reported (the plan's "Starting kernel" line is the start of the kernel marks).
 
-Files come from HENGE_LINUX_OUT or build/linux in the main checkout (read only; the disk is cloned).
+Files come from TUX_LINUX_OUT or build/linux in the main checkout (read only; the disk is cloned).
 Usage: kernel-boot-time.py [--machine henge|qemu ...] [--boot direct|uboot ...] [--initrd on|off ...]
        [--runs N] [--cpus N] [--json FILE]. With no selection it runs the whole matrix.
 """
@@ -56,8 +56,8 @@ MARKS = [
 
 
 def linux_dir():
-    if os.environ.get("HENGE_LINUX_OUT"):
-        return os.environ["HENGE_LINUX_OUT"]
+    if os.environ.get("TUX_LINUX_OUT"):
+        return os.environ["TUX_LINUX_OUT"]
     common = subprocess.run(["git", "-C", ROOT, "rev-parse", "--path-format=absolute", "--git-common-dir"],
                             capture_output=True, text=True, check=True).stdout.strip()
     return os.path.join(os.path.dirname(common), "build", "linux")
@@ -90,7 +90,7 @@ def argv_for(a, machine, boot, initrd_on, disk, files, append):
             return argv + ["-bios", firmware]
         argv += ["-kernel", kernel, "-append", append]
         return argv + (["-initrd", initrd] if initrd_on else [])
-    argv = [a.hengevm, "--ram", str(a.ram), "--cpus", str(a.cpus), "--disk", disk]
+    argv = [a.tuxvm, "--ram", str(a.ram), "--cpus", str(a.cpus), "--disk", disk]
     if boot == "uboot":
         return argv + ["--firmware", firmware]
     argv += ["--kernel", kernel, "--append", append]
@@ -195,7 +195,7 @@ def main():
     ap.add_argument("--ram", type=int, default=2048)
     ap.add_argument("--limit", type=int, default=300, help="seconds for each wait")
     ap.add_argument("--dir", default=None, help="artefact directory")
-    ap.add_argument("--hengevm", default=os.path.join(ROOT, "build", "hengevm"))
+    ap.add_argument("--tuxvm", default=os.path.join(ROOT, "build", "tuxvm"))
     ap.add_argument("--work-dir", default=None, help="for the disk clone; on the image's volume")
     ap.add_argument("--console-dir", default=None, help="keep each console log here, with host seconds")
     ap.add_argument("--json", default=None)
@@ -205,7 +205,7 @@ def main():
     fw = next((f for f in (os.path.join(a.dir, "u-boot-stock.bin"), os.path.join(a.dir, "u-boot.bin")) if os.path.exists(f)),
               os.path.join(a.dir, "u-boot.bin"))
     files = (os.path.join(a.dir, "Image"), os.path.join(a.dir, "initrd.img"), fw)
-    for f in files + (a.hengevm,):
+    for f in files + (a.tuxvm,):
         if not os.path.exists(f):
             sys.exit(f"missing {f}")
     out = {"load": os.getloadavg(), "cpus": a.cpus, "ram": a.ram, "kernel": KVER, "runs": {}}

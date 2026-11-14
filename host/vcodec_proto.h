@@ -6,8 +6,8 @@
    payload is a short text. A request the host cannot parse closes the connection.
 
    This header is shared with the guest tools (tools/linux/hvcodec), so it is plain C99 with no host types. */
-#ifndef HENGE_VCODEC_PROTO_H
-#define HENGE_VCODEC_PROTO_H
+#ifndef TUX_VCODEC_PROTO_H
+#define TUX_VCODEC_PROTO_H
 
 #include <stdint.h>
 

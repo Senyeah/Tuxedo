@@ -8,7 +8,7 @@
 Boot a clone of the image on a sparse disk, write --mb MB, delete it, run fstrim and compare the
 clone's allocated size (st_blocks, what du shows) before and after. A file written before the trim
 must still match its checksum after a power off and a second boot.
-Runs on hengevm (--firmware) or, with --qemu, on QEMU TCG (QEMU is the reference: it also discards).
+Runs on tuxvm (--firmware) or, with --qemu, on QEMU TCG (QEMU is the reference: it also discards).
 """
 import argparse
 import os
@@ -24,7 +24,7 @@ import pexpect
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 QEMU = os.environ.get("QEMU", "/opt/homebrew/bin/qemu-system-aarch64")
 SHELL = r"henge@henge:\S*\$ "
-MARK = "HENGE_RC_"
+MARK = "TUX_RC_"
 
 
 class Fail(Exception):
@@ -39,8 +39,8 @@ def argv(args, disk):
                 "-device", "virtio-blk-pci,drive=d0",
                 "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-device", "virtio-rng-pci",
                 "-device", "qemu-xhci", "-device", "usb-kbd"]
-    # hengevm's stderr goes to a file so it cannot break the console parsing
-    return ["/bin/sh", "-c", 'exec "$@" 2>"$0"', disk + ".stderr", args.hengevm, "--firmware", args.firmware, "--ram", "2048", "--cpus", str(args.cpus), "--disk", disk]
+    # tuxvm's stderr goes to a file so it cannot break the console parsing
+    return ["/bin/sh", "-c", 'exec "$@" 2>"$0"', disk + ".stderr", args.tuxvm, "--firmware", args.firmware, "--ram", "2048", "--cpus", str(args.cpus), "--disk", disk]
 
 
 def sh(p, cmd, limit=30):
@@ -77,7 +77,7 @@ def main():
     ap.add_argument("--qemu", action="store_true")
     ap.add_argument("--image", default=os.path.join(ROOT, "build", "linux", "debian-console.img"))
     ap.add_argument("--firmware", default=os.path.join(ROOT, "build", "linux", "u-boot.bin"))
-    ap.add_argument("--hengevm", default=os.path.join(ROOT, "build", "hengevm"))
+    ap.add_argument("--tuxvm", default=os.path.join(ROOT, "build", "tuxvm"))
     ap.add_argument("--size-gb", type=int, default=4)
     ap.add_argument("--mb", type=int, default=512)
     ap.add_argument("--cpus", type=int, default=1)

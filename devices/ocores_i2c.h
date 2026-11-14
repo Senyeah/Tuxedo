@@ -1,5 +1,5 @@
-#ifndef HENGEVM_OCORES_I2C_H
-#define HENGEVM_OCORES_I2C_H
+#ifndef TUXVM_OCORES_I2C_H
+#define TUXVM_OCORES_I2C_H
 
 #include <stdint.h>
 

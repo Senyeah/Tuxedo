@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build henge-ffmpeg_<version>_arm64.deb (docs/guest-video-encode-plan.md, VE3.1, VE3.2) from the build of
-# build-ffmpeg.sh in $HENGE_LINUX_OUT/ffmpeg, in an arm64 debian:trixie container with the pinned snapshot.
+# build-ffmpeg.sh in $TUX_LINUX_OUT/ffmpeg, in an arm64 debian:trixie container with the pinned snapshot.
 # The binaries go in /usr/lib/henge/ffmpeg/bin; postinst links ffmpeg and ffprobe into /usr/local/bin.
 # The man page is tools/linux/hvcodec/ffmpeg-henge.7.md through pandoc, and must pass hvcodec/manpage-check.py.
 set -eu
@@ -9,7 +9,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 
 if [ "${1:-}" != "--inner" ]; then
-    OUT=${HENGE_LINUX_OUT:-$HOME/Repos/Henge/build/linux}
+    OUT=${TUX_LINUX_OUT:-$HOME/Repos/Henge/build/linux}
     if [ ! -f "$OUT/ffmpeg/ffmpeg.manifest" ]; then
         echo "build-ffmpeg-pkg.sh: no $OUT/ffmpeg/ffmpeg.manifest; run build-ffmpeg.sh (make linux-ffmpeg) first" >&2
         exit 1
@@ -30,10 +30,10 @@ get() { sed -n "s/^$1=//p" "$M"; }
 die() { echo "build-ffmpeg-pkg.sh: $*" >&2; exit 1; }
 
 # A stale build must not go out under this version: the manifest must match the sources and the binaries.
-[ "$(get release)" = "$FFMPEG_VERSION" ] && [ "$(get henge_rev)" = "$FFMPEG_HENGE_REV" ] ||
-    die "the build is FFmpeg $(get release) henge$(get henge_rev), versions.env says $FFMPEG_VERSION henge$FFMPEG_HENGE_REV; run make linux-ffmpeg"
+[ "$(get release)" = "$FFMPEG_VERSION" ] && [ "$(get henge_rev)" = "$FFMPEG_TUX_REV" ] ||
+    die "the build is FFmpeg $(get release) henge$(get henge_rev), versions.env says $FFMPEG_VERSION henge$FFMPEG_TUX_REV; run make linux-ffmpeg"
 [ "$(get patch_sha256)" = "$(sha256sum "$HV/ffmpeg-henge.patch" | cut -d' ' -f1)" ] ||
-    die "ffmpeg-henge.patch changed since the build; run make linux-ffmpeg (and raise FFMPEG_HENGE_REV if it was published)"
+    die "ffmpeg-henge.patch changed since the build; run make linux-ffmpeg (and raise FFMPEG_TUX_REV if it was published)"
 [ "$(get libhvcodec_sha256)" = "$(cat "$HV/libhvcodec/hvcodec.c" "$HV/libhvcodec/hvcodec.h" /src/host/vcodec_proto.h /src/host/vcodec_dev.h | sha256sum | cut -d' ' -f1)" ] ||
     die "libhvcodec changed since the build; run make linux-ffmpeg"
 for f in ffmpeg ffprobe henge-codec-info; do
@@ -43,7 +43,7 @@ done
 APT_PKGS="dpkg-dev pandoc man-db python3-minimal xz-utils $(get runtime)"
 . /src/tools/linux/snapshot-apt.sh
 
-VER=$FFMPEG_VERSION-henge$FFMPEG_HENGE_REV
+VER=$FFMPEG_VERSION-henge$FFMPEG_TUX_REV
 SOURCE_URL=https://walkies.site/henge-linux-catalogue/source/ffmpeg-$VER/
 DEB=/out/ffmpeg/henge-ffmpeg_${VER}_arm64.deb
 export SOURCE_DATE_EPOCH=1762905600

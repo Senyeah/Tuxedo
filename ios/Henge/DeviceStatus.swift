@@ -25,7 +25,7 @@ final class DeviceStatus: NSObject {
         self.pictureOnPhone = pictureOnPhone
         UIDevice.current.isBatteryMonitoringEnabled = true
         SystemVolume.shared.attach() // its slider is there by the time the guest asks
-        // outputVolume is current, and its KVO fires, only in an active session; the category (HengeApp) stays as it is
+        // outputVolume is current, and its KVO fires, only in an active session; the category (TuxApp) stays as it is
         try? AVAudioSession.sharedInstance().setActive(true)
         sendBattery()
         sendBrightness()
@@ -37,8 +37,8 @@ final class DeviceStatus: NSObject {
             (UIDevice.batteryStateDidChangeNotification, { $0.sendBattery() }),
             (UIScreen.brightnessDidChangeNotification, { $0.sendBrightness() }),
             (.NSSystemTimeZoneDidChange, { $0.sendTimeZone() }),
-            (.NSSystemClockDidChange, { _ in henge_vm_status_touch() }),
-            (UIApplication.significantTimeChangeNotification, { _ in henge_vm_status_touch() }),
+            (.NSSystemClockDidChange, { _ in tux_vm_status_touch() }),
+            (UIApplication.significantTimeChangeNotification, { _ in tux_vm_status_touch() }),
         ]
         for (name, body) in follow {
             observers.append(centre.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -54,7 +54,7 @@ final class DeviceStatus: NSObject {
                 try? await Task.sleep(nanoseconds: 250_000_000)
             }
         }
-        HengeLog.log("status", "following the battery, brightness, volume and time zone")
+        TuxLog.log("status", "following the battery, brightness, volume and time zone")
     }
 
     func stop() {
@@ -76,7 +76,7 @@ final class DeviceStatus: NSObject {
     private func putBrightnessBack() {
         guard let level = restore.takeRestore(), let screen else { return }
         screen.brightness = CGFloat(level)
-        HengeLog.log("status", String(format: "brightness back to the user's %.2f", level))
+        TuxLog.log("status", String(format: "brightness back to the user's %.2f", level))
     }
 
     // MARK: The phone to the guest
@@ -85,29 +85,29 @@ final class DeviceStatus: NSObject {
         let device = UIDevice.current
         let level = DeviceStatusPolicy.batteryLevel(device.batteryLevel)
         let state = DeviceStatusPolicy.batteryState(device.batteryState.rawValue)
-        henge_vm_set_battery(level, state)
-        HengeLog.log("status", "battery \(level) % state \(state)")
+        tux_vm_set_battery(level, state)
+        TuxLog.log("status", "battery \(level) % state \(state)")
     }
 
     private func sendBrightness() {
         guard let screen else { return }
         let level = Double(screen.brightness)
-        henge_vm_set_brightness(level)
-        if brightnessLog.allows(at: Date()) { HengeLog.log("status", String(format: "brightness %.2f", level)) }
+        tux_vm_set_brightness(level)
+        if brightnessLog.allows(at: Date()) { TuxLog.log("status", String(format: "brightness %.2f", level)) }
     }
 
     private func sendVolume() {
         let clicks = VolumeClicks.shared
         let level = DeviceStatusPolicy.guestVolume(system: AVAudioSession.sharedInstance().outputVolume,
                                                    pinned: clicks.pinsVolume, restored: clicks.volumeToRestore)
-        henge_vm_set_volume(level)
+        tux_vm_set_volume(level)
     }
 
     private func sendTimeZone() {
         NSTimeZone.resetSystemTimeZone()
         let name = TimeZone.current.identifier
-        let rc = henge_vm_set_timezone(name)
-        HengeLog.log("status", rc == 0 ? "time zone \(name)" : "time zone \(name) not passed on")
+        let rc = tux_vm_set_timezone(name)
+        TuxLog.log("status", rc == 0 ? "time zone \(name)" : "time zone \(name) not passed on")
     }
 
     // MARK: The guest's sliders to the phone
@@ -115,24 +115,24 @@ final class DeviceStatus: NSObject {
     private func takeRequests() {
         var level = 0.0
         var muted: Int32 = 0
-        if henge_vm_take_brightness_request(&level) != 0 {
+        if tux_vm_take_brightness_request(&level) != 0 {
             let active = UIApplication.shared.applicationState == .active
             if DeviceStatusPolicy.appliesBrightness(pictureOnPhone: pictureOnPhone(), appActive: active), let screen {
                 restore.willApply(current: Double(screen.brightness))
                 screen.brightness = CGFloat(level)
-                HengeLog.log("status", String(format: "the guest set the brightness to %.2f", level))
+                TuxLog.log("status", String(format: "the guest set the brightness to %.2f", level))
             } else {
-                HengeLog.log("status", String(format: "the guest's brightness %.2f not applied: the picture is elsewhere or the app is away", level))
+                TuxLog.log("status", String(format: "the guest's brightness %.2f not applied: the picture is elsewhere or the app is away", level))
             }
         }
-        if henge_vm_take_volume_request(&level, &muted) != 0 {
+        if tux_vm_take_volume_request(&level, &muted) != 0 {
             let clicks = VolumeClicks.shared
             if clicks.pinsVolume {
                 clicks.volumeToRestore = Float(level) // the buttons stay clicks; this is the level they give back
             } else {
                 SystemVolume.shared.set(Float(level))
             }
-            HengeLog.log("status", String(format: "the guest set the volume to %.2f%@", level, muted != 0 ? " (muted in the guest)" : ""))
+            TuxLog.log("status", String(format: "the guest set the volume to %.2f%@", level, muted != 0 ? " (muted in the guest)" : ""))
         }
     }
 }

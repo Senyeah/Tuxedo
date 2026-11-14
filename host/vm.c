@@ -218,7 +218,7 @@ static void on_ill(int sig, siginfo_t *info, void *ctx) {
     int in_rx = pc >= rx && pc < rx + size;
     int fetch = (uint64_t)(uintptr_t)info->si_addr == pc;
     if (sig == SIGILL || in_rx || fetch) {
-        fprintf(stderr, "hengevm: signal %d in translated code: pc %llx (rx %llx size %llx used %llx, pc is rx%+lld), full flushes %llu, lr %llx, addr %p\n",
+        fprintf(stderr, "tuxvm: signal %d in translated code: pc %llx (rx %llx size %llx used %llx, pc is rx%+lld), full flushes %llu, lr %llx, addr %p\n",
                 sig, (unsigned long long)pc, (unsigned long long)rx, (unsigned long long)size, (unsigned long long)used, (long long)(pc - rx),
                 (unsigned long long)m.stats.block_flushes, (unsigned long long)uc->uc_mcontext->__ss.__lr, info->si_addr);
         for (int i = 0; i < 29; i++) fprintf(stderr, "x%d=%llx%c", i, (unsigned long long)uc->uc_mcontext->__ss.__x[i], i % 6 == 5 ? '\n' : ' ');
@@ -354,7 +354,7 @@ static void set_folders(const HvVmConfig *c) {
         const HvVmFolder *f = &c->folders[i];
         if (!f->name) continue; /* a hole: indexes stay the folders' own */
         if (hv_fs_folder_set(i, f->id, f->name, f->path, f->mode) != 0)
-            fprintf(stderr, "hengevm: folder %s: %s\n", f->name ? f->name : "?", strerror(errno));
+            fprintf(stderr, "tuxvm: folder %s: %s\n", f->name ? f->name : "?", strerror(errno));
     }
 }
 
@@ -443,7 +443,7 @@ int hv_vm_create(const HvVmConfig *c, char *err, size_t errlen) {
     uint64_t ram_size = (c->ram_mb ? c->ram_mb : 2048) << 20;
     if (create_virt(c, ram_size, err, errlen) != 0) return -1;
     if (devs.net && !c->no_net) {
-        if (hv_net_attach(&m, devs.net) != 0) fprintf(stderr, "hengevm: user-mode network unavailable\n");
+        if (hv_net_attach(&m, devs.net) != 0) fprintf(stderr, "tuxvm: user-mode network unavailable\n");
         else net_on = 1;
     }
     if (devs.snd && !c->no_sound) hv_audio_attach(devs.snd);
@@ -524,7 +524,7 @@ static void gpu_hold_locked(int on) {
         int slow = hv_virtio_gpu_wait_idle(virt.gpu, GPU_DRAIN_MS) != 0;
         uint64_t now = mono_ms();
         if (hv_vgpu_virgl_quiesce(virgl, now < end ? (unsigned)(end - now) : 0) != 0) slow = 1;
-        if (slow) fprintf(stderr, "hengevm: the renderer was still busy after %d ms in the pause\n", GPU_DRAIN_MS);
+        if (slow) fprintf(stderr, "tuxvm: the renderer was still busy after %d ms in the pause\n", GPU_DRAIN_MS);
     }
 #endif
     hv_vgpu_metal_pause(vgpu.presenter);
@@ -599,7 +599,7 @@ int hv_vm_background_pauses(int accelerated, int sound_playing) { return acceler
 static dispatch_queue_t background_queue(void) {
     static dispatch_queue_t q;
     static dispatch_once_t once;
-    dispatch_once(&once, ^{ q = dispatch_queue_create("henge.background", DISPATCH_QUEUE_SERIAL); });
+    dispatch_once(&once, ^{ q = dispatch_queue_create("tux.background", DISPATCH_QUEUE_SERIAL); });
     return q;
 }
 
@@ -690,7 +690,7 @@ static void *secondary_thread(void *arg) {
     hv_vm_cpu_qos();
     int r = hv_run(c);
     if (!c->halted)
-        fprintf(stderr, "hengevm: cpu %u stopped (%s) at pc %llx el%u\n", c->index, hv_vm_reason_name(r),
+        fprintf(stderr, "tuxvm: cpu %u stopped (%s) at pc %llx el%u\n", c->index, hv_vm_reason_name(r),
                 (unsigned long long)c->pc, c->el);
     return NULL;
 }
@@ -767,7 +767,7 @@ void hv_vm_stop(void) {
 static dispatch_queue_t pointer_queue(void) {
     static dispatch_queue_t q;
     static dispatch_once_t once;
-    dispatch_once(&once, ^{ q = dispatch_queue_create("henge.pointer", DISPATCH_QUEUE_SERIAL); });
+    dispatch_once(&once, ^{ q = dispatch_queue_create("tux.pointer", DISPATCH_QUEUE_SERIAL); });
     return q;
 }
 
