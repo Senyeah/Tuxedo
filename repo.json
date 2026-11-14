@@ -1,7 +1,7 @@
 {
   "name": "Henge",
   "identifier": "dev.itslevii.henge",
-  "subtitle": "macOS on your iPhone and iPad.",
+  "subtitle": "Debian Linux on your iPhone and iPad.",
   "description": "Henge's own source. Add it in SideStore or AltStore to install Henge and get its updates.",
   "iconURL": "https://raw.githubusercontent.com/Leviidev/Henge/main/docs/icon.png",
   "website": "https://github.com/Leviidev/Henge",
@@ -14,17 +14,12 @@
       "name": "Henge",
       "bundleIdentifier": "com.henge.app",
       "developerName": "Leviidev",
-      "subtitle": "macOS on your iPhone and iPad.",
-      "localizedDescription": "Henge runs macOS on iPhone and iPad with its own emulator. It downloads Apple's restore image and installs macOS right on the device, no Mac needed. Safari and Discord run, and the clipboard and a shared folder work between macOS and the device. It's emulation, so it runs slower than a real Mac. Henge needs JIT (StikDebug, its built-in StikJIT on iOS 26 or later, TrollStore or a jailbreak), iOS 17 or later, an A14 or M1 chip or newer, and about 43 GB free.",
+      "subtitle": "Debian Linux on your iPhone and iPad.",
+      "localizedDescription": "Henge runs Debian Linux on iPhone and iPad with its own emulator. Download an image in the app, or open a machine folder from Files. It has a text console and a desktop, accelerated graphics and video decode and encode (both opt-in), Files folders, port forwards, and a trackpad. It's emulation, so it runs slower than a real computer. Henge needs JIT (StikDebug, its built-in StikJIT on iOS 26 or later, TrollStore or a jailbreak), iOS 17 or later, and an A14 or M1 chip or newer.",
       "iconURL": "https://raw.githubusercontent.com/Leviidev/Henge/main/docs/icon.png",
       "tintColor": "#2E6BFF",
       "category": "utilities",
-      "screenshots": [
-        "https://raw.githubusercontent.com/Leviidev/Henge/main/Screenshots/macs.png",
-        "https://raw.githubusercontent.com/Leviidev/Henge/main/Screenshots/trackpad.png",
-        "https://raw.githubusercontent.com/Leviidev/Henge/main/Screenshots/install.png",
-        "https://raw.githubusercontent.com/Leviidev/Henge/main/Screenshots/ipad.jpg"
-      ],
+      "screenshots": [],
       "versions": [
         {
           "version": "0.3.0",

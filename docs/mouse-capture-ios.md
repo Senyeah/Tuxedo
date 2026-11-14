@@ -112,7 +112,6 @@ The Info.plist is correct for indirect input. A missing key is not the cause.
 Notes on option 3:
 
 - A Linux guest gets an absolute device from the touchscreen plan (`LINUX-PLAN-12-touchscreen.md`). The same virtio-input device can also carry a pointer position, or a second device can be a virtio tablet.
-- A macOS guest has no absolute device today. It needs a USB HID tablet on the xHCI bus. That is a larger change.
 - `UIPointerInteraction` with `.hidden()` is already in `Trackpad.swift:54`. If iOS obeys it on an iPhone with "Perform Touch Gestures" off, then only the guest pointer shows. CloudGear says iOS does not obey it. This must be tested.
 - Scroll in this mode comes from `UIPanGestureRecognizer` with `allowedScrollTypesMask = .all`, or from `GCMouseInput.scroll` if it arrives.
 - Buttons come from `GCMouse` (already works), or from `UIEvent.buttonMask`.
@@ -170,7 +169,7 @@ For each run, record:
 | Result | Action |
 | --- | --- |
 | Deltas arrive in run C, and continue at the edge. | Relative mode is sufficient. Show a hint on iPhone when a `GCMouse` is connected: "Turn on AssistiveTouch and turn off Perform Touch Gestures". Stop here. |
-| Deltas arrive in run C, but stop at the edge. | Build absolute mode (option 3) for Linux first. It uses the device from `LINUX-PLAN-12-touchscreen.md`. Keep relative mode for macOS guests, with the hint. |
+| Deltas arrive in run C, but stop at the edge. | Build absolute mode (option 3) for Linux first. It uses the device from `LINUX-PLAN-12-touchscreen.md`. Keep relative mode as the fallback, with the hint. |
 | No deltas in any run. | Build absolute mode from hover locations, or use touchscreen mode (option 4) with run B settings. |
 | A click in run B arrives as a `direct` touch. | In relative mode, drop a touch that starts in the same instant as a `GCMouse` button event. If not, each click is also a finger on the emulated trackpad. |
 

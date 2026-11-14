@@ -1,5 +1,7 @@
 # Changelog
 
+macOS guest support was removed on 14/11/2026. The dated history below stays as written.
+
 This fork collects the fixes from the community forks of [Leviidev/Henge](https://github.com/Leviidev/Henge)
 into one build, with a few additions, aimed above all at iPad (tested hardware: iPad Pro M4).
 Every change keeps its original author in the git history.

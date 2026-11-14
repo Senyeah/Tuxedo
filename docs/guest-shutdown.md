@@ -29,15 +29,11 @@ their partial machine and allow retry.
 The session view removes guest input controls, releases captured input, restores
 normal device sleep and shows a terminal message. `BootDisplay` keeps watching
 the VM state after GPU rendering begins, then removes the last rendered frame
-on both the device and an external display. The stopped card offers **Start
-Mac** and **Close**. A guest restart request automatically starts the next boot;
-closing the session and opening a Mac again also works in the same app process.
+on both the device and an external display. The stopped card offers a start
+button and **Close**. A guest restart request automatically starts the next boot;
+closing the session and opening the machine again also works in the same app process.
 Each successful boot increments a generation counter so the display discards
 the previous boot's frame and watches for the new GPU output.
-
-This applies to normal boots of installed guests. The installer has separate
-long-lived USB restore workers and retains its existing reopen-the-app
-restriction; this change does not release a board still owned by those workers.
 
 ## Regression checks
 
@@ -59,15 +55,13 @@ are bounded, with cleanup to release threads even when the regression fails.
 
 `make test-vm-lifecycle` additionally needs the app's libslirp development
 dependencies. It links the production native bridge and engine, supplies a
-test JIT mapping, and uses a tiny synthetic ROM. It covers guest shutdown,
-restart, host stop, failed-boot recovery and concurrent UI reads. It needs no
-Apple ROM or guest disk.
+test JIT mapping, and uses a tiny synthetic firmware for the `virt` board. It covers
+guest shutdown, restart, host stop, failed-boot recovery and concurrent UI reads. It
+needs no U-Boot binary or guest disk image.
 
-`make build/test_pvg_lifecycle` builds a Metal lifecycle test for Apple Silicon.
-Run `build/test_pvg_lifecycle` to check that teardown drains pending GPU work
-before freeing the board. This test does not cover guest image rendering.
+`test_devices` runs on the `virt` board.
 
 ## Validation
 
 Tested: On iPhone Duo running with iOS 27.3 Beta 1, the guest now shuts down and
-restarts normally from inside macOS.
+restarts normally.

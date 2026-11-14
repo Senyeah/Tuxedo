@@ -56,11 +56,13 @@ def versions():
     return out
 
 
-FIRST_SHOTS = ["macs.png", "trackpad.png", "install.png", "ipad.jpg"]  # the order the source shows them in
+FIRST_SHOTS = []  # file names to show first; no screenshots exist until Linux ones are added
 
 
 def screenshots():
     folder = os.path.join(ROOT, "Screenshots")
+    if not os.path.isdir(folder):
+        return []
     names = [n for n in os.listdir(folder) if n.lower().endswith((".png", ".jpg", ".jpeg"))]
     names.sort(key=lambda n: (FIRST_SHOTS.index(n) if n in FIRST_SHOTS else len(FIRST_SHOTS), n))
     return [f"{RAW}/Screenshots/{n}" for n in names]
@@ -72,13 +74,13 @@ def main():
         "name": "Henge",
         "bundleIdentifier": "com.henge.app",
         "developerName": "Leviidev",
-        "subtitle": "macOS on your iPhone and iPad.",
+        "subtitle": "Debian Linux on your iPhone and iPad.",
         "localizedDescription": (
-            "Henge runs macOS on iPhone and iPad with its own emulator. It downloads Apple's restore image and "
-            "installs macOS right on the device, no Mac needed. Safari and Discord run, and the clipboard and a "
-            "shared folder work between macOS and the device. It's emulation, so it runs slower than a real Mac. "
-            "Henge needs JIT (StikDebug, its built-in StikJIT on iOS 26 or later, TrollStore or a jailbreak), "
-            "iOS 17 or later, an A14 or M1 chip or newer, and about 43 GB free."
+            "Henge runs Debian Linux on iPhone and iPad with its own emulator. Download an image in the app, or open "
+            "a machine folder from Files. It has a text console and a desktop, accelerated graphics and video decode "
+            "and encode (both opt-in), Files folders, port forwards, and a trackpad. It's emulation, so it runs slower "
+            "than a real computer. Henge needs JIT (StikDebug, its built-in StikJIT on iOS 26 or later, TrollStore or a "
+            "jailbreak), iOS 17 or later, and an A14 or M1 chip or newer."
         ),
         "iconURL": icon,
         "tintColor": "#2E6BFF",
@@ -101,7 +103,7 @@ def main():
     source = {
         "name": "Henge",
         "identifier": "dev.itslevii.henge",
-        "subtitle": "macOS on your iPhone and iPad.",
+        "subtitle": "Debian Linux on your iPhone and iPad.",
         "description": "Henge's own source. Add it in SideStore or AltStore to install Henge and get its updates.",
         "iconURL": icon,
         "website": "https://github.com/Leviidev/Henge",
