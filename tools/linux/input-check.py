@@ -5,7 +5,7 @@
 # ///
 """D5: keys, pointer, buttons, wheel and trackpad reach a Linux guest (make test-linux-input).
 
-Boots a clone of debian-desktop.img on `hengevm --board virt` and drives the machine through
+Boots a clone of debian-desktop.img on `hengevm` and drives the machine through
 HV_INPUT_FILE. In the guest, `libinput debug-events` records what arrives. The test checks the
 xHCI probe in dmesg, then each device: the USB keyboard, the virtio mouse (move, left, right,
 wheel) and the USB Magic Trackpad 2 (one finger, two-finger scroll, click).
@@ -83,8 +83,7 @@ def uboot_keyboard(args, fw, tmp):
     """The xHCI keyboard stops the autoboot countdown and types a command at the U-Boot prompt."""
     infile = os.path.join(tmp, "uboot-input")
     open(infile, "w").close()
-    p = pexpect.spawn("/bin/sh", ["-c", 'exec "$@" 2>"$0"', os.path.join(tmp, "uboot-stderr"), args.hengevm, "--board",
-                                  "virt", "--firmware", fw, "--ram", "1024"],
+    p = pexpect.spawn("/bin/sh", ["-c", 'exec "$@" 2>"$0"', os.path.join(tmp, "uboot-stderr"), args.hengevm, "--firmware", fw, "--ram", "1024"],
                       encoding="utf-8", codec_errors="replace", dimensions=(50, 200),
                       env=dict(os.environ, HV_INPUT_FILE=infile))
     try:
@@ -137,7 +136,7 @@ def main():
         boot = (["--firmware", fw] if args.uboot else
                 ["--kernel", kernel, "--initrd", initrd, "--append",
                  f"console=ttyAMA0 earlycon=pl011,0x9000000 root=PARTUUID={partuuid} rw"])
-        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', os.path.join(tmp, "stderr"), args.hengevm, "--board", "virt"] + \
+        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', os.path.join(tmp, "stderr"), args.hengevm] + \
             boot + ["--disk", clone, "--ram", "2048", "--cpus", str(args.cpus), "--display", "1280x720"]
         p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200),
                           env=dict(os.environ, HV_INPUT_FILE=infile))

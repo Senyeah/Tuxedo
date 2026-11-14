@@ -128,8 +128,7 @@ def main():
     stalls = 0
     try:
         subprocess.run(["/bin/cp", "-c", args.image, disk], check=True)
-        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', disk + ".stderr", args.hengevm, "--board", "virt",
-                "--firmware", args.firmware, "--ram", "2048", "--cpus", str(args.cpus), "--disk", disk]
+        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', disk + ".stderr", args.hengevm, "--firmware", args.firmware, "--ram", "2048", "--cpus", str(args.cpus), "--disk", disk]
         p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200))
         p.expect(r"\(automatic login\)", timeout=180)
         p.expect(SHELL, timeout=60)

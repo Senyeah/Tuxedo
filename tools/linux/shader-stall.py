@@ -124,7 +124,7 @@ def boot_process(args, d, tmp, cache, n):
     r = subprocess.run(["/bin/cp", "-c", image, clone], capture_output=True, text=True)
     if r.returncode:
         raise Fail(f"cannot clone {image}: {r.stderr.strip()}")
-    argv = [args.hengevm, "--board", "virt", "--kernel", os.path.join(d, "Image"), "--initrd", os.path.join(d, "initrd.img"),
+    argv = [args.hengevm, "--kernel", os.path.join(d, "Image"), "--initrd", os.path.join(d, "initrd.img"),
             "--append", f"console=ttyAMA0 root=PARTUUID={partuuid} rw", "--disk", clone, "--ram", "3072",
             "--cpus", str(args.cpus), "--display", "1280x720", "--gpu-accel"]
     env = dict(os.environ, HV_VIRGL_STATS="1", HV_GL_CACHE=cache)

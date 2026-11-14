@@ -88,7 +88,7 @@ def main():
         os.truncate(clone, 8 << 30)
         host = Host(inp, err)
         host.line("volume 0.3")  # before boot, as the app does
-        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.hengevm, "--board", "virt", "--kernel", kernel,
+        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.hengevm, "--kernel", kernel,
                 "--initrd", initrd, "--append", append, "--disk", clone, "--ram", "2048", "--cpus", str(args.cpus),
                 "--share", share]
         env = dict(os.environ, HV_INPUT_FILE=inp, HV_STATUS_LOG="1", HV_SND_CAPTURE=cap)

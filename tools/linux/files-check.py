@@ -148,7 +148,7 @@ class Vm:
 
     def boot(self, folders=()):
         a = self.args
-        cmd = ["/bin/sh", "-c", 'exec "$@" 2>>"$0"', self.err, a.hengevm, "--board", "virt", "--firmware", a.firmware,
+        cmd = ["/bin/sh", "-c", 'exec "$@" 2>>"$0"', self.err, a.hengevm, "--firmware", a.firmware,
                "--ram", str(a.ram), "--cpus", str(a.cpus), "--disk", self.disk, "--share", self.share]
         for f in folders:
             cmd += ["--folder", f]

@@ -556,7 +556,22 @@ static void test_reset(void) {
     }
 }
 
-/* Through host/vm.c: no vmapple, and CPU 0's tick feeds the console. */
+/* Through host/vm.c: CPU 0's tick feeds the console. */
+/* A config with nothing set boots the virt board. */
+static void test_default_board(void) {
+    char error[256];
+    HvVmConfig d = {.ram_mb = 64, .ncpus = 1, .no_net = 1, .no_sound = 1, .jit_bytes = 8 << 20};
+    if (hv_vm_create(&d, error, sizeof error) != 0) {
+        printf("  FAIL default create: %s\n", error);
+        failures++;
+        hv_vm_destroy();
+        return;
+    }
+    check("default config: virt board", hv_vm_virt() != NULL, 1);
+    check("default config: virt RAM base", hv_vm_devs()->ram_pa, VIRT_MEM);
+    hv_vm_destroy();
+}
+
 static void test_vm(void) {
     char rom[256], disk[256], error[256];
     snprintf(rom, sizeof rom, "%s/firmware", dir);
@@ -564,7 +579,7 @@ static void test_vm(void) {
     static const uint32_t loop[] = {0x14000000};
     write_file(rom, loop, sizeof loop);
     write_file(disk, NULL, 1 << 20);
-    HvVmConfig c = {.board = HV_BOARD_VIRT, .rom = rom, .disk = disk, .ram_mb = 64, .ncpus = 2, .no_net = 1,
+    HvVmConfig c = {.rom = rom, .disk = disk, .ram_mb = 64, .ncpus = 2, .no_net = 1,
                     .no_sound = 1, .jit_bytes = 8 << 20};
     if (hv_vm_create(&c, error, sizeof error) != 0) {
         printf("  FAIL create: %s\n", error);
@@ -573,7 +588,6 @@ static void test_vm(void) {
         return;
     }
     HvMachine *vm = hv_vm_machine();
-    check("no vmapple board", hv_vm_board() == NULL, 1);
     check("virt board", hv_vm_virt() != NULL, 1);
     check("RAM base", hv_vm_devs()->ram_pa, VIRT_MEM);
     check("disk device", hv_vm_devs()->blk[0] != NULL, 1);
@@ -636,7 +650,7 @@ static void test_vm(void) {
     char kernel[256];
     snprintf(kernel, sizeof kernel, "%s/Image", dir);
     write_image(kernel, 0, 64 << 10, 0x644d5241);
-    HvVmConfig direct = {.board = HV_BOARD_VIRT, .kernel = kernel, .cmdline = "console=ttyAMA0", .ram_mb = 128,
+    HvVmConfig direct = {.kernel = kernel, .cmdline = "console=ttyAMA0", .ram_mb = 128,
                          .ncpus = 2, .no_net = 1, .no_sound = 1, .jit_bytes = 8 << 20};
     if (hv_vm_create(&direct, error, sizeof error) != 0) {
         printf("  FAIL direct create: %s\n", error);
@@ -655,7 +669,7 @@ static void test_vm(void) {
     both.rom = rom;
     check("kernel and firmware together fail", hv_vm_create(&both, error, sizeof error) != 0, 1);
     hv_vm_destroy();
-    HvVmConfig lone = {.board = HV_BOARD_VIRT, .initrd = kernel, .ram_mb = 64, .ncpus = 1, .no_net = 1, .no_sound = 1,
+    HvVmConfig lone = {.initrd = kernel, .ram_mb = 64, .ncpus = 1, .no_net = 1, .no_sound = 1,
                        .jit_bytes = 8 << 20};
     check("initrd without a kernel fails", hv_vm_create(&lone, error, sizeof error) != 0, 1);
     hv_vm_destroy();
@@ -664,7 +678,7 @@ static void test_vm(void) {
     check("a bad kernel fails create", hv_vm_create(&junk, error, sizeof error) != 0, 1);
     check("with the loader's reason", strstr(error, "arm64 Image") != NULL, 1);
     hv_vm_destroy();
-    HvVmConfig bad = {.board = HV_BOARD_VIRT, .rom = disk, .ram_mb = 64, .ncpus = 1, .no_net = 1, .no_sound = 1, .jit_bytes = 8 << 20};
+    HvVmConfig bad = {.rom = disk, .ram_mb = 64, .ncpus = 1, .no_net = 1, .no_sound = 1, .jit_bytes = 8 << 20};
     write_file(disk, NULL, VIRT_FLASH_SIZE + 4);
     check("firmware over 64 MB fails create", hv_vm_create(&bad, error, sizeof error) != 0, 1);
     hv_vm_destroy();
@@ -674,7 +688,7 @@ static void test_vm(void) {
 static void test_vm_display(void) {
     char error[256];
     hv_vm_set_display_mode(1280, 800); /* before the board exists: kept and applied at create */
-    HvVmConfig c = {.board = HV_BOARD_VIRT, .ram_mb = 64, .ncpus = 1, .no_net = 1, .no_sound = 1, .jit_bytes = 8 << 20};
+    HvVmConfig c = {.ram_mb = 64, .ncpus = 1, .no_net = 1, .no_sound = 1, .jit_bytes = 8 << 20};
     if (hv_vm_create(&c, error, sizeof error) != 0) {
         printf("  FAIL display create: %s\n", error);
         failures++;
@@ -684,7 +698,6 @@ static void test_vm_display(void) {
     HvMachine *vm = hv_vm_machine();
     HvVirtioGpu *g = hv_vm_virt()->gpu;
     check("display: the board has one", hv_vm_devs()->display != NULL, 1);
-    check("display: no boot framebuffer on virt", hv_vm_boot_display(&(HvBootDisplay){0}), (uint64_t)-1);
     int x = 0, y = 0;
     check("display: no pointer before a cursor", hv_vm_pointer(&x, &y), (uint64_t)-1);
     uint8_t px[4 * 2 * 4];
@@ -3857,6 +3870,7 @@ int main(void) {
     }
     setenv("HV_NO_SOUND", "1", 1);
     test_vm();
+    test_default_board();
     test_vm_display();
     char cmd[300];
     snprintf(cmd, sizeof cmd, "rm -rf %s", dir);

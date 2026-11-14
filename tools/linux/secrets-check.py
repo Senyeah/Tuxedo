@@ -445,7 +445,7 @@ def boot(args, image, store, machine, steps):
     open(inp, "w").close()
     open(err, "w").close()
     host = Host(inp, err)
-    argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.hengevm, "--board", "virt", "--kernel", kernel, "--initrd", initrd,
+    argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.hengevm, "--kernel", kernel, "--initrd", initrd,
             "--append", append, "--disk", image, "--ram", "2048", "--cpus", str(args.cpus), "--display", "1280x720",
             "--share", share, "--secrets", store, "--machine-id", machine]
     p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200), env=dict(os.environ, HV_INPUT_FILE=inp))

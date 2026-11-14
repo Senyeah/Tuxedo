@@ -44,7 +44,7 @@ TCP = "HENGE_VCODEC=10.0.2.4:8470"
 
 
 def boot(args, disk, share, err_log):
-    argv = ["/bin/sh", "-c", 'exec "$@" 2>>"$0"', err_log, args.hengevm, "--board", "virt", "--firmware", args.firmware,
+    argv = ["/bin/sh", "-c", 'exec "$@" 2>>"$0"', err_log, args.hengevm, "--firmware", args.firmware,
             "--disk", disk, "--ram", str(args.ram), "--cpus", str(args.cpus), "--display", "1280x800", "--share", share,
             "--vcodec-dma"]
     print(f"--   booting {os.path.basename(disk)} through U-Boot (host load average {os.getloadavg()[0]:.1f})")

@@ -49,8 +49,7 @@ class Vm:
     def boot(self):
         a = self.args
         env = dict(os.environ, HV_SND_CAPTURE=self.cap, HV_SND_LOG="1")
-        cmd = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', self.err, a.hengevm, "--board", "virt",
-               "--firmware", a.firmware, "--ram", str(a.ram), "--cpus", str(a.cpus), "--disk", self.disk]
+        cmd = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', self.err, a.hengevm, "--firmware", a.firmware, "--ram", str(a.ram), "--cpus", str(a.cpus), "--disk", self.disk]
         self.p = p = pexpect.spawn(cmd[0], cmd[1:], encoding="utf-8", timeout=60, env=env)
         self.login()
 

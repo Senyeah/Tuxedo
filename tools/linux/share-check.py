@@ -37,8 +37,7 @@ class Fail(Exception):
 
 def argv(args, disk, share):
     # hengevm's stderr goes to a file so it cannot break the console parsing
-    cmd = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', disk + ".stderr", args.hengevm, "--board", "virt",
-           "--firmware", args.firmware, "--ram", "2048", "--cpus", str(args.cpus), "--disk", disk]
+    cmd = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', disk + ".stderr", args.hengevm, "--firmware", args.firmware, "--ram", "2048", "--cpus", str(args.cpus), "--disk", disk]
     return cmd + (["--share", share] if share else [])
 
 

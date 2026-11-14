@@ -1,6 +1,5 @@
 #include "vm.h"
 #include "linux_boot.h"
-#include "pvg_lite.h"
 #include "vgpu_metal.h"
 #include "virt.h"
 #ifdef HV_GFX
@@ -21,7 +20,6 @@
 #include <stdio.h>
 #include <time.h>
 
-#include "usb_host.h"
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -34,9 +32,7 @@
 static HvMachine m;
 static HvCpu cpus[HV_MAX_CPUS]; /* the board takes them as an array */
 static int ncpus = 1;
-static HvVmapple board = {.ram_fd = -1};
 static HvVirt virt = {.mem.fd = -1};
-static int board_kind = HV_BOARD_VMAPPLE;
 static HvBoardDevs devs;
 static _Atomic int input_stopping = 1;
 static void stop_pointer(void);
@@ -54,12 +50,9 @@ static VgpuDisplay vgpu;
 #ifdef HV_GFX
 static HvVgpuVirgl *virgl; /* the renderer behind vgpu.gpu (--gpu-accel) */
 #endif
-static HvDisk disk = {.fd = -1, .wfd = -1}, aux = {.fd = -1, .wfd = -1};
+static HvDisk disk = {.fd = -1, .wfd = -1};
 static int machine_created, signals_installed;
-static uint64_t boot_args_offset;
-static double boot_last_scan;
 static int net_on;
-static void (*extra_poll)(void);
 static void (*exit_cb)(int);
 static pthread_t secondary_threads[HV_MAX_CPUS], kicker;
 static int secondary_started[HV_MAX_CPUS], kicker_started;
@@ -74,29 +67,12 @@ static _Atomic int vm_paused, in_background;
 static int gpu_held, gpu_gone = 1; /* under pause_mu; gone: no machine with a GPU */
 
 HvMachine *hv_vm_machine(void) { return &m; }
-HvVmapple *hv_vm_board(void) { return board_kind == HV_BOARD_VMAPPLE ? &board : NULL; }
-HvVirt *hv_vm_virt(void) { return machine_created && board_kind == HV_BOARD_VIRT ? &virt : NULL; }
+HvVirt *hv_vm_virt(void) { return machine_created ? &virt : NULL; }
 const HvBoardDevs *hv_vm_devs(void) { return &devs; }
 HvCpu *hv_vm_cpu(int index) { return index >= 0 && index < ncpus ? &cpus[index] : NULL; }
 int hv_vm_ncpus(void) { return ncpus; }
 
-/* vmapple: Apple's paravirtual GPU. Its mode is global and read when the guest's driver starts. */
-static void pvg_set_layer(void *d, void *layer) { hv_pvg_lite_set_layer(d, layer); }
-static uint64_t pvg_frames(void *d) { return hv_pvg_lite_gpu_frames(d); }
-static int pvg_snapshot(void *d, uint8_t *bgra, uint32_t w, uint32_t h) { return hv_pvg_lite_snapshot(d, bgra, w, h); }
-static int pvg_pointer(void *d, int *x, int *y) {
-    const uint8_t *page = hv_pvg_lite_display_page(d);
-    if (!page) return -1;
-    uint32_t at = *(const volatile uint32_t *)(page + 0xe00);
-    if (at == 0xffffffff) return -1;
-    *x = (int)(at & 0xffff), *y = (int)(at >> 16);
-    return 0;
-}
-static void pvg_set_mode(void *d, uint32_t w, uint32_t h) { (void)d, hv_pvg_lite_set_mode(w, h); }
-static void pvg_set_size_mm(void *d, uint32_t w, uint32_t h) { (void)d, hv_pvg_lite_set_size_mm(w, h); }
-static const HvDisplayOps pvg_display = {pvg_set_layer, pvg_frames, pvg_snapshot, pvg_pointer, pvg_set_mode, pvg_set_size_mm, NULL};
-
-/* virt: the virtio GPU and its presenter, which is NULL without Metal. */
+/* The virtio GPU and its presenter, which is NULL without Metal. */
 static void vgpu_set_layer(void *d, void *layer) { hv_vgpu_metal_set_layer(((VgpuDisplay *)d)->presenter, layer); }
 static uint64_t vgpu_frames(void *d) { return hv_vgpu_metal_frames(((VgpuDisplay *)d)->presenter); }
 static int vgpu_snapshot(void *d, uint8_t *bgra, uint32_t w, uint32_t h) {
@@ -117,60 +93,6 @@ static const HvDisplayOps vgpu_display = {vgpu_set_layer, vgpu_frames, vgpu_snap
                                           vgpu_hide_cursor};
 
 static const HvBoardDevs *shown_display(void) { return atomic_load_explicit(&display_devs, memory_order_acquire); }
-
-/* arm64 boot_args: {u16 Revision, u16 Version, u64 virtBase, physBase, memSize,
-   topOfKernelData, Video {baseAddr, display, rowBytes, width, height, depth}, ...}.
-   Found by scanning page starts for one whose physBase is the RAM base. */
-int hv_vm_boot_display(HvBootDisplay *d) {
-    /* What the guest's GPU has drawn, once it has drawn anything. */
-    const HvBoardDevs *shown = shown_display();
-    if (!shown || shown->display != &pvg_display) return -1; /* virt: the console covers the time before a frame */
-    HvPvgLite *pvg = shown->display_opaque;
-    const uint8_t *frame;
-    uint32_t fw, fh;
-    if (hv_pvg_lite_frame(pvg, &frame, &fw, &fh) == 0) {
-        d->pixels = (uint8_t *)frame;
-        d->width = fw, d->height = fh, d->stride = fw * 4;
-        return 0;
-    }
-    uint8_t *ram = board.ram;
-    uint64_t size = board.ram_size;
-    if (!ram || board_kind != HV_BOARD_VMAPPLE) return -1;
-    for (int pass = 0; pass < 2; pass++) {
-        if (!boot_args_offset || pass) {
-            /* A full scan at most every 2 s; boot_args sits low in RAM
-               (iBoot puts it near 0x78ed0000), so the first GB is enough. */
-            struct timespec ts;
-            clock_gettime(CLOCK_MONOTONIC, &ts);
-            double now = ts.tv_sec + ts.tv_nsec * 1e-9;
-            if (now - boot_last_scan < 2) return -1;
-            boot_last_scan = now;
-            if (pass && boot_args_offset) boot_args_offset = 0;
-            uint64_t limit = size < (1ull << 30) ? size : 1ull << 30;
-            for (uint64_t off = 0; off + 0x1000 <= limit && !boot_args_offset; off += 0x4000) {
-                const uint64_t *q = (const uint64_t *)(ram + off);
-                const uint16_t *h = (const uint16_t *)(ram + off);
-                if (h[0] < 2 || h[0] > 3 || h[1] < 1 || h[1] > 3) continue; /* boot_args: revision, version */
-                if (q[1] >> 40 != 0xfffffe || q[2] < VMAPPLE_MEM || q[2] >= VMAPPLE_MEM + size || q[3] == 0 || q[3] > size) continue;
-                uint64_t base = q[5], row = q[7], w = q[8], hh = q[9], depth = q[10];
-                if (w < 320 || w > 8192 || hh < 200 || hh > 8192 || row < w * 4 || (depth & 0xff) != 32) continue;
-                if (base < VMAPPLE_MEM || base - VMAPPLE_MEM + row * hh > size) continue;
-                boot_args_offset = off;
-            }
-        }
-        if (!boot_args_offset) return -1;
-        const uint64_t *q = (const uint64_t *)(ram + boot_args_offset);
-        uint64_t base = q[5], row = q[7], w = q[8], hh = q[9];
-        if (q[1] >> 40 == 0xfffffe && w >= 320 && w <= 8192 && hh >= 200 && hh <= 8192 && base >= VMAPPLE_MEM &&
-            base - VMAPPLE_MEM + row * hh <= size) {
-            d->pixels = ram + (base - VMAPPLE_MEM);
-            d->width = (uint32_t)w, d->height = (uint32_t)hh, d->stride = (uint32_t)row;
-            return 0;
-        }
-    }
-    return -1;
-}
-void hv_vm_set_poll(void (*poll)(void)) { extra_poll = poll; }
 
 const char *hv_vm_reason_name(int r) {
     switch (r) {
@@ -275,8 +197,7 @@ static void guest_volume(void *opaque, int percent, int muted) {
 }
 
 static void board_poll(void) {
-    if (board_kind == HV_BOARD_VIRT && hv_status_devices_changed(&status_gen)) status_apply();
-    if (extra_poll) extra_poll();
+    if (hv_status_devices_changed(&status_gen)) status_apply();
     if (net_on) hv_net_poll();
     console_pump();
 }
@@ -436,32 +357,6 @@ static void publish_display(void) {
     os_unfair_lock_unlock(&display_lock);
 }
 
-static int create_vmapple(const HvVmConfig *c, uint64_t ram_size, char *err, size_t errlen) {
-    if (hv_disk_open(&aux, c->aux, c->aux_offset ? c->aux_offset : 16384, 0) != 0)
-        return fail(err, errlen, "Cannot open the auxiliary storage.");
-    HvCfgParams cfg = {.nr_cpus = (uint32_t)ncpus, .ecid = c->ecid, .seed = c->seed, .mac_en0 = {0x02, 0x48, 0x56, 0x4d, 0x00, 0x01}};
-    if (c->installer) cfg.run_installer1 = cfg.run_installer2 = 1;
-    if (getenv("HV_RUN_INSTALLER")) { /* experiment: "a,b" for the two installer words */
-        unsigned a = 0, b2 = 0;
-        sscanf(getenv("HV_RUN_INSTALLER"), "%u,%u", &a, &b2);
-        cfg.run_installer1 = a, cfg.run_installer2 = b2;
-    }
-    static const uint8_t mac[6] = {0x02, 0x48, 0x56, 0x4d, 0x00, 0x01};
-    if (hv_vmapple_create(&board, &m, cpus, ram_size, &disk, &aux, &cfg, mac) != 0)
-        return fail(err, errlen, "Cannot build the machine (not enough memory for the guest's RAM?).");
-    if (hv_vmapple_load_rom(&board, c->rom) != 0) return fail(err, errlen, "Cannot read the ROM (AVPBooter.vmapple2.bin).");
-    hv_vmapple_reset_cpu(&board);
-    devs = (HvBoardDevs){.gic = board.gic, .uart = board.uart, .gpio = board.gpio, .usb = board.usb,
-                         .keyboard = board.keyboard, .mouse = board.mouse, .net = board.net, .snd = board.snd,
-                         .balloon = board.balloon, .blk = {board.root_blk, board.aux_blk},
-                         .ram = board.ram, .ram_pa = VMAPPLE_MEM, .ram_size = board.ram_size,
-                         .display = board.pvg ? &pvg_display : NULL, .display_opaque = board.pvg};
-    board.poll = board_poll;
-    if (board.vusb && getenv("HV_VUSB_PROBE")) hv_usb_probe_start(board.vusb);
-    publish_display();
-    return 0;
-}
-
 /* A folder that cannot be opened is left out and logged: the machine still boots. */
 static void set_folders(const HvVmConfig *c) {
     hv_fs_folders_clear();
@@ -534,14 +429,9 @@ int hv_vm_create(const HvVmConfig *c, char *err, size_t errlen) {
         pthread_join(primary_thread, NULL);
         primary_started = 0;
     }
-    if (c->board != HV_BOARD_VMAPPLE && c->board != HV_BOARD_VIRT) return fail(err, errlen, "Unknown board.");
-    if (c->board == HV_BOARD_VMAPPLE && (!c->rom || !c->disk || !c->aux))
-        return fail(err, errlen, "The ROM, disk and auxiliary storage are all needed.");
-    if (c->kernel && (c->board != HV_BOARD_VIRT || c->rom))
-        return fail(err, errlen, "A kernel boots directly on the virt board only, without firmware.");
+    if (c->kernel && c->rom) return fail(err, errlen, "A kernel boots directly, without firmware.");
     if ((c->initrd || c->cmdline) && !c->kernel) return fail(err, errlen, "An initrd or a command line needs a kernel.");
     machine_created = 1;
-    board_kind = c->board;
     struct sigaction ill = {.sa_flags = SA_SIGINFO | SA_ONSTACK};
     ill.sa_sigaction = on_ill;
     if (!signals_installed) {
@@ -561,7 +451,7 @@ int hv_vm_create(const HvVmConfig *c, char *err, size_t errlen) {
     ncpus = c->ncpus < 1 ? 1 : c->ncpus > HV_MAX_CPUS ? HV_MAX_CPUS : c->ncpus;
     m.big_lock_on = ncpus > 1 && getenv("HV_BIG_LOCK"); /* debugging: one CPU in guest code at a time */
     uint64_t ram_size = (c->ram_mb ? c->ram_mb : 2048) << 20;
-    if ((c->board == HV_BOARD_VIRT ? create_virt : create_vmapple)(c, ram_size, err, errlen) != 0) return -1;
+    if (create_virt(c, ram_size, err, errlen) != 0) return -1;
     if (devs.net && !c->no_net) {
         if (hv_net_attach(&m, devs.net) != 0) fprintf(stderr, "hengevm: user-mode network unavailable\n");
         else net_on = 1;
@@ -610,16 +500,11 @@ void hv_vm_destroy(void) {
         virgl = NULL;
     }
 #endif
-    if (board_kind == HV_BOARD_VMAPPLE) hv_vmapple_destroy(&board);
-    else hv_virt_destroy(&virt);
+    hv_virt_destroy(&virt);
     hv_disk_close(&disk);
-    hv_disk_close(&aux);
     hv_machine_free(&m);
     memset(cpus, 0, sizeof cpus);
     ncpus = 0;
-    boot_args_offset = 0;
-    boot_last_scan = 0;
-    extra_poll = NULL;
     machine_created = 0;
 }
 
@@ -822,7 +707,6 @@ static void *secondary_thread(void *arg) {
 
 void hv_vm_flush_disks(void) {
     hv_disk_flush(&disk);
-    hv_disk_flush(&aux);
 }
 
 int hv_vm_run_cpu0(void) {
@@ -848,7 +732,7 @@ static void *cpu0_thread(void *unused) {
     /* A DMA worker can still be writing after the guest CPUs have exited. */
     hv_virtio_blk_stop(devs.blk[0]);
     hv_virtio_blk_stop(devs.blk[1]);
-    if (board_kind == HV_BOARD_VIRT) hv_virtio_fs_stop(virt.fs);
+    hv_virtio_fs_stop(virt.fs);
     hv_audio_detach();
     hv_vm_flush_disks();
     if (exit_cb) exit_cb(r);
@@ -977,20 +861,9 @@ static void button_now(void *ctx) {
     if (button == 0) {
         left_user = down;
         left_update();
-    } else if (button == 1 && board_kind == HV_BOARD_VIRT) {
+    } else if (button == 1) {
         hv_virtio_input_send(devs.mouse, HV_EV_KEY, HV_BTN_RIGHT, down);
         hv_virtio_input_send(devs.mouse, HV_EV_SYN, 0, 0);
-    } else if (button == 1 && down != left_click) {
-        if (down) {
-            rctrl_hold(&rctrl_click, 1);
-            usleep(50000);
-        }
-        left_click = down;
-        left_update();
-        if (!down) {
-            usleep(50000);
-            rctrl_hold(&rctrl_click, 0);
-        }
     } else if (button == 2) {
         hv_virtio_input_send(devs.mouse, HV_EV_KEY, HV_BTN_MIDDLE, down);
         hv_virtio_input_send(devs.mouse, HV_EV_SYN, 0, 0);
@@ -1016,7 +889,7 @@ static void power_now(void *ctx) {
 
 /* On the pointer queue so hv_vm_destroy waits for the release (stop_pointer). */
 int hv_vm_power_button(void) {
-    if (board_kind != HV_BOARD_VIRT || !machine_created || atomic_load(&input_stopping)) return 0;
+    if (!machine_created || atomic_load(&input_stopping)) return 0;
     dispatch_async_f(pointer_queue(), NULL, power_now);
     return 1;
 }

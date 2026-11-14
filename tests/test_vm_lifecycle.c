@@ -17,19 +17,13 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-/* Real native bridge and device workers; only the debugger allocation and
-   unused installer entry point are replaced. No Apple ROM or disk needed. */
+/* Real native bridge and device workers; only the debugger allocation is replaced. */
 static HvJitRegion jit;
 static HengeDualMapping mapping;
 static int failures;
 static _Atomic int reader_done;
 HengeDualMapping *henge_ios_jit_get_mapping(void) { return &mapping; }
 void hv_prof_ios_start(void) {}
-int hv_install_start(HvVirtioUsb *usb, const char *ipsw, const char *work, uint64_t ecid,
-                     HvInstallProgress progress, void *user) {
-    (void)usb; (void)ipsw; (void)work; (void)ecid; (void)progress; (void)user;
-    return -1;
-}
 static void check(const char *what, int ok) {
     if (!ok) { fprintf(stderr, "FAIL: %s\n", what); failures++; }
 }
@@ -132,34 +126,29 @@ static void *read_ui(void *unused) {
     (void)unused;
     while (!atomic_load(&reader_done)) {
         uint8_t image[16];
-        int x, y, width, height, stride;
-        const uint8_t *pixels;
+        int x, y;
         henge_vm_snapshot(image, 2, 2);
         henge_vm_pointer(&x, &y);
         henge_vm_cpus_on();
         henge_vm_gpu_frames();
         henge_vm_balloon(-1);
-        henge_vm_board_kind();
         henge_vm_console_write((const uint8_t *)"", 0);
         henge_vm_set_display_layer(NULL);
-        if (!henge_vm_boot_display(&pixels, &width, &height, &stride)) henge_vm_free_display(pixels);
         usleep(500);
     }
     return NULL;
 }
 int main(void) {
     alarm(60);
-    char dir[] = "/tmp/henge-lifecycle-XXXXXX", rom[256], disk[256], aux[256], ram[256], error[256];
+    char dir[] = "/tmp/henge-lifecycle-XXXXXX", rom[256], disk[256], ram[256], error[256];
     if (!mkdtemp(dir) || hv_jit_region_open(&jit, 8 << 20)) return 1;
     snprintf(rom, sizeof rom, "%s/rom", dir);
     snprintf(disk, sizeof disk, "%s/disk", dir);
-    snprintf(aux, sizeof aux, "%s/aux", dir);
     snprintf(ram, sizeof ram, "%s/ram", dir);
     setenv("HV_RAM_FILE", ram, 1);
     setenv("HV_RAM_NO_LEDGER", "1", 1);
     setenv("HV_BALLOON", "0", 1);
     write_file(disk, NULL, 1 << 20);
-    write_file(aux, NULL, 1 << 20);
     mapping = (HengeDualMapping){.rx_addr = (uint8_t *)jit.base,
         .rw_addr = (uint8_t *)jit.base + jit.rw_diff, .size = jit.capacity * 4};
     pthread_t reader;
@@ -167,7 +156,7 @@ int main(void) {
     /* Warm the process-wide pointer queue before counting worker threads. */
     hv_vm_mouse_move(0, 0);
     /* And Metal, which the virt board's presenter opens once for the process. */
-    HvVmConfig virt = {.board = HV_BOARD_VIRT, .disk = disk, .ram_mb = 64, .ncpus = 2, .no_net = 1, .no_sound = 1,
+    HvVmConfig virt = {.disk = disk, .ram_mb = 64, .ncpus = 2, .no_net = 1, .no_sound = 1,
                        .jit_rx = mapping.rx_addr, .jit_rw = mapping.rw_addr, .jit_bytes = mapping.size};
     if (hv_vm_create(&virt, error, sizeof error) != 0) fprintf(stderr, "virt warm-up: %s\n", error);
     hv_vm_destroy();
@@ -176,57 +165,18 @@ int main(void) {
     int initial_fds = fds();
     initial_threads = threads();
     unsigned initial_dead_ports = dead_ports();
-    /* A virt machine is built and released without a trace, and the virtual Mac still boots after it. */
+    /* A virt machine is built and released without a trace. */
     for (int i = 0; i < 3; i++) {
-        check("virt board builds", hv_vm_create(&virt, error, sizeof error) == 0 && !hv_vm_board() && hv_vm_virt());
+        check("virt board builds", hv_vm_create(&virt, error, sizeof error) == 0 && hv_vm_virt());
         check("virt board has a display", hv_vm_devs()->display != NULL);
         hv_vm_destroy();
         check("virt release leaves nothing behind", !hv_vm_virt() && henge_vm_can_start() && fds() == initial_fds &&
                                                      threads_settled());
     }
-    /* Missing ROM fails after disks, RAM and device workers were created. */
-    for (int i = 0; i < 3; i++) {
-        check("failed boot reports an error", henge_vm_boot(rom, disk, aux, 1, 0, 64, 4, error, sizeof error) != 0);
-        check("failed boot allows retry", henge_vm_state() == 0 && henge_vm_can_start());
-        check("failed boot closes files", fds() == initial_fds);
-        check("failed boot joins workers", threads_settled());
-    }
-    for (int i = 0; i < 12; i++) {
-        int outcome = i % 3 == 2 ? HENGE_VM_OUTCOME_HOST_STOP : i % 3 == 1 ? HENGE_VM_OUTCOME_RESTART : HENGE_VM_OUTCOME_SHUTDOWN;
-        uint32_t code[] = {outcome == HENGE_VM_OUTCOME_RESTART ? 0xd2800120 : 0xd2800100, 0xf2b08000, 0xd4000002};
-        if (outcome == HENGE_VM_OUTCOME_HOST_STOP) code[0] = 0x14000000;
-        write_file(rom, code, sizeof code);
-        int rc = henge_vm_boot(rom, disk, aux, 1, 0, 64, 4, error, sizeof error);
-        if (rc) fprintf(stderr, "boot %d: %s\n", i, error);
-        check("boot succeeds without restarting app", rc == 0);
-        if (rc) break;
-        if (outcome == HENGE_VM_OUTCOME_HOST_STOP) {
-            henge_vm_mouse_button(0, 1);
-            henge_vm_mouse_button(1, 1);
-            henge_vm_mouse_move(5, 7);
-            henge_vm_mouse_button(1, 0);
-            henge_vm_stop();
-        }
-        for (int n = 0; n < 3000 && henge_vm_state() != 2; n++) usleep(1000);
-        check("terminal state is published after cleanup", henge_vm_state() == 2);
-        if (henge_vm_state() != 2) exit(1);
-        check("power outcome preserved", henge_vm_exit_outcome() == outcome);
-        check("start is available again", henge_vm_can_start());
-        check("new generation", henge_vm_generation() == (uint64_t)i + 1);
-        check("RAM released", hv_vm_board()->ram == NULL);
-        check("RAM file closed", hv_vm_board()->ram_fd == -1);
-        check("balloon released", hv_vm_board()->balloon == NULL);
-        check("translation metadata released", hv_vm_machine()->blocks == NULL && hv_vm_machine()->jit.base == NULL);
-        check("borrowed JIT mapping retained", mapping.rx_addr == (uint8_t *)jit.base);
-        check("no disk or network descriptor leak", fds() == initial_fds);
-        /* The last CPU thread can still be returning from its callback. */
-        check("no CPU, disk or network worker leak", threads_settled());
-        check("no leaked CPU thread ports", dead_ports() == initial_dead_ports);
-    }
     /* The virt board through the bridge: a tiny firmware prints to the PL011 and ends in PSCI or a host stop. */
     {
         static char text[1 << 19];
-        int base = 12, runs = 0;
+        int base = 0, runs = 0;
         struct { const char *name; int how, key, outcome; const char *say; } cases[] = {
             {"off", FW_OFF, 0, HENGE_VM_OUTCOME_SHUTDOWN, "HENGE OFF\n"},
             {"reset", FW_RESET, 0, HENGE_VM_OUTCOME_RESTART, "HENGE RESET\n"},
@@ -236,7 +186,6 @@ int main(void) {
         check("the background policy: silent pauses, sound keeps a plain machine running, acceleration always pauses",
               hv_vm_background_pauses(0, 0) && !hv_vm_background_pauses(0, 1) && hv_vm_background_pauses(1, 0) &&
                   hv_vm_background_pauses(1, 1));
-        check("no board before a boot", henge_vm_board_kind() == -1);
         check("missing firmware file fails", henge_vm_boot_linux("/nonexistent/u-boot.bin", disk, 64, 2, 0, 0, 0, error, sizeof error) != 0 &&
                                                 henge_vm_state() == 0 && henge_vm_can_start() && fds() == initial_fds &&
                                                 threads_settled());
@@ -264,7 +213,6 @@ int main(void) {
                 check("virt boots through the bridge", rc == 0);
                 if (rc) break;
                 runs++;
-                check("virt board kind", henge_vm_board_kind() == HENGE_VM_BOARD_LINUX);
                 check("a second start is refused while running", henge_vm_boot_linux(rom, disk, 64, 2, 0, 0, 0, error, sizeof error) != 0 &&
                                                                   henge_vm_state() == 1);
                 henge_vm_console_write((const uint8_t *)"x", 1); /* nobody reads it; it must not hurt */
@@ -298,13 +246,13 @@ int main(void) {
                 check("console text arrives", strstr(text, cases[i].say) != NULL);
                 if (!strstr(text, cases[i].say)) fprintf(stderr, "virt %s: got \"%s\"\n", cases[i].name, text);
                 check("virt outcome", henge_vm_exit_outcome() == cases[i].outcome);
-                check("virt board kind after stop", henge_vm_board_kind() == -1);
                 check("virt released", hv_vm_virt() == NULL && henge_vm_can_start());
                 check("virt generation", henge_vm_generation() == (uint64_t)base + runs);
                 check("console empty after the drain", henge_vm_console_read((uint8_t *)text, sizeof text) == 0);
                 henge_vm_power_button(); /* no machine: nothing to press */
                 check("virt leaves no descriptors", fds() == initial_fds);
                 check("virt leaves no threads", threads_settled());
+                check("no leaked CPU thread ports", dead_ports() == initial_dead_ports);
                 if (threads() > initial_threads) fprintf(stderr, "  %s #%d: %u threads, started with %u\n", cases[i].name, again, threads(), initial_threads);
             }
         }
@@ -323,14 +271,6 @@ int main(void) {
         check("ring kept the newest byte", total && flood[total - 1] == 1);
         check("flood outcome", henge_vm_exit_outcome() == HENGE_VM_OUTCOME_SHUTDOWN);
         runs++;
-        /* The virtual Mac still boots after Linux and writes nothing to the console. */
-        uint32_t off[] = {0xd2800100, 0xf2b08000, 0xd4000002};
-        write_file(rom, off, sizeof off);
-        check("macOS boots after Linux", henge_vm_boot(rom, disk, aux, 1, 0, 64, 1, error, sizeof error) == 0);
-        for (int w = 0; w < 3000 && henge_vm_state() != 2; w++) usleep(1000);
-        check("mac outcome after Linux", henge_vm_exit_outcome() == HENGE_VM_OUTCOME_SHUTDOWN);
-        check("mac generation after Linux", henge_vm_generation() == (uint64_t)base + runs + 1);
-        check("mac wrote nothing to the console", henge_vm_console_read(flood, sizeof flood) == 0);
     }
     /* Video encode, last: its listener stays for the process, as the shared folder's does. */
     {
@@ -394,7 +334,7 @@ int main(void) {
     atomic_store(&reader_done, 1);
     pthread_join(reader, NULL);
     hv_jit_region_close(&jit);
-    unlink(rom); unlink(disk); unlink(aux); rmdir(dir);
-    printf("VM lifecycle: 12 power cycles and 3 failed boots, then the virt board (4 endings twice, a flood, video encode), %d failures\n", failures);
+    unlink(rom); unlink(disk); rmdir(dir);
+    printf("VM lifecycle: the virt board (4 endings twice, a flood, video encode), %d failures\n", failures);
     return failures != 0;
 }

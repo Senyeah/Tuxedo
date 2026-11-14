@@ -76,7 +76,7 @@ class Run:
 
     def boot(self, name, forwards, extra=(), env=None):
         self.err = os.path.join(self.tmp, f"{name}.stderr")
-        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', self.err, self.args.hengevm, "--board", "virt", "--firmware",
+        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', self.err, self.args.hengevm, "--firmware",
                 self.args.firmware, "--disk", self.disk, "--ram", "2048", "--cpus", str(self.args.cpus)]
         for f in forwards:
             argv += ["--forward", f]

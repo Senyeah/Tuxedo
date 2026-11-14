@@ -299,7 +299,6 @@ struct SessionView: View {
             .onChange(of: display.externalPixels) { externalChanged($0) }
             .onChange(of: ScreenChoiceKey(current)) { _ in screenChoiceChanged() }
             .onChange(of: display.isExternal) {
-                henge_vm_set_pointer_scale($0 ? 1 : 0) // 1:1 on a big screen
                 liftEverything() // the pad's views change: no finger or button stays down
             }
         }
@@ -376,7 +375,6 @@ struct SessionView: View {
             UIApplication.shared.isIdleTimerDisabled = false
             zoomFollowing?.cancel()
             modeTask?.cancel()
-            henge_vm_set_pointer_scale(0)
             console.stop()
             henge_vm_screen_touch_cancel()
             henge_vm_set_touch_mode(0)
@@ -1177,7 +1175,10 @@ struct SessionView: View {
         case .mac:
             henge_vm_set_display_mm(UInt32(macMM.width), UInt32(macMM.height))
             HengeLog.log("session", "screen \(guestScreen.width)x\(guestScreen.height) retina \(mac.isRetina) mm \(macMM.width)x\(macMM.height)")
-            rc = henge_vm_boot(mac.rom.path, mac.disk.path, mac.aux.path, mac.ecid, mac.seed, ram, Int32(cpus), &buffer, buffer.count)
+            error = "macOS machines are no longer supported."
+            FolderSession.shared.end()
+            ForwardSession.shared.end()
+            return
         case .linux:
             HengeLog.log("session", "linux screen \(guestScreen.width)x\(guestScreen.height)\(current.followsPhoneScreen ? " (phone native, scale 2)" : "")\(mac.accel == true ? ", graphics acceleration" : "")\(mac.decodesVideo ? ", video decode" : "")\(mac.encodesVideo ? ", video encode" : "")")
             rc = henge_vm_boot_linux(mac.firmware.path, mac.disk.path, ram, Int32(cpus), mac.accel == true ? 1 : 0,

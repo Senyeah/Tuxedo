@@ -73,7 +73,7 @@ There is no default image host yet, so one of these:
 
 ### What works
 
-The Mac tool (`build/hengevm --board virt`) runs all of this under `make test-linux-*`. The app was run in the iOS Simulator. Nothing in this list has had its iPhone check yet.
+The Mac tool (`build/hengevm`) runs all of this under `make test-linux-*`. The app was run in the iOS Simulator. Nothing in this list has had its iPhone check yet.
 
 - Boot through U-Boot to a login in about 5 to 7 s on the Mac tool at one CPU, restart, power off, and a power key (Shut Down in the app, `SIGTERM` or Ctrl-A p in `hengevm`). In the simulator the console prompt took about 12 s.
 - 1 to 4 CPUs, virtio disk (with discard), network (user-mode NAT, `10.0.2.15`), entropy, USB keyboard and Magic Trackpad 2, sound, and the memory balloon device (off by default and not driven by the app).

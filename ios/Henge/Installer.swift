@@ -207,7 +207,7 @@ final class Installer: NSObject, ObservableObject {
         let h = try FileHandle(forWritingTo: mac.disk)
         try h.truncate(atOffset: UInt64(64) << 30) // sparse: blocks are only used as macOS writes them
         try h.close()
-        guard henge_make_aux(mac.aux.path) == 0 else { throw message("Cannot create the auxiliary storage.") }
+        guard fm.createFile(atPath: mac.aux.path, contents: nil) else { throw message("Cannot create the auxiliary storage.") }
         let info: [String: Any] = ["name": name, "ecid": ecid, "seed": 0, "ramMB": ramMB]
         try JSONSerialization.data(withJSONObject: info).write(to: mac.directory.appendingPathComponent("machine.json"))
         mac.diskBytes = 64 << 30
@@ -218,42 +218,7 @@ final class Installer: NSObject, ObservableObject {
     // MARK: The restore
 
     private func install(_ mac: VirtualMac, ipsw: URL, cpus: Int) async throws {
-        guard JITBootstrap.ready else { throw message("Turn on JIT first: the installer runs the Mac's own restore system, which needs it.") }
-        // The restore needs 2 GB, whatever the Mac is set to use afterwards, and gets at most 4 GB: the restore system
-        // caches the ~15 GB it writes, so it fills all the memory it is given, and 10 GB of a 12 GB iPhone's RAM in use
-        // (it is outside Henge's footprint, so iOS does not stop it) stalls the whole phone two thirds of the way through.
-        var restoring = mac
-        restoring.ramMB = min(max(mac.ramMB, 2048), 4096)
-        let ram = GuestMemory.prepare(restoring)
-        guard ram >= 2048 else { throw message("Installing needs a few more GB of free storage for the Mac's memory.") }
-        setenv("HV_WRITE_CACHE", "0", 1) // the ~15 GB the restore writes goes straight to storage (host/disk.c); this process runs no other Mac
-        let work = mac.directory.appendingPathComponent("restore", isDirectory: true)
-        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-        var buffer = [CChar](repeating: 0, count: 256)
-        let rc = henge_vm_install(mac.rom.path, mac.disk.path, mac.aux.path, mac.ecid, ipsw.path, work.path, ram, Int32(cpus),
-                                  &buffer, buffer.count)
-        if rc != 0 { throw message(String(cString: buffer)) }
-        while true {
-            try await Task.sleep(nanoseconds: 1_000_000_000)
-            step = Int(henge_install_step())
-            stepProgress = henge_install_progress()
-            if step == 100 { break }
-            if step == 101 { throw message("The restore failed. The log (Settings, or Documents/henge.log) says why.") }
-            if henge_vm_state() == 2 && step < 100 {
-                // The restore ends with the machine restarting, and idevicerestore finishes a
-                // little after; a stop with no result after that is a failure.
-                for _ in 0..<90 where henge_install_step() < 100 { try await Task.sleep(nanoseconds: 1_000_000_000) }
-                if henge_install_step() == 100 { break }
-                throw message("The machine stopped during the restore (\(String(cString: henge_vm_exit_reason()))).")
-            }
-        }
-        // In the list before anything else: stopping the restore system can take a while, and if Henge is
-        // stopped meanwhile (the phone locked) a finished Mac must not be left on the disk unlisted.
-        mac.markInstalled()
-        Machines.shared.add(mac)
-        HengeLog.log("install", "\(mac.name): restore finished, added to the Macs")
-        if henge_vm_state() == 1 { henge_vm_stop() }
-        try? FileManager.default.removeItem(at: work)
+        throw message("Installing macOS is no longer supported.") // L4 removes this file
     }
 
     static func stepName(_ step: Int) -> String {

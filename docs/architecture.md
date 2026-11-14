@@ -94,7 +94,7 @@ see what has the keyboard on the Mac.
 
 ## Installing macOS (no Mac needed)
 
-`hengevm --install IPSW` (and the iOS app's Install macOS) install macOS on a
+The iOS app's Install macOS installs macOS on a
 blank machine the way Virtualization.framework's installer does: the boot ROM
 starts in DFU mode (cfg `run_installer`) and shows up as a USB device, and a
 standard restore runs over that link. Apple's signing server personalizes the
@@ -119,7 +119,7 @@ restore OS asks for its keys itself; the host only fetches the URL it names).
 
 Debian runs on a second board, `virt`, which copies QEMU's machine of that name. U-Boot's
 `qemu_arm64` build has that layout compiled in, so a stock U-Boot starts on it with no
-patch. The CPU core is the one macOS uses. `hengevm --board virt` selects the board, and
+patch. The CPU core is the one macOS uses. `hengevm` starts it, and
 the iOS app starts it for a machine of kind `linux`. The tools that build the firmware
 and the images are in [tools/linux](../tools/linux/README.md).
 

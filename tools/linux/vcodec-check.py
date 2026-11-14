@@ -258,8 +258,7 @@ def ffmpeg_case(p, share, tag, src, want, args, cmd_out="/tmp/ff-out.mp4", check
 def boot(args, disk, share, err_log):
     d = args.linux_dir
     partuuid = open(os.path.join(d, "debian-desktop.partuuid")).read().strip()
-    argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err_log, args.hengevm, "--board", "virt",
-            "--kernel", os.path.join(d, "Image"), "--initrd", os.path.join(d, "initrd.img"),
+    argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err_log, args.hengevm, "--kernel", os.path.join(d, "Image"), "--initrd", os.path.join(d, "initrd.img"),
             "--append", f"console=ttyAMA0 root=PARTUUID={partuuid} rw", "--disk", disk, "--ram", str(args.ram),
             "--cpus", str(args.cpus), "--display", "1280x800", "--share", share, "--vcodec"]
     print(f"--   booting {os.path.basename(disk)} (host load average {os.getloadavg()[0]:.1f})")

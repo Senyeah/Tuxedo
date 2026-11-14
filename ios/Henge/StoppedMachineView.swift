@@ -13,7 +13,6 @@ struct StoppedMachineView: View {
         case Int32(HENGE_VM_OUTCOME_SHUTDOWN.rawValue): return .shutdown
         case Int32(HENGE_VM_OUTCOME_RESTART.rawValue): return .restart
         case Int32(HENGE_VM_OUTCOME_HOST_STOP.rawValue): return .hostStop
-        case Int32(HENGE_VM_OUTCOME_PANIC.rawValue): return .panic
         default: return .error
         }
     }

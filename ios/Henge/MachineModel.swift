@@ -227,7 +227,7 @@ enum DiskGrowth {
 }
 
 /// Why a machine stopped (the app maps HengeVmOutcome to this) and what to tell the person.
-enum StopKind { case shutdown, restart, hostStop, panic, error }
+enum StopKind { case shutdown, restart, hostStop, error }
 
 enum StopText {
     static func title(_ kind: StopKind, guest: GuestKind) -> String {
@@ -236,7 +236,6 @@ enum StopText {
         case .shutdown: return "\(name) shut down"
         case .restart: return "\(name) requested a restart"
         case .hostStop: return "\(name) stopped"
-        case .panic: return "\(name) had a kernel panic"
         case .error: return "\(name) stopped unexpectedly"
         }
     }
@@ -247,7 +246,6 @@ enum StopText {
         switch kind {
         case .shutdown, .hostStop: return next
         case .restart: return "The \(noun) is ready to start again."
-        case .panic: return "The kernel stopped with a panic. " + next
         case .error: return "The \(noun) stopped: \(reason). " + next
         }
     }

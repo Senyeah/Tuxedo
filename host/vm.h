@@ -6,12 +6,9 @@
 
 #include "disk.h"
 #include "virt.h"
-#include "vmapple.h"
 
-/* The virtual Mac as a host app drives it: build it from files, run it, feed
-   it input, stop it. The macOS command-line tool and the iOS app both use this;
-   graphics are the host's own business (Mac: hv_pvg_attach before starting). */
-enum { HV_BOARD_VMAPPLE = 0, HV_BOARD_VIRT = 1 };
+/* The virtual machine as a host app drives it: build it from files, run it, feed
+   it input, stop it. The macOS command-line tool and the iOS app both use this. */
 
 /* A folder from the Files app (fs_server.h). The guest's helper mounts it at /media/henge/<name>. */
 typedef struct HvVmFolder {
@@ -20,12 +17,9 @@ typedef struct HvVmFolder {
 } HvVmFolder;
 
 typedef struct HvVmConfig {
-    int board;                /* HV_BOARD_*; 0 is the virtual Mac */
-    const char *rom;          /* vmapple: AVPBooter.vmapple2.bin. virt: u-boot.bin, or NULL (a kernel boot, or no firmware and no tree) */
-    const char *disk, *aux;   /* the root disk and the auxiliary storage (vmapple only); virt: disk may be NULL */
+    const char *rom;          /* u-boot.bin, or NULL (a kernel boot, or no firmware and no tree) */
+    const char *disk;         /* the root disk; may be NULL */
     const char *kernel, *initrd, *cmdline; /* virt direct boot (rom NULL): an arm64 Image; initrd and cmdline may be NULL */
-    uint64_t aux_offset;      /* where the aux image's data starts (16 KB) */
-    uint64_t ecid, seed;      /* the machine identity the disk was installed with */
     uint64_t ram_mb;
     int ncpus;
     int log;                  /* m->log */
@@ -33,7 +27,6 @@ typedef struct HvVmConfig {
     int accel;                /* virt: the virtio GPU draws with virgl (needs a GFX=1 build) */
     int video;                /* with accel: guest video decode through virgl on VideoToolbox (default 0) */
     const struct HvHvcodecOps *codec_ops; /* virt: the hvcodec DMA device with this backend; NULL for none */
-    int installer;            /* boot the ROM in DFU mode with the USB device port (installing macOS) */
     /* virt: the Files folders, at most HV_FS_MAX_FOLDERS, each at its own index (one with no name is left out).
        They replace the folder table (none clears it); with none the board has no virtio-fs device, as before.
        Changes while it runs go to hv_fs_folder_set and the others in fs_server.h. */
@@ -79,7 +72,6 @@ int hv_vm_create(const HvVmConfig *cfg, char *err, size_t errlen);
    JIT memory stays owned by the app and can be attached to the next machine. */
 void hv_vm_destroy(void);
 HvMachine *hv_vm_machine(void);
-HvVmapple *hv_vm_board(void); /* NULL when the board is not vmapple */
 HvVirt *hv_vm_virt(void);     /* NULL unless a virt machine exists */
 const HvBoardDevs *hv_vm_devs(void);
 HvCpu *hv_vm_cpu(int index);
@@ -97,19 +89,6 @@ int hv_vm_display(uint32_t *w, uint32_t *h, double *scale);
 /* The panel's size, for a guest that works out its pixel density from it (vmapple). 0 x 0: the default. */
 void hv_vm_set_display_size_mm(uint32_t width_mm, uint32_t height_mm);
 int hv_vm_ncpus(void);
-
-/* The boot framebuffer iBoot hands the kernel (XNU's boot_args video info):
-   the Apple logo and progress bar while booting or installing, before a GPU
-   driver takes the display. Host pointer to the pixels (32-bit BGRA), or NULL
-   until the kernel has its boot_args. */
-typedef struct HvBootDisplay {
-    const uint8_t *pixels;
-    uint32_t width, height, stride;
-} HvBootDisplay;
-int hv_vm_boot_display(HvBootDisplay *d);
-
-/* Extra device work on CPU 0 each tick (Mac graphics). Set before hv_vm_start. */
-void hv_vm_set_poll(void (*poll)(void));
 
 /* Runs CPU 0 on a new thread (unless the caller runs it: cpu0 = 0), the other
    CPUs and the 1 ms kicker. on_exit is called on CPU 0's thread when the

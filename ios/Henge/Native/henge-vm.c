@@ -18,8 +18,6 @@
 #include "dns_proxy.h"
 #include "vm.h"
 #include "fs_server.h"
-#include "pvg_lite.h"
-#include "install.h"
 #include "vcodec.h"
 
 #include <arpa/inet.h>
@@ -34,7 +32,6 @@ static _Atomic int state;
 static int exit_reason, exit_outcome;
 static pthread_rwlock_t api_lock = PTHREAD_RWLOCK_INITIALIZER;
 static _Atomic uint64_t generation;
-static int installer_session;
 static uint64_t stopped_blocks, stopped_tx, stopped_rx;
 static const char *exit_description(void);
 
@@ -48,27 +45,22 @@ static void on_exit(int reason) {
     case HV_HALT_SHUTDOWN: exit_outcome = HENGE_VM_OUTCOME_SHUTDOWN; break;
     case HV_HALT_RESET: exit_outcome = HENGE_VM_OUTCOME_RESTART; break;
     case HV_HALT_HOST: exit_outcome = HENGE_VM_OUTCOME_HOST_STOP; break;
-    case HV_HALT_PANIC: exit_outcome = HENGE_VM_OUTCOME_PANIC; break;
     }
     stopped_blocks = hv_vm_machine()->stats.blocks;
     stopped_tx = hv_net_tx_frames;
     stopped_rx = hv_net_rx_frames;
-    /* The restore stack owns separate USB workers for the installer session.
-       Normal guest sessions release everything before another boot is allowed. */
-    if (!installer_session) hv_vm_destroy();
+    hv_vm_destroy();
     state = 2;
-    fprintf(stderr, "henge: the machine stopped (%s, halt reason %d); CPU threads ended, disks flushed%s\n",
-            exit_description(), halt, installer_session ? "" : ", machine released");
+    fprintf(stderr, "henge: the machine stopped (%s, halt reason %d); CPU threads ended, disks flushed, machine released\n",
+            exit_description(), halt);
     pthread_rwlock_unlock(&api_lock);
 }
 
 /* Holds api_lock through creation so UI snapshots cannot see a partial board. */
 static int begin_start(char *err, size_t errlen) {
     pthread_rwlock_wrlock(&api_lock);
-    if ((state != 0 && state != 2) || installer_session) {
-        snprintf(err, errlen, "%s", installer_session
-                 ? "The installer is still attached. Quit Henge and open it again before starting a Mac."
-                 : "The previous Mac is still running or finishing its shutdown.");
+    if (state != 0 && state != 2) {
+        snprintf(err, errlen, "The previous machine is still running or finishing its shutdown.");
         pthread_rwlock_unlock(&api_lock);
         return -1;
     }
@@ -77,8 +69,8 @@ static int begin_start(char *err, size_t errlen) {
 }
 
 static int failed_start(void) {
-    if (!installer_session) hv_vm_destroy();
-    state = installer_session ? 2 : 0;
+    hv_vm_destroy();
+    state = 0;
     pthread_rwlock_unlock(&api_lock);
     return -1;
 }
@@ -94,26 +86,6 @@ static int started(char *err, size_t errlen) {
     atomic_fetch_add(&generation, 1);
     pthread_rwlock_unlock(&api_lock);
     return 0;
-}
-
-int henge_vm_boot(const char *rom, const char *disk, const char *aux, uint64_t ecid, uint64_t seed, uint64_t ram_mb,
-                  int cpus, char *err, size_t errlen) {
-    { extern void hv_prof_ios_start(void); hv_prof_ios_start(); }
-    if (begin_start(err, errlen)) return -1;
-    HengeDualMapping *jit = henge_ios_jit_get_mapping();
-    if (!jit || !jit->rw_addr) {
-        snprintf(err, errlen, "Henge has no JIT region. Turn on JIT first.");
-        return failed_start();
-    }
-    HvVmConfig c = {.rom = rom, .disk = disk, .aux = aux, .ecid = ecid, .seed = seed, .ram_mb = ram_mb, .ncpus = cpus, .log = 1,
-                    .jit_rx = jit->rx_addr, .jit_rw = jit->rw_addr, .jit_bytes = jit->size};
-    hv_net_set_vcodec_socket(NULL); /* a Linux machine before it may have had one */
-    hv_net_forward_set(NULL, 0); /* forwards are a Linux machine's */
-    fprintf(stderr, "henge: booting with %d CPUs, %llu MB RAM, a %zu MB JIT region\n", cpus, (unsigned long long)ram_mb,
-            jit->size >> 20);
-    if (hv_vm_create(&c, err, errlen) != 0) return failed_start();
-    if (getenv("HV_STATS")) hv_vm_machine()->stats_interval = atoi(getenv("HV_STATS"));
-    return started(err, errlen);
 }
 
 /* Serial console output: the guest's bytes wait here until the UI drains them. */
@@ -242,7 +214,7 @@ int henge_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb,
         nfolders = i + 1;
         used++;
     }
-    HvVmConfig c = {.board = HV_BOARD_VIRT, .rom = firmware, .disk = disk, .ram_mb = ram_mb, .ncpus = cpus, .log = 1, .accel = accel,
+    HvVmConfig c = {.rom = firmware, .disk = disk, .ram_mb = ram_mb, .ncpus = cpus, .log = 1, .accel = accel,
                     .video = accel && video, .folders = folders, .nfolders = nfolders,
                     .codec_ops = encode ? hv_vcodec_device_ops() : NULL,
                     .jit_rx = jit->rx_addr, .jit_rw = jit->rw_addr, .jit_bytes = jit->size};
@@ -266,64 +238,11 @@ int henge_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb,
     return started(err, errlen);
 }
 
-static volatile int install_step = -1;
-static volatile double install_progress;
-
-static void on_install_progress(int step, double p, void *user) {
-    (void)user;
-    install_step = step;
-    install_progress = p;
-    static int last = -1, lastpct = -1;
-    int pct = (int)(p * 100);
-    if (step != last || pct / 10 != lastpct / 10) {
-        fprintf(stderr, "henge: install step %d %d%%\n", step, pct);
-        last = step, lastpct = pct;
-    }
-}
-
-int henge_vm_install(const char *rom, const char *disk, const char *aux, uint64_t ecid, const char *ipsw,
-                     const char *workdir, uint64_t ram_mb, int cpus, char *err, size_t errlen) {
-    if (begin_start(err, errlen)) return -1;
-    HengeDualMapping *jit = henge_ios_jit_get_mapping();
-    if (!jit || !jit->rw_addr) {
-        snprintf(err, errlen, "Henge has no JIT region. Turn on JIT first.");
-        return failed_start();
-    }
-    HvVmConfig c = {.rom = rom, .disk = disk, .aux = aux, .ecid = ecid, .ram_mb = ram_mb, .ncpus = cpus, .log = 1,
-                    .installer = 1, .no_sound = 1, .jit_rx = jit->rx_addr, .jit_rw = jit->rw_addr, .jit_bytes = jit->size};
-    hv_net_set_vcodec_socket(NULL);
-    hv_net_forward_set(NULL, 0);
-    fprintf(stderr, "henge: installing %s with %d CPUs, %llu MB RAM\n", ipsw, cpus, (unsigned long long)ram_mb);
-    if (hv_vm_create(&c, err, errlen) != 0) return failed_start();
-    install_step = 0;
-    install_progress = 0;
-    installer_session = 1;
-    if (!hv_vm_board() || hv_install_start(hv_vm_board()->vusb, ipsw, workdir, ecid, on_install_progress, NULL) != 0) {
-        snprintf(err, errlen, "The installer could not start.");
-        return failed_start();
-    }
-    return started(err, errlen);
-}
-
-int henge_install_step(void) { return install_step; }
-double henge_install_progress(void) { return install_progress; }
-
-/* VZMacAuxiliaryStorage's new file: a 64-byte header, the rest zero (32 MB + 16 KB). */
-int henge_make_aux(const char *path) {
-    static const unsigned char header[24] = {0xa5, 0xd5, 0xb3, 0xfe, 0x97, 0xad, 0x1d, 0x27, 1, 0, 0, 0, 0, 0, 0, 0,
-                                             1, 0, 0, 0, 0, 0, 0, 0};
-    int fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0600);
-    if (fd < 0) return -1;
-    int ok = write(fd, header, sizeof header) == (ssize_t)sizeof header && ftruncate(fd, 33570816) == 0;
-    close(fd);
-    return ok ? 0 : -1;
-}
-
 int henge_vm_state(void) { return state; }
 uint64_t henge_vm_generation(void) { return atomic_load(&generation); }
 int henge_vm_can_start(void) {
     pthread_rwlock_rdlock(&api_lock);
-    int ready = (state == 0 || state == 2) && !installer_session;
+    int ready = state == 0 || state == 2;
     pthread_rwlock_unlock(&api_lock);
     return ready;
 }
@@ -338,7 +257,6 @@ static const char *exit_description(void) {
     case HENGE_VM_OUTCOME_SHUTDOWN: return "guest shut down";
     case HENGE_VM_OUTCOME_RESTART: return "guest requested a restart";
     case HENGE_VM_OUTCOME_HOST_STOP: return "stopped by host";
-    case HENGE_VM_OUTCOME_PANIC: return "guest panic";
     default: return hv_vm_reason_name(exit_reason);
     }
 }
@@ -427,13 +345,6 @@ void henge_vm_set_background(int on) {
     pthread_rwlock_unlock(&api_lock);
 }
 int henge_vm_paused(void) { return hv_vm_paused(); }
-
-int henge_vm_board_kind(void) {
-    if (!lock_running()) return -1;
-    int kind = hv_vm_board() ? HENGE_VM_BOARD_MAC : hv_vm_virt() ? HENGE_VM_BOARD_LINUX : -1;
-    pthread_rwlock_unlock(&api_lock);
-    return kind;
-}
 
 int henge_vm_forwards_set(const uint16_t *phone_ports, const uint16_t *guest_ports, int n) {
     HvFwdRule rules[HV_FWD_MAX_RULES];
@@ -554,7 +465,6 @@ int henge_vm_take_volume_request(double *level, int *muted) {
 void henge_vm_set_display(uint32_t width, uint32_t height) { hv_vm_set_display_mode(width, height); }
 void henge_vm_set_display_scale(double scale) { hv_vm_set_display_scale(scale); }
 void henge_vm_set_display_mm(uint32_t width_mm, uint32_t height_mm) { hv_vm_set_display_size_mm(width_mm, height_mm); }
-void henge_vm_set_pointer_scale(int scale) { hv_pvg_set_cursor_scale(scale); }
 
 void henge_vm_key(uint16_t code, int down) {
     if (!lock_running()) return;
@@ -636,27 +546,6 @@ uint64_t henge_vm_gpu_frames(void) {
     pthread_rwlock_unlock(&api_lock);
     return result;
 }
-int henge_vm_boot_display(const uint8_t **pixels, int *width, int *height, int *stride) {
-    if (!lock_running()) return -1;
-    HvBootDisplay d;
-    int result = -1;
-    if (hv_vm_boot_display(&d) == 0) {
-        size_t bytes = (size_t)d.stride * d.height;
-        uint8_t *copy = malloc(bytes);
-        if (copy) {
-            memcpy(copy, d.pixels, bytes);
-            *pixels = copy;
-            *width = (int)d.width;
-            *height = (int)d.height;
-            *stride = (int)d.stride;
-            result = 0;
-        }
-    }
-    pthread_rwlock_unlock(&api_lock);
-    return result;
-}
-void henge_vm_free_display(const uint8_t *pixels) { free((void *)pixels); }
-
 #if TARGET_OS_IPHONE
 size_t henge_available_memory(void) { return os_proc_available_memory(); }
 #else

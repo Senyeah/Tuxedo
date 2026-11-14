@@ -6,7 +6,7 @@
 """K2: what the initrd costs at boot (LINUX-PLAN-04, K2 item 3).
 
 Boots Debian's 16 KB kernel from an APFS clone of debian-console.img on QEMU (TCG, no hvf) and on
-hengevm --board virt, by direct kernel boot or through U-Boot, with and without the initrd. Kernel
+hengevm, by direct kernel boot or through U-Boot, with and without the initrd. Kernel
 messages carry timestamps (printk.time=1, no quiet), so the tool reads these marks from the console:
 
   unpack     "Freeing initrd memory": the initramfs is unpacked
@@ -90,7 +90,7 @@ def argv_for(a, machine, boot, initrd_on, disk, files, append):
             return argv + ["-bios", firmware]
         argv += ["-kernel", kernel, "-append", append]
         return argv + (["-initrd", initrd] if initrd_on else [])
-    argv = [a.hengevm, "--board", "virt", "--ram", str(a.ram), "--cpus", str(a.cpus), "--disk", disk]
+    argv = [a.hengevm, "--ram", str(a.ram), "--cpus", str(a.cpus), "--disk", disk]
     if boot == "uboot":
         return argv + ["--firmware", firmware]
     argv += ["--kernel", kernel, "--append", append]

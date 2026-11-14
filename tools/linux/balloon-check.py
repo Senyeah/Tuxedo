@@ -51,8 +51,7 @@ class Vm:
         if a.ram_file:
             env["HV_RAM_FILE"] = os.path.join(os.path.dirname(self.input), "ram")
             env["HV_RAM_NO_LEDGER"] = "1"
-        cmd = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', self.err, a.hengevm, "--board", "virt",
-               "--firmware", a.firmware, "--ram", str(a.ram), "--cpus", str(a.cpus), "--disk", self.disk]
+        cmd = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', self.err, a.hengevm, "--firmware", a.firmware, "--ram", str(a.ram), "--cpus", str(a.cpus), "--disk", self.disk]
         self.p = p = pexpect.spawn(cmd[0], cmd[1:], encoding="utf-8", timeout=60, env=env)
         p.expect(r"\(automatic login\)", timeout=120)
         p.expect(SHELL, timeout=30)

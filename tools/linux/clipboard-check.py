@@ -86,7 +86,7 @@ def one(args):
             raise Fail(f"cannot clone {image}: {r.stderr.strip()}")
         host = Host(inp, err)
         host.line("clip from before the helper started")  # the device's clipboard is set at boot
-        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.hengevm, "--board", "virt", "--kernel", kernel,
+        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.hengevm, "--kernel", kernel,
                 "--initrd", initrd, "--append", append, "--disk", clone, "--ram", "2048",
                 "--cpus", str(args.cpus), "--display", "1280x720", "--share", share]
         env = dict(os.environ, HV_INPUT_FILE=inp)

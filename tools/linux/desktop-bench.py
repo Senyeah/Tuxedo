@@ -3,7 +3,7 @@
 # requires-python = ">=3.9"
 # dependencies = ["pexpect"]
 # ///
-"""G6: desktop timings on hengevm --board virt (not part of make test).
+"""G6: desktop timings on hengevm (not part of make test).
 
 Each run boots a clone of debian-desktop.img (direct kernel boot, 1920x1080 unless --display) and reads
 /run/user/1000/henge-times: guest uptime at tty1 login, labwc up and the terminal's shell start.
@@ -38,7 +38,7 @@ def one(args, d, n):
         r = subprocess.run(["/bin/cp", "-c", image, clone], capture_output=True, text=True)
         if r.returncode:
             raise Fail(f"cannot clone {image}: {r.stderr.strip()}")
-        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.hengevm, "--board", "virt", "--kernel", kernel,
+        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.hengevm, "--kernel", kernel,
                 "--initrd", initrd, "--append", append, "--disk", clone, "--ram", "2048",
                 "--cpus", str(args.cpus), "--display", args.display]
         if args.window:

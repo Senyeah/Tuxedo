@@ -38,8 +38,7 @@ def argv(args, disk):
                 "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-device", "virtio-rng-pci",
                 "-device", "qemu-xhci", "-device", "usb-kbd"]
     # hengevm's stderr goes to a file so it cannot break the console parsing
-    return ["/bin/sh", "-c", 'exec "$@" 2>"$0"', disk + ".stderr", args.hengevm, "--board", "virt",
-            "--firmware", args.firmware, "--ram", "2048", "--cpus", str(args.cpus), "--disk", disk]
+    return ["/bin/sh", "-c", 'exec "$@" 2>"$0"', disk + ".stderr", args.hengevm, "--firmware", args.firmware, "--ram", "2048", "--cpus", str(args.cpus), "--disk", disk]
 
 
 def sh(p, cmd, limit=30):

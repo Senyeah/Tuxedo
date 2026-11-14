@@ -3,8 +3,7 @@
 #include "net_slirp.h"
 #include "vcodec.h"
 #include <time.h>
-/* hengevm: boots the virtual Mac on the macOS host.
-   hengevm --rom AVPBooter.vmapple2.bin --disk disk.img --aux auxiliary.bin --ecid N [--seed N] [--ram MB] [--log N] */
+/* hengevm: boots a Linux guest on the macOS host. See usage() for the flags. */
 #include <CoreFoundation/CoreFoundation.h>
 #include <mach/mach.h>
 #include <pthread.h>
@@ -24,21 +23,14 @@
 #include "dispatch.h"
 #include "exception.h"
 #include "mmu.h"
-#include "pvg.h"
-#include "pvg_lite.h"
 #include "status.h"
 #include "vm.h"
 #include "audio_mac.h"
-#include "install.h"
 #include "virt_window.h"
 #include <ImageIO/ImageIO.h>
 
-/* Set here because the macro below would take the field name. */
-static void set_board_kind(HvVmConfig *c, int kind) { c->board = kind; }
-
 /* The machine lives in vm.c; these name its parts here. */
 #define m (*hv_vm_machine())
-#define board (*hv_vm_board())
 #define cpu (*hv_vm_cpu(0))
 static int ncpus = 3; /* --cpus: 3 boots as fast as 4 on a 2+4-core Mac and leaves room for the window */
 static volatile sig_atomic_t interrupted;
@@ -195,15 +187,6 @@ static void prof_dump(const char *path) {
         fprintf(f, "offsets");
         for (int k = 0; k < 12; k++) fprintf(f, " %llu", (unsigned long long)prof_off[k]);
         fprintf(f, "\n");
-        { /* the kernel's slide, from where its SHA-256 routine is */
-            static const uint8_t sig[] = {0x5f, 0x24, 0x03, 0xd5, 0x03, 0x00, 0x00, 0x90, 0x41, 0x00, 0x00, 0xb5, 0xc0, 0x03, 0x5f, 0xd6, 0x63, 0x00, 0x36, 0x91, 0xe4, 0x43, 0x04, 0xd1, 0xff, 0x43, 0x04, 0xd1, 0x80, 0x28, 0x9f, 0x4c};
-            HvVmapple *bd = hv_vm_board();
-            HvCpu *c0 = hv_vm_cpu(0);
-            HvWalk wv;
-            hv_mmu_walk(c0, c0->vbar_el1, HV_ACC_READ, 1, &wv);
-            uint8_t *at = bd ? memmem(bd->ram, bd->ram_size, sig, sizeof sig) : NULL;
-            if (at && !wv.fsc) fprintf(f, "kslide %llx\n", (unsigned long long)(c0->vbar_el1 + (0x70000000ull + (uint64_t)(at - bd->ram) - wv.pa) - 0xfffffe002b76de80ull));
-        }
         qsort(prof_fn, (size_t)prof_nfn, sizeof prof_fn[0], prof_cmp_fn);
         for (int i = 0; i < prof_nfn && prof_fn[i].n; i++) fprintf(f, "fn %u %s\n", prof_fn[i].n, prof_fn[i].name);
         static ProfBlock sorted[PROF_SLOTS];
@@ -238,49 +221,16 @@ static void prof_dump(const char *path) {
     pthread_mutex_unlock(&prof_mu);
 }
 
-/* Walks the pointer to a spot on the screen, watching where the display says
-   it is, in small steps as a hand makes: macOS accelerates big ones past the target. */
-static void pointer_to(int x, int y) {
-    if (!hv_vm_board()) return;
-    const uint8_t *page = hv_pvg_lite_display_page(board.pvg);
-    for (int i = 0; page && i < 1500; i++) {
-        uint32_t at = *(const volatile uint32_t *)(page + 0xe00);
-        int dx = x - (int)(at & 0xffff), dy = y - (int)(at >> 16);
-        if (abs(dx) < 3 && abs(dy) < 3) break;
-        int sx = dx > 16 ? 16 : dx < -16 ? -16 : dx, sy = dy > 16 ? 16 : dy < -16 ? -16 : dy;
-        hv_virtio_input_send(board.mouse, HV_EV_REL, HV_REL_X, sx);
-        hv_virtio_input_send(board.mouse, HV_EV_REL, HV_REL_Y, sy);
-        hv_virtio_input_send(board.mouse, HV_EV_SYN, 0, 0);
-        usleep(30000);
-    }
-}
-
 static void click_here(void) {
-    if (hv_vm_virt()) {
-        hv_vm_mouse_button(0, 1);
-        usleep(120000);
-        hv_vm_mouse_button(0, 0);
-        return;
-    }
-    if (!hv_vm_board()) return;
-    hv_virtio_input_send(board.mouse, HV_EV_KEY, HV_BTN_LEFT, 1);
-    hv_virtio_input_send(board.mouse, HV_EV_SYN, 0, 0);
+    hv_vm_mouse_button(0, 1);
     usleep(120000);
-    hv_virtio_input_send(board.mouse, HV_EV_KEY, HV_BTN_LEFT, 0);
-    hv_virtio_input_send(board.mouse, HV_EV_SYN, 0, 0);
+    hv_vm_mouse_button(0, 0);
 }
 
 static void key_event(int code, int down) {
-    if (hv_vm_virt()) {
-        hv_virt_machine_lock();
-        hv_vm_key((uint16_t)code, down);
-        hv_virt_machine_unlock();
-        return;
-    }
-    if (!hv_vm_board()) return;
-    hv_xhci_key_linux(board.usb, (uint16_t)code, down);
-    hv_virtio_input_send(board.keyboard, HV_EV_KEY, (uint16_t)code, down);
-    hv_virtio_input_send(board.keyboard, HV_EV_SYN, 0, 0);
+    hv_virt_machine_lock();
+    hv_vm_key((uint16_t)code, down);
+    hv_virt_machine_unlock();
 }
 
 static void key_press(int code, int shift) {
@@ -312,228 +262,6 @@ static void type_text(const char *t) {
                 if (extra[k].c == c) code = extra[k].code, up = extra[k].shift;
         if (code) key_press(code, up);
     }
-}
-
-/* Debugging: HV_CLICKS="seconds:x,y;seconds:x,y" clicks on a timetable, to drive a guest's UI without a window. */
-static void *click_thread(void *unused) {
-    (void)unused;
-    const char *p = getenv("HV_CLICKS");
-    time_t start = time(NULL);
-    while (p && *p) {
-        int when, x, y, n = 0;
-        if (sscanf(p, "%d:%d,%d%n", &when, &x, &y, &n) != 3) break;
-        p += n;
-        if (*p == ';') p++;
-        while (time(NULL) - start < when) sleep(1);
-        pointer_to(x, y);
-        fprintf(stderr, "hengevm: click (%d,%d) at %ld s\n", x, y, (long)(time(NULL) - start));
-        click_here();
-    }
-    return NULL;
-}
-
-uint64_t hook_pages;
-/* The guest kernel's call chain, by frame pointers. */
-static void guest_frames(HvCpu *c) {
-    HvMachine *hm = hv_vm_machine();
-    uint64_t fp = c->x[29];
-    fprintf(stderr, "  frames: lr %llx", (unsigned long long)c->x[30]);
-    for (int i = 0; i < 12 && fp >> 40 == 0xfffffe; i++) {
-        uint64_t rec[2];
-        HvWalk w;
-        hv_mmu_walk(c, fp, HV_ACC_READ, 1, &w);
-        if (w.fsc || hv_phys_read(hm, w.pa, rec, 16)) break;
-        fprintf(stderr, " %llx", (unsigned long long)(rec[1] & 0xfffffffffffffull) | 0xfff0000000000000ull);
-        fp = rec[0];
-    }
-    fprintf(stderr, "; sha at %llx; process table n/a\n", (unsigned long long)c->pc);
-}
-/* SHA-256 compression, to know what the guest's should come to. */
-static void sha_blocks(uint32_t st[8], const uint8_t *d, size_t n) {
-    static const uint32_t K[64] = {0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2};
-#define ROR(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
-    for (; n; n--, d += 64) {
-        uint32_t w[64], a[8];
-        for (int i = 0; i < 16; i++) w[i] = (uint32_t)d[i * 4] << 24 | d[i * 4 + 1] << 16 | d[i * 4 + 2] << 8 | d[i * 4 + 3];
-        for (int i = 16; i < 64; i++) w[i] = w[i - 16] + (ROR(w[i - 15], 7) ^ ROR(w[i - 15], 18) ^ (w[i - 15] >> 3)) + w[i - 7] + (ROR(w[i - 2], 17) ^ ROR(w[i - 2], 19) ^ (w[i - 2] >> 10));
-        memcpy(a, st, sizeof a);
-        for (int i = 0; i < 64; i++) {
-            uint32_t t1 = a[7] + (ROR(a[4], 6) ^ ROR(a[4], 11) ^ ROR(a[4], 25)) + ((a[4] & a[5]) ^ (~a[4] & a[6])) + K[i] + w[i];
-            uint32_t t2 = (ROR(a[0], 2) ^ ROR(a[0], 13) ^ ROR(a[0], 22)) + ((a[0] & a[1]) ^ (a[0] & a[2]) ^ (a[1] & a[2]));
-            a[7] = a[6], a[6] = a[5], a[5] = a[4], a[4] = a[3] + t1, a[3] = a[2], a[2] = a[1], a[1] = a[0], a[0] = t1 + t2;
-        }
-        for (int i = 0; i < 8; i++) st[i] += a[i];
-    }
-#undef ROR
-}
-static void memcmp_hook(HvCpu *c) {
-    if (c->x[2] != 32) return;
-    uint8_t x[32], y[32];
-    HvWalk w1, w2;
-    HvMachine *hm = hv_vm_machine();
-    hv_mmu_walk(c, c->x[0], HV_ACC_READ, 1, &w1);
-    hv_mmu_walk(c, c->x[1], HV_ACC_READ, 1, &w2);
-    if (w1.fsc || w2.fsc || hv_phys_read(hm, w1.pa, x, 32) || hv_phys_read(hm, w2.pa, y, 32)) return;
-    static const uint8_t want[8] = {0x52, 0x24, 0x67, 0x35, 0x8c, 0x28, 0x38, 0x7a};
-    if (memcmp(x, want, 8) && memcmp(y, want, 8)) return;
-    fprintf(stderr, "hengevm: at %ld s ", (long)time(NULL));
-    fprintf(stderr, "hengevm: memcmp 32 bytes, lr %llx:\n  a %llx:", (unsigned long long)c->x[30], (unsigned long long)c->x[0]);
-    for (int i = 0; i < 32; i++) fprintf(stderr, "%02x", x[i]);
-    fprintf(stderr, "\n  b %llx:", (unsigned long long)c->x[1]);
-    for (int i = 0; i < 32; i++) fprintf(stderr, "%02x", y[i]);
-    fprintf(stderr, "\n");
-    guest_frames(c);
-}
-static __thread uint64_t watch_state;
-static __thread uint32_t watch_want[8];
-/* Debugging: "hooksha file": the guest kernel's SHA-256 routine, watched for hashing this 16 KB page. */
-static uint8_t hook_page[0x4000];
-static void sha_hook(HvCpu *c) {
-    static uint64_t calls;
-    extern uint64_t hook_pages;
-    uint64_t pages = hook_pages;
-    calls++;
-    if (watch_state) { /* the call after the page's: its state now is what the page's hash came to */
-        uint32_t st[8];
-        HvWalk wn;
-        hv_mmu_walk(c, watch_state, HV_ACC_READ, 1, &wn);
-        if (!wn.fsc && !hv_phys_read(hv_vm_machine(), wn.pa, st, 32)) {
-            int ok = !memcmp(st, watch_want, 32);
-            fprintf(stderr, "hengevm: sha hook: next call (x0 %s, %llu blocks): state after the page %s: %08x %08x %08x, should be %08x %08x %08x\n", c->x[0] == watch_state ? "same" : "other", (unsigned long long)c->x[1], ok ? "RIGHT" : "WRONG", st[0], st[1], st[2], watch_want[0], watch_want[1], watch_want[2]);
-        }
-        watch_state = 0;
-    }
-    uint64_t blocks = c->x[1], va = c->x[2];
-    if (blocks >= 64) pages = ++hook_pages;
-    if (!blocks || blocks > 256) return;
-    uint64_t bytes = blocks * 64, in = va & 0x3fff;
-    if (in + bytes > 0x4000) return;
-    static __thread uint8_t now[0x4000];
-    HvMachine *hm = hv_vm_machine();
-    HvWalk w;
-    for (uint64_t k = 0; k < bytes;) {
-        uint64_t chunk = 0x1000 - ((va + k) & 0xfff);
-        if (chunk > bytes - k) chunk = bytes - k;
-        hv_mmu_walk(c, va + k, HV_ACC_READ, 1, &w);
-        if (w.fsc || hv_phys_read(hm, w.pa, now + k, (unsigned)chunk)) return;
-        k += chunk;
-    }
-    if (bytes == 0x4000) { /* any 4 KB of it the same as the file's? */
-        char eq[5] = "....";
-        int any = 0;
-        for (int k = 0; k < 4; k++) {
-            static const uint8_t zero4k[0x1000];
-            if (memcmp(hook_page + k * 0x1000, zero4k, 0x1000) && !memcmp(now + k * 0x1000, hook_page + k * 0x1000, 0x1000)) eq[k] = 'S', any = 1;
-        }
-        if (any) {
-            int zeros[4] = {0};
-            for (int k = 0; k < 0x4000; k++) zeros[k >> 12] += now[k] == 0;
-            fprintf(stderr, "hengevm: sha hook: part of the page: %s, zero bytes per 4K %d %d %d %d, va %llx lr %llx\n", eq, zeros[0], zeros[1], zeros[2], zeros[3], (unsigned long long)va, (unsigned long long)c->x[30]);
-            {
-                uint32_t st0[8] = {0};
-                HvWalk ws0;
-                hv_mmu_walk(c, c->x[0], HV_ACC_READ, 1, &ws0);
-                if (!ws0.fsc && !hv_phys_read(hm, ws0.pa, st0, 32)) {
-                    fprintf(stderr, "  state before %08x %08x, cpu %d\n", st0[0], st0[1], c->index);
-                    guest_frames(c);
-                    memcpy(watch_want, st0, 32);
-                    sha_blocks(watch_want, now, 256);
-                    watch_state = c->x[0];
-                    static int switched;
-                    if (getenv("HV_HOOK_SWITCH") && !switched++) { /* the page is about to be compared: from now on watch memcmp instead */
-                        HvMachine *mm = hv_vm_machine();
-                        mm->stop_hook = memcmp_hook;
-                        mm->stop_pc = c->pc - 0x2274914ull; /* bcmp */
-                        mm->flush_pending = 1;
-                    }
-                }
-            }
-            for (int k = 0; k < 4; k++) if (eq[k] != 'S') {
-                fprintf(stderr, "  chunk %d there:", k);
-                for (int j = 0; j < 32; j++) fprintf(stderr, " %02x", now[k * 0x1000 + j]);
-                fprintf(stderr, "\n  chunk %d want: ", k);
-                for (int j = 0; j < 32; j++) fprintf(stderr, " %02x", hook_page[k * 0x1000 + j]);
-                fprintf(stderr, "\n");
-            }
-            return;
-        }
-    }
-    /* Mostly the same as the file at that offset, on what is not zero in the file? */
-    int same = 0, nonzero = 0;
-    for (uint64_t k = 0; k + 16 <= bytes; k += 64) {
-        static const uint8_t zero[16];
-        if (!memcmp(hook_page + in + k, zero, 16)) continue;
-        nonzero++;
-        same += !memcmp(now + k, hook_page + in + k, 16);
-    }
-    if (nonzero < 1 || same * 2 < nonzero) return;
-    int diff = 0, first = -1, last = -1;
-    for (uint64_t k = 0; k < bytes; k++)
-        if (now[k] != hook_page[in + k]) {
-            diff++;
-            if (first < 0) first = (int)k;
-            last = (int)k;
-        }
-    uint8_t h[32];
-    CC_SHA256(now, (CC_LONG)bytes, h);
-    uint32_t st[8] = {0};
-    HvWalk ws;
-    hv_mmu_walk(c, c->x[0], HV_ACC_READ, 1, &ws);
-    if (!ws.fsc) hv_phys_read(hm, ws.pa, st, 32);
-    fprintf(stderr, "hengevm: sha hook: cpu %d, %llu blocks at %llx (pa %llx, in page +%llx), %llu pages so far: %d differ (+%x..+%x); sha256 %02x%02x%02x%02x%02x%02x%02x%02x; state %08x %08x; lr %llx\n",
-            c->index, (unsigned long long)blocks, (unsigned long long)va, (unsigned long long)w.pa, (unsigned long long)in, (unsigned long long)pages, diff, first, last, h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], st[0], st[1], (unsigned long long)c->x[30]);
-    if (diff) {
-        fprintf(stderr, "  there:");
-        for (int k = first & ~31; k < (first & ~31) + 64 && k < (int)bytes; k++) fprintf(stderr, " %02x", now[k]);
-        fprintf(stderr, "\n");
-    }
-}
-
-/* Both at once: remember what each 16 KB hash read; when the compare for the page fails, keep it. */
-static uint64_t both_sha_pc;
-static __thread uint8_t both_data[0x4000];
-static __thread uint64_t both_va, both_pa;
-static __thread int both_have;
-static void both_hook(HvCpu *c) {
-    HvMachine *hm = hv_vm_machine();
-    if (c->pc == both_sha_pc) {
-        if (c->x[1] != 256) return;
-        HvWalk w;
-        both_have = 0;
-        for (int k = 0; k < 4; k++) {
-            hv_mmu_walk(c, c->x[2] + (uint64_t)k * 0x1000, HV_ACC_READ, 1, &w);
-            if (w.fsc || hv_phys_read(hm, w.pa, both_data + k * 0x1000, 0x1000)) return;
-            if (!k) both_pa = w.pa;
-        }
-        both_va = c->x[2];
-        both_have = 1;
-        return;
-    }
-    if (c->x[2] != 32) return;
-    uint8_t x[32], y[32];
-    HvWalk w1, w2;
-    hv_mmu_walk(c, c->x[0], HV_ACC_READ, 1, &w1);
-    hv_mmu_walk(c, c->x[1], HV_ACC_READ, 1, &w2);
-    if (w1.fsc || w2.fsc || hv_phys_read(hm, w1.pa, x, 32) || hv_phys_read(hm, w2.pa, y, 32)) return;
-    static const uint8_t want[8] = {0x52, 0x24, 0x67, 0x35, 0x8c, 0x28, 0x38, 0x7a};
-    if (memcmp(x, want, 8)) return;
-    int same = !memcmp(x, y, 32);
-    fprintf(stderr, "hengevm: compare %s; hash read pa %llx va %llx (have %d); now it holds:\n", same ? "equal" : "DIFFERENT", (unsigned long long)both_pa, (unsigned long long)both_va, both_have);
-    if (!same && both_have) {
-        static uint8_t now[0x4000];
-        int same_now = hv_phys_read(hm, both_pa, now, 0x4000) == 0 && !memcmp(now, both_data, 0x4000);
-        int diff_good = 0, part[4] = {0};
-        for (int k = 0; k < 0x4000; k++) if (both_data[k] != hook_page[k]) diff_good++, part[k >> 12]++;
-        uint8_t h[32];
-        CC_SHA256(both_data, 0x4000, h);
-        fprintf(stderr, "  bytes hashed: %d differ from the file's page (per 4K %d %d %d %d); same as RAM now: %d; sha256 %02x%02x%02x%02x; compare b %02x%02x%02x%02x\n", diff_good, part[0], part[1], part[2], part[3], same_now, h[0], h[1], h[2], h[3], y[0], y[1], y[2], y[3]);
-        const char *out = getenv("HV_HOOK_OUT");
-        if (out) {
-            FILE *f = fopen(out, "wb");
-            if (f) fwrite(both_data, 1, 0x4000, f), fclose(f);
-        }
-    }
-    guest_frames(c);
 }
 
 /* Debugging: HV_INPUT_FILE=path follows a file of lines, for driving a running guest:
@@ -666,7 +394,7 @@ static void folder_line(const char *line) {
     fprintf(stderr, "hengevm: input: %s: want folder add|remove|offline|online|touch|export|discard\n", line);
 }
 
-/* HV_INPUT_FILE lines for the virt board: rel DX DY, rclick, msleep MS, tpframe (ends a touch batch), mode WxH [SCALE] (live display mode), and btn, tp, tpclick as on vmapple.
+/* HV_INPUT_FILE lines for the virt board: rel DX DY, rclick, msleep MS, tpframe (ends a touch batch), mode WxH [SCALE] (live display mode).
    Device status: battery LEVEL unplugged|charging|full|unknown, brightness F, volume F, tz NAME, and status (prints it). HV_STATUS_LOG=1 logs the guest's requests.
    Touchscreen: ts SLOT PHASE X Y, tsframe, tscancel, tsmode 0|1.
    Files folders: folder add NAME PATH ro|cow|rw, folder remove NAME, folder offline NAME, folder online NAME, folders;
@@ -779,14 +507,8 @@ static void *input_thread(void *unused) {
         at = ftell(f);
         line[strcspn(line, "\n")] = 0;
         int x, y;
-        static const char *const mac_only[] = {"press", "release", "kdump ", "hooksha ", "find ", "grep ", "grepall ", "vdump ", "page "};
-        int skip = 0;
-        for (size_t k = 0; !hv_vm_board() && k < sizeof mac_only / sizeof *mac_only; k++)
-            if (!strncmp(line, mac_only[k], strlen(mac_only[k]))) skip = 1;
-        if (skip) fprintf(stderr, "hengevm: input: %s: needs the vmapple board\n", line);
-        else if (hv_vm_virt() && virt_input(line)) {}
-        else if (sscanf(line, "click %d %d", &x, &y) == 2) pointer_to(x, y), click_here();
-        else if (sscanf(line, "move %d %d", &x, &y) == 2) pointer_to(x, y);
+        if (virt_input(line)) {}
+        else if (sscanf(line, "click %d %d", &x, &y) == 2) click_here();
         else if (sscanf(line, "scroll %d %d", &x, &y) == 2) {
             hv_virt_machine_lock();
             if (y) hv_vm_mouse_wheel(y);
@@ -818,30 +540,6 @@ static void *input_thread(void *unused) {
                 fwrite(px, 1, size, bf);
                 fclose(bf);
             }
-        }
-        else if (!strncmp(line, "btn ", 4)) { /* "btn CODE 1|0": any evdev button code on the virtio mouse (testing) */
-            unsigned code = 0;
-            int down = 0;
-            if (sscanf(line + 4, "%i %d", &code, &down) == 2) {
-                hv_virtio_input_send(board.mouse, HV_EV_KEY, (uint16_t)code, down);
-                hv_virtio_input_send(board.mouse, HV_EV_SYN, 0, 0);
-            }
-        }
-        else if (!strncmp(line, "tp ", 3)) { /* "tp ID 0|1|2 X Y": a finger down/move/up on the USB Magic Trackpad 2, sensor units (testing) */
-            int id = 0, phase = 0, px = 0, py = 0;
-            if (sscanf(line + 3, "%d %d %d %d", &id, &phase, &px, &py) == 4) {
-                struct timespec ts;
-                clock_gettime(CLOCK_MONOTONIC, &ts);
-                uint32_t ms = (uint32_t)((uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000);
-                hv_xhci_touch(board.usb, id, phase, px, py, ms);
-                if (phase == 1) hv_xhci_touch_frame(board.usb, ms);
-            }
-        }
-        else if (!strncmp(line, "tpclick ", 8)) /* "tpclick 1|0": the Magic Trackpad 2's own press (testing) */
-            hv_xhci_touch_button(board.usb, atoi(line + 8));
-        else if (!strncmp(line, "press", 5) || !strncmp(line, "release", 7)) {
-            hv_virtio_input_send(board.mouse, HV_EV_KEY, HV_BTN_LEFT, line[0] == 'p');
-            hv_virtio_input_send(board.mouse, HV_EV_SYN, 0, 0);
         }
         else if (!strncmp(line, "clip ", 5)) hv_share_set_clipboard(line + 5);
         else if (!strncmp(line, "getclip", 7)) {
@@ -895,218 +593,7 @@ static void *input_thread(void *unused) {
             if (sscanf(line, "knob %31s %d", name, &x) == 2 && !hv_knob_set(hv_vm_machine(), name, x))
                 fprintf(stderr, "hengevm: no knob %s\n", name);
         }
-        else if (!strncmp(line, "kdump ", 6)) { /* the guest kernel's image, from where its first byte is mapped now */
-            static const uint8_t sig[] = {0x5f, 0x24, 0x03, 0xd5, 0x03, 0x00, 0x00, 0x90, 0x41, 0x00, 0x00, 0xb5, 0xc0, 0x03, 0x5f, 0xd6, 0x63, 0x00, 0x36, 0x91, 0xe4, 0x43, 0x04, 0xd1, 0xff, 0x43, 0x04, 0xd1, 0x80, 0x28, 0x9f, 0x4c};
-            HvVmapple *bd = hv_vm_board();
-            uint8_t *at = memmem(bd->ram, bd->ram_size, sig, sizeof sig);
-            FILE *kf = fopen(line + 6, "wb");
-            if (at && kf) fwrite(at - (0xfffffe002b76de80ull - 0xfffffe0028604000ull), 1, 0x4800000, kf);
-            if (kf) fclose(kf);
-            fprintf(stderr, "hengevm: kernel image written\n");
-        }
-        else if (!strncmp(line, "hooksha ", 8)) {
-            if (hv_vm_machine()->stop_hook) continue;
-            FILE *pf = fopen(line + 8, "rb");
-            size_t got = pf ? fread(hook_page, 1, sizeof hook_page, pf) : 0;
-            if (pf) fclose(pf);
-            static const uint8_t sig[] = {0x5f, 0x24, 0x03, 0xd5, 0x03, 0x00, 0x00, 0x90, 0x41, 0x00, 0x00, 0xb5, 0xc0, 0x03, 0x5f, 0xd6, 0x63, 0x00, 0x36, 0x91, 0xe4, 0x43, 0x04, 0xd1, 0xff, 0x43, 0x04, 0xd1, 0x80, 0x28, 0x9f, 0x4c};
-            HvVmapple *bd = hv_vm_board();
-            HvCpu *c0 = hv_vm_cpu(0);
-            HvWalk wv;
-            hv_mmu_walk(c0, c0->vbar_el1, HV_ACC_READ, 1, &wv);
-            uint8_t *at = memmem(bd->ram, bd->ram_size, sig, sizeof sig);
-            uint64_t pa = at ? 0x70000000ull + (uint64_t)(at - bd->ram) : 0;
-            uint64_t va = c0->vbar_el1 + (pa - wv.pa);
-            HvWalk wc;
-            hv_mmu_walk(c0, va, HV_ACC_EXEC, 1, &wc);
-            fprintf(stderr, "hengevm: sha at pa %llx, va %llx (walks to pa %llx, fsc %u); page file %zu bytes\n", (unsigned long long)pa, (unsigned long long)va, (unsigned long long)wc.pa, (unsigned)wc.fsc, got);
-            if (at && !wc.fsc && wc.pa == pa && got == sizeof hook_page && c0->vbar_el1 >> 40 == 0xfffffe) {
-                HvMachine *hm = hv_vm_machine();
-                if (getenv("HV_HOOK_BOTH")) {
-                    both_sha_pc = va;
-                    hm->stop_hook = both_hook;
-                    hm->stop_pc = va;
-                    hm->stop_pc2 = va - 0x2274914ull;
-                } else {
-                hm->stop_hook = getenv("HV_HOOK_BCMP") ? memcmp_hook : sha_hook;
-                hm->stop_pc = getenv("HV_HOOK_BCMP") ? va - 0x2274914ull : va;
-                }
-                hm->flush_pending = 1;
-            }
-        }
-        else if (!strncmp(line, "find ", 5)) { /* bytes in hex: where in guest RAM, and what is around them */
-            uint8_t want[32];
-            size_t wn = 0;
-            for (const char *h = line + 5; h[0] && h[1] && wn < sizeof want; h += 2) {
-                unsigned v;
-                if (sscanf(h, "%2x", &v) != 1) break;
-                want[wn++] = (uint8_t)v;
-            }
-            HvVmapple *bd = hv_vm_board();
-            int n = 0;
-            for (uint64_t i = 0; wn && i + wn + 64 < bd->ram_size && n < 8; i += 4) {
-                if (memcmp(bd->ram + i, want, wn)) continue;
-                n++;
-                fprintf(stderr, "ram %llx:", (unsigned long long)(0x70000000ull + i));
-                for (int k = 0; k < 96; k++) fprintf(stderr, "%s%02x", k % 32 == 0 ? " " : "", bd->ram[i + k]);
-                fprintf(stderr, "\n");
-            }
-            fprintf(stderr, "hengevm: find: %d places\n", n);
-        }
-        else if (!strncmp(line, "grep ", 5) || !strncmp(line, "grepall ", 8)) { /* lines of text in guest RAM (the kernel's
-                                                                                   log, launchd's); grep stops at 40 */
-            HvVmapple *bd = hv_vm_board();
-            int all = line[4] == 'a';
-            const char *word = line + (all ? 8 : 5);
-            size_t wn = strlen(word);
-            uint64_t hits = 0;
-            for (uint64_t i = 0; i + wn < bd->ram_size && (all || hits < 40); i++) {
-                if (bd->ram[i] != (uint8_t)word[0] || memcmp(bd->ram + i, word, wn)) continue;
-                uint64_t from = i;
-                while (from > 0 && i - from < 200 && bd->ram[from - 1] >= 32 && bd->ram[from - 1] < 127) from--;
-                uint64_t to = i;
-                while (to < bd->ram_size && to - i < 400 && bd->ram[to] >= 32 && bd->ram[to] < 127) to++;
-                fprintf(stderr, "ram %llx: %.*s\n", (unsigned long long)(0x70000000ull + from), (int)(to - from), bd->ram + from);
-                hits++;
-                i = to;
-            }
-            fprintf(stderr, "hengevm: grep: %llu lines\n", (unsigned long long)hits);
-        }
-        else if (!strncmp(line, "vdump ", 6)) { /* "vdump VA LEN FILE": guest memory at a VA as CPU 0 maps it now (EL1), up to 64 KB */
-            unsigned long long va = 0, len = 0;
-            char out[400];
-            if (sscanf(line + 6, "%llx %lli %399s", &va, &len, out) == 3 && len > 0 && len <= 65536) {
-                HvVmapple *bd = hv_vm_board();
-                FILE *vf = fopen(out, "wb");
-                unsigned long long done = 0;
-                while (vf && done < len) {
-                    HvWalk wv;
-                    hv_mmu_walk(hv_vm_cpu(0), va + done, HV_ACC_READ, 1, &wv);
-                    uint64_t off = wv.pa - 0x70000000ull, n = 0x4000 - ((va + done) & 0x3fff);
-                    if (n > len - done) n = len - done;
-                    if (wv.fsc || wv.pa < 0x70000000ull || off + n > bd->ram_size) break;
-                    fwrite(bd->ram + off, 1, n, vf);
-                    done += n;
-                }
-                if (vf) fclose(vf);
-                fprintf(stderr, "hengevm: vdump %llx: %llu bytes\n", va, done);
-            }
-        }
-        else if (!strncmp(line, "page ", 5)) { /* a 16 KB file: is it in guest RAM, and how does the copy there differ? */
-            static uint8_t want[0x4000];
-            FILE *pf = fopen(line + 5, "rb");
-            size_t got = pf ? fread(want, 1, sizeof want, pf) : 0;
-            if (pf) fclose(pf);
-            HvVmapple *bd = hv_vm_board();
-            int found = 0;
-            for (uint64_t at = 0; got == sizeof want && at + 0x4000 <= bd->ram_size; at += 0x4000) {
-                int same = 0;
-                for (int k = 0; k < 16; k++) same += !memcmp(bd->ram + at + k * 0x400, want + k * 0x400, 8);
-                if (same < 2) continue;
-                int diff = 0, first = -1, last = -1;
-                for (int k = 0; k < 0x4000; k++)
-                    if (bd->ram[at + k] != want[k]) {
-                        diff++;
-                        if (first < 0) first = k;
-                        last = k;
-                    }
-                if (diff > 9700) continue; /* a page of zeros differs by about this */
-                fprintf(stderr, "hengevm: page copy at pa %llx: %d bytes differ, from +%x to +%x\n", (unsigned long long)(0x70000000ull + at), diff, first, last);
-                { int part[4] = {0};
-                  for (int k = 0; k < 0x4000; k++) part[k >> 12] += bd->ram[at + k] != want[k];
-                  fprintf(stderr, "  differ per 4K: %d %d %d %d\n", part[0], part[1], part[2], part[3]); }
-                if (diff && first >= 0 && found < 3) {
-                    fprintf(stderr, "  there:");
-                    for (int k = first & ~31; k < (first & ~31) + 64 && k < 0x4000; k++) fprintf(stderr, " %02x", bd->ram[at + k]);
-                    fprintf(stderr, "\n  want: ");
-                    for (int k = first & ~31; k < (first & ~31) + 64 && k < 0x4000; k++) fprintf(stderr, " %02x", want[k]);
-                    fprintf(stderr, "\n");
-                }
-                found++;
-            }
-            fprintf(stderr, "hengevm: %d copies of that page in RAM\n", found);
-        }
         fprintf(stderr, "hengevm: input: %s\n", line);
-    }
-    return NULL;
-}
-
-/* Debugging: HV_WATCH=seconds says what each CPU is at, and how many frames the guest has shown. */
-static void *watch_thread(void *unused) {
-    (void)unused;
-    int secs = atoi(getenv("HV_WATCH"));
-    time_t start = time(NULL);
-    if (!hv_vm_board()) return NULL;
-    {
-        HvVmapple *bd = hv_vm_board();
-        hv_smc_pages = bd->ram_size >> 14;
-        hv_smc_last = calloc(hv_smc_pages, 8);
-        hv_smc_counts = calloc(hv_smc_pages, 4);
-    }
-    for (;;) {
-        sleep((unsigned)(secs > 0 ? secs : 5));
-        const uint8_t *page = hv_pvg_lite_display_page(board.pvg);
-        fprintf(stderr, "hengevm: watch %ld s: swaps %u on %u;", (long)(time(NULL) - start), page ? *(const volatile uint32_t *)(page + 0xf98) : 0, page ? *(const volatile uint32_t *)(page + 0xfb0) : 0);
-        for (int i = 0; i < ncpus; i++) fprintf(stderr, " %llx@%u", (unsigned long long)hv_vm_cpu(i)->pc, hv_vm_cpu(i)->el);
-        { HvMachine *wm = hv_vm_machine(); fprintf(stderr, " | jit %llu MB, flushes %llu, ic %llu, code writes %llu", (unsigned long long)wm->jit.used * 4 >> 20, (unsigned long long)wm->stats.block_flushes, (unsigned long long)wm->stats.flush_ic, (unsigned long long)wm->stats.flush_smc);
-          fprintf(stderr, " (cpu %llu dma %llu), %llu translations, blocks now %u; top:", (unsigned long long)hv_smc_cpu, (unsigned long long)hv_smc_dma, (unsigned long long)wm->stats.translations, (unsigned)wm->nblocks);
-          uint32_t seen = 0; uint64_t distinct = 0; (void)seen;
-          uint64_t best[4] = {0}; uint32_t bestn[4] = {0};
-          for (uint64_t pg = 0; pg < hv_smc_pages; pg++) {
-              uint32_t n = hv_smc_counts[pg];
-              if (n) distinct++;
-              for (int k = 0; k < 4; k++) if (n > bestn[k]) { for (int j = 3; j > k; j--) bestn[j] = bestn[j - 1], best[j] = best[j - 1]; bestn[k] = n, best[k] = pg; break; }
-          }
-          for (int k = 0; k < 4; k++) fprintf(stderr, " %llx*%u(pc %llx)", (unsigned long long)(0x70000000ull + (best[k] << 14)), bestn[k], (unsigned long long)hv_smc_last[best[k]]);
-          fprintf(stderr, " distinct %llu", (unsigned long long)distinct);
-          fprintf(stderr, " sha pages %llu", (unsigned long long)hook_pages);
-          { uint64_t bs[4]; hv_pvg_lite_barrier_stats(board.pvg, bs); fprintf(stderr, " barriers %llu drains %llu retries %llu gaveup %llu", (unsigned long long)bs[0], (unsigned long long)bs[1], (unsigned long long)bs[2], (unsigned long long)bs[3]); }
-        }
-        fprintf(stderr, "\n");
-    }
-    return NULL;
-}
-
-/* Debugging: HV_TYPE_AT=seconds types "abc" then, to check input end to end without a window. */
-static void *type_thread(void *unused) {
-    (void)unused;
-    if (!hv_vm_board()) return NULL;
-    sleep((unsigned)atoi(getenv("HV_TYPE_AT")));
-    for (int i = 0; i < 60; i++) { /* shake it: macOS enlarges the pointer, so new glyphs get sent */
-        hv_virtio_input_send(board.mouse, HV_EV_REL, HV_REL_X, i & 1 ? 120 : -120);
-        hv_virtio_input_send(board.mouse, HV_EV_SYN, 0, 0);
-        usleep(15000);
-    }
-    for (int i = 0; i < 40; i++) { /* the pointer: up and to the left, so it shows */
-        hv_virtio_input_send(board.mouse, HV_EV_REL, HV_REL_X, -10);
-        hv_virtio_input_send(board.mouse, HV_EV_REL, HV_REL_Y, -6);
-        hv_virtio_input_send(board.mouse, HV_EV_SYN, 0, 0);
-        usleep(20000);
-    }
-    if (getenv("HV_TYPE_NO_KEYS")) { /* out into the open, for a screenshot */
-        for (int i = 0; i < 60; i++) {
-            hv_virtio_input_send(board.mouse, HV_EV_REL, HV_REL_X, 12);
-            hv_virtio_input_send(board.mouse, HV_EV_REL, HV_REL_Y, 8);
-            hv_virtio_input_send(board.mouse, HV_EV_SYN, 0, 0);
-            usleep(20000);
-        }
-        return NULL;
-    }
-    static const uint16_t keys[3] = {30, 48, 46}; /* a, b, c */
-    for (int i = 0; i < 3; i++) {
-        hv_xhci_key_linux(board.usb, keys[i], 1);
-        hv_virtio_input_send(board.keyboard, HV_EV_KEY, keys[i], 1);
-        hv_virtio_input_send(board.keyboard, HV_EV_SYN, 0, 0);
-        usleep(100000);
-        hv_xhci_key_linux(board.usb, keys[i], 0);
-        hv_virtio_input_send(board.keyboard, HV_EV_KEY, keys[i], 0);
-        hv_virtio_input_send(board.keyboard, HV_EV_SYN, 0, 0);
-        usleep(700000);
-    }
-    for (int i = 0; i < 10; i++) {
-        sleep(2);
-        fprintf(stderr, "hengevm: typed abc: usb delivered %llu reports, keyboard delivered %llu of 12 events, mouse %llu\n",
-                (unsigned long long)board.usb->delivered, (unsigned long long)board.keyboard->delivered, board.mouse ? (unsigned long long)board.mouse->delivered : 0ull);
     }
     return NULL;
 }
@@ -1324,7 +811,6 @@ static int stop_status(int r, int halted, const char **why) {
     if (quit_req || interrupted) return *why = quit_req ? "quit" : "interrupted", 0;
     if (halted == HV_HALT_SHUTDOWN) return *why = "guest shutdown", 0;
     if (halted == HV_HALT_RESET) return *why = "guest restart", EXIT_RESTART;
-    if (halted == HV_HALT_PANIC) return *why = "guest panic", EXIT_FAULT;
     if (r != HV_EXIT_HALT) return *why = reason_name(r), EXIT_FAULT;
     return *why = "halted", 0;
 }
@@ -1434,83 +920,28 @@ static void *cpu_thread(void *unused) {
         fprintf(stderr, "hengevm: %s %llu bytes at %llx to %s\n", p ? "wrote" : "cannot dump", (unsigned long long)a->dump_len,
                 (unsigned long long)a->dump_pa, a->dump_path);
     }
-    if (getenv("HV_RAM_GREP") && hv_vm_board()) { /* debugging: text lines in guest RAM with any of these words (the kernel's log buffer) */
-        HvVmapple *bd = hv_vm_board();
-        char words[512];
-        snprintf(words, sizeof words, "%s", getenv("HV_RAM_GREP"));
-        const char *w[16];
-        int nw = 0;
-        for (char *t = strtok(words, ","); t && nw < 16; t = strtok(NULL, ",")) w[nw++] = t;
-        FILE *out = fopen(getenv("HV_RAM_GREP_OUT") ? getenv("HV_RAM_GREP_OUT") : "/dev/stderr", "w");
-        uint64_t hits = 0;
-        for (uint64_t i = 0; i < bd->ram_size && out && hits < 20000;) {
-            /* a run of printable bytes ending in a newline or NUL */
-            uint64_t j = i;
-            while (j < bd->ram_size && j - i < 1024 && (bd->ram[j] >= 32 && bd->ram[j] < 127)) j++;
-            if (j - i >= 12) {
-                for (int k = 0; k < nw; k++)
-                    if (memmem(bd->ram + i, j - i, w[k], strlen(w[k]))) {
-                        fprintf(out, "%llx: %.*s\n", (unsigned long long)(0x70000000ull + i), (int)(j - i), bd->ram + i);
-                        hits++;
-                        break;
-                    }
-            }
-            i = j + 1;
-        }
-        if (out) fclose(out);
-        fprintf(stderr, "hengevm: RAM grep: %llu lines\n", (unsigned long long)hits);
-    }
-    if (getenv("HV_BOOT_DISPLAY_DUMP")) { /* debugging: the boot framebuffer, raw BGRA, for the iOS view */
-        HvBootDisplay bd;
-        if (hv_vm_boot_display(&bd) == 0) {
-            FILE *f = fopen(getenv("HV_BOOT_DISPLAY_DUMP"), "wb");
-            if (f) fwrite(bd.pixels, 1, (size_t)bd.stride * bd.height, f), fclose(f);
-            fprintf(stderr, "hengevm: boot display %ux%u stride %u written\n", bd.width, bd.height, bd.stride);
-        } else {
-            fprintf(stderr, "hengevm: no boot display found\n");
-        }
-    }
     hv_vm_flush_disks();
     {
         const char *why;
         int status = stop_status(r, cpu.halted, &why);
-        if (!hv_vm_virt()) status = 0; /* the Mac's exit status has always been 0 */
         finish(why, status);
     }
     return NULL;
 }
 
 static void usage(void) {
-    fprintf(stderr, "usage: hengevm --board virt (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N] [--display WxH] [--gpu-accel [--gpu-video]] [--vcodec | --vcodec-dma] [--screenshot PNG] [--window [--touch]] [--folder NAME=DIR[:ro|cow|rw]]... [--forward HOSTPORT:GUESTPORT]... [--forward-addr IPV4|local]\n"
-                    "       (virt: Ctrl-A x quits, Ctrl-A p and SIGTERM press the power key, Ctrl-A s pauses and resumes, Ctrl-A b is the app's background, SIGTSTP pauses and stops until SIGCONT; exit status 0 shutdown, 3 restart with --no-reboot, 4 panic or engine error)\n");
-    fprintf(stderr, "usage: hengevm [--board vmapple] --rom FILE --disk FILE --aux FILE --ecid N [--seed N] [--ram MB] [--log N] [--trace 1] [--screenshot PNG] [--watch VA] [--stats SECONDS [--profile 1]] [--cpus N] [--window] [--no-pvg] [--no-chain] [--break PC [--break-hits N]] [--dump PA LEN FILE] [--aux-offset BYTES] [--install IPSW]\n");
+    fprintf(stderr, "usage: hengevm (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N] [--display WxH] [--gpu-accel [--gpu-video]] [--vcodec | --vcodec-dma] [--screenshot PNG] [--window [--touch]] [--folder NAME=DIR[:ro|cow|rw]]... [--forward HOSTPORT:GUESTPORT]... [--forward-addr IPV4|local]\n"
+                    "       (Ctrl-A x quits, Ctrl-A p and SIGTERM press the power key, Ctrl-A s pauses and resumes, Ctrl-A b is the app's background, SIGTSTP pauses and stops until SIGCONT; exit status 0 shutdown, 3 restart with --no-reboot, 4 panic or engine error)\n");
     exit(2);
 }
 
-static void install_progress(int step, double p, void *user) {
-    (void)user;
-    static int last_step = -1, last_pct = -1;
-    int pct = (int)(p * 100);
-    if (step == last_step && pct / 5 == last_pct / 5) return;
-    last_step = step, last_pct = pct;
-    if (step == HV_INSTALL_DONE) fprintf(stderr, "hengevm: install: done\n");
-    else if (step == HV_INSTALL_FAILED) fprintf(stderr, "hengevm: install: failed\n");
-    if ((step == HV_INSTALL_DONE || step == HV_INSTALL_FAILED) && getenv("HV_INSTALL_STOP_AT_END")) {
-        sleep(3); /* debugging: stop the machine once the restore has a result (the exit dumps then run) */
-        hv_vm_stop();
-    }
-    else fprintf(stderr, "hengevm: install: step %d %d%%\n", step, pct);
-}
-
 int main(int argc, char **argv) {
-    const char *rom = NULL, *disk_path = NULL, *aux_path = NULL;
-    uint64_t seed = 0, ecid = 0, ram_mb = 0, aux_offset = 16384;
+    const char *disk_path = NULL;
+    uint64_t ram_mb = 0;
     const char *firmware = NULL, *kernel = NULL, *initrd = NULL, *append = NULL, *dump_dtb = NULL;
-    int board_kind = HV_BOARD_VMAPPLE;
-    const char *install_ipsw = NULL;
     const char *share_folder = NULL;
     const char *secrets_dir = NULL, *machine_id = "hengevm";
-    int log = 1, trace = 0, use_pvg = 1, no_chain = 0, gpu_accel = 0, gpu_video = 0, vcodec = 0; /* vcodec 2: and the device */
+    int log = 1, trace = 0, no_chain = 0, gpu_accel = 0, gpu_video = 0, vcodec = 0; /* vcodec 2: and the device */
     const char *screenshot = NULL;
     uint64_t watch = 0, watch_pa = 0;
     int stats = 0, profile = 0, window = 0;
@@ -1530,15 +961,10 @@ int main(int argc, char **argv) {
             continue;
         }
         if (!strcmp(argv[i], "--phone")) {
-            /* Test iOS's setup on the Mac: no graphics framework, split JIT mapping. */
-            use_pvg = 0;
+            /* Test iOS's setup on the Mac: split JIT mapping. */
             setenv("HV_JIT_SPLIT", "1", 1);
             memmove(&argv[i], &argv[i + 1], (size_t)(argc - i - 1) * sizeof *argv);
             argc--, i--;
-            continue;
-        }
-        if (!strcmp(argv[i], "--no-pvg")) {
-            use_pvg = 0;
             continue;
         }
         if (!strcmp(argv[i], "--no-chain")) {
@@ -1566,18 +992,11 @@ int main(int argc, char **argv) {
             continue;
         }
         if (i + 1 >= argc) usage();
-        if (!strcmp(argv[i], "--board")) {
-            i++;
-            if (!strcmp(argv[i], "virt")) board_kind = HV_BOARD_VIRT;
-            else if (!strcmp(argv[i], "vmapple")) board_kind = HV_BOARD_VMAPPLE;
-            else usage();
-        }
-        else if (!strcmp(argv[i], "--firmware")) firmware = argv[++i];
+        if (!strcmp(argv[i], "--firmware")) firmware = argv[++i];
         else if (!strcmp(argv[i], "--kernel")) kernel = argv[++i];
         else if (!strcmp(argv[i], "--initrd")) initrd = argv[++i];
         else if (!strcmp(argv[i], "--append")) append = argv[++i];
         else if (!strcmp(argv[i], "--dump-dtb")) dump_dtb = argv[++i];
-        else if (!strcmp(argv[i], "--rom")) rom = argv[++i];
         else if (!strcmp(argv[i], "--share")) { /* FOLDER: the guest reaches it at http://10.0.2.4/ */
             share_folder = argv[++i];
         }
@@ -1594,15 +1013,12 @@ int main(int argc, char **argv) {
         }
         else if (!strcmp(argv[i], "--forward-addr")) forward_addr = argv[++i]; /* an IPv4 address, or local: as the app */
         else if (!strcmp(argv[i], "--machine-id")) machine_id = argv[++i];
-        else if (!strcmp(argv[i], "--display")) { /* WxH: virt, or vmapple in --phone mode */
+        else if (!strcmp(argv[i], "--display")) { /* WxH */
             unsigned w = 0, h = 0;
             if (sscanf(argv[++i], "%ux%u", &w, &h) == 2 && w && h) hv_vm_set_display_mode(w, h), virt_w = w, virt_h = h;
         }
         else if (!strcmp(argv[i], "--disk")) disk_path = argv[++i];
-        else if (!strcmp(argv[i], "--aux")) aux_path = argv[++i];
-        else if (!strcmp(argv[i], "--ecid")) ecid = strtoull(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--ram")) ram_mb = strtoull(argv[++i], NULL, 0);
-        else if (!strcmp(argv[i], "--seed")) seed = strtoull(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--log")) log = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--trace")) trace = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--screenshot")) screenshot = argv[++i];
@@ -1620,43 +1036,30 @@ int main(int argc, char **argv) {
             dump_len = strtoull(argv[++i], NULL, 0);
             dump_path = argv[++i];
         }
-        else if (!strcmp(argv[i], "--aux-offset")) aux_offset = strtoull(argv[++i], NULL, 0);
-        else if (!strcmp(argv[i], "--install")) install_ipsw = argv[++i];
         else usage();
     }
-    int virt = board_kind == HV_BOARD_VIRT;
-    if (virt) {
+    {
         const char *bad = NULL;
-        if (!firmware && !kernel && !dump_dtb) bad = "--board virt needs --firmware or --kernel";
+        if (!firmware && !kernel && !dump_dtb) bad = "need --firmware or --kernel";
         else if (firmware && kernel) bad = "--firmware and --kernel cannot be used together";
         else if ((initrd || append) && !kernel && !dump_dtb) bad = "--initrd and --append need --kernel";
         else if (dump_dtb && initrd) bad = "--dump-dtb writes no initrd range; leave out --initrd";
-        else if (install_ipsw) bad = "--install is for the vmapple board";
         else if (gpu_accel && dump_dtb) bad = "--gpu-accel makes no device tree";
         if (bad) {
             fprintf(stderr, "hengevm: %s\n", bad);
             usage();
         }
-        use_pvg = 0; /* the virtio GPU is the display; pvg is for vmapple */
         virt_shot_path = screenshot;
-    } else {
-        if (!rom || !disk_path || !aux_path) usage();
-        if (firmware || kernel || initrd || append || dump_dtb || no_reboot || gpu_accel || nfolders || vcodec == 2) {
-            fprintf(stderr, "hengevm: --firmware, --kernel, --initrd, --append, --dump-dtb, --no-reboot, --gpu-accel, --folder and --vcodec-dma need --board virt\n");
-            usage();
-        }
     }
-    if (!ram_mb) ram_mb = virt ? 2048 : 4096;
+    if (!ram_mb) ram_mb = 2048;
     setvbuf(stderr, NULL, _IONBF, 0);
 
-    HvVmConfig vc = {.rom = virt ? (dump_dtb ? NULL : firmware) : rom, .disk = disk_path, .aux = aux_path,
+    HvVmConfig vc = {.rom = dump_dtb ? NULL : firmware, .disk = disk_path,
                      .kernel = dump_dtb ? NULL : kernel, .initrd = dump_dtb ? NULL : initrd, .cmdline = dump_dtb ? NULL : append,
-                     .aux_offset = aux_offset, .ecid = ecid, .seed = seed,
                      .ram_mb = ram_mb, .ncpus = ncpus, .log = log, .no_net = dump_dtb || getenv("HV_NO_NET") != NULL,
-                     .no_sound = dump_dtb != NULL, .installer = install_ipsw != NULL, .accel = gpu_accel,
+                     .no_sound = dump_dtb != NULL, .accel = gpu_accel,
                      .video = gpu_video, .folders = folder_list, .nfolders = nfolders,
                      .codec_ops = vcodec == 2 && !dump_dtb ? hv_vcodec_device_ops() : NULL};
-    set_board_kind(&vc, board_kind);
     if (getenv("HV_JIT_MB")) vc.jit_bytes = (size_t)atoi(getenv("HV_JIT_MB")) << 20; /* debugging: a small region flushes often */
     hv_prof_register = hv_prof_register_thread;
     char err[256];
@@ -1711,37 +1114,15 @@ int main(int argc, char **argv) {
     apply_machine_opts();
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
-    if (virt) {
-        signal(SIGHUP, on_signal);
-        sigterm_as_power_key();
-        sigtstp_as_suspend();
-        hv_vm_console_set_output(console_out, NULL);
-        tty_raw();
-    }
-    if (install_ipsw) {
-        char work[1024];
-        snprintf(work, sizeof work, "%s.restore", disk_path);
-        mkdir(work, 0755);
-        if (hv_install_start(board.vusb, install_ipsw, work, ecid, install_progress, NULL) != 0) {
-            fprintf(stderr, "hengevm: cannot start the installer\n");
-            return 1;
-        }
-        /* usbmuxd installs its own handlers; take SIGINT and SIGTERM back so
-           the machine still stops on them. */
-        usleep(500000);
-        signal(SIGINT, on_signal);
-        signal(SIGTERM, on_signal);
-    }
-    int pvg_on = 0;
-    if (use_pvg && !virt) {
-        if (hv_pvg_attach(&board, screenshot) != 0) fprintf(stderr, "hengevm: ParavirtualizedGraphics device unavailable; graphics stays inert\n");
-        else pvg_on = 1;
-    }
-    if (pvg_on) hv_vm_set_poll(hv_pvg_poll);
+    signal(SIGHUP, on_signal);
+    sigterm_as_power_key();
+    sigtstp_as_suspend();
+    hv_vm_console_set_output(console_out, NULL);
+    tty_raw();
     run_args = (RunArgs){brk, brk_hits, dump_pa, dump_len, dump_path};
     /* The CPU runs on its own thread: the graphics framework needs the main queue. */
     pthread_t t;
-    if (virt && brk == ~0ull && !dump_path) {
+    if (brk == ~0ull && !dump_path) {
         /* hv_vm_start runs CPU 0 and rebuilds the machine on a restart request. */
         if (hv_vm_start(1, virt_exit) != 0) {
             tty_restore();
@@ -1755,13 +1136,9 @@ int main(int argc, char **argv) {
         pthread_attr_init(&attr);
         pthread_attr_setstacksize(&attr, 8u << 20);
         pthread_create(&t, &attr, cpu_thread, NULL);
-        if (virt) pthread_create(&t, NULL, stdin_thread, NULL);
+        pthread_create(&t, NULL, stdin_thread, NULL);
     }
     if (profile) pthread_create(&t, NULL, profile_thread, NULL);
-    if (getenv("HV_CLICKS")) {
-        pthread_t cl;
-        pthread_create(&cl, NULL, click_thread, NULL);
-    }
     if (getenv("HV_PROF_PCS")) prof_pcs = calloc(PROF_PCS, sizeof *prof_pcs);
     if (getenv("HV_PROF_ALL")) {
         pthread_t pr;
@@ -1771,20 +1148,11 @@ int main(int argc, char **argv) {
         pthread_t in;
         pthread_create(&in, NULL, input_thread, NULL);
     }
-    if (getenv("HV_WATCH")) {
-        pthread_t wa;
-        pthread_create(&wa, NULL, watch_thread, NULL);
-    }
-    if (getenv("HV_TYPE_AT")) {
-        pthread_t ty;
-        pthread_create(&ty, NULL, type_thread, NULL);
-    }
-    if (virt && screenshot) {
+    if (screenshot) {
         pthread_t st;
         pthread_create(&st, NULL, virt_shot_thread, NULL);
     }
-    if (window && use_pvg) hv_pvg_window_run();
-    if (window && virt) hv_virt_window_run(virt_w, virt_h);
+    if (window) hv_virt_window_run(virt_w, virt_h);
     CFRunLoopRun();
     return 0;
 }

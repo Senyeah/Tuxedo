@@ -7,7 +7,7 @@
 #include <string.h>
 #include <unistd.h>
 
-/* The console interface on the PL011 of the vmapple board and of the virt board, with CPU 0's tick run by hand. */
+/* The console interface on the virt board's PL011, with CPU 0's tick run by hand. */
 static int failures;
 static void check(const char *what, int ok) {
     if (!ok) { fprintf(stderr, "FAIL: %s\n", what); failures++; }
@@ -25,7 +25,7 @@ static void capture(void *opaque, uint8_t c) {
     if (opaque == &out_count && out_count < (int)sizeof out_bytes) out_bytes[out_count++] = c;
 }
 
-static uint64_t uart_base = VMAPPLE_UART;
+static uint64_t uart_base = VIRT_UART;
 static uint32_t uart_read(uint64_t off) {
     uint32_t v = 0;
     hv_phys_read(hv_vm_machine(), uart_base + off, &v, 4);
@@ -50,10 +50,9 @@ static int drain(const uint8_t *want, int n, int *ticks) {
     return got;
 }
 
-static int board = HV_BOARD_VMAPPLE;
-static int create(const char *rom, const char *disk, const char *aux) {
+static int create(const char *rom, const char *disk) {
     char error[256];
-    HvVmConfig c = {.board = board, .rom = rom, .disk = disk, .aux = board == HV_BOARD_VIRT ? NULL : aux, .ram_mb = 64,
+    HvVmConfig c = {.rom = rom, .disk = disk, .ram_mb = 64,
                     .ncpus = 1, .no_net = 1, .no_sound = 1, .jit_bytes = 8 << 20};
     if (hv_vm_create(&c, error, sizeof error) != 0) {
         fprintf(stderr, "FAIL: create: %s\n", error);
@@ -66,10 +65,10 @@ static int create(const char *rom, const char *disk, const char *aux) {
 static int other_count;
 static void other(void *opaque, uint8_t b) { (void)opaque, (void)b, other_count++; }
 
-static int run_board(const char *name, const char *rom, const char *disk, const char *aux, int *ticks_out) {
+static int run_board(const char *name, const char *rom, const char *disk, int *ticks_out) {
     out_count = 0;
     hv_vm_console_set_output(capture, &out_count);
-    if (create(rom, disk, aux)) return 1;
+    if (create(rom, disk)) return 1;
     uint32_t c = 'h';
     hv_phys_write(hv_vm_machine(), uart_base, &c, 4);
     check("output reaches the callback set before create", out_count == 1 && out_bytes[0] == 'h');
@@ -138,7 +137,7 @@ static int run_board(const char *name, const char *rom, const char *disk, const 
     /* Destroy clears the callback and the queue. */
     hv_vm_console_input(want, 10);
     hv_vm_destroy();
-    if (create(rom, disk, aux)) return 1;
+    if (create(rom, disk)) return 1;
     hv_phys_write(hv_vm_machine(), uart_base, &c, 4);
     check("destroy cleared the output callback", out_count == 1);
     tick();
@@ -154,23 +153,19 @@ static int run_board(const char *name, const char *rom, const char *disk, const 
 
 int main(void) {
     alarm(60);
-    char dir[] = "/tmp/henge-console-XXXXXX", rom[256], disk[256], aux[256];
+    char dir[] = "/tmp/henge-console-XXXXXX", rom[256], disk[256];
     if (!mkdtemp(dir)) return 1;
     snprintf(rom, sizeof rom, "%s/rom", dir);
     snprintf(disk, sizeof disk, "%s/disk", dir);
-    snprintf(aux, sizeof aux, "%s/aux", dir);
     setenv("HV_RAM_NO_LEDGER", "1", 1);
     setenv("HV_NO_SOUND", "1", 1);
     static const uint32_t loop[] = {0x14000000}; /* b . */
     write_file(rom, loop, sizeof loop);
     write_file(disk, NULL, 1 << 20);
-    write_file(aux, NULL, 1 << 20);
 
-    int ticks = 0, bad = run_board("vmapple", rom, disk, aux, &ticks);
-    board = HV_BOARD_VIRT, uart_base = VIRT_UART;
-    if (!bad) bad = run_board("virt", rom, disk, aux, &ticks);
+    int ticks = 0, bad = run_board("virt", rom, disk, &ticks);
 
-    unlink(rom); unlink(disk); unlink(aux); rmdir(dir);
+    unlink(rom); unlink(disk); rmdir(dir);
     printf("Console: %d failures\n", failures);
     return bad || failures != 0;
 }

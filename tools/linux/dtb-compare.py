@@ -102,7 +102,7 @@ def qemu_dtb(path, ncpus, ram_mb):
 
 def henge_dtb(path, ncpus, ram_mb):
     tool = os.path.join(ROOT, "build", "hengevm")
-    cmd = [tool, "--board", "virt", "--dump-dtb", path, "--cpus", str(ncpus), "--ram", str(ram_mb)]
+    cmd = [tool, "--dump-dtb", path, "--cpus", str(ncpus), "--ram", str(ram_mb)]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError("hengevm --dump-dtb failed: " + r.stderr.strip())
@@ -186,12 +186,12 @@ def check_options(tmp):
     """--dump-dtb keeps --append in /chosen and refuses --initrd, which it cannot place."""
     tool = os.path.join(ROOT, "build", "hengevm")
     path, append = os.path.join(tmp, "append.dtb"), "console=ttyAMA0 break=top"
-    r = subprocess.run([tool, "--board", "virt", "--dump-dtb", path, "--append", append], capture_output=True, text=True)
+    r = subprocess.run([tool, "--dump-dtb", path, "--append", append], capture_output=True, text=True)
     dts = subprocess.run(["dtc", "-I", "dtb", "-O", "dts", path], capture_output=True, text=True).stdout if r.returncode == 0 else ""
     errors = []
     if f'bootargs = "{append}";' not in dts:
         errors.append(f"--dump-dtb --append: no bootargs line (exit {r.returncode}: {r.stderr.strip()})")
-    r = subprocess.run([tool, "--board", "virt", "--dump-dtb", path, "--initrd", path], capture_output=True, text=True)
+    r = subprocess.run([tool, "--dump-dtb", path, "--initrd", path], capture_output=True, text=True)
     if r.returncode != 2 or "--initrd" not in r.stderr:
         errors.append(f"--dump-dtb --initrd: exit {r.returncode}, expected a usage error")
     print(f"--dump-dtb options: {'FAIL' if errors else 'ok'}")

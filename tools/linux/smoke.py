@@ -143,13 +143,13 @@ def command(args, kernel, initrd, tmp, append=APPEND, disk=None, firmware=None):
             return argv + ["-append", append]
         # Henge's tree carries the command line; QEMU adds only the initrd range.
         dtb = os.path.join(tmp, "henge.dtb")
-        r = subprocess.run([args.hengevm, "--board", "virt", "--dump-dtb", dtb, "--append", append,
+        r = subprocess.run([args.hengevm, "--dump-dtb", dtb, "--append", append,
                             "--ram", str(args.ram), "--cpus", str(args.cpus)], capture_output=True, text=True)
         if r.returncode != 0:
             raise Fail(f"hengevm --dump-dtb failed: {r.stderr.strip()}")
         return argv + ["-dtb", dtb]
     boot = ["--firmware", firmware] if firmware else ["--kernel", kernel, "--initrd", initrd, "--append", append]
-    argv = [args.hengevm, "--board", "virt"] + boot + ["--ram", str(args.ram), "--cpus", str(args.cpus),
+    argv = [args.hengevm] + boot + ["--ram", str(args.ram), "--cpus", str(args.cpus),
                                                         "--log", str(args.log)]
     if disk:
         argv += ["--disk", disk]

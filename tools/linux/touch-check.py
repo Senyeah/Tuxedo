@@ -5,7 +5,7 @@
 # ///
 """TS3: the virtio touchscreen reaches labwc (make test-linux-touch).
 
-Boots a clone of debian-desktop.img on `hengevm --board virt` at --display 1920x1080 with --share and drives the
+Boots a clone of debian-desktop.img on `hengevm` at --display 1920x1080 with --share and drives the
 touchscreen with ts / tsframe / tscancel lines in HV_INPUT_FILE. In the guest it checks:
 - dmesg names "HengeVM Touchscreen" in PCI slot 9, udev marks it ID_INPUT_TOUCHSCREEN=1, and
   libinput lists it with the capability touch;
@@ -191,7 +191,7 @@ def main():
         r = subprocess.run(["/bin/cp", "-c", image, clone], capture_output=True, text=True)
         if r.returncode:
             raise Fail(f"cannot clone {image}: {r.stderr.strip()}")
-        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.hengevm, "--board", "virt", "--kernel", kernel,
+        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', err, args.hengevm, "--kernel", kernel,
                 "--initrd", initrd, "--append", append, "--disk", clone, "--ram", "2048", "--cpus", str(args.cpus),
                 "--display", "1920x1080", "--share", share]
         p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200),

@@ -143,7 +143,7 @@ def main():
     p = None
     try:
         subprocess.run(["/bin/cp", "-c", image, disk], check=True)
-        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', errfile, args.hengevm, "--board", "virt", "--kernel",
+        argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', errfile, args.hengevm, "--kernel",
                 os.path.join(d, "Image"), "--initrd", os.path.join(d, "initrd.img"), "--append",
                 f"console=ttyAMA0 root=PARTUUID={partuuid} rw", "--disk", disk, "--ram", "3072", "--cpus", str(args.cpus),
                 "--display", "1280x720", "--gpu-accel", "--screenshot", os.path.join(tmp, "shot.png")]
