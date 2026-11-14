@@ -140,19 +140,62 @@ def check():
 
 # Stages: path globs to touch, globs to skip, and a token test.
 def is_ident_caps(t): return "HENGE" in t
-def is_engine_ident(t):
-    return bool(re.search(r"^(henge_vm_|henge_ios_jit_|henge_args|hengevm|libhenge(vm|restore)|epoxy_henge)|HENGE_|^Henge[A-Z]|^henge[A-Z]", t)) \
-        or t in ("hengevm", "hengerestore")
+
+# Stage 4 (docs/rename-tuxedo-plan.md): compile-time and build-time names, no stored state.
+# Read by a guest package script, so the guest packages (Stage 9) own them.
+S4_GUEST_ENV = {"HENGE_CLIPBOARD", "HENGE_VCODEC", "HENGE_HOST", "HENGE_SECRETS_HOST", "HENGE_SECRETS_PORT", "HENGE_WALLET_USER"}
+# File, target, scheme, plist key and device names: Stage 5 (files) and Stage 6 (device names).
+S4_LATER = {"HengeVM", "HengeSim", "HengeBridge", "HengeBuildCommit", "HengeBuildDate", "HengeJITHelper"}
+S4_C_SYMBOL = re.compile(r"^_?henge_(vm_|ios_|brk_|largest_|share_|available_|jit_|self_|page_|prewarm|probe_|qemu_|runtime_|rw_|kernel_|now_|trap_|angle_get_|gl_handle$|dtb$|caps$)")
+S4_TYPE = re.compile(r"^(Henge[A-Z]|henge[A-Z]|isHenge[A-Z])")
+S4_FILE_EXT = re.compile(r"\.(swift|h|c|m|S|appex|entitlements|xcodeproj|js)\b")
+# Whole lines Stage 6 and later own: the DHCP hostname, the machine id default (a stored secrets scope).
+S4_KEEP_LINE = re.compile(r'vhostname = "hengevm"|machine_id = "hengevm"')
+
+
+def is_stage4_token(t):
+    if t in S4_LATER or t in S4_GUEST_ENV:
+        return False
+    return bool(S4_C_SYMBOL.match(t) or S4_TYPE.match(t) or "HENGE_" in t or re.match(r"^HENGEVM_", t)
+                or t in ("hengevm", "libhengevm", "lhengevm", "nhengevm", "epoxy_henge_static_gl", "_epoxy_henge_static_gl"))
+
+
+def stage4_ctx(path, line, s, e, tok):
+    """False to leave this one occurrence alone."""
+    if S4_KEEP_LINE.search(line):
+        return False
+    if tok == "hengevm" and line[e:e + 5] == "-disk":
+        return False  # hengevm-disk: Stage 6
+    if tok[0] in "Hh" and S4_FILE_EXT.match(line, e):
+        return False  # a file name: Stage 5
+    if line[max(0, s - 9):s] == 'domain: "':
+        return False  # NSError domain: Stage 7
+    return True
+
+
+# Thread and queue names that do not start with com.henge.app (no map token matches them).
+S4_LITERALS = [
+    ("host/main.c", '"henge.sigterm"', '"tux.sigterm"'), ("host/main.c", '"henge.suspend"', '"tux.suspend"'),
+    ("host/vm.c", '"henge.background"', '"tux.background"'), ("host/vm.c", '"henge.pointer"', '"tux.pointer"'),
+    ("devices/vgpu_virgl.m", '"henge-virgl"', '"tux-virgl"'),
+    ("ios/Henge/PortForwards.swift", '"henge.forwards"', '"tux.forwards"'),
+    ("ios/Henge/VolumeClicks.swift", '"henge.volume.stream"', '"tux.volume.stream"'),
+    ("ios/Henge/HengeLog.swift", '"com.henge.log.reader"', '"tux.log.reader"'),
+    ("tests/test_vm_lifecycle.c", '"HENGE ', '"TUX '),
+    # The smoke.py flag that args.henge_dtb reads.
+    ("tools/linux/*.py", "henge-dtb", "tux-dtb"), ("tools/linux/README.md", "henge-dtb", "tux-dtb"),
+]
+
 
 STAGES = {
     3: dict(globs=["*.md", "ios/*", "host/*", "core/*", "devices/*", "tests/*", "tools/*", "Makefile", "ci/*", ".github/*"],
             skip=["docs/rename-tuxedo-plan.md", "CHANGELOG.md", "tools/rename*", "*.json", "*.plist", "*.yml", "*.yaml", "*.patch", "*.pbxproj"],
             token=lambda t: t == "Henge", md_prose=True, code_comments=True),
-    4: dict(globs=["ios/*", "host/*", "core/*", "devices/*", "tests/*", "tools/*", "third_party/*", "Makefile", "*.sh"],
+    4: dict(globs=["*"],
             skip=["tools/linux/henge-guest/*", "tools/linux/henge-va/*", "tools/linux/henge-ffmpeg/*",
-                  "tools/linux/henge-codec-dkms/*", "tools/linux/rootfs*", "tools/linux/customize.sh",
-                  "tools/rename*", "*.md", "ios/TrackpadLab/*", "tools/linux/hvcodec/ffmpeg-henge.patch"],
-            token=is_engine_ident, no_phrases=True),
+                  "tools/linux/henge-codec-dkms/*", "tools/linux/rootfs*", "tools/linux/customize*.sh",
+                  "tools/rename*", "tools/linux/hvcodec/ffmpeg-henge.patch", "repo.json", "tools/update-source.py"],
+            token=is_stage4_token, ctx=stage4_ctx, literals=S4_LITERALS, no_phrases=True),
 }
 
 
@@ -190,6 +233,8 @@ def run_stage(n, apply):
                     tok = mm.group(0)
                     if not st["token"](tok):
                         return tok
+                    if st.get("ctx") and not st["ctx"](p, line, mm.start(), mm.end(), tok):
+                        return tok
                     if tok not in m:
                         sys.exit(f"{p}:{i}: token {tok} is not in the map")
                     return m[tok]
@@ -199,6 +244,9 @@ def run_stage(n, apply):
                     new = "".join(x if x.startswith("`") else TOKEN.sub(sub, x) for x in parts)
                 else:
                     new = TOKEN.sub(sub, line)
+            for g, a, b in st.get("literals", []):
+                if fnmatch.fnmatch(p, g) and not keep.line(p, i, line):
+                    new = new.replace(a, b)
             if new != line:
                 changed[p] += 1
             out.append(new)
