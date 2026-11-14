@@ -37,7 +37,7 @@ enum HengeLog {
         UnsafeMutablePointer<UnsafeMutableRawPointer?>.allocate(capacity: 64)
     private static var pipeWriteFD: Int32 = -1
     /// HV_LOG_CONSOLE: a copy of the original stderr, so `devicectl device process launch --console` (and Xcode's
-    /// console) can follow the log live. `colorprobe` (any text) mirrors only lines containing it; `all` mirrors everything.
+    /// console) can follow the log live. A filter such as `perf` (any text) mirrors only lines containing it; `all` mirrors everything.
     private static var consoleFD: Int32 = -1
     private static var consoleFilter: String?
     private static var started = false

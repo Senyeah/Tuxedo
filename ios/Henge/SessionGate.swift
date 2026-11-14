@@ -1,6 +1,6 @@
-/// When a session asks for Face ID, and when a Linux machine's wallet is open. A Linux machine asks at each start
+/// When a session asks for Face ID, and when a machine's wallet is open. A machine asks at each start
 /// (a restart too) and each time the app comes back from the background; the machine stays paused and hidden until
-/// the check passes. A Mac does not ask: it has no wallet.
+/// the check passes.
 /// Pure policy: SessionAuth does the check, SessionView follows the phase and opens KeychainStore with it.
 struct SessionGate: Equatable {
     /// Face ID only, with no passcode fallback, for the session's check (SessionAuth). The owner chose the fallback.
@@ -9,12 +9,10 @@ struct SessionGate: Equatable {
 
     enum Check: Equatable {
         case faceID
-        case none           // a Mac
         case skippedForTest // HENGE_AUTOPILOT: the session opens, the wallet stays locked
 
         /// Only the launch environment skips the check (devicectl launch -e), not a file in Documents.
-        static func `for`(linux: Bool, environment: [String: String]) -> Check {
-            guard linux else { return .none }
+        static func `for`(environment: [String: String]) -> Check {
             return environment["HENGE_AUTOPILOT"] != nil ? .skippedForTest : .faceID
         }
     }

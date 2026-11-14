@@ -19,7 +19,7 @@ struct DisplayRouterTests {
         router.connect(monitor, layer: monitorLayer, role: .external)
         precondition(engineShows(monitorLayer) && router.isExternal)
 
-        // Two monitors (USB-C and AirPlay): the later one shows the Mac. Disconnecting one
+        // Two monitors (USB-C and AirPlay): the later one shows the guest. Disconnecting one
         // monitor's surface leaves the other showing it, not the phone.
         let airPlayLayer = CAMetalLayer(), airPlay = UUID()
         router.connect(airPlay, layer: airPlayLayer, role: .external)
@@ -27,13 +27,13 @@ struct DisplayRouterTests {
         router.disconnect(airPlay)
         precondition(engineShows(monitorLayer) && router.isExternal)
 
-        // The last monitor going gives the Mac back to the phone, and a late repeat changes nothing.
+        // The last monitor going gives the guest back to the phone, and a late repeat changes nothing.
         router.disconnect(monitor)
         precondition(engineShows(phoneLayer) && !router.isExternal)
         router.disconnect(monitor)
         precondition(engineShows(phoneLayer) && !router.isExternal)
 
-        // The external screen's pixels are reported while it shows the Mac, and clear when the phone gets it back.
+        // The external screen's pixels are reported while it shows the guest, and clear when the phone gets it back.
         let tv = CGSize(width: 3840, height: 2160), small = CGSize(width: 1920, height: 1080)
         precondition(router.externalPixels == nil)
         router.connect(monitor, layer: monitorLayer, role: .external, screenPixels: tv)

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Chooses one presentation surface for the running Mac. An external accessory
+/// Chooses one presentation surface for the running guest. An external accessory
 /// cannot keep presenting after its owning session's device surface has gone.
 struct DisplayTargetSelection {
     enum Role { case device, external }

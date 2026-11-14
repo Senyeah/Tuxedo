@@ -105,7 +105,7 @@ struct LinuxInstallView: View {
                 }
                 .padding(.horizontal, 17)
                 .padding(.vertical, 10)
-                if let text = Device.memoryNote(ramGB, guest: .linux) {
+                if let text = Device.memoryNote(ramGB) {
                     Text(text).font(.system(size: 13)).foregroundStyle(Desk.dim)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 17)

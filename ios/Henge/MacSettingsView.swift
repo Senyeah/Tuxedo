@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// One Mac: what it has, and what can be done with it.
+/// One machine: what it has, and what can be done with it.
 struct MacSettingsView: View {
     @ObservedObject private var machines = Machines.shared
     @Environment(\.dismiss) private var dismiss
@@ -36,7 +36,7 @@ struct MacSettingsView: View {
                     }
                     Stepper("Memory", value: Binding(get: { mac.ramMB / 1024 }, set: { mac.ramMB = $0 * 1024; save() }), in: Device.memoryChoices)
                         .font(.system(size: 16))
-                    if let note = Device.memoryNote(mac.ramMB / 1024, guest: mac.guest) {
+                    if let note = Device.memoryNote(mac.ramMB / 1024) {
                         Text(note).font(.system(size: 13)).foregroundStyle(Desk.dim)
                     }
                 }
@@ -56,14 +56,11 @@ struct MacSettingsView: View {
                 .deskCard()
 
                 DeskHeading("Screen")
-                if mac.guest == .linux && !Device.isPad { linuxScreen } else { macScreen }
-                if mac.guest == .mac && !mac.isRetina { sharpText }
-                if mac.guest == .linux {
-                    DeskHeading("Graphics")
-                    graphics
-                }
+                if Device.isPad { padScreen } else { linuxScreen }
+                DeskHeading("Graphics")
+                graphics
 
-                DeskHeading(mac.guest == .linux ? "Disk size" : "Storage")
+                DeskHeading("Disk size")
                 VStack(alignment: .leading, spacing: 11) {
                     HStack {
                         Text("\(usedText) used").font(.system(size: 16))
@@ -71,15 +68,13 @@ struct MacSettingsView: View {
                         Text("of \(sizeText)").font(.system(size: 16)).foregroundStyle(Desk.dim)
                     }
                     DeskBar(fraction: Double(mac.bytesUsed) / Double(max(diskBytes, 1)))
-                    if mac.guest == .linux { growControls }
+                    growControls
                 }
                 .padding(17)
                 .deskCard()
 
-                if mac.guest == .linux {
-                    FoldersSection(machine: mac.id)
-                    ForwardsSection(machine: mac.id)
-                }
+                FoldersSection(machine: mac.id)
+                ForwardsSection(machine: mac.id)
 
                 DeskHeading("Manage")
                 manage
@@ -176,21 +171,18 @@ struct MacSettingsView: View {
         }
     }
 
-    private var macScreenChoice: String {
-        if mac.screenFollowsExternal == true && !mac.isRetina { return "external" }
-        if mac.isRetina { return "retina" }
+    private var padScreenChoice: String {
+        if mac.screenFollowsExternal == true { return "external" }
         if mac.screen.width == Device.performanceScreen.width, mac.screen.height == Device.performanceScreen.height { return "performance" }
         if mac.screen.width == 1920, mac.screen.height == 1080, Device.fittingScreen.height != 1080 { return "wide" }
         return "fit"
     }
 
-    @ViewBuilder private var macScreen: some View {
+    @ViewBuilder private var padScreen: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Picker("Screen", selection: Binding(get: { macScreenChoice }, set: { choice in
-                mac.retina = choice == "retina"
+            Picker("Screen", selection: Binding(get: { padScreenChoice }, set: { choice in
                 mac.screenFollowsExternal = choice == "external" ? true : nil
                 switch choice {
-                case "retina": break
                 case "external": (mac.screenWidth, mac.screenHeight) = (nil, nil)
                 case "performance": (mac.screenWidth, mac.screenHeight) = Device.performanceScreen
                 case "wide": (mac.screenWidth, mac.screenHeight) = (1920, 1080)
@@ -198,24 +190,21 @@ struct MacSettingsView: View {
                 }
                 save()
             })) {
-                if Device.isPad {
-                    if mac.guest == .mac { Text("Retina").tag("retina") }
-                    Text("Performance").tag("performance")
-                }
+                if Device.isPad { Text("Performance").tag("performance") }
                 Text("Fit this \(Device.name)").tag("fit")
                 if Device.fittingScreen.height != 1080 { Text("16:9").tag("wide") }
                 Text("External display").tag("external")
             }
             .pickerStyle(.segmented)
-            Text(macScreenNote).font(.system(size: 13)).foregroundStyle(Desk.dim)
+            Text(padScreenNote).font(.system(size: 13)).foregroundStyle(Desk.dim)
         }
         .padding(17)
         .deskCard()
     }
 
-    private var macScreenNote: String {
-        let later = mac.guest == .mac ? "Changes apply the next time this Mac starts." : "Changes apply the next time this machine starts."
-        if macScreenChoice == "external" {
+    private var padScreenNote: String {
+        let later = "Changes apply the next time this machine starts."
+        if padScreenChoice == "external" {
             let size = mac.lastExternalScreen.map { "\($0.width) × \($0.height) when it was last connected" } ?? "none remembered yet: connect one once"
             return "The external display's size (\(size)). Without it, \(mac.screen.width) × \(mac.screen.height). \(later)"
         }
@@ -245,24 +234,12 @@ struct MacSettingsView: View {
         .deskCard()
     }
 
-    private var sharpText: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Toggle("Sharp text (HiDPI)", isOn: Binding(get: { mac.sharpText ?? false }, set: { mac.sharpText = $0; save() }))
-                .font(.system(size: 16))
-            Text("macOS draws at twice the density, so text is sharp and everything looks half as big. It is on by itself for an external display taller than 1440 pixels until you set it here. Applies the next time this Mac starts.")
-                .font(.system(size: 13)).foregroundStyle(Desk.dim)
-        }
-        .padding(17)
-        .deskCard()
-        .padding(.top, 12)
-    }
-
-    private var diskBytes: Int64 { mac.guest == .linux ? mac.logicalDiskBytes : mac.diskBytes }
+    private var diskBytes: Int64 { mac.logicalDiskBytes }
     private var diskGB: Int { Int((diskBytes + (1 << 30) - 1) >> 30) }
     private var growTarget: Int { max(growToGB, diskGB) }
     // Linux sizes are in GB of 2^30 bytes, like Memory and the grow stepper.
-    private var usedText: String { mac.guest == .linux ? String(format: "%.1f GB", Double(max(mac.bytesUsed, 0)) / Double(1 << 30)) : ByteText.string(UInt64(max(mac.bytesUsed, 0))) }
-    private var sizeText: String { mac.guest == .linux ? "\(diskGB) GB" : ByteText.string(UInt64(max(diskBytes, 0))) }
+    private var usedText: String { String(format: "%.1f GB", Double(max(mac.bytesUsed, 0)) / Double(1 << 30)) }
+    private var sizeText: String { "\(diskGB) GB" }
 
     @ViewBuilder private var growControls: some View {
         Stepper(value: Binding(get: { growTarget }, set: { growToGB = $0 }), in: diskGB...max(diskGB + 1, 512), step: 4) {
@@ -320,7 +297,7 @@ struct MacSettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             divider
-            row("Delete this \(mac.noun)", symbol: nil, tint: Desk.bad) { confirmDelete = true }
+            row("Delete this machine", symbol: nil, tint: Desk.bad) { confirmDelete = true }
         }
         .deskCard()
     }
@@ -341,7 +318,7 @@ struct MacSettingsView: View {
     }
 
     private func save() {
-        if mac.name.isEmpty { mac.name = mac.guest == .linux ? "Linux" : "Mac" }
+        if mac.name.isEmpty { mac.name = "Linux" }
         machines.update(mac)
     }
 }

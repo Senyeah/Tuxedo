@@ -2,7 +2,7 @@ import SwiftUI
 import GameController
 import LocalAuthentication
 
-/// A running Mac. Upright, its screen sits above a trackpad; on its side the screen fills the device
+/// A running machine. Upright, its screen sits above a trackpad; on its side the screen fills the device
 /// and is its own trackpad. Zoomed in, the screen fills the device either way and follows the pointer.
 /// A keyboard, trackpad or mouse attached to an iPad works throughout.
 struct SessionView: View {
@@ -12,7 +12,7 @@ struct SessionView: View {
     init(mac: VirtualMac, close: @escaping () -> Void) {
         self.mac = mac
         self.close = close
-        let check = SessionGate.Check.for(linux: mac.guest == .linux, environment: ProcessInfo.processInfo.environment)
+        let check = SessionGate.Check.for(environment: ProcessInfo.processInfo.environment)
         var gate = SessionGate(check: check)
         if SessionGate.testUnlock(environment: ProcessInfo.processInfo.environment) { gate.unlockForTest() }
         _gate = State(initialValue: gate)
@@ -41,8 +41,6 @@ struct SessionView: View {
     private var cpus: Int { mac.cpuCount(fallback: globalCpus) }
     @AppStorage("henge.matchScreenColors") private var matchScreenColors = true
     @AppStorage("henge.display.brightness") private var screenBrightness = 1.0
-    @AppStorage("henge.cursor.scale") private var cursorScale = Device.isPad ? 1 : 3
-    @AppStorage("henge.cursor.sharp") private var sharpCursor = true
     @AppStorage(HardwareMouse.scrollSpeedKey) private var scrollSpeed = 0.3
 
     @State private var typing = false
@@ -60,29 +58,24 @@ struct SessionView: View {
     // Not observed here: only the pill follows the pad's layout.
     @State private var externalPad = PadSession(ghostKey: "henge.trackpad.ghostShown")
     @State private var panelPad = PadSession()
-    /// Once per install: macOS's moving wallpapers and aerial screen saver are video, decoded by the emulated
-    /// CPUs (a phone ran about 30% faster with a still one).
-    @AppStorage("henge.tips.stillWallpaperShown") private var stillWallpaperTipShown = false
-    @State private var showWallpaperTip = false
     @State private var confirmStop = false
     @State private var shutdownAsked: Date? // Linux: when the power button was pressed
     @State private var shutdownOverdue = false
-    @State private var zoomCentre = CGPoint(x: 0.5, y: 0.5) // where the zoomed view is, 0...1 of the Mac's screen
+    @State private var zoomCentre = CGPoint(x: 0.5, y: 0.5) // where the zoomed view is, 0...1 of the guest's screen
     @State private var map: UIImage?
     @State private var zoomFollowing: Task<Void, Never>?
     @State private var helperRunning = false
     @AppStorage(Sharing.PasteKeys.storageKey) private var pasteKeys = Sharing.PasteKeys.control.rawValue
     @AppStorage(KeyboardFollow.storageKey) private var keyboardFollows = true
     @State private var keyboardFollow = KeyboardFollow()
-    @State private var shown = CGSize(width: 0.5, height: 0.5) // how much of the Mac's screen the zoomed view shows
+    @State private var shown = CGSize(width: 0.5, height: 0.5) // how much of the guest's screen the zoomed view shows
     // Phone Linux follows the screen (R8): windowMode is what this orientation wants, liveMode what the guest was sent.
     @State private var windowMode: GuestMode?
     @State private var liveMode: GuestMode?
     @State private var follower: ModeFollower?
     @State private var modeTask: Task<Void, Never>?
-    // An external screen sets the guest's mode (R7): externalMode is Linux's, macBootMode the size a Mac booted at.
+    // An external screen sets the guest's mode (R7).
     @State private var externalMode: GuestMode?
-    @State private var macBootMode: GuestMode?
     @State private var lastWindow: WindowKey?
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var console = ConsoleModel()
@@ -108,11 +101,11 @@ struct SessionView: View {
 
     /// A fixed Linux size (R9 choices, or an older saved size); nil follows the phone or an external screen.
     private func fixedMode(_ m: VirtualMac) -> GuestMode? {
-        guard m.guest == .linux, !Device.isPad, m.screenWidth != nil else { return nil } // an iPad's saved size has always yielded to a screen
+        guard !Device.isPad, m.screenWidth != nil else { return nil } // an iPad's saved size has always yielded to a screen
         return GuestMode(w: m.screen.width, h: m.screen.height)
     }
 
-    private var consoleShown: Bool { mac.guest == .linux && consoleChoice == .console }
+    private var consoleShown: Bool { consoleChoice == .console }
     /// LINUX-PLAN-12: the picture takes direct touches. Only while the phone shows the picture; the saved choice stays.
     /// Upright on the phone: the picture under the status bar and the home bar, into the corners.
     /// The window's own bottom inset: the home bar, never the keyboard.
@@ -122,7 +115,7 @@ struct SessionView: View {
     private func wholeScreen(landscape: Bool) -> Bool {
         current.wholeScreen == true && current.followsPhoneScreen && !landscape && !display.isExternal
     }
-    private var touchActive: Bool { mac.guest == .linux && current.usesTouch && !consoleShown && !display.isExternal }
+    private var touchActive: Bool { current.usesTouch && !consoleShown && !display.isExternal }
     /// Zoom is off in touch mode, and comes back with the pointer.
     private var zoomShown: Bool { zoomed && !touchActive }
     /// The guest is on a monitor: the phone is all pad, with its keys and the tools at the top.
@@ -130,12 +123,12 @@ struct SessionView: View {
 
     /// The guest's shape now: the phone's own screen for phone Linux, else the machine's fixed size.
     private var layoutAspect: CGFloat {
-        if let m = externalMode ?? macBootMode ?? (current.followsPhoneScreen ? windowMode : nil) { return CGFloat(m.w) / CGFloat(m.h) }
+        if let m = externalMode ?? (current.followsPhoneScreen ? windowMode : nil) { return CGFloat(m.w) / CGFloat(m.h) }
         return current.aspect
     }
     /// The size the guest really has, for the pointer's pixels.
     private var guestScreen: (width: Int, height: Int) {
-        if let m = mac.guest == .linux ? liveMode : macBootMode { return (m.w, m.h) }
+        if let m = liveMode { return (m.w, m.h) }
         return mac.screen
     }
 
@@ -156,7 +149,7 @@ struct SessionView: View {
             ZStack(alignment: .topLeading) {
                 (landscape || zoomShown || layout.native != nil ? Color.black : Desk.page)
                 // One view in every layout: it holds the layer the engine draws into.
-                BootDisplay(display: display, role: .device, guest: mac.guest, console: console,
+                BootDisplay(display: display, role: .device, console: console,
                             showConsole: consoleShown, typing: $typing)
                     .opacity(display.isExternal ? 0 : 1)
                     .frame(width: layout.screen.width, height: layout.screen.height)
@@ -171,7 +164,7 @@ struct SessionView: View {
                     if !consoleShown { // the console takes touches itself
                         if padShown {
                             PadView(touchView: externalPad.surface, buttons: .guest, tuning: TrackpadFeel.tuning(motion: motionFeel),
-                                    value: "\(mac.guest == .linux ? "Linux" : "Mac") is on the external display",
+                                    value: "Linux is on the external display",
                                     hapticLevel: hapticLevel, made: externalPad.attach)
                                 .frame(width: full.width, height: full.height)
                                 .position(x: full.width / 2, y: full.height / 2)
@@ -201,7 +194,7 @@ struct SessionView: View {
                         floatingControls(layout)
                     }
                     if pointerRefused && !showRevealHint {
-                        Label("Make Henge full screen to use the trackpad or mouse as the \(mac.noun)'s", systemImage: "cursorarrow.rays")
+                        Label("Make Henge full screen to use the trackpad or mouse as the machine's", systemImage: "cursorarrow.rays")
                             .font(.system(size: 15, weight: .medium))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 18).padding(.vertical, 12)
@@ -220,18 +213,6 @@ struct SessionView: View {
                             .transition(.opacity)
                             .allowsHitTesting(false)
                     }
-                    if showWallpaperTip && mac.guest == .mac && !showRevealHint && !pointerRefused {
-                        Label("For more speed, give this Mac a still wallpaper and set its screen saver to Never in System Settings.", systemImage: "speedometer")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(.white)
-                            .multilineTextAlignment(.leading)
-                            .frame(maxWidth: min(full.width - 40, 520))
-                            .padding(.horizontal, 18).padding(.vertical, 12)
-                            .deskGlass(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-                            .position(x: full.width / 2, y: insets.top + 56)
-                            .transition(.opacity)
-                            .allowsHitTesting(false)
-                    }
                     if let folderNotice, !showRevealHint, !hidesGuest {
                         Label(folderNotice, systemImage: "folder")
                             .font(.system(size: 15, weight: .medium))
@@ -246,7 +227,7 @@ struct SessionView: View {
                     }
                 }
                 if state == 2 {
-                    StoppedMachineView(kind: mac.guest, outcome: henge_vm_exit_outcome(), reason: String(cString: henge_vm_exit_reason()),
+                    StoppedMachineView(outcome: henge_vm_exit_outcome(), reason: String(cString: henge_vm_exit_reason()),
                                    start: { bootAttempt += 1 }, close: close)
                         .frame(width: min(layout.touch.width - 32, 360))
                         .position(x: layout.touch.midX, y: layout.fillsPhone ? layout.touch.midY : layout.pad.midY)
@@ -254,8 +235,8 @@ struct SessionView: View {
                 if let error { errorCard(error, layout) }
                 if shutdownAsked != nil && state != 2 { shutdownCard(layout) }
                 if hidesGuest { lockCover(layout, full) }
-                KeyboardCatcher(active: $typing, suspended: consoleShown, linux: mac.guest == .linux).frame(width: 0, height: 0)
-                if mac.guest == .linux && state == 1 && !consoleShown && !display.isExternal {
+                KeyboardCatcher(active: $typing, suspended: consoleShown).frame(width: 0, height: 0)
+                if state == 1 && !consoleShown && !display.isExternal {
                     // Plasma keeps the active window above the keyboard (KeyboardPanel)
                     KeyboardPanelProbe(guest: CGSize(width: guestScreen.width, height: guestScreen.height), frame: layout.screen)
                         .frame(width: layout.screen.width, height: layout.screen.height)
@@ -269,7 +250,6 @@ struct SessionView: View {
             .animation(.easeInOut(duration: 0.25), value: typing)
             .animation(.easeInOut(duration: 0.25), value: controlsHidden)
             .animation(.easeInOut(duration: 0.25), value: showRevealHint)
-            .animation(.easeInOut(duration: 0.25), value: showWallpaperTip)
             .animation(.easeInOut(duration: 0.25), value: folderNotice)
             .onChange(of: folders.notice) { text in
                 folderNotice = text
@@ -314,9 +294,7 @@ struct SessionView: View {
         .confirmationDialog("Shut down \(mac.name)?", isPresented: $confirmStop, titleVisibility: .visible) {
             Button("Shut Down", role: .destructive) { finish() }
         } message: {
-            Text(mac.guest == .linux
-                 ? "\(mac.name) is asked to shut down, as if you pressed its power button. It can take a few seconds."
-                 : "This turns the Mac off at once. Anything not saved on it is lost.")
+            Text("\(mac.name) is asked to shut down, as if you pressed its power button. It can take a few seconds.")
         }
         .onChange(of: zoomShown) { on in
             zoomFollowing?.cancel()
@@ -389,9 +367,9 @@ struct SessionView: View {
             FolderSession.shared.end()
             ForwardSession.shared.end()
         }
-        .modifier(ExternalMacDisplayModifier(presentation: MacPresentation(display: display, aspect: layoutAspect, isLinux: mac.guest == .linux)))
+        .modifier(ExternalMacDisplayModifier(presentation: MacPresentation(display: display, aspect: layoutAspect)))
         .task(id: bootAttempt) { await run() }
-        .task { await Sharing.followMacClipboard() }
+        .task { await Sharing.followGuestClipboard() }
         .task(id: bootAttempt) { await followGuestKeyboard() }
         .onChange(of: typing) { if !$0 { keyboardFollow.closed() } }
     }
@@ -465,7 +443,7 @@ struct SessionView: View {
                 toolsY = 0
                 pad = .zero
             } else if landscape, big {
-                // Room to keep the controls off the Mac's menu bar, and the Mac above the on-screen keyboard.
+                // Room to keep the controls off the guest's top bar, and the guest above the on-screen keyboard.
                 let bar: CGFloat = 62
                 let room = typing ? full.height - insets.bottom - insets.top - bar - 8 : full.height
                 // An iPad keeps clear of its side insets; a big iPhone (iPhone Duo) fills edge to edge.
@@ -480,7 +458,7 @@ struct SessionView: View {
                 pad = .zero
                 if y - insets.top >= 54 { barY = insets.top + (y - insets.top) / 2 }
             } else if landscape {
-                // Edge to edge. Phones wider than the Mac fill the height with room to spare beside the
+                // Edge to edge. Phones wider than the guest fill the height with room to spare beside the
                 // Dynamic Island; a squarer phone (iPhone Duo) fills all of it, island and corners included.
                 let height = min(full.height, full.width / aspect)
                 let width = height * aspect
@@ -513,14 +491,12 @@ struct SessionView: View {
                 } else {
                     tool("eye.slash", "Hide controls") { hideControls() }
                     Spacer()
-                    if mac.guest == .linux {
-                        viewSwitch()
-                        Spacer()
-                    }
+                    viewSwitch()
+                    Spacer()
                 }
                 tool("keyboard", "Keyboard") { typing.toggle() }
                 Spacer()
-                if mac.guest == .linux && !consoleShown {
+                if !consoleShown {
                     inputSwitch()
                     Spacer()
                 }
@@ -566,7 +542,7 @@ struct SessionView: View {
         if !controlsHidden {
             PadToolPill(pad: externalPad, tuning: TrackpadFeel.tuning(motion: motionFeel)) {
                 padTool("eye.slash", "Hide controls") { hideControls() }
-                if mac.guest == .linux { padTool("terminal", "Show the console") { switchView() } }
+                padTool("terminal", "Show the console") { switchView() }
                 padTool("keyboard", "Keyboard") { typing.toggle() }
                 pasteTool(keysMenu: Self.roomForKeysMenu(full.width))
                 padTool("info.circle", "Details") { showDetails = true }
@@ -590,14 +566,14 @@ struct SessionView: View {
         HStack(spacing: 0) {
             PasteButton(payloadType: String.self) { texts in
                 if let text = texts.first {
-                    Sharing.paste(text, guest: mac.guest, console: consoleShown, keys: Sharing.PasteKeys(rawValue: pasteKeys) ?? .control)
+                    Sharing.paste(text, console: consoleShown, keys: Sharing.PasteKeys(rawValue: pasteKeys) ?? .control)
                 }
             }
             .labelStyle(.iconOnly)
             .buttonBorderShape(.circle)
             .tint(Desk.raised)
-            .accessibilityHint(mac.guest == .linux ? "Types the copied text into the machine" : "Pastes the copied text into the Mac")
-            if mac.guest == .linux && !consoleShown && keysMenu {
+            .accessibilityHint("Types the copied text into the machine")
+            if !consoleShown && keysMenu {
                 Menu {
                     Picker("Paste with", selection: $pasteKeys) {
                         Text("Ctrl-V").tag(Sharing.PasteKeys.control.rawValue)
@@ -651,7 +627,6 @@ struct SessionView: View {
 
     /// A Linux desktop says when the focused program wants text (henge-keyboard): the keyboard comes and goes with it.
     private func followGuestKeyboard() async {
-        guard mac.guest == .linux else { return }
         KeyboardFrame.start() // before the console can hide the probe
         var seq: UInt = 0
         _ = henge_share_keyboard_wanted(&seq)
@@ -725,16 +700,16 @@ struct SessionView: View {
     @ViewBuilder private func floatingControls(_ layout: Layout) -> some View {
         let landscape = layout.touch.width > layout.touch.height
         let top = layout.insets.top + (landscape ? 8 : 6)
-        let roomy = Self.roomForKeysMenu(layout.touch.width) || mac.guest == .mac || consoleShown
+        let roomy = Self.roomForKeysMenu(layout.touch.width) || consoleShown
         let pill = HStack(spacing: roomy ? 4 : 2) {
             if consoleShown {
                 viewSwitch(tint: .white)
             } else {
                 tool("eye.slash", "Hide controls", tint: .white) { hideControls() }
-                if mac.guest == .linux { viewSwitch(tint: .white) }
+                viewSwitch(tint: .white)
             }
             tool("keyboard", "Keyboard", tint: .white) { typing.toggle() }
-            if mac.guest == .linux && !consoleShown { inputSwitch(tint: .white) }
+            if !consoleShown { inputSwitch(tint: .white) }
             pasteTool(keysMenu: roomy)
             if consoleShown {
                 fitTool(tint: .white)
@@ -818,19 +793,15 @@ struct SessionView: View {
         schedule(pending)
     }
 
-    /// An external screen came or went: Linux follows its size; a Mac only remembers it (its size is fixed at boot).
+    /// An external screen came or went: the guest follows its size, and the machine remembers it.
     private func externalChanged(_ pixels: CGSize?) {
-        if mac.guest == .mac {
-            saveExternalScreen(pixels)
-            return
-        }
+        saveExternalScreen(pixels)
         HengeLog.log("display", "external screen \(pixels.map { "\(Int($0.width))x\(Int($0.height))" } ?? "gone")")
         applyLinuxScreen()
     }
 
-    /// The screen choice changed in settings: Linux takes it at once.
+    /// The screen choice changed in settings: the guest takes it at once.
     private func screenChoiceChanged() {
-        guard mac.guest == .linux else { return }
         if let lastWindow { windowChanged(lastWindow) } // the phone mode may be stale after a fixed size
         applyLinuxScreen()
     }
@@ -916,7 +887,7 @@ struct SessionView: View {
 
     private func errorCard(_ text: String, _ layout: Layout) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(mac.guest == .linux ? "This machine could not start" : "This Mac could not start").font(.system(size: 17, weight: .semibold))
+            Text("This machine could not start").font(.system(size: 17, weight: .semibold))
             Text(text).font(.system(size: 14)).foregroundStyle(Desk.dim)
             Button("Close") { close() }.font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.accentLight)
         }
@@ -952,7 +923,7 @@ struct SessionView: View {
     private var phase: String {
         switch state {
         case 0: return error == nil ? "Starting…" : "Not started"
-        case 1: return userCode ? (mac.guest == .linux ? "Debian is running" : "macOS is running") : "Booting"
+        case 1: return userCode ? "Debian is running" : "Booting"
         case 3: return "Finishing shutdown…"
         default: return "Stopped (\(String(cString: henge_vm_exit_reason())))"
         }
@@ -968,86 +939,39 @@ struct SessionView: View {
                     LabeledContent("Network frames", value: "\(framesOut) out, \(framesIn) in")
                     LabeledContent("Up", value: "\(Int(Date().timeIntervalSince(started))) s")
                 }
-                if mac.guest == .linux { // where to connect is what Details is opened for
-                    Section("Port forwards") { ForwardsDetails(machine: mac.id) }
-                }
+                Section("Port forwards") { ForwardsDetails(machine: mac.id) } // where to connect is what Details is opened for
                 Section("Display") {
                     Toggle("Color matching", isOn: $matchScreenColors)
                     LabeledContent("Brightness", value: "\(Int(screenBrightness * 100))%")
                     Slider(value: $screenBrightness, in: 0.4...1)
-                    Text("Brightness dims only the \(mac.noun)'s screen.")
+                    Text("Brightness dims only the machine's screen.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Pointer") {
-                    Picker("Size", selection: $cursorScale) {
-                        Text("1×").tag(1)
-                        Text("2×").tag(2)
-                        Text("3×").tag(3)
-                    }
-                    .pickerStyle(.segmented)
-                    Toggle("Sharp edges", isOn: $sharpCursor)
                     LabeledContent("Scroll speed", value: String(format: "%.1f×", scrollSpeed))
                     Slider(value: $scrollSpeed, in: 0.1...1.5)
-                    Text("The \(mac.noun) supplies a small pointer image. Enlarging it can look blurry; 1× is the sharpest on an iPad. Scroll speed changes apply immediately.")
+                    Text("Scroll speed changes apply immediately.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Sharing") {
-                    LabeledContent(mac.guest == .linux ? "Clipboard" : "Clipboard and folder", value: helperRunning ? "On" : mac.guest == .linux ? "Not running" : "Not set up")
-                    if mac.guest == .mac && !helperRunning {
-                        Button("Type the Set Up Command") {
-                            showDetails = false
-                            Task {
-                                try? await Task.sleep(nanoseconds: 600_000_000)
-                                await Sharing.typeSetUpCommand()
-                            }
-                        }
+                    LabeledContent("Clipboard", value: helperRunning ? "On" : "Not running")
+                    Picker("Paste with", selection: $pasteKeys) {
+                        Text("Ctrl-V").tag(Sharing.PasteKeys.control.rawValue)
+                        Text("Ctrl-Shift-V (terminals)").tag(Sharing.PasteKeys.controlShift.rawValue)
                     }
-                    if mac.guest == .linux {
-                        Picker("Paste with", selection: $pasteKeys) {
-                            Text("Ctrl-V").tag(Sharing.PasteKeys.control.rawValue)
-                            Text("Ctrl-Shift-V (terminals)").tag(Sharing.PasteKeys.controlShift.rawValue)
-                        }
-                        Text(helperRunning
-                             ? "What you copy in the guest is copied here too, and the paste button pastes from here into the guest. Paste with chooses Ctrl-V or Ctrl-Shift-V, which terminals want. When there is room, the arrow beside the paste button also chooses it."
-                             : "The clipboard helper runs on a Debian desktop. Without it, and on the console, the paste button types the text into the guest.")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    } else {
                     Text(helperRunning
-                         ? "Put files in Files, Henge, Shared to see them in the Henge folder in this Mac's home folder. What you copy on the Mac is copied here too, and the paste button pastes from here into the Mac."
-                         : "Once for each Mac: open Terminal on the Mac, tap this, then press Return. When macOS asks about henge-agent and local networks, choose Allow. It types \(Sharing.setUpCommand) and needs the Mac's keyboard layout to be U.S.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                    }
-                }
-                if mac.guest == .linux {
-                    Section("Folders") {
-                        NavigationLink {
-                            FoldersPage(machine: mac.id)
-                        } label: {
-                            LabeledContent("Folders from Files", value: "\(current.folders?.count ?? 0)")
-                        }
-                        Text("Add, pick again, change the mode, or export and discard a Copy-on-write folder's changes. Changes apply at once.")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    }
-                }
-                if mac.guest == .mac {
-                Section("Lighter macOS") {
-                    Button("Type the Lighter macOS Command") {
-                        showDetails = false
-                        Task {
-                            try? await Task.sleep(nanoseconds: 600_000_000)
-                            await Keys.typeSlowly(Sharing.lightenCommand)
-                        }
-                    }
-                    Button("Type the Undo Command") {
-                        showDetails = false
-                        Task {
-                            try? await Task.sleep(nanoseconds: 600_000_000)
-                            await Keys.typeSlowly(Sharing.unlightenCommand)
-                        }
-                    }
-                    Text("Less drawing for the emulated CPUs: window and Dock animations, desktop widgets, the screen saver and a moving wallpaper go. Open Terminal on the Mac, tap the button and press Return, then log out and back in. Also turn on Reduce Motion and Reduce Transparency in the Mac's System Settings, Accessibility. Undo puts it back, apart from the wallpaper. Needs the Mac's keyboard layout to be U.S.")
+                         ? "What you copy in the guest is copied here too, and the paste button pastes from here into the guest. Paste with chooses Ctrl-V or Ctrl-Shift-V, which terminals want. When there is room, the arrow beside the paste button also chooses it."
+                         : "The clipboard helper runs on a Debian desktop. Without it, and on the console, the paste button types the text into the guest.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
+                Section("Folders") {
+                    NavigationLink {
+                        FoldersPage(machine: mac.id)
+                    } label: {
+                        LabeledContent("Folders from Files", value: "\(current.folders?.count ?? 0)")
+                    }
+                    Text("Add, pick again, change the mode, or export and discard a Copy-on-write folder's changes. Changes apply at once.")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Log") {
                     VStack(alignment: .leading, spacing: 1) {
@@ -1089,14 +1013,11 @@ struct SessionView: View {
         showRevealHint = false
         zoomCentre = CGPoint(x: 0.5, y: 0.5)
         map = nil
-        showWallpaperTip = false
         shutdownAsked = nil
         shutdownOverdue = false
         consoleChoice = current.showsConsole == true ? .console : .screen
-        if mac.guest == .linux {
-            console.reset()
-            console.start()
-        }
+        console.reset()
+        console.start()
         while henge_vm_state() == 3 && !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
@@ -1113,77 +1034,43 @@ struct SessionView: View {
         let ram = GuestMemory.prepare(mac)
         HengeLog.log("session", "available memory \(henge_available_memory() >> 20) MB")
         guard ram >= 1024 else {
-            error = "There is not room for this \(mac.guest == .linux ? "machine" : "Mac")'s memory: it needs a few GB of free storage."
+            error = "There is not room for this machine's memory: it needs a few GB of free storage."
             return
         }
         var buffer = [CChar](repeating: 0, count: 256)
         JITBootstrap.releaseLingeringDebugger()
         Sharing.prepare()
         // After the Face ID check: the folders are private. They stay open while the wallet is locked (decision 6).
-        if mac.guest == .linux { FolderSession.shared.start(current) } else { FolderSession.shared.end() }
-        if mac.guest == .linux { ForwardSession.shared.start(current) } else { ForwardSession.shared.end() }
+        FolderSession.shared.start(current)
+        ForwardSession.shared.start(current)
         KeychainStore.shared.attach(mac)
         KeychainStore.shared.setUnlocked(gate.secretsUnlocked)
-        if mac.guest == .linux { DeviceStatus.shared.start { [display] in !display.isExternal } }
+        DeviceStatus.shared.start { [display] in !display.isExternal }
         EngineTuning.apply()
         let saved = current
-        var macMM: (width: Int, height: Int) = saved.isRetina ? Device.retinaMM : (0, 0)
-        if saved.guest == .linux {
-            var phone = GuestMode(w: saved.screen.width, h: saved.screen.height)
-            if saved.followsPhoneScreen {
-                while windowMode == nil && !Task.isCancelled { try? await Task.sleep(nanoseconds: 50_000_000) }
-                guard !Task.isCancelled, let mode = windowMode else { return }
-                phone = mode
-            }
-            let fixed = fixedMode(saved)
-            let live = fixed == nil ? await bootExternalMode() : nil // a fixed size ignores screens
-            guard !Task.isCancelled else { return }
-            if current.followsPhoneScreen, let latest = windowMode { phone = latest } // rotation during the wait
-            let remembered = saved.lastExternalScreen.map { CGSize(width: $0.width, height: $0.height) }
-            let external = DisplayModePolicy.linuxTarget(fixed: fixed, live: live.map { CGSize(width: $0.w, height: $0.h) },
-                                                         remembered: remembered, wantsExternal: saved.screenFollowsExternal == true)
-            let boot = external ?? phone
-            externalMode = external
-            liveMode = boot
-            follower = ModeFollower(initial: boot, phone: phone, external: external)
-            henge_vm_set_display_scale(guestScale(for: boot))
-            henge_vm_set_display(UInt32(boot.w), UInt32(boot.h))
-        } else {
-            var screen = saved.screen
-            macBootMode = nil // a restart must not keep the last external size
-            var external: GuestMode?
-            // macOS reads its size once, so a screen it ran on before gets a short wait to show up.
-            if saved.lastExternalScreen != nil, saved.screenFollowsExternal == true || saved.screenWidth == nil, !saved.isRetina {
-                external = await bootExternalMode()
-                guard !Task.isCancelled else { return }
-                if let ext = external { screen = (ext.w, ext.h); macBootMode = ext }
-                else if saved.screenFollowsExternal == true, let r = saved.lastExternalScreen { // asked for it, but not connected
-                    let ext = DisplayModePolicy.externalMode(pixels: CGSize(width: r.width, height: r.height))
-                    screen = (ext.w, ext.h)
-                    macBootMode = ext
-                    external = ext
-                }
-            }
-            if !saved.isRetina {
-                let auto = external.map { DisplayModePolicy.guestScale(shortSide: min($0.w, $0.h), isPhone: false) == 2 } ?? false
-                if saved.sharpText ?? auto { macMM = PixelSize(width: screen.width, height: screen.height).denseMM }
-            }
-            henge_vm_set_display(UInt32(screen.width), UInt32(screen.height))
+        var phone = GuestMode(w: saved.screen.width, h: saved.screen.height)
+        if saved.followsPhoneScreen {
+            while windowMode == nil && !Task.isCancelled { try? await Task.sleep(nanoseconds: 50_000_000) }
+            guard !Task.isCancelled, let mode = windowMode else { return }
+            phone = mode
         }
+        let fixed = fixedMode(saved)
+        let live = fixed == nil ? await bootExternalMode() : nil // a fixed size ignores screens
+        guard !Task.isCancelled else { return }
+        if current.followsPhoneScreen, let latest = windowMode { phone = latest } // rotation during the wait
+        let remembered = saved.lastExternalScreen.map { CGSize(width: $0.width, height: $0.height) }
+        let external = DisplayModePolicy.linuxTarget(fixed: fixed, live: live.map { CGSize(width: $0.w, height: $0.h) },
+                                                 remembered: remembered, wantsExternal: saved.screenFollowsExternal == true)
+        let boot = external ?? phone
+        externalMode = external
+        liveMode = boot
+        follower = ModeFollower(initial: boot, phone: phone, external: external)
+        henge_vm_set_display_scale(guestScale(for: boot))
+        henge_vm_set_display(UInt32(boot.w), UInt32(boot.h))
         let rc: Int32
-        switch mac.guest {
-        case .mac:
-            henge_vm_set_display_mm(UInt32(macMM.width), UInt32(macMM.height))
-            HengeLog.log("session", "screen \(guestScreen.width)x\(guestScreen.height) retina \(mac.isRetina) mm \(macMM.width)x\(macMM.height)")
-            error = "macOS machines are no longer supported."
-            FolderSession.shared.end()
-            ForwardSession.shared.end()
-            return
-        case .linux:
-            HengeLog.log("session", "linux screen \(guestScreen.width)x\(guestScreen.height)\(current.followsPhoneScreen ? " (phone native, scale 2)" : "")\(mac.accel == true ? ", graphics acceleration" : "")\(mac.decodesVideo ? ", video decode" : "")\(mac.encodesVideo ? ", video encode" : "")")
-            rc = henge_vm_boot_linux(mac.firmware.path, mac.disk.path, ram, Int32(cpus), mac.accel == true ? 1 : 0,
-                                     mac.decodesVideo ? 1 : 0, mac.encodesVideo ? 1 : 0, &buffer, buffer.count)
-        }
+        HengeLog.log("session", "linux screen \(guestScreen.width)x\(guestScreen.height)\(current.followsPhoneScreen ? " (phone native, scale 2)" : "")\(mac.accel == true ? ", graphics acceleration" : "")\(mac.decodesVideo ? ", video decode" : "")\(mac.encodesVideo ? ", video encode" : "")")
+        rc = henge_vm_boot_linux(mac.firmware.path, mac.disk.path, ram, Int32(cpus), mac.accel == true ? 1 : 0,
+                                mac.decodesVideo ? 1 : 0, mac.encodesVideo ? 1 : 0, &buffer, buffer.count)
         if rc != 0 {
             error = String(cString: buffer)
             FolderSession.shared.end()
@@ -1253,11 +1140,6 @@ struct SessionView: View {
                 lastGPUFrames = gpuFrames
                 JITBootstrap.releaseLingeringDebugger()
             }
-            if tick == 60 && mac.guest == .mac && !stillWallpaperTipShown { // about when the desktop is up after a login
-                stillWallpaperTipShown = true
-                showWallpaperTip = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 10) { showWallpaperTip = false }
-            }
             if tick % 30 == 0 { HengeLog.logFootprint("session") } // how close to the limit, for a memory kill leaves no crash report
             if tick % 60 == 0 { MacPreview.save(for: mac) }
             try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -1268,8 +1150,7 @@ struct SessionView: View {
         if state == 1 { confirmStop = true } else { close() }
     }
 
-    /// Linux pauses while the app is away, so iOS freezing it does not jump the guest's clock (RCU stalls).
-    /// A Mac keeps running as before: the pause is not checked with macOS yet (T4).
+    /// The machine pauses while the app is away, so iOS freezing it does not jump the guest's clock (RCU stalls).
     /// A machine with graphics acceleration always pauses, even while it plays sound: iOS allows no Metal work in the background.
     /// Every machine locks in the background and asks for Face ID when the app comes back (SessionGate).
     private func setBackground(_ away: Bool) {
@@ -1281,7 +1162,6 @@ struct SessionView: View {
         } else if gate.covered {
             return
         }
-        guard mac.guest == .linux else { return }
         let was = henge_vm_paused() != 0
         henge_vm_set_background(away ? 1 : 0) // sound keeps only a machine without acceleration running; it pauses when the sound stops
         let now = henge_vm_paused() != 0
@@ -1299,7 +1179,7 @@ struct SessionView: View {
         switch gate.ask() {
         case .nothing:
             return
-        case .opened: // a Mac, or HENGE_AUTOPILOT
+        case .opened: // HENGE_AUTOPILOT
             if gate.check == .skippedForTest {
                 HengeLog.log("session", "face id: skipped (HENGE_AUTOPILOT); wallet \(gate.secretsUnlocked ? "unlocked by the test" : "locked")")
             }
@@ -1357,13 +1237,10 @@ struct SessionView: View {
     private func finish() {
         if state == 1 {
             MacPreview.saveNow(for: mac)
-            if mac.guest == .linux {
-                henge_vm_power_button()
-                shutdownAsked = Date()
-                shutdownOverdue = false
-                return // the run loop closes the view when the guest is off
-            }
-            henge_vm_stop()
+            henge_vm_power_button()
+            shutdownAsked = Date()
+            shutdownOverdue = false
+            return // the run loop closes the view when the guest is off
         }
         close()
     }

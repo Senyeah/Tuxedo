@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The accessory only presents the existing Mac's pixels. It never owns or
+/// The accessory only presents the existing guest's pixels. It never owns or
 /// starts a VM, and hardware input continues through the phone's SessionView.
 struct ExternalMacDisplay: View {
     let presentation: MacPresentation
@@ -11,7 +11,7 @@ struct ExternalMacDisplay: View {
         GeometryReader { geometry in
             let aspect = presentation.aspect
             let width = min(geometry.size.width, geometry.size.height * aspect)
-            BootDisplay(display: presentation.display, role: .external, surface: surface, guest: presentation.isLinux ? .linux : .mac)
+            BootDisplay(display: presentation.display, role: .external, surface: surface)
                 .frame(width: width, height: width / aspect)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -32,7 +32,7 @@ private struct GuestHidden: View {
     }
 }
 
-/// Puts the session's Mac on an external display. iOS 27 delivers that scene only to this
+/// Puts the session's guest on an external display. iOS 27 delivers that scene only to this
 /// accessory; earlier iOS connects it to ExternalDisplaySceneDelegate (LegacyExternalDisplay),
 /// which is told about the session either way and acts only where iOS gives it scenes.
 struct ExternalMacDisplayModifier: ViewModifier {

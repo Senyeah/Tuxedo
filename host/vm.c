@@ -335,10 +335,6 @@ int hv_vm_display(uint32_t *w, uint32_t *h, double *scale) {
     return set;
 }
 
-void hv_vm_set_display_size_mm(uint32_t width_mm, uint32_t height_mm) {
-    (void)width_mm, (void)height_mm; /* no effect: the virtio GPU has no panel size in mm */
-}
-
 static void publish_display(void) {
     // The setters and publication share this lock: an older preboot target can
     // never overwrite a monitor change made while the board was being built.

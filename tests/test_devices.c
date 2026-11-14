@@ -538,7 +538,7 @@ static void test_reset_input(void) {
     int kslot = (int)find_slot(0x1af4, 0x1052, 0), mslot = (int)find_slot(0x1af4, 0x1052, 1);
     if (!board.keyboard || !board.mouse || kslot < 0 || kslot >= 32 || mslot < 0 || mslot >= 32) return;
     uint64_t buf = VIRT_MEM + 0x2500000;
-    /* events from before the first probe stay for it (macOS types into the guest while it boots) */
+    /* events from before the first probe stay for it (the host types into the guest while it boots) */
     uint64_t mbar = VIRT_PCIE_MMIO + 0x580000;
     hv_virtio_input_send(board.mouse, HV_EV_REL, HV_REL_X, 5);
     uint64_t mring = reprobe(mslot, mbar, VIRT_MEM + 0x2600000);

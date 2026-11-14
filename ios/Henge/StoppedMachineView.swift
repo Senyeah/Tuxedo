@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// Terminal state after the engine has released the previous guest (a Mac or a Linux machine).
+/// Terminal state after the engine has released the previous guest (a Linux machine).
 struct StoppedMachineView: View {
-    var kind: GuestKind = .mac
     let outcome: Int32
     let reason: String
     var start: (() -> Void)? = nil
@@ -20,10 +19,10 @@ struct StoppedMachineView: View {
     var body: some View {
         VStack(spacing: 14) {
             Image(systemName: "power").font(.system(size: 30))
-            Text(StopText.title(stop, guest: kind)).font(.headline)
-            Text(StopText.detail(stop, guest: kind, reason: reason)).font(.subheadline).foregroundStyle(.white.opacity(0.7))
+            Text(StopText.title(stop)).font(.headline)
+            Text(StopText.detail(stop, reason: reason)).font(.subheadline).foregroundStyle(.white.opacity(0.7))
                 .multilineTextAlignment(.center)
-            if let start { Button(StopText.startLabel(guest: kind), action: start).buttonStyle(.borderedProminent) }
+            if let start { Button(StopText.startLabel, action: start).buttonStyle(.borderedProminent) }
             Button("Close", action: close).buttonStyle(.bordered)
         }
         .foregroundStyle(.white)

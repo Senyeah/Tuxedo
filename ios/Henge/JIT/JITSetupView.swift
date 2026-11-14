@@ -65,7 +65,7 @@ struct JITSetupFlow: View {
 
     private var choose: some View {
         page(symbol: "bolt.fill", title: "Turn on JIT",
-             subtitle: "A Mac needs memory it can write and then run, which on iOS only an attached "
+             subtitle: "A machine needs memory it can write and then run, which on iOS only an attached "
                      + "debugger can grant. Choose how your \(device) gets one.") {
             VStack(spacing: 10) {
                 let builtIn = HengeBuiltInJIT.unavailableReason
@@ -283,7 +283,7 @@ struct JITSetupFlow: View {
             VStack(alignment: .leading, spacing: 14) {
                 point(1, "Tap **Check setup**. Henge checks LocalDevVPN and prepares the Developer Disk Image.",
                       done: jit.prepared || attached)
-                point(2, "Tap **Enable JIT**. Henge's helper attaches and a Mac can start.", done: attached)
+                point(2, "Tap **Enable JIT**. Henge's helper attaches and a machine can start.", done: attached)
             }
             .padding(16).hengeCard()
 
@@ -295,7 +295,7 @@ struct JITSetupFlow: View {
                 }
                 .padding(16).hengeCard(high: true)
             } else if attached {
-                outcome("JIT is on. a Mac can start.", ok: true)
+                outcome("JIT is on. A machine can start.", ok: true)
             } else if let error = jit.error {
                 VStack(alignment: .leading, spacing: 10) {
                     outcome(error, ok: false)
@@ -346,7 +346,7 @@ struct JITSetupFlow: View {
                       done: JITBootstrap.isStikDebugInstalled)
                 point(2, "Import this \(device)'s pairing file into StikDebug.")
                 point(3, "Install and connect [LocalDevVPN](\(LocalDevVPN.appStore.absoluteString)).")
-                point(4, "Whenever you start a Mac, Henge opens StikDebug, which attaches and comes back.")
+                point(4, "Whenever you start a machine, Henge opens StikDebug, which attaches and comes back.")
             }
             .padding(16).hengeCard()
         } actions: {
@@ -370,7 +370,7 @@ struct JITSetupFlow: View {
                        + "entitlements TrollStore keeps, so the same file works there and in a sideloader.",
                       done: JITBootstrap.isInstalledWithTrollStore)
                 point(2, "In TrollStore's Settings, turn on URL Scheme. TrollStore ignores enable-jit requests without it.")
-                point(3, "Whenever a Mac starts, Henge asks TrollStore to enable JIT. TrollStore opens Henge, "
+                point(3, "Whenever a machine starts, Henge asks TrollStore to enable JIT. TrollStore opens Henge, "
                        + "attaches to it for a moment and lets go, which leaves it allowed to run code it wrote.")
             }
             .padding(16).hengeCard()

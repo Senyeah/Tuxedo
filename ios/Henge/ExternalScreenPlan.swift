@@ -1,6 +1,6 @@
 import Foundation
 
-/// Before iOS 27: which connected external screens show the running Mac. A screen not showing
+/// Before iOS 27: which connected external screens show the running machine. A screen not showing
 /// it gets no window of ours, so iOS mirrors the phone there. Pure, so every order of session
 /// and plug events can be tested; LegacyExternalDisplay carries out the changes it returns.
 /// Screens are named by their surface id; a presentation is whatever the host shows.

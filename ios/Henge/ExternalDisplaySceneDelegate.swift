@@ -32,15 +32,15 @@ final class ExternalDisplaySceneDelegate: UIResponder, UIWindowSceneDelegate, Ex
         window.rootViewController = UIHostingController(rootView: ExternalMacDisplay(presentation: presentation, surface: surface))
         window.isHidden = false
         self.window = window
-        HengeLog.log("display", "the Mac is on the external display")
+        HengeLog.log("display", "the machine is on the external display")
     }
 
-    /// Takes the Mac off this display: no window of ours, so iOS mirrors the phone (or the display is gone).
+    /// Takes the guest off this display: no window of ours, so iOS mirrors the phone (or the display is gone).
     func stopMac() {
         guard let window else { return }
         window.rootViewController = nil // lets SwiftUI take the screen view down, which detaches its layer
         window.isHidden = true
         self.window = nil
-        HengeLog.log("display", "the Mac left the external display")
+        HengeLog.log("display", "the machine left the external display")
     }
 }

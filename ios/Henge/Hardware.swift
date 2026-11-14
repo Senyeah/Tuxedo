@@ -7,7 +7,7 @@ enum Device {
     static let isPad = UIDevice.current.userInterfaceIdiom == .pad
     static let name = isPad ? "iPad" : "iPhone"
 
-    /// A Mac's screen that fills this device on its side: 1920 wide, as tall as the shape asks. iPads and
+    /// A guest screen that fills this device on its side: 1920 wide, as tall as the shape asks. iPads and
     /// squarer phones (iPhone Duo, about 1.46:1) would get bars above and below at 16:9. Phones wider
     /// than 16:9 come out at 1920×1080, as before.
     static var fittingScreen: (width: Int, height: Int) {
@@ -22,37 +22,22 @@ enum Device {
         return (1600, Int((Double(fit.height) * 5 / 6 / 8).rounded()) * 8)
     }
 
-    /// The panel itself, on its side: every physical pixel, and its real size in mm so that macOS
-    /// sees a Retina density and draws at 2x (looks like half the pixels, sharp as the iPad's own UI).
-    /// Every iPad with an M chip is 264 ppi.
-    static var retinaScreen: (width: Int, height: Int) {
-        let n = UIScreen.main.nativeBounds.size
-        return (Int(max(n.width, n.height)) / 8 * 8, Int(min(n.width, n.height)) / 8 * 8)
-    }
-    static var retinaMM: (width: Int, height: Int) {
-        let s = retinaScreen
-        return (Int((Double(s.width) / 264 * 25.4).rounded()), Int((Double(s.height) / 264 * 25.4).rounded()))
-    }
-
-    /// How much memory to suggest for a new Mac: what leaves this device room for iOS.
+    /// How much memory to suggest for a new machine: what leaves this device room for iOS.
     static var suggestedRAMGB: Int {
         let mb = ProcessInfo.processInfo.physicalMemory >> 20
-        // m4 fork: an 8 GB iPad (7.4 GB usable) thrashes and kills the Mac at 6 GB: 16 GB devices only.
+        // m4 fork: an 8 GB iPad (7.4 GB usable) thrashes and kills the guest at 6 GB: 16 GB devices only.
         return mb >= 14_000 ? 8 : mb >= 10_000 ? 6 : 4
     }
 
-    /// The choices for a Mac's memory, in GB.
+    /// The choices for a machine's memory, in GB.
     static let memoryChoices = 1...16
 
-    /// What a choice risks on this device, if anything. An install always gets at least 2 GB (Installer.install).
-    static func memoryNote(_ gb: Int, guest: GuestKind = .mac) -> String? {
-        if guest == .linux { return gb > suggestedRAMGB ? "More than \(suggestedRAMGB) GB is a lot for this \(name): iOS may close Henge when Linux gets busy." : nil }
-        if gb < 4 { return "macOS has little room under 4 GB, so it can be very slow." }
-        if gb > suggestedRAMGB { return "More than \(suggestedRAMGB) GB is a lot for this \(name): iOS may close Henge when macOS gets busy." }
-        return nil
+    /// What a choice risks on this device, if anything.
+    static func memoryNote(_ gb: Int) -> String? {
+        gb > suggestedRAMGB ? "More than \(suggestedRAMGB) GB is a lot for this \(name): iOS may close Henge when Linux gets busy." : nil
     }
 
-    /// The virtual CPU offers Armv8.5 instructions (core/sysreg.c), and macOS uses them. They run as
+    /// The virtual CPU offers Armv8.5 instructions (core/sysreg.c), and Linux uses them. They run as
     /// they are, so the chip needs them too: A14, M1 and later, which is iPhone13,x and iPad13,x up.
     static let chipTooOld: Bool = {
         let model = HengeLog.deviceModel
@@ -61,17 +46,17 @@ enum Device {
         return major < 13
     }()
 
-    static let chipTooOldText = "macOS won't run on this \(name). Henge needs an A14 or M1 chip or newer."
+    static let chipTooOldText = "Linux won't run on this \(name). Henge needs an A14 or M1 chip or newer."
 }
 
 /// A keyboard attached to the device. iOS reports each key going down and coming up by its HID usage,
-/// which is what the Mac's USB keyboard sends, so every key and modifier goes straight across.
+/// which is what the guest's USB keyboard sends, so every key and modifier goes straight across.
 enum HardwareKeys {
     private static var held: Set<UInt8> = []
     private static var lastKey: CFTimeInterval = 0
 
     /// With the on-screen keyboard's view holding the keyboard, iOS may also offer a hardware key as
-    /// text, and again as it repeats. The Mac has the key already, and repeats it itself.
+    /// text, and again as it repeats. The guest has the key already, and repeats it itself.
     static var keyJustPressed: Bool {
         held.contains { $0 < 0xe0 } || CACurrentMediaTime() - lastKey < 0.1
     }
@@ -107,7 +92,7 @@ enum HardwareKeys {
         return rest
     }
 
-    /// iPadOS can keep a key's release when it takes over, as it does for ⌘-Tab: the Mac must not
+    /// iPadOS can keep a key's release when it takes over, as it does for ⌘-Tab: the guest must not
     /// go on thinking the key is down.
     static func releaseAll() {
         for usage in held { henge_vm_key_hid(usage, 0) }
@@ -115,7 +100,7 @@ enum HardwareKeys {
     }
 }
 
-/// Asks iPadOS to hand the pointer over, so a trackpad or mouse drives only the Mac's pointer. It does
+/// Asks iPadOS to hand the pointer over, so a trackpad or mouse drives only the guest's pointer. It does
 /// that only for an app filling the screen. SwiftUI has no way to ask, so the answer is added to the
 /// class of the window's root view controller, which is who iPadOS asks.
 enum PointerLock {
@@ -141,7 +126,7 @@ enum PointerLock {
     }
 
     /// iPadOS only locks the pointer to an app that fills the screen: in a window (Stage Manager, or iPadOS 26's windows)
-    /// the request is ignored and the system pointer stays separate from the Mac's (#18). An iPhone never locks it, and
+    /// the request is ignored and the system pointer stays separate from the guest's (#18). An iPhone never locks it, and
     /// its apps are always full screen, so the hint is for iPad only.
     static var refused: Bool {
         guard Device.isPad, wanted, GCMouse.current != nil else { return false }
@@ -150,8 +135,8 @@ enum PointerLock {
     }
 }
 
-/// A Magic Keyboard's trackpad or a mouse, while a Mac is running. GameController gives the raw motion,
-/// which macOS then accelerates as it would for its own mouse.
+/// A Magic Keyboard's trackpad or a mouse, while a machine is running. GameController gives the raw motion,
+/// which the guest then accelerates as it would for its own mouse.
 final class HardwareMouse {
     static let shared = HardwareMouse()
     static let speedKey = "henge.mouse.speed"
@@ -326,7 +311,7 @@ final class HardwareMouse {
     }
 
     /// GameController puts vertical motion on the first axis and horizontal on the second.
-    /// macOS accelerates wheel units roughly quadratically, so use a tunable square root
+    /// The curve was tuned for macOS, which accelerates wheel units roughly quadratically: a tunable square root
     /// and cap each event to keep a small pad gesture from jumping across a page.
     private func scrolled(_ first: Float, _ second: Float) {
         // GameController reports both axis states when either one changes. On a

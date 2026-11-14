@@ -13,7 +13,7 @@ protocol ExternalScreen: AnyObject {
 /// Before iOS 27, a connected display (USB-C cable or AirPlay) arrives as a
 /// `windowExternalDisplayNonInteractive` scene that iOS connects to ExternalDisplaySceneDelegate
 /// because Info.plist's scene manifest declares that role with that class (without the entry the
-/// display just mirrors the phone and the app hears nothing). This shows the running Mac on those
+/// display just mirrors the phone and the app hears nothing). This shows the running machine on those
 /// scenes as ExternalScreenPlan decides; a screen not showing it gets no window of ours, so iOS
 /// mirrors the phone there. iOS 27 offers the scene only to the accessory
 /// ExternalMacDisplayModifier registers, so here it never sees one.
@@ -30,7 +30,7 @@ final class LegacyExternalDisplay {
     private var plan = ExternalScreenPlan<MacPresentation>()
     private var screens: [UUID: ExternalScreen] = [:]
 
-    /// A session appeared: its Mac goes to every connected display.
+    /// A session appeared: its guest goes to every connected display.
     func begin(_ presentation: MacPresentation) {
         apply(plan.begin(presentation))
     }

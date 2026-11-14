@@ -62,21 +62,11 @@ struct SessionGateTests {
         g.checked(restart, passed: true)
         precondition(g.secretsUnlocked)
 
-        // Which check a session gets: Linux asks; a Mac has no wallet and does not ask; HENGE_AUTOPILOT in the
-        // launch environment skips the check, and nothing else does.
-        precondition(SessionGate.Check.for(linux: true, environment: [:]) == .faceID)
-        precondition(SessionGate.Check.for(linux: false, environment: [:]) == .none)
-        precondition(SessionGate.Check.for(linux: false, environment: ["HENGE_AUTOPILOT": "1"]) == .none)
-        precondition(SessionGate.Check.for(linux: true, environment: ["HENGE_AUTOPILOT": "1"]) == .skippedForTest)
-        precondition(SessionGate.Check.for(linux: true, environment: ["HENGE_AUTOPILOT_ONCE": "1"]) == .faceID)
-
-        // A Mac: never covered, never asks, and no wallet to unlock.
-        var mac = SessionGate(check: .none)
-        precondition(mac.ask() == .opened && mac.phase == .open && !mac.covered && !mac.secretsUnlocked)
-        mac.leave()
-        precondition(mac.ask() == .opened && !mac.covered)
-        mac.end()
-        precondition(mac.ask() == .opened)
+        // Which check a session gets: Face ID; HENGE_AUTOPILOT in the launch environment skips the check, and
+        // nothing else does.
+        precondition(SessionGate.Check.for(environment: [:]) == .faceID)
+        precondition(SessionGate.Check.for(environment: ["HENGE_AUTOPILOT": "1"]) == .skippedForTest)
+        precondition(SessionGate.Check.for(environment: ["HENGE_AUTOPILOT_ONCE": "1"]) == .faceID)
 
         // Autopilot: the session opens with no check, but the wallet stays locked unless the test unlocks it.
         var auto = SessionGate(check: .skippedForTest)
@@ -106,9 +96,6 @@ struct SessionGateTests {
         let h2 = ticket(hide.ask())
         hide.checked(h2, passed: false)
         precondition(hide.hidesGuest(inactive: false)) // refused
-        var macHide = SessionGate(check: .none)
-        _ = macHide.ask()
-        precondition(!macHide.hidesGuest(inactive: true) && !macHide.blanksExternal(inactive: true))
         var autoHide = SessionGate(check: .skippedForTest)
         _ = autoHide.ask()
         precondition(!autoHide.hidesGuest(inactive: true) && !autoHide.blanksExternal(inactive: true))

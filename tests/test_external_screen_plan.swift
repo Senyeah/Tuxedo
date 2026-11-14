@@ -11,7 +11,7 @@ struct ExternalScreenPlanTests {
         var plan = ExternalScreenPlan<Session>()
         let monitor = UUID(), second = UUID(), ghost = UUID()
         let names = [monitor: "monitor", second: "second", ghost: "ghost"]
-        /// Changes as readable text: "show monitor 1" is the Mac of session 1 going to the monitor.
+        /// Changes as readable text: "show monitor 1" is the guest of session 1 going to the monitor.
         func text(_ changes: [ExternalScreenPlan<Session>.Change]) -> [String] {
             changes.map {
                 switch $0 {
@@ -23,25 +23,25 @@ struct ExternalScreenPlanTests {
 
         // A monitor plugged in before any session shows nothing of ours: iOS mirrors the phone.
         precondition(text(plan.connect(monitor)) == [])
-        // The session begins: the waiting monitor gets the Mac.
+        // The session begins: the waiting monitor gets the guest.
         precondition(text(plan.begin(Session(id: 1))) == ["show monitor 1"])
 
-        // Unplugged while showing the Mac: stop, so the phone gets it back.
+        // Unplugged while showing the guest: stop, so the phone gets it back.
         precondition(text(plan.disconnect(monitor)) == ["stop monitor 1"])
         // A screen the plan never saw changes nothing.
         precondition(text(plan.disconnect(ghost)) == [])
 
-        // Plugged in while the session runs: the Mac goes there at once.
+        // Plugged in while the session runs: the guest goes there at once.
         precondition(text(plan.connect(monitor)) == ["show monitor 1"])
 
         // A stale session ending (an old SessionView going away late) leaves the running one alone.
         precondition(text(plan.end(Session(id: 2))) == [])
-        // The session ends: every screen showing the Mac goes back to mirroring...
+        // The session ends: every screen showing the guest goes back to mirroring...
         precondition(text(plan.end(Session(id: 1))) == ["stop monitor 1"])
         // ...and stays that way for screens plugged in afterwards.
         precondition(text(plan.connect(second)) == [])
 
-        // Two screens showing the Mac: the session ending stops each exactly once.
+        // Two screens showing the guest: the session ending stops each exactly once.
         do {
             var plan = ExternalScreenPlan<Session>()
             _ = plan.connect(monitor); _ = plan.connect(second)

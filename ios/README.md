@@ -21,17 +21,13 @@ the packager as an environment variable (`HENGE_ENTITLEMENTS=... ios/scripts/pac
 - **Memory**: `increased-memory-limit` is recommended, not required. Once a
   debugger has attached, guest RAM is kept out of the app's memory limit, and if
   iOS refuses that it comes from a file on free storage instead.
-- **Machines** are installed on the iPhone from Apple's restore image
-  (`Installer.swift`, [docs/architecture.md](../docs/architecture.md)). A machine
-  can also be exported from the app, or made on a Mac with
-  `tools/export_ios.sh DISK AUX ECID [NAME]` (disk packed with its holes left out,
-  see `host/hvsparse.h`), and dropped on Henge in Finder or picked in Files.
-- **Boot ROM**: fetched from Apple at install, not shipped (`Henge/BootROM.swift`,
-  [docs/architecture.md](../docs/architecture.md)).
-- **Display**: iOS has no ParavirtualizedGraphics framework, so Henge replays the
-  guest's GPU commands with Metal (`devices/pvg_lite.c`, `devices/pvg_metal.m`).
+- **Machines** are Linux machines (below). One can be installed on the iPhone from
+  an image catalogue, exported from the app, or made on a computer (disk packed with its holes left
+  out, see `host/hvsparse.h`), and dropped on Henge in Finder or picked in Files.
+- **Display**: the guest's virtio GPU commands are drawn into a `CAMetalLayer`
+  (`devices/vgpu_*`, [docs/architecture.md](../docs/architecture.md)).
 - **External display**: on iOS 27, `SessionView` registers a SwiftUI
-  `ExternalNonInteractiveAccessory` during a Mac session. On iOS 17–26 iOS offers
+  `ExternalNonInteractiveAccessory` during a session. On iOS 17–26 iOS offers
   the display scene to the app delegate instead (`HengeAppDelegate`), and
   `LegacyExternalDisplay` shows the session there as `ExternalScreenPlan` decides;
   outside a session the display mirrors the phone. `DisplayRouter` selects
@@ -45,7 +41,7 @@ the packager as an environment variable (`HENGE_ENTITLEMENTS=... ios/scripts/pac
   for routing lifecycle checks; `ios/scripts/check_display.sh` also compiles all
   app Swift sources and the iOS/macOS renderer without linking external libraries.
   USB-C video is user-confirmed on an iPhone 17 Pro running iOS 27 with
-  development build 0.1/2; activation is automatic during a Mac session. The
+  development build 0.1/2; activation is automatic during a session. The
   iOS 17–26 path compiles and its plan is tested, but has not run on hardware yet.
   Remaining acceptance checks: connect before/during boot, unplug/replug with an
   idle desktop, rotate the phone, use keyboard/mouse through the dock, and end
@@ -53,23 +49,23 @@ the packager as an environment variable (`HENGE_ENTITLEMENTS=... ios/scripts/pac
   and AirPlay have not been separately verified.
 - **Sharing** (`Henge/Sharing.swift`, `host/share.c`,
   [docs/architecture.md](../docs/architecture.md)): the Shared folder in Files and
-  the clipboard. The Mac's clipboard follows along; going the other way uses the
+  the clipboard. The guest's clipboard follows along; going the other way uses the
   system paste button, since iOS asks permission when an app reads it on its own.
-- **Hardware input** (`Henge/Hardware.swift`): a keyboard's keys go to the Mac's
+- **Hardware input** (`Henge/Hardware.swift`): a keyboard's keys go to the guest's
   USB keyboard by HID usage, which is how iOS reports them. A trackpad or mouse
   goes through GameController with the pointer locked, which iPadOS allows only
   for an app filling the screen. The first scroll values are logged to
   `henge.log`, to tune scrolling from a real device.
 - **Chips**: the virtual CPU offers Armv8.5 instructions (`core/sysreg.c`), which
-  macOS uses and which run as they are, so Henge needs an A14 or M1 or newer.
+  Linux uses and which run as they are, so Henge needs an A14 or M1 or newer.
 
 ## Linux machines
 
-A machine has a kind, `GuestKind` (`mac` or `linux`, in `MachineModel.swift`). A machine file with no kind is a Mac. The kind picks the folder's required files (`MachineFolder.required`): a Mac needs `AVPBooter.vmapple2.bin`, `auxiliary.bin` and `machine.json`; a Linux machine needs `u-boot.bin` and `machine.json`. Both have `disk.img`, or `disk.img.hvsparse` in an exported folder. A Linux `machine.json` has `name`, `kind` and `ramMB`.
+A machine folder needs `u-boot.bin` and `machine.json` (`MachineFolder.required`, in `MachineModel.swift`), and `disk.img`, or `disk.img.hvsparse` in an exported folder. `machine.json` has `name` and `ramMB`; other keys are ignored.
 
 - **Boot**: `henge_vm_boot_linux(firmware, disk, ram_mb, cpus, accel, video, encode, ...)` in `Native/henge-vm.h` starts `hengevm`'s `virt` board with U-Boot. The same header has `henge_vm_console_read` and `henge_vm_console_write` for the serial console, and `henge_vm_power_button`, which presses the guest's power key. Shut Down on a Linux session presses it, so Debian shuts down by itself.
 - **Session**: `SessionView` shows the console (`ConsoleView.swift`, a SwiftTerm terminal over the engine's 256 KB ring) or the screen. A machine opens on the console. The console model lives with the session, so its scrollback survives a switch to the screen and back. The serial line has no window size and the guest shell assumes 80 columns, so `ConsoleModel.fit()` types `stty rows R cols C` on request.
-- **Install**: Install has a macOS side and a Linux side. `LinuxCatalogue.swift` reads `linux-images.json`, `LinuxDownload.swift` and `RangedDownload.swift` fetch the firmware and the disk and resume with byte ranges, `LinuxUnpack.swift` decodes the LZFSE package and runs `hv_sparse_unpack`, and `LinuxInstaller.swift` grows the disk to the chosen size and writes the installed marker last. `tools/linux/package-image.sh` writes the catalogue and its packages (see [tools/linux/README.md](../tools/linux/README.md)).
+- **Install**: `LinuxCatalogue.swift` reads `linux-images.json`, `LinuxDownload.swift` and `RangedDownload.swift` fetch the firmware and the disk and resume with byte ranges, `LinuxUnpack.swift` decodes the LZFSE package and runs `hv_sparse_unpack`, and `LinuxInstaller.swift` grows the disk to the chosen size and writes the installed marker last. `tools/linux/package-image.sh` writes the catalogue and its packages (see [tools/linux/README.md](../tools/linux/README.md)).
 - **Catalogue setting**: Settings, Linux images, Catalogue URL (the `henge.linux.catalogueURL` default). Empty means no catalogue: import a folder instead. File names in the catalogue may be relative to its URL. A public host must use `https`, because App Transport Security refuses plain `http` except to local hosts (`NSAllowsLocalNetworking`). An image's `minBuild` is checked against `CFBundleVersion`.
 - **Screen**: a Linux machine on the phone follows the phone's safe area at scale 2 and the device's rotation (`DisplayModePolicy.swift`). Settings also offers an external display, 2560x1440 and 1920x1080. The guest follows a mode change through `/.henge/display` and `henge-display`.
 - **Graphics acceleration**: see below. **Sharing**: the shared folder is `~/Henge` in the guest, and the desktop image shares the clipboard.
@@ -81,7 +77,7 @@ A machine has a kind, `GuestKind` (`mac` or `linux`, in `MachineModel.swift`). A
 `ios/scripts/sim_build.sh [device]` builds the `HengeSim` target, boots a simulator if none is booted
 (default "iPhone 18 Pro"), installs and launches Henge, and prints the path of `henge.log`. It needs no
 phone, signing, Husk checkout or libslirp: the engine is built for `iphonesimulator` in `build/ios-sim`
-(`make ios-sim-lib`, the installer stack with `tools/build_ios_restore.sh sim`).
+(`make ios-sim-lib`).
 
 What differs from the device app: networking is a stub (`host/net_stub.c`, the guest has no network),
 pairing is a stub (`HengeSim/sim_stubs.c`), and there is no JIT helper or StikJIT. The JIT region is
@@ -91,7 +87,7 @@ Launch with `simctl`, not under a debugger. Memory figures in Settings read zero
 
 ## Graphics acceleration (Linux machines)
 
-It is opt-in, as on the Mac. With `HENGE_GFX=1` both app targets build the engine with `GFX=1` and link
+It is opt-in. With `HENGE_GFX=1` both app targets build the engine with `GFX=1` and link
 the static ANGLE, libepoxy and virglrenderer from `build/gfx/{ios,sim}` (`tools/gfx/build-deps.sh`).
 `sim_build.sh` and `package_ipa.sh` set `HENGE_GFX` and `HENGE_GFX_DIR` (from the main checkout, also in a
 worktree) when the libraries exist (`scripts/gfx_env.sh`). Without them, and in CI, the app builds with

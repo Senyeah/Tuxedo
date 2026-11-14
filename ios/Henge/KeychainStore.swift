@@ -16,15 +16,11 @@ final class KeychainStore {
     private let lock = NSLock()
     private var unlocked = false
 
-    /// The machine the guest's wallet is for; nil for a Mac, which has no wallet.
+    /// The machine the guest's wallet is for.
     func attach(_ mac: VirtualMac) {
         var store = HvSecretStore(ctx: nil, list: storeList, read: storeRead, write: storeWrite, remove: storeRemove)
-        if mac.guest == .linux {
-            Self.dropOldLayout(machine: mac.id)
-            henge_vm_secrets(&store, WalletScope.id(mac.id))
-        } else {
-            henge_vm_secrets(nil, nil)
-        }
+        Self.dropOldLayout(machine: mac.id)
+        henge_vm_secrets(&store, WalletScope.id(mac.id))
     }
 
     /// The session's check passed, or the wallet locks: in the background, or when the session ends.

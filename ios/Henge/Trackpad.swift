@@ -1,10 +1,9 @@
 import SwiftUI
 import UIKit
 
-/// A surface that works like a Mac's trackpad — it is one: the engine presents it on
-/// the Mac's USB bus as a Magic Trackpad 2, so the Mac's own multitouch engine sees
-/// the fingers: two scroll, three swipe between Spaces and to Mission Control, four
-/// show the session's hidden controls.
+/// A surface that works like a laptop trackpad — it is one: the engine presents it on
+/// the guest's USB bus as a Magic Trackpad 2, so the guest's multitouch driver (hid-magicmouse)
+/// sees the fingers: two scroll, four show the session's hidden controls.
 ///
 /// Clicking depends on the input mode (Settings > Trackpad) and the keyboard (PadClickRule):
 ///  - Touchscreen: the surface itself clicks. A quick tap is a left click, and touching
@@ -81,7 +80,7 @@ struct Trackpad: UIViewRepresentable {
             HengeLog.log("input", "hover \(g.state.rawValue) at \(Int(p.x)),\(Int(p.y))")
         }
 
-        /// Over the Mac there is only the Mac's pointer, if iPadOS hasn't locked its own away.
+        /// Over the guest there is only the guest's pointer, if iPadOS hasn't locked its own away.
         func pointerInteraction(_ interaction: UIPointerInteraction, styleFor region: UIPointerRegion) -> UIPointerStyle? { .hidden() }
 
         required init?(coder: NSCoder) { fatalError("made in code") }

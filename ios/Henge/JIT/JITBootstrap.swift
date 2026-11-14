@@ -9,7 +9,7 @@ import os
 private func csops(_ pid: Int32, _ ops: Int32,
                    _ useraddr: UnsafeMutableRawPointer?, _ usersize: Int) -> Int32
 
-/// Husk reserves its Android heap around the claim; a Mac guest has nothing to do there.
+/// Husk reserves its Android heap around the claim; a guest has nothing to do there.
 private func prepareCompressedHeap() {}
 private func releaseUnusedCompressedHeap() {}
 
@@ -209,7 +209,7 @@ enum JITBootstrap {
     /// A debugger still on after the one that gave the region was let go: another helper that attached once the first
     /// detached. With one attached every trap stops Henge until it answers (a phone run went 1.5-2x slower). Told to let
     /// go too, if it is the built-in helper's (StikJIT's script answers the detach brk; a debugger that does not, Xcode's
-    /// say, would stop at it). Cheap: one sysctl. Called before a Mac starts and every 10 s while one runs; three tries.
+    /// say, would stop at it). Cheap: one sysctl. Called before a machine starts and every 10 s while one runs; three tries.
     static func releaseLingeringDebugger() {
         guard detached, !keepDebuggerAttached, helperMayBeAttached, lingeringTries < 3, isTraced else { return }
         lingeringTries += 1

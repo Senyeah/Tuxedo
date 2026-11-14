@@ -2,22 +2,16 @@ import SwiftUI
 import QuartzCore
 import CoreGraphics
 
-/// The Mac's screen, refreshed a few times a second: what its GPU draws once
-/// macOS is up. Before that, the boot framebuffer, which only ever holds the
-/// progress bar (a virtual Mac's firmware draws no logo into it), so the logo
-/// over it is the app's own.
+/// The guest's screen: what its GPU draws, with the console over it while `showConsole` is set.
 struct BootDisplay: View {
     let display: DisplayRouter
     let role: DisplayTargetSelection.Role
     /// The id this view's layer connects to the router under.
     var surface = UUID()
-    /// A Linux guest has no Apple logo; its console shows over the screen while `showConsole` is set.
-    var guest: GuestKind = .mac
     var console: ConsoleModel?
     var showConsole = false
     var typing: Binding<Bool> = .constant(false)
 
-    @State private var image: CGImage?
     @State private var gpuLive = false
     @State private var stopped = false
     @AppStorage("henge.matchScreenColors") private var matchScreenColors = true
@@ -27,25 +21,11 @@ struct BootDisplay: View {
         ZStack {
             Color.black
             if !stopped {
-                if !gpuLive && guest == .mac {
-                    if let image {
-                        Image(decorative: image, scale: 1).resizable().interpolation(.medium).aspectRatio(contentMode: .fit)
-                        if image.height > image.width {
-                            Image(systemName: "apple.logo")
-                                .font(.system(size: 44))
-                                .foregroundStyle(.white)
-                        }
-                    } else {
-                        Image(systemName: "apple.logo")
-                            .font(.system(size: 44))
-                            .foregroundStyle(.white)
-                    }
-                }
                 GPUScreen(display: display, role: role, surface: surface,
                           matchScreenColors: matchScreenColors, brightness: screenBrightness)
                     .allowsHitTesting(false)
             }
-            if role == .external && guest == .linux && !gpuLive && !stopped {
+            if role == .external && !gpuLive && !stopped {
                 Text("Starting the machine…").font(.title2).foregroundStyle(.white.opacity(0.8))
             }
             if let console, showConsole { ConsoleView(model: console, typing: typing) }
@@ -59,31 +39,24 @@ struct BootDisplay: View {
                 if next != generation {
                     generation = next
                     gpuLive = false
-                    image = nil
                 }
                 if state == 2 || state == 3 {
                     stopped = true
-                    image = nil
                     gpuLive = false
                 } else {
                     stopped = false
                     if !gpuLive && henge_vm_gpu_frames() > 0 {
                         gpuLive = true
-                        image = nil
                     }
-                    if !gpuLive && guest == .mac { image = Self.snapshot() ?? image }
                 }
                 try? await Task.sleep(nanoseconds: gpuLive ? 250_000_000 : 100_000_000)
             }
         }
     }
 
-    static func snapshot() -> CGImage? {
-        nil // the Mac boot framebuffer is gone (L4 removes this)
-    }
 }
 
-/// A layer the engine draws the Mac's frames into, with the GPU, without the main thread.
+/// A layer the engine draws the guest's frames into, with the GPU, without the main thread.
 private struct GPUScreen: UIViewRepresentable {
     let display: DisplayRouter
     let role: DisplayTargetSelection.Role
@@ -170,14 +143,6 @@ private struct GPUScreen: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> Screen {
-        if ProcessInfo.processInfo.environment["HV_COLOR_PROBE"] != nil {
-            // What the screen itself is, for the colour probe (the engine logs the layer and the frames).
-            let s = UIScreen.main
-            let gamut = s.traitCollection.displayGamut == .P3 ? "P3" : s.traitCollection.displayGamut == .SRGB ? "sRGB" : "unspecified"
-            HengeLog.log("colorprobe", "colorprobe: v=1 src=swift event=screen gamut=\(gamut) scale=\(s.scale) nativeScale=\(s.nativeScale) "
-                       + "bounds=\(Int(s.bounds.width))x\(Int(s.bounds.height)) maxEDR=\(s.potentialEDRHeadroom) currentEDR=\(s.currentEDRHeadroom) "
-                       + "brightness=\(String(format: "%.2f", s.brightness)) refreshHz=\(s.maximumFramesPerSecond)")
-        }
         let view = Screen(display: display, role: role, surface: surface)
         setColorSpace(view)
         return view

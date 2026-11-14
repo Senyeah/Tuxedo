@@ -1,19 +1,17 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Your Mac as you left it, and one big button.
+/// Your machine as you left it, and one big button.
 struct HomeView: View {
     @ObservedObject private var machines = Machines.shared
     @ObservedObject private var jit = JITCoordinator.shared
-    @ObservedObject private var installer = Installer.shared
     @Binding var running: VirtualMac?
     @Binding var tab: RootView.Tab
-    @Binding var installSide: InstallView.Platform?
     @State private var picking = false
     @State private var jitReady = JITBootstrap.ready
     @State private var chosen: UUID?
 
-    /// The Mac on show: the one picked, or the one used last.
+    /// The machine on show: the one picked, or the one used last.
     private var mac: VirtualMac? {
         if let chosen, let mac = machines.all.first(where: { $0.id == chosen }) { return mac }
         return machines.all.max { ($0.lastUsed ?? $0.added) < ($1.lastUsed ?? $1.added) }
@@ -36,7 +34,7 @@ struct HomeView: View {
                         }
                         others(besides: mac)
                     } else {
-                        firstMac
+                        firstMachine
                     }
                 }
                 .padding(.horizontal, 16)
@@ -49,8 +47,7 @@ struct HomeView: View {
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
-                        Button("Install macOS…") { installSide = .macOS; tab = .install }
-                        Button("Install Linux…") { installSide = .linux; tab = .install }
+                        Button("Install Linux…") { tab = .install }
                         Button("Bring in a machine from a computer…") { picking = true }
                     } label: {
                         Image(systemName: "plus")
@@ -74,11 +71,6 @@ struct HomeView: View {
         if Device.chipTooOld {
             NoticeRow(symbol: "exclamationmark.triangle.fill", text: Device.chipTooOldText, tint: Desk.bad)
         }
-        if installer.busy {
-            Button { tab = .install } label: {
-                NoticeRow(symbol: "arrow.down.circle.fill", text: "Installing \(installer.machineName)…", trailing: "See")
-            }
-        }
         if let name = machines.importing {
             NoticeRow(symbol: "square.and.arrow.down.fill",
                       text: machines.unpacked > 0 ? String(format: "Unpacking %@'s disk… %.0f%%", name, machines.unpacked * 100) : "Bringing in \(name)…")
@@ -88,20 +80,18 @@ struct HomeView: View {
         }
     }
 
-    private var firstMac: some View {
+    private var firstMachine: some View {
         VStack(spacing: 14) {
-            Image(systemName: "macwindow.on.rectangle")
+            Image(systemName: "terminal")
                 .font(.system(size: 54, weight: .light))
                 .foregroundStyle(Desk.accentLight)
                 .frame(maxWidth: .infinity)
                 .frame(height: 190)
                 .background(Desk.raised.opacity(0.5), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             Text("No machine yet").font(.system(size: 24, weight: .bold))
-            Text("Install macOS or Linux on this \(Device.name), or bring in a machine made on a computer.")
+            Text("Install Linux on this \(Device.name), or bring in a machine made on a computer.")
                 .font(.system(size: 15)).foregroundStyle(Desk.dim).multilineTextAlignment(.center)
-            Button("Install macOS") { installSide = .macOS; tab = .install }.buttonStyle(DeskButtonStyle())
-            Button("Install Linux") { installSide = .linux; tab = .install }
-                .font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.accentLight)
+            Button("Install Linux") { tab = .install }.buttonStyle(DeskButtonStyle())
             Button("Bring in a machine") { picking = true }
                 .font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.accentLight)
         }
@@ -112,7 +102,7 @@ struct HomeView: View {
     @ViewBuilder private func others(besides shown: VirtualMac) -> some View {
         let rest = machines.all.filter { $0.id != shown.id }
         if !rest.isEmpty {
-            DeskHeading(MachineList.othersHeading(machines.all))
+            DeskHeading(MachineList.othersHeading)
             VStack(spacing: 0) {
                 ForEach(rest) { other in
                     Button { chosen = other.id } label: {
@@ -150,13 +140,13 @@ extension VirtualMac {
 
     var summary: String {
         var parts: [String] = []
-        if let osName { parts.append(osName) } else if guest == .linux { parts.append("Linux") }
+        parts.append(osName ?? "Linux")
         parts.append("\(ramMB / 1024) GB")
         return parts.joined(separator: " · ")
     }
 }
 
-/// The picture of the Mac, its name, and Start.
+/// The picture of the machine, its name, and Start.
 private struct MacHero: View {
     let mac: VirtualMac
     let jitReady: Bool
@@ -232,7 +222,7 @@ private struct MacHero: View {
             if let image {
                 Image(uiImage: image).resizable().aspectRatio(contentMode: .fill)
             } else {
-                Image(systemName: mac.guest == .linux ? "terminal" : "macwindow.on.rectangle")
+                Image(systemName: "terminal")
                     .font(.system(size: 46, weight: .light))
                     .foregroundStyle(Desk.faint)
             }

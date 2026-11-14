@@ -170,10 +170,10 @@ struct FolderPolicyTests {
     }
 
     static func model() throws {
-        // A Linux machine from a list written before folders: none.
+        // A machine from a list written before folders: none.
         let old = """
-        [{"id":"11111111-2222-3333-4444-555555555555","name":"Debian","ecid":0,"seed":0,"ramMB":4096,
-          "diskBytes":17179869184,"added":784000000.5,"kind":"linux"}]
+        [{"id":"11111111-2222-3333-4444-555555555555","name":"Debian","ramMB":4096,
+          "diskBytes":17179869184,"added":784000000.5}]
         """
         let list = MachineList.decode(Data(old.utf8), diskExists: { _ in true })!
         check("an old list: no folders", list[0].folders == nil)

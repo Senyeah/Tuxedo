@@ -2,14 +2,13 @@ import Foundation
 import UIKit
 
 extension VirtualMac {
-    var isRetina: Bool { Device.isPad && (retina ?? false) }
-    var screen: (width: Int, height: Int) { isRetina ? Device.retinaScreen : (screenWidth ?? 1920, screenHeight ?? 1080) }
-    /// A phone's Linux machine with no chosen size takes the phone's safe area at scale 2; rotation changes it.
-    var followsPhoneScreen: Bool { guest == .linux && !Device.isPad && screenWidth == nil }
+    var screen: (width: Int, height: Int) { (screenWidth ?? 1920, screenHeight ?? 1080) }
+    /// A phone's machine with no chosen size takes the phone's safe area at scale 2; rotation changes it.
+    var followsPhoneScreen: Bool { !Device.isPad && screenWidth == nil }
     var aspect: CGFloat { CGFloat(screen.width) / CGFloat(screen.height) }
 }
 
-/// How much RAM a Mac gets. The engine first asks the kernel to leave it out of Henge's footprint,
+/// How much RAM a machine gets. The engine first asks the kernel to leave it out of Henge's footprint,
 /// which is allowed once a debugger has attached (how JIT is turned on). If that is refused it uses
 /// a file beside the disk: iOS's memory limit does not count a mapped file's pages either.
 enum GuestMemory {
@@ -35,7 +34,7 @@ final class Machines: ObservableObject {
     @Published private(set) var importing: String?
     @Published var lastError: String?
 
-    /// An exported folder's disk is disk.img, or disk.img.hvsparse (tools/export_ios.sh packs it); the rest is MachineFolder.required.
+    /// An exported folder's disk is disk.img, or disk.img.hvsparse (the export packs it); the rest is MachineFolder.required.
     static let packedDisk = "disk.img.hvsparse"
 
     nonisolated static func hasDisk(_ folder: URL) -> Bool {
@@ -45,7 +44,7 @@ final class Machines: ObservableObject {
     }
 
     @Published private(set) var unpacked: Double = 0
-    /// While a Mac is being exported: its name and how far along.
+    /// While a machine is being exported: its name and how far along.
     @Published private(set) var exporting: String?
     @Published private(set) var exported: Double = 0
     /// The last finished export, ready to be moved out of Henge.
@@ -58,21 +57,10 @@ final class Machines: ObservableObject {
 
     /// Machine folders nothing refers to (an install cut short by a crash or by quitting): their disks take real space.
     /// A folder whose install finished (Henge stopped before it was listed) is listed again instead, and nothing is
-    /// removed when the list itself could not be read: every Mac would look unreferenced.
-    /// Downloads by builds before 0.3 kept a stopped download in the system's temporary files, where nothing could resume
-    /// or delete it (#58): those go. Downloads now stay in Restore images as .part files and go on from there.
-    private func removeOldTemporaryDownloads() {
-        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
-        guard let names = try? FileManager.default.contentsOfDirectory(atPath: tmp.path) else { return }
-        for name in names where name.hasPrefix("CFNetworkDownload_") && name.hasSuffix(".tmp") {
-            try? FileManager.default.removeItem(at: tmp.appendingPathComponent(name))
-        }
-    }
-
+    /// removed when the list itself could not be read: every machine would look unreferenced.
     private func removeLeftovers() {
-        removeOldTemporaryDownloads()
         if listUnreadable {
-            HengeLog.log("machines", "the list of Macs could not be read: no machine folder is removed")
+            HengeLog.log("machines", "the list of machines could not be read: no machine folder is removed")
             return
         }
         let known = Set(all.map(\.id))
@@ -80,11 +68,9 @@ final class Machines: ObservableObject {
         let items = (try? fm.contentsOfDirectory(at: Self.root, includingPropertiesForKeys: nil)) ?? []
         for item in items {
             guard let id = UUID(uuidString: item.lastPathComponent), !known.contains(id) else { continue }
-            if var mac = MachineList.recover(id: id, folder: item, defaultRAMMB: Device.suggestedRAMGB * 1024) {
-                if mac.guest == .mac { (mac.screenWidth, mac.screenHeight) = Device.fittingScreen }
+            if let mac = MachineList.recover(id: id, folder: item, defaultRAMMB: Device.suggestedRAMGB * 1024) {
                 all.append(mac)
                 save()
-                try? fm.removeItem(at: item.appendingPathComponent("restore"))
                 HengeLog.log("machines", "\(mac.name) finished installing but was not listed: listed again")
                 continue
             }
@@ -108,7 +94,7 @@ final class Machines: ObservableObject {
         guard importing == nil, let items = try? FileManager.default.contentsOfDirectory(at: Self.inbox, includingPropertiesForKeys: nil) else { return }
         for folder in items {
             guard Self.hasDisk(folder), let info = MachineFolder.info(folder),
-                  MachineFolder.required(info.kind ?? .mac).allSatisfy({ FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path) }) else { continue }
+                  MachineFolder.required.allSatisfy({ FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path) }) else { continue }
             await adopt(folder, move: true)
         }
     }
@@ -126,27 +112,16 @@ final class Machines: ObservableObject {
         do {
             let data = try Data(contentsOf: folder.appendingPathComponent("machine.json"))
             let info = try JSONDecoder().decode(MachineFile.self, from: data)
-            let kind = info.kind ?? .mac
-            let missing = MachineFolder.required(kind).filter { !FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path) }
+            let missing = MachineFolder.required.filter { !FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path) }
             guard missing.isEmpty, Self.hasDisk(folder) else { throw message("The folder is missing \((missing + (Self.hasDisk(folder) ? [] : ["disk.img"])).joined(separator: ", ")).") }
-            var mac: VirtualMac
-            switch kind {
-            case .mac:
-                guard let ecid = info.ecid else { throw message("This folder is not a Mac.") }
-                mac = VirtualMac(name: info.name ?? folder.lastPathComponent, ecid: ecid, seed: info.seed ?? 0,
-                                 ramMB: info.ramMB ?? 2048, diskBytes: 0)
-            case .linux:
-                mac = VirtualMac(name: info.name ?? folder.lastPathComponent, ecid: 0, seed: 0,
-                                 ramMB: info.ramMB ?? 2048, diskBytes: 0)
-                mac.kind = .linux
-            }
+            var mac = VirtualMac(name: info.name ?? folder.lastPathComponent, ramMB: info.ramMB ?? 2048, diskBytes: 0)
             importing = mac.name
             unpacked = 0
             let dest = mac.directory
             let fm = FileManager.default
             try fm.createDirectory(at: dest, withIntermediateDirectories: true)
             excludeFromBackup()
-            for name in MachineFolder.files(kind) {
+            for name in MachineFolder.files {
                 let from = folder.appendingPathComponent(name)
                 guard fm.fileExists(atPath: from.path) else { continue }
                 if move { try fm.moveItem(at: from, to: dest.appendingPathComponent(name)) }
@@ -169,7 +144,7 @@ final class Machines: ObservableObject {
             mac.diskBytes = (try? fm.attributesOfItem(atPath: mac.disk.path)[.size] as? Int64) ?? 0
             all.append(mac)
             save()
-            HengeLog.log("machines", "imported \(mac.name) (\(kind == .linux ? "Linux" : "ECID \(mac.ecid)"), \(mac.diskBytes >> 30) GB disk)")
+            HengeLog.log("machines", "imported \(mac.name) (\(mac.diskBytes >> 30) GB disk)")
         } catch {
             lastError = error.localizedDescription
             HengeLog.log("machines", "import of \(folder.lastPathComponent) failed: \(error.localizedDescription)")
@@ -177,7 +152,7 @@ final class Machines: ObservableObject {
         importing = nil
     }
 
-    /// Makes a folder "Bring in a Mac" can read back (the same files tools/export_ios.sh writes),
+    /// Makes a folder "Bring in a machine" can read back,
     /// in Documents/Exports, which the Files app can reach. Deleting Henge deletes that folder too,
     /// so it has to be moved out of Henge before a reinstall that replaces the app's data.
     func export(_ mac: VirtualMac) {
@@ -204,7 +179,7 @@ final class Machines: ObservableObject {
         let exports = Self.inbox.appendingPathComponent("Exports", isDirectory: true)
         let safeName = mac.name.replacingOccurrences(of: "/", with: "-")
         let final = exports.appendingPathComponent(safeName, isDirectory: true)
-        // Not under its final name until it is whole, so a cut-short export can't be mistaken for a Mac.
+        // Not under its final name until it is whole, so a cut-short export can't be mistaken for a machine.
         let partial = exports.appendingPathComponent(safeName + ".partial", isDirectory: true)
         try? fm.removeItem(at: partial)
         try? fm.removeItem(at: final)
@@ -212,16 +187,11 @@ final class Machines: ObservableObject {
         let free = (try? Self.root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?.volumeAvailableCapacityForImportantUsage ?? 0
         let needed = Int64(used) + (256 << 20)
         if free > 0 && free < needed {
-            throw message("Exporting \(mac.name) needs about \(ByteText.string(UInt64(needed))) free; this \(Device.name) has \(ByteText.string(UInt64(free))). \(mac.guest == .linux ? "Deleting a downloaded Linux image (Install, Linux, the trash button) frees space." : "Deleting a downloaded macOS installer (Install macOS, swipe it) frees about 16 GB.")")
+            throw message("Exporting \(mac.name) needs about \(ByteText.string(UInt64(needed))) free; this \(Device.name) has \(ByteText.string(UInt64(free))). Deleting a downloaded Linux image (Install, the trash button) frees space.")
         }
         try fm.createDirectory(at: partial, withIntermediateDirectories: true)
         do {
-            if mac.guest == .linux {
-                try fm.copyItem(at: mac.firmware, to: partial.appendingPathComponent("u-boot.bin"))
-            } else {
-                try fm.copyItem(at: mac.rom, to: partial.appendingPathComponent("AVPBooter.vmapple2.bin"))
-                try fm.copyItem(at: mac.aux, to: partial.appendingPathComponent("auxiliary.bin"))
-            }
+            try fm.copyItem(at: mac.firmware, to: partial.appendingPathComponent("u-boot.bin"))
             try JSONSerialization.data(withJSONObject: MachineFolder.exportInfo(mac)).write(to: partial.appendingPathComponent("machine.json"))
             let source = mac.disk.path, target = partial.appendingPathComponent(Self.packedDisk).path
             let ok = await Task.detached { () -> Bool in

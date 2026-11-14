@@ -85,8 +85,6 @@ void hv_vm_set_display_mode(uint32_t width, uint32_t height);
 void hv_vm_set_display_scale(double scale);
 /* The mode and scale last set; 0 when no mode was ever set (outputs untouched). */
 int hv_vm_display(uint32_t *w, uint32_t *h, double *scale);
-/* No effect: nothing in the virtio GPU path uses a panel size. */
-void hv_vm_set_display_size_mm(uint32_t width_mm, uint32_t height_mm);
 int hv_vm_ncpus(void);
 
 /* Runs CPU 0 on a new thread (unless the caller runs it: cpu0 = 0), the other

@@ -31,7 +31,7 @@ final class DisplayRouter: ObservableObject {
     }
 
     /// Re-present the latest frame after layout or a return from the background,
-    /// even when macOS is idle and isn't submitting another frame.
+    /// even when the guest is idle and isn't submitting another frame.
     func refresh(_ id: UUID? = nil) {
         guard id == nil || id == selected else { return }
         sendTarget()

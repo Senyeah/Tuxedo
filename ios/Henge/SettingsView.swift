@@ -12,7 +12,6 @@ struct SettingsView: View {
     @AppStorage(TrackpadFeel.hapticsKey) private var haptics = PadHaptics.Level.all
     @AppStorage(TrackpadFeel.motionKey) private var motionFeel = PadTuning.Motion().style
     @AppStorage(PhysicalMouseButtons.swapKey) private var swapMouseButtons = false
-    @AppStorage(EngineTuning.refreshKey) private var refreshRate = 60
     @AppStorage(EngineTuning.fastFlushKey) private var fastFlush = true
     @AppStorage(EngineTuning.wfiSpinKey) private var wfiSpin = false
     @AppStorage(EngineTuning.superblocksKey) private var superblocks = false
@@ -124,12 +123,6 @@ struct SettingsView: View {
                     .listRowBackground(Desk.card)
                 }
                 Section("Performance") {
-                    Picker("Mac refresh rate", selection: $refreshRate) {
-                        Text("30 Hz").tag(30)
-                        Text("60 Hz").tag(60)
-                        Text("120 Hz").tag(120)
-                    }
-                    .pickerStyle(.segmented)
                     Toggle("Faster disk writes", isOn: $fastFlush)
                     Toggle("Quicker wake from idle", isOn: $wfiSpin)
                     Toggle("Superblocks (experimental)", isOn: $superblocks)
@@ -139,7 +132,7 @@ struct SettingsView: View {
                     }
                     Text("A bigger code cache empties less often and takes more memory; Henge picks 1.5 GB where there is room for it. Applies the next time Henge opens. If JIT stops turning on, choose 1 GB.")
                         .font(.footnote).foregroundStyle(.secondary)
-                    Text("The refresh rate is for Macs only. macOS draws a frame for every refresh: 30 Hz leaves the most of the emulated CPU to apps, at the cost of choppier animation; 60 Hz is smoother. Faster disk writes order them without waiting for a full sync; a sudden power loss could lose the last ones. Quicker wake keeps an idle CPU watching for work for 50 µs, at some battery cost. Superblocks let translated code run past conditional branches. Changes apply the next time a machine starts.")
+                    Text("Faster disk writes order them without waiting for a full sync; a sudden power loss could lose the last ones. Quicker wake keeps an idle CPU watching for work for 50 µs, at some battery cost. Superblocks let translated code run past conditional branches. Changes apply the next time a machine starts.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 .listRowBackground(Desk.card)

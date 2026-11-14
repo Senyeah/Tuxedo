@@ -7,7 +7,7 @@ nonisolated(unsafe) var engineLayer: UnsafeMutableRawPointer?
 @_cdecl("henge_vm_set_display_layer")
 func recordDisplayLayer(_ layer: UnsafeMutableRawPointer?) { engineLayer = layer }
 
-/// An external display scene as the app has it: records what it was told. Showing the Mac
+/// An external display scene as the app has it: records what it was told. Showing the guest
 /// attaches a layer the way the real screen view does; stopping it never detaches, because
 /// iOS may never tear the view down once the monitor is gone.
 @MainActor
@@ -41,13 +41,13 @@ struct LegacyExternalDisplayTests {
         precondition(a.told == ["show"] && b.told == ["show"])
         precondition(engineShows(b.layer))
 
-        // Unplugging A leaves B alone and still showing the Mac, not the phone.
+        // Unplugging A leaves B alone and still showing the guest, not the phone.
         legacy.disconnect(a)
         precondition(a.told == ["show", "stop"])
         precondition(b.told == ["show"])
         precondition(engineShows(b.layer))
 
-        // The session ending stops only the display still showing the Mac, and the phone gets it back.
+        // The session ending stops only the display still showing the guest, and the phone gets it back.
         legacy.end(MacPresentation(display: router, aspect: 16.0 / 9.0))
         precondition(a.told == ["show", "stop"])
         precondition(b.told == ["show", "stop"])

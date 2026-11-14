@@ -1312,7 +1312,7 @@ int main(int argc, char **argv) {
         const HvVtCaps *caps = hv_vt_caps();
         int hw = 0;
         for (int i = 0; i < caps->n_enc; i++) hw += !caps->enc[i].excluded && (caps->enc[i].info.codec == HV_VC_H264 || caps->enc[i].info.codec == HV_VC_HEVC);
-        if (hw < 2) { /* a virtual Mac has no media engine */
+        if (hw < 2) { /* a virtual machine has no media engine */
             printf("test_vcodec: skipped: no H.264 and HEVC hardware encoders here\n");
             return 0;
         }

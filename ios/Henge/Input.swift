@@ -1,21 +1,18 @@
 import SwiftUI
 import UIKit
 
-/// Types into the Mac. Two invisible views take turns holding the keyboard: one that asks for the
-/// on-screen keyboard, with a row of the Mac's own keys above it, and one that doesn't, so that a
+/// Types into the guest. Two invisible views take turns holding the keyboard: one that asks for the
+/// on-screen keyboard, with a row of the guest's own keys above it, and one that doesn't, so that a
 /// hardware keyboard works whether or not that is open.
 struct KeyboardCatcher: UIViewRepresentable {
     @Binding var active: Bool
     /// The console view holds the keyboard instead.
     var suspended = false
-    /// A Linux guest: the modifier row names Ctrl, Alt and Super.
-    var linux = false
 
     func makeUIView(context: Context) -> Holder { Holder() }
 
     func updateUIView(_ view: Holder, context: Context) {
         view.typer.onHide = { active = false }
-        view.typer.linux = linux
         view.typing = active
         view.suspended = suspended
         DispatchQueue.main.async { view.takeKeyboard() }
@@ -45,7 +42,7 @@ struct KeyboardCatcher: UIViewRepresentable {
         }
 
         /// iPadOS's own hide-keyboard key closes the keyboard without asking the app, which then went on
-        /// keeping the Mac small, with room for a keyboard that was gone. Stop typing as the row's button does.
+        /// keeping the guest small, with room for a keyboard that was gone. Stop typing as the row's button does.
         /// A sheet taking the keyboard isn't that: it is handed back when the sheet closes.
         private func keyboardHid() {
             guard typing, let window, window.rootViewController?.presentedViewController == nil else { return }
@@ -73,7 +70,7 @@ struct KeyboardCatcher: UIViewRepresentable {
     /// Whichever view holds the keyboard hears a hardware keyboard's keys here.
     class KeyListener: UIView {
         override var canBecomeFirstResponder: Bool { true }
-        /// Fingers belong to the session (they drive the Mac's trackpad), not to iPadOS's undo/copy/paste bar.
+        /// Fingers belong to the session (they drive the guest's trackpad), not to iPadOS's undo/copy/paste bar.
         override var editingInteractionConfiguration: UIEditingInteractionConfiguration { .none }
 
         override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
@@ -94,9 +91,8 @@ struct KeyboardCatcher: UIViewRepresentable {
 
     final class CatcherView: KeyListener, UIKeyInput {
         var onHide: () -> Void = {}
-        var linux = false { didSet { if linux != oldValue { row.rootView = ModifierRow(linux: linux, hide: { [weak self] in self?.onHide() }) } } }
         private lazy var row: UIHostingController<ModifierRow> = {
-            let host = UIHostingController(rootView: ModifierRow(linux: linux, hide: { [weak self] in self?.onHide() }))
+            let host = UIHostingController(rootView: ModifierRow(hide: { [weak self] in self?.onHide() }))
             host.sizingOptions = []
             host.view.backgroundColor = .clear
             host.view.frame = CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: 56)
@@ -126,7 +122,7 @@ struct KeyboardCatcher: UIViewRepresentable {
     }
 }
 
-/// Linux input key codes, which the Mac's keyboard device takes.
+/// Linux input key codes, which the guest's keyboard device takes.
 enum Keys {
     static let backspace: UInt16 = 14
     static let shift: UInt16 = 42
@@ -169,7 +165,7 @@ enum Keys {
         henge_vm_key(modifier, 0)
     }
 
-    /// One character at a time, for what the Mac has to keep up with.
+    /// One character at a time, for what the guest has to keep up with.
     @MainActor static func typeSlowly(_ text: String) async {
         for c in text {
             type(c)
@@ -209,7 +205,6 @@ final class StickyKeys: ObservableObject {
 
 /// The keys an on-screen keyboard doesn't have, in the slot above it.
 struct ModifierRow: View {
-    var linux = false
     let hide: () -> Void
     @ObservedObject private var sticky = StickyKeys.shared
 
@@ -217,9 +212,9 @@ struct ModifierRow: View {
         HStack(spacing: 5) {
             HeldKey(label: "esc", code: Keys.escape)
             HeldKey(label: "tab", code: Keys.tab)
-            modifier(linux ? "Ctrl" : "⌃", Keys.control, linux ? "Ctrl" : "Control")
-            modifier(linux ? "Alt" : "⌥", Keys.option, linux ? "Alt" : "Option")
-            modifier(linux ? "Super" : "⌘", Keys.command, linux ? "Super" : "Command")
+            modifier("Ctrl", Keys.control, "Ctrl")
+            modifier("Alt", Keys.option, "Alt")
+            modifier("Super", Keys.command, "Super")
             HeldKey(label: "←", code: Keys.left)
             HeldKey(label: "↑", code: Keys.up)
             HeldKey(label: "↓", code: Keys.down)
@@ -255,7 +250,7 @@ struct ModifierRow: View {
     }
 }
 
-/// A key that goes down when touched and up when let go, so holding it repeats as on a Mac.
+/// A key that goes down when touched and up when let go, so holding it repeats as on a keyboard.
 private struct HeldKey: View {
     let label: String
     let code: UInt16

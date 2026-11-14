@@ -2,8 +2,8 @@ import SwiftUI
 import UIKit
 
 /// The Desk: a quiet page, cards on it with a hairline edge, and one blue for what you press.
-/// A Mac's screen is the only colourful thing here. Dark, or light (Settings › Appearance);
-/// a running Mac's session is always dark.
+/// The guest's screen is the only colourful thing here. Dark, or light (Settings › Appearance);
+/// a running session is always dark.
 enum Desk {
     static let page = tone(light: (242, 243, 247), dark: (11, 12, 16))
     static let card = tone(light: (255, 255, 255), dark: (22, 24, 31))
@@ -50,7 +50,7 @@ enum DeskAppearance: String, CaseIterable, Identifiable {
 }
 
 /// Sets its own window's style directly, so System follows iOS's setting as it changes and a
-/// running Mac's session (in the same window) can stay dark over a light page.
+/// running session (in the same window) can stay dark over a light page.
 struct WindowStyle: UIViewRepresentable {
     let style: UIUserInterfaceStyle
 
@@ -73,7 +73,7 @@ struct WindowStyle: UIViewRepresentable {
 }
 
 extension View {
-    /// Liquid Glass where iOS has it, for controls floating over a Mac's screen.
+    /// Liquid Glass where iOS has it, for controls floating over the guest's screen.
     @ViewBuilder func deskGlass<S: Shape>(in shape: S) -> some View {
         #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
@@ -144,7 +144,7 @@ struct DeskBar: View {
     }
 }
 
-/// The picture of a Mac as it was last seen, kept beside its disk.
+/// The picture of a machine as it was last seen, kept beside its disk.
 enum MacPreview {
     static func file(for mac: VirtualMac) -> URL { mac.directory.appendingPathComponent("preview.jpg") }
 

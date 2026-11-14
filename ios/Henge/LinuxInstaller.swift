@@ -128,8 +128,7 @@ final class LinuxInstaller: ObservableObject {
     private func make(_ image: LinuxImage, files: LinuxDownload.Files, options: Options) async throws -> VirtualMac {
         try checkUnpackSpace(image)
         let name = options.name.trimmingCharacters(in: .whitespaces)
-        var mac = VirtualMac(name: name.isEmpty ? "Debian" : name, ecid: 0, seed: 0, ramMB: options.ramMB, diskBytes: options.diskBytes)
-        mac.kind = .linux
+        var mac = VirtualMac(name: name.isEmpty ? "Debian" : name, ramMB: options.ramMB, diskBytes: options.diskBytes)
         mac.osName = image.name
         if image.touch == true { mac.touchInput = true }
         phase = .decoding

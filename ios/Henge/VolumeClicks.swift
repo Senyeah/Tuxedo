@@ -276,7 +276,7 @@ final class VolumeClicks: NSObject {
     }
 
     /// True press/release from the capture interaction: the physical button *is* the mouse
-    /// button. Down on .began, up on .ended/.cancelled — no timers, no hold logic; macOS
+    /// button. Down on .began, up on .ended/.cancelled — no timers, no hold logic; the guest
     /// decides click vs drag from how long it's held and whether the pad moves. The button
     /// edge goes out first; the haptic is only feedback and must never sit in front of it.
     /// Called by CaptureInteractionView.

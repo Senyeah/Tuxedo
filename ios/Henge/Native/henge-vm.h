@@ -122,25 +122,24 @@ int henge_vm_take_volume_request(double *level, int *muted);
 void henge_vm_secrets(const HvSecretStore *store, const char *machine_id);
 void henge_vm_secrets_set_locked(int locked);
 
-/* The size macOS is told its screen is. Before henge_vm_boot. */
+/* The size the guest is told its screen is. Before henge_vm_boot_linux. */
 void henge_vm_set_display(uint32_t width, uint32_t height);
-/* The panel's physical size; 0, 0 for the default (a ~122 ppi, 1x screen). Before boot. */
+/* The scale the guest draws at: its UI points are pixels / scale. */
 void henge_vm_set_display_scale(double scale);
-void henge_vm_set_display_mm(uint32_t width_mm, uint32_t height_mm);
 void henge_vm_key(uint16_t code, int down);
 void henge_vm_key_hid(uint8_t usage, int down); /* a hardware keyboard: iOS gives each key's HID usage */
 void henge_vm_mouse_move(int dx, int dy);
 void henge_vm_mouse_button(int button, int down);
 /* Wheel units: dy > 0 up, dx > 0 right. */
 void henge_vm_mouse_scroll(int dx, int dy);
-/* The Magic Trackpad 2 the Mac sees on its USB bus: a finger on it. phase: 0 down, 1 move, 2 up;
+/* The Magic Trackpad 2 the guest sees on its USB bus: a finger on it. phase: 0 down, 1 move, 2 up;
    finger a stable 1..15 per touch; x, y sensor units 0..8134, 0..5206. ts_ms is the touch
    sample's own clock in ms, so the guest computes finger speed from real sample timing. */
 void henge_vm_touch(int finger, int phase, int x, int y, uint32_t ts_ms);
 void henge_vm_touch_frame(uint32_t ts_ms); /* commit one frame with every finger that moved */
 void henge_vm_touch_button(int down); /* the pad's full press (a click) */
 /* A Linux machine's touchscreen: slot 0..9; phase 0 down, 1 move, 2 up; x, y 0..32767 over the whole
-   guest picture. Nothing reaches the guest until _frame. cancel lifts every contact. No effect on a Mac. */
+   guest picture. Nothing reaches the guest until _frame. cancel lifts every contact. */
 void henge_vm_screen_touch(int slot, int phase, int x, int y);
 void henge_vm_screen_touch_frame(void);
 void henge_vm_screen_touch_cancel(void);
@@ -151,7 +150,7 @@ int henge_vm_pointer(int *x, int *y);
 /* A small picture of the display, BGRA, width * height * 4 bytes. 0, or -1 before anything shows. */
 int henge_vm_snapshot(uint8_t *bgra, int width, int height);
 
-/// Where the Mac's GPU frames go: a CAMetalLayer. Keep it alive while the machine runs.
+/// Where the guest's GPU frames go: a CAMetalLayer. Keep it alive while the machine runs.
 void henge_vm_set_display_layer(void *layer);
 /// How many frames have gone to it.
 uint64_t henge_vm_gpu_frames(void);

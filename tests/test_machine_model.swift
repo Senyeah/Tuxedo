@@ -2,11 +2,11 @@ import Foundation
 
 @main
 struct MachineModelTests {
-    // machines.json as the app wrote it before GuestKind existed (no "kind" key).
+    // A list written by an earlier build: keys the model no longer has (ecid, seed, kind, retina, sharpText) are ignored.
     static let oldList = """
-    [{"id":"11111111-2222-3333-4444-555555555555","name":"Sequoia","ecid":1234605616436508552,"seed":12345,
-      "ramMB":4096,"diskBytes":68719476736,"added":784000000.5,"osName":"macOS 15.1",
-      "screenWidth":1920,"screenHeight":1080,"retina":false}]
+    [{"id":"11111111-2222-3333-4444-555555555555","name":"Bookworm","ecid":0,"seed":0,"kind":"linux",
+      "ramMB":4096,"diskBytes":17179869184,"added":784000000.5,"osName":"Debian 12",
+      "screenWidth":1920,"screenHeight":1080,"retina":false,"sharpText":true}]
     """
 
     static func main() throws {
@@ -15,21 +15,21 @@ struct MachineModelTests {
         try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: tmp) }
 
-        // Old list: decodes, and the Mac keeps its identity and kind.
+        // Old list: decodes, and the keys the model dropped are ignored.
         let old = MachineList.decode(Data(oldList.utf8), diskExists: { _ in true })!
-        precondition(old.count == 1 && old[0].kind == nil && old[0].guest == .mac)
-        precondition(old[0].ecid == 1234605616436508552 && old[0].seed == 12345 && old[0].ramMB == 4096)
-        precondition(old[0].rom.lastPathComponent == "AVPBooter.vmapple2.bin" && old[0].aux.lastPathComponent == "auxiliary.bin")
+        precondition(old.count == 1 && old[0].name == "Bookworm" && old[0].ramMB == 4096 && old[0].osName == "Debian 12")
+        precondition(old[0].screenWidth == 1920 && old[0].screenHeight == 1080)
 
-        // New list: a Mac and a Linux machine round-trip, and the Linux one has its own firmware path.
-        var linux = VirtualMac(name: "Debian", ecid: 0, seed: 0, ramMB: 1024, diskBytes: 16 << 30)
-        linux.kind = .linux
+        // New list: two machines round-trip, and each has its own firmware path.
+        let linux = VirtualMac(name: "Debian", ramMB: 1024, diskBytes: 16 << 30)
         let both = old + [linux]
         let data = try JSONEncoder().encode(both)
         let back = MachineList.decode(data, diskExists: { _ in true })!
-        precondition(back == both && back[0].guest == .mac && back[1].guest == .linux)
+        precondition(back == both)
         precondition(back[1].firmware.lastPathComponent == "u-boot.bin" && back[1].firmware.deletingLastPathComponent() == back[1].directory)
-        precondition(String(decoding: data, as: UTF8.self).contains("\"kind\":\"linux\""))
+        for dropped in ["kind", "ecid", "seed", "retina", "sharpText"] {
+            precondition(!String(decoding: data, as: UTF8.self).contains("\"\(dropped)\""), dropped)
+        }
 
         // lastExternalScreen is optional: old JSON decodes without it, and a saved size round-trips.
         precondition(old[0].lastExternalScreen == nil && back[1].lastExternalScreen == nil)
@@ -40,15 +40,15 @@ struct MachineModelTests {
         precondition(String(decoding: screenData, as: UTF8.self).contains("\"lastExternalScreen\":{"))
 
         // A machine whose disk is gone is dropped; a damaged list is nil, not empty.
-        precondition(MachineList.decode(data, diskExists: { $0.guest == .mac })!.map(\.name) == ["Sequoia"])
+        precondition(MachineList.decode(data, diskExists: { $0.name == "Bookworm" })!.map(\.name) == ["Bookworm"])
         precondition(MachineList.decode(Data("{".utf8)) == nil)
         precondition(MachineList.decode(Data(#"[{"id":"x"}]"#.utf8)) == nil)
 
-        // machine.json: a Linux one has no ecid; an old Mac one has no kind.
-        let file = try JSONDecoder().decode(MachineFile.self, from: Data(#"{"name":"D","kind":"linux","ramMB":1024}"#.utf8))
-        precondition(file.kind == .linux && file.ecid == nil && file.ramMB == 1024)
-        let macFile = try JSONDecoder().decode(MachineFile.self, from: Data(#"{"name":"M","ecid":7,"seed":9,"ramMB":2048}"#.utf8))
-        precondition(macFile.kind == nil && macFile.ecid == 7)
+        // machine.json holds a name and a RAM size; other keys (an older file's kind, ecid, seed) are ignored.
+        let file = try JSONDecoder().decode(MachineFile.self, from: Data(#"{"name":"D","ramMB":1024}"#.utf8))
+        precondition(file.name == "D" && file.ramMB == 1024)
+        let staleFile = try JSONDecoder().decode(MachineFile.self, from: Data(#"{"name":"S","kind":"linux","ecid":7,"seed":9,"ramMB":2048}"#.utf8))
+        precondition(staleFile.name == "S" && staleFile.ramMB == 2048)
 
         // Recovery of an install that finished but was never listed.
         func folder(_ name: String, files: [String: String]) throws -> URL {
@@ -58,11 +58,14 @@ struct MachineModelTests {
             return dir
         }
         let id = UUID()
-        let linuxJSON = #"{"name":"Debian","kind":"linux","ramMB":2048}"#
+        let linuxJSON = #"{"name":"Debian","ramMB":2048}"#
         let ok = try folder("linux-ok", files: ["installed": "Debian 13\n", "machine.json": linuxJSON, "disk.img": "xxxx", "u-boot.bin": "fw"])
         let rec = MachineList.recover(id: id, folder: ok, defaultRAMMB: 1024)!
-        precondition(rec.guest == .linux && rec.id == id && rec.name == "Debian" && rec.ramMB == 2048)
-        precondition(rec.osName == "Debian 13" && rec.ecid == 0 && rec.seed == 0 && rec.diskBytes == 4)
+        precondition(rec.id == id && rec.name == "Debian" && rec.ramMB == 2048)
+        precondition(rec.osName == "Debian 13" && rec.diskBytes == 4)
+        let stale = try folder("linux-stale", files: ["installed": "", "machine.json": #"{"kind":"linux","ecid":7}"#, "disk.img": "xx", "u-boot.bin": "fw"])
+        let srec = MachineList.recover(id: id, folder: stale, defaultRAMMB: 3072)!
+        precondition(srec.name == "Linux" && srec.ramMB == 3072 && srec.osName == nil && srec.diskBytes == 2)
 
         let noFirmware = try folder("linux-nofw", files: ["installed": "", "machine.json": linuxJSON, "disk.img": "x"])
         precondition(MachineList.recover(id: id, folder: noFirmware, defaultRAMMB: 1024) == nil)
@@ -71,11 +74,6 @@ struct MachineModelTests {
         let noDisk = try folder("linux-nodisk", files: ["installed": "", "machine.json": linuxJSON, "u-boot.bin": "fw"])
         precondition(MachineList.recover(id: id, folder: noDisk, defaultRAMMB: 1024) == nil)
 
-        let macOK = try folder("mac-ok", files: ["installed": "macOS 15\n", "machine.json": #"{"name":"M","ecid":7}"#, "disk.img": "x"])
-        let mrec = MachineList.recover(id: id, folder: macOK, defaultRAMMB: 3072)!
-        precondition(mrec.guest == .mac && mrec.ecid == 7 && mrec.ramMB == 3072 && mrec.osName == "macOS 15")
-        let macNoEcid = try folder("mac-noecid", files: ["installed": "", "machine.json": #"{"name":"M"}"#, "disk.img": "x"])
-        precondition(MachineList.recover(id: id, folder: macNoEcid, defaultRAMMB: 1024) == nil)
 
         // I5: a per-machine CPU count falls back to the global one, and stays in range.
         precondition(old[0].cpus == nil && old[0].cpuCount(fallback: 4) == 4)
@@ -87,10 +85,8 @@ struct MachineModelTests {
         four.cpus = 3
         let again = try MachineList.decode(JSONEncoder().encode([four]), diskExists: { _ in true })!; precondition(again[0].cpus == 3)
 
-        // The tab and the list heading say "machines" once a Linux machine exists.
-        precondition(MachineList.tabTitle([]) == "Macs" && MachineList.tabTitle(old) == "Macs")
-        precondition(MachineList.tabTitle(both) == "Machines" && MachineList.othersHeading(both) == "Other machines")
-        precondition(MachineList.othersHeading(old) == "Other Macs" && linux.noun == "machine" && old[0].noun == "Mac")
+        // The tab and the list heading say "machines".
+        precondition(MachineList.tabTitle == "Machines" && MachineList.othersHeading == "Other machines")
 
         // Disk growth: the file gets longer, never shorter.
         let img = tmp.appendingPathComponent("grow.img")
@@ -105,44 +101,34 @@ struct MachineModelTests {
         sized.diskBytes = 5
         precondition(sized.logicalDiskBytes == 5) // no disk.img in its folder: the stored size
 
-        // The stopped card has its own words per kind.
-        for guest in [GuestKind.mac, .linux] {
-            let name = guest == .linux ? "Debian" : "Mac"
-            precondition(StopText.title(.shutdown, guest: guest) == "\(name) shut down")
-            precondition(StopText.title(.restart, guest: guest) == "\(name) requested a restart")
-            precondition(StopText.title(.error, guest: guest) == "\(name) stopped unexpectedly")
-            precondition(StopText.detail(.error, guest: guest, reason: "boom").contains("boom"))
-        }
-        precondition(StopText.startLabel(guest: .linux) == "Start" && StopText.startLabel(guest: .mac) == "Start Mac")
-        precondition(StopText.detail(.shutdown, guest: .linux, reason: "").contains("machines"))
-        precondition(StopText.detail(.shutdown, guest: .mac, reason: "").contains("Macs"))
+        // The stopped card's words.
+        precondition(StopText.title(.shutdown) == "Debian shut down")
+        precondition(StopText.title(.restart) == "Debian requested a restart")
+        precondition(StopText.title(.hostStop) == "Debian stopped")
+        precondition(StopText.title(.error) == "Debian stopped unexpectedly")
+        precondition(StopText.detail(.error, reason: "boom").contains("boom"))
+        precondition(StopText.startLabel == "Start")
+        precondition(StopText.detail(.shutdown, reason: "").contains("machines"))
+        precondition(StopText.detail(.restart, reason: "") == "The machine is ready to start again.")
 
-        precondition(MachineFolder.required(.linux) == ["u-boot.bin", "machine.json"])
-        precondition(MachineFolder.required(.mac).contains("auxiliary.bin"))
-        precondition(MachineFolder.files(.linux).contains("u-boot.bin") && !MachineFolder.files(.linux).contains("auxiliary.bin"))
-        var lin = VirtualMac(name: "Deb", ecid: 0, seed: 0, ramMB: 1024, diskBytes: 0)
-        lin.kind = .linux
-        let exp = MachineFolder.exportInfo(lin)
-        precondition(exp["kind"] as? String == "linux" && exp["ecid"] == nil && exp["ramMB"] as? Int == 1024)
+        precondition(MachineFolder.required == ["u-boot.bin", "machine.json"])
+        precondition(MachineFolder.files.contains("u-boot.bin") && MachineFolder.files.contains("disk.img"))
+        let exp = MachineFolder.exportInfo(VirtualMac(name: "Deb", ramMB: 1024, diskBytes: 0))
+        precondition(Set(exp.keys) == ["name", "ramMB"] && exp["ramMB"] as? Int == 1024)
         let exported = try JSONDecoder().decode(MachineFile.self, from: JSONSerialization.data(withJSONObject: exp))
-        precondition(exported.kind == .linux && exported.name == "Deb")
-        let macExp = MachineFolder.exportInfo(VirtualMac(name: "M", ecid: 7, seed: 9, ramMB: 2048, diskBytes: 0))
-        precondition(macExp["kind"] == nil && macExp["ecid"] as? UInt64 == 7)
+        precondition(exported.name == "Deb" && exported.ramMB == 1024)
 
         // R9: the screen choices are optional; old JSON decodes without them and saved ones round-trip.
-        precondition(old[0].screenFollowsExternal == nil && old[0].sharpText == nil && back[1].screenFollowsExternal == nil)
+        precondition(old[0].screenFollowsExternal == nil && back[1].screenFollowsExternal == nil)
         var chosen = linux
         chosen.screenFollowsExternal = true
-        chosen.sharpText = true
         chosen.screenWidth = ScreenPreset.qhd.width
         chosen.screenHeight = ScreenPreset.qhd.height
         let chosenData = try JSONEncoder().encode([chosen])
         let chosenBack = MachineList.decode(chosenData, diskExists: { _ in true })!
-        precondition(chosenBack == [chosen] && chosenBack[0].screenFollowsExternal == true && chosenBack[0].sharpText == true)
+        precondition(chosenBack == [chosen] && chosenBack[0].screenFollowsExternal == true)
         precondition(String(decoding: chosenData, as: UTF8.self).contains("\"screenFollowsExternal\":true"))
         // Without the fields they are left out of the JSON, so an older build reads the list.
-        precondition(!String(decoding: data, as: UTF8.self).contains("sharpText"))
-        precondition(ScreenPreset.fhd.denseMM == (width: 185, height: 104) && ScreenPreset.qhd.denseMM == (width: 246, height: 139))
 
         // A9: acceleration is off unless chosen, and is left out of the JSON when never chosen.
         precondition(old[0].accel == nil && chosenBack[0].accel == nil)
@@ -150,20 +136,16 @@ struct MachineModelTests {
         chosen.accel = true
         let accelBack = MachineList.decode(try JSONEncoder().encode([chosen]), diskExists: { _ in true })!
         precondition(accelBack[0].accel == true)
-        // Video decode is off unless chosen, and only with acceleration on a Linux machine.
+        // Video decode is off unless chosen, and only with acceleration.
         precondition(accelBack[0].video == nil && !accelBack[0].decodesVideo && !String(decoding: data, as: UTF8.self).contains("video"))
         chosen.video = true
         let videoBack = MachineList.decode(try JSONEncoder().encode([chosen]), diskExists: { _ in true })!
         precondition(videoBack[0].video == true && videoBack[0].decodesVideo)
         chosen.accel = false
         precondition(!chosen.decodesVideo)
-        var videoMac = old[0]
-        videoMac.accel = true
-        videoMac.video = true
-        precondition(!videoMac.decodesVideo)
         chosen.accel = true
         chosen.video = nil
-        // Video encode is off unless chosen, needs no acceleration, and is only for a Linux machine.
+        // Video encode is off unless chosen, and needs no acceleration.
         precondition(old[0].encode == nil && !old[0].encodesVideo && back[1].encode == nil && !back[1].encodesVideo)
         precondition(!String(decoding: data, as: UTF8.self).contains("encode"))
         var encoding = linux
@@ -175,20 +157,14 @@ struct MachineModelTests {
         encoding.encode = false
         let offBack = MachineList.decode(try JSONEncoder().encode([encoding]), diskExists: { _ in true })!
         precondition(!encoding.encodesVideo && offBack[0].encode == false && !offBack[0].encodesVideo)
-        var encodeMac = old[0]
-        encodeMac.encode = true
-        precondition(!encodeMac.encodesVideo)
 
-        // TS5: the touch switch is per machine; old JSON has none (the pointer), and a Mac ignores it.
+        // TS5: the touch switch is per machine; old JSON has none (the pointer).
         precondition(old[0].touchInput == nil && !old[0].usesTouch && back[1].touchInput == nil && !back[1].usesTouch)
         precondition(!String(decoding: data, as: UTF8.self).contains("touchInput"))
         var touchLinux = linux
         touchLinux.touchInput = true
         let touchBack = MachineList.decode(try JSONEncoder().encode([touchLinux]), diskExists: { _ in true })!
         precondition(touchBack[0].touchInput == true && touchBack[0].usesTouch)
-        var touchMac = old[0]
-        touchMac.touchInput = true
-        precondition(!touchMac.usesTouch)
         touchLinux.touchInput = false
         precondition(!touchLinux.usesTouch)
 

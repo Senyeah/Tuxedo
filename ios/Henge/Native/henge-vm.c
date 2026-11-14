@@ -80,7 +80,7 @@ static int started(char *err, size_t errlen) {
     exit_reason = exit_outcome = 0;
     state = 1;
     if (hv_vm_start(1, on_exit) != 0) {
-        snprintf(err, errlen, "There are not enough resources to start the Mac's CPU threads.");
+        snprintf(err, errlen, "There are not enough resources to start the machine's CPU threads.");
         return failed_start();
     }
     atomic_fetch_add(&generation, 1);
@@ -464,7 +464,6 @@ int henge_vm_take_volume_request(double *level, int *muted) {
 
 void henge_vm_set_display(uint32_t width, uint32_t height) { hv_vm_set_display_mode(width, height); }
 void henge_vm_set_display_scale(double scale) { hv_vm_set_display_scale(scale); }
-void henge_vm_set_display_mm(uint32_t width_mm, uint32_t height_mm) { hv_vm_set_display_size_mm(width_mm, height_mm); }
 
 void henge_vm_key(uint16_t code, int down) {
     if (!lock_running()) return;
@@ -566,7 +565,7 @@ uint64_t henge_largest_reservation_gb(void) {
 }
 
 uint64_t henge_largest_mapping_mb(void) {
-    for (uint64_t mb = 16896; mb >= 1024; mb -= 512) { /* 16 GB, the most a Mac can ask for, plus what the caller keeps back */
+    for (uint64_t mb = 16896; mb >= 1024; mb -= 512) { /* 16 GB, the most a machine can ask for, plus what the caller keeps back */
         void *p = mmap(NULL, mb << 20, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
         if (p != MAP_FAILED) {
             munmap(p, mb << 20);

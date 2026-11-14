@@ -20,11 +20,6 @@ struct HengeApp: App {
         JITBootstrap.installTrapGuard()
         try? AVAudioSession.sharedInstance().setCategory(.playback, options: [.mixWithOthers])
         Machines.shared.collectImports()
-        // The display question: does this iOS have Apple's paravirtualized graphics at all?
-        for path in ["/System/Library/Frameworks/ParavirtualizedGraphics.framework/ParavirtualizedGraphics",
-                     "/System/Library/PrivateFrameworks/ParavirtualizedGraphics.framework/ParavirtualizedGraphics"] {
-            HengeLog.log("app", "\(path): \(dlopen(path, RTLD_LAZY) != nil ? "present" : "absent")")
-        }
     }
 
     var body: some Scene {
@@ -36,23 +31,22 @@ struct HengeApp: App {
 }
 
 struct RootView: View {
-    enum Tab: Hashable { case macs, install, settings }
+    enum Tab: Hashable { case machines, install, settings }
 
     @ObservedObject private var machines = Machines.shared
     @ObservedObject private var jit = JITCoordinator.shared
     @Environment(\.scenePhase) private var scenePhase
     @State private var running: VirtualMac?
-    @State private var tab = Tab.macs
-    @State private var installSide: InstallView.Platform? // the side a Home button asked for
+    @State private var tab = Tab.machines
     @AppStorage(DeskAppearance.key) private var appearance = DeskAppearance.system
 
     var body: some View {
         ZStack {
             TabView(selection: $tab) {
-                HomeView(running: $running, tab: $tab, installSide: $installSide)
-                    .tabItem { Label(MachineList.tabTitle(machines.all), systemImage: "macwindow") }
-                    .tag(Tab.macs)
-                InstallView(start: { mac in tab = .macs; running = mac }, side: $installSide)
+                HomeView(running: $running, tab: $tab)
+                    .tabItem { Label(MachineList.tabTitle, systemImage: "terminal") }
+                    .tag(Tab.machines)
+                InstallView(start: { mac in tab = .machines; running = mac })
                     .tabItem { Label("Install", systemImage: "arrow.down.circle") }
                     .tag(Tab.install)
                 SettingsView()
@@ -93,7 +87,7 @@ struct RootView: View {
         .onChange(of: jit.attachGeneration) { _ in JITBootstrap.prewarm() } // the built-in helper attached
         .task { // testing only: HENGE_AUTOPILOT
             await Autopilot.run { mac in
-                // A session still on screen (its Mac stopped) is closed first: the same value again would start nothing.
+                // A session still on screen (its machine stopped) is closed first: the same value again would start nothing.
                 guard running != nil else { running = mac; return }
                 running = nil
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) { running = mac }
