@@ -1,7 +1,7 @@
 import Foundation
 
 /// Every number of the pad's look and haptics, in one place (docs/external-trackpad-plan.md).
-/// Trackpad Lab changes them live and exports them; Henge uses the defaults.
+/// Tuning numbers for the trackpad surface; the app uses the defaults.
 /// Sizes are in points, times in seconds, alphas and energies from 0 to 1, colours sRGB hex.
 struct PadTuning: Codable, Equatable {
     var grid = Grid()

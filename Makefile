@@ -482,7 +482,7 @@ test-edge-push: $(B)/test_edge_push
 	$<
 .PHONY: test-edge-push
 
-# The trackpad's surface (ios/Pad, shared with Trackpad Lab): pure Swift, no UIKit.
+# The trackpad's surface (ios/Pad): pure Swift, no UIKit.
 # -O: it times a frame of the field.
 $(B)/test_pad_field: ios/Pad/PadTuning.swift ios/Pad/PadField.swift tests/test_pad_field.swift | $(B)
 	xcrun --sdk macosx swiftc -O -parse-as-library $^ -o $@

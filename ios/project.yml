@@ -60,7 +60,7 @@ targets:
         buildPhase: resources
       # The messages the app and its JIT helper exchange.
       - path: HengeJITHelper/HengeJITMessages.swift
-      # The trackpad's surface, shared with Trackpad Lab (ios/TrackpadLab).
+      # The trackpad's surface (ios/Pad).
       - path: Pad
     settings:
       base:
