@@ -14,3 +14,6 @@ line-re:Leviidev/Henge
 # Dated log entries in docs and plans: a date at the start of a list item or heading.
 line-re:^\s*(?:[-*]\s+|#+\s+)?\*{0,2}\d{1,2}/\d{1,2}/20\d\d
 line-re:formerly Henge
+# Dated result records that quote the old binary name (Decision 20): a date in the line or in the block opener.
+lines:docs/files-mount-plan.md:595
+lines:docs/guest-video-encode-plan.md:705
