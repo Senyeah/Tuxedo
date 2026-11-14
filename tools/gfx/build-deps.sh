@@ -248,6 +248,7 @@ build_epoxy() {
 	git_pin "$GFX_SRC/libepoxy" "$LIBEPOXY_REPO" "$LIBEPOXY_COMMIT"
 	# ANGLE is static, so libepoxy must not dlopen EGL and GLES (see README). Idempotent.
 	local patch=$HERE/libepoxy-static-gl.patch
+	git -C "$GFX_SRC/libepoxy" checkout -q -- . # drop an older version of the patch
 	if ! git -C "$GFX_SRC/libepoxy" apply --reverse --check "$patch" 2>/dev/null; then
 		git -C "$GFX_SRC/libepoxy" apply "$patch"
 	fi
