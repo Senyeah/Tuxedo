@@ -115,7 +115,7 @@ enum LinuxUnpack {
 
     /// Makes the machine's folder: disk.img at the chosen size, u-boot.bin, machine.json, then the installed marker.
     /// A failure removes the folder. Blocks for as long as the unpack takes: call it off the main thread.
-    static func make(_ image: LinuxImage, files: LinuxDownload.Files, into dir: URL, mac: VirtualMac, diskBytes: Int64,
+    static func make(_ image: LinuxImage, files: LinuxDownload.Files, into dir: URL, machine: VirtualMachine, diskBytes: Int64,
                      progress: @escaping (Stage, Int64, Int64) -> Void) throws {
         let fm = FileManager.default
         do {
@@ -132,9 +132,9 @@ enum LinuxUnpack {
             let now = (try fm.attributesOfItem(atPath: disk.path)[.size] as? Int64) ?? 0
             if diskBytes > now { try DiskGrowth.grow(disk, toBytes: diskBytes) }
             try fm.copyItem(at: files.firmware, to: dir.appendingPathComponent("u-boot.bin"))
-            try JSONSerialization.data(withJSONObject: MachineFolder.exportInfo(mac)).write(to: dir.appendingPathComponent("machine.json"))
+            try JSONSerialization.data(withJSONObject: MachineFolder.exportInfo(machine)).write(to: dir.appendingPathComponent("machine.json"))
             // Last: the list is rebuilt from folders with this marker after a crash
-            try (mac.osName ?? "").write(to: dir.appendingPathComponent(MachinePaths.installedMarker), atomically: true, encoding: .utf8)
+            try (machine.osName ?? "").write(to: dir.appendingPathComponent(MachinePaths.installedMarker), atomically: true, encoding: .utf8)
         } catch {
             try? fm.removeItem(at: dir)
             throw error

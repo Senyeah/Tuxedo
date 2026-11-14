@@ -1,6 +1,6 @@
 import Foundation
 
-/// Stands in for MacPresentation: a session identified by its number.
+/// Stands in for MachinePresentation: a session identified by its number.
 struct Session: Identifiable {
     let id: Int
 }
@@ -15,8 +15,8 @@ struct ExternalScreenPlanTests {
         func text(_ changes: [ExternalScreenPlan<Session>.Change]) -> [String] {
             changes.map {
                 switch $0 {
-                case .showMac(let surface, let session): "show \(names[surface]!) \(session.id)"
-                case .stopMac(let surface, let session): "stop \(names[surface]!) \(session.id)"
+                case .showMachine(let surface, let session): "show \(names[surface]!) \(session.id)"
+                case .stopMachine(let surface, let session): "stop \(names[surface]!) \(session.id)"
                 }
             }
         }

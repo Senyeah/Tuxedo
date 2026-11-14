@@ -5,7 +5,7 @@ struct LinuxInstallView: View {
     @ObservedObject private var linux = LinuxInstaller.shared
     @AppStorage(LinuxCatalogue.urlKey) private var catalogueURL = ""
     let jitReady: Bool
-    let start: (VirtualMac) -> Void
+    let start: (VirtualMachine) -> Void
 
     @State private var selected: String?
     @State private var name = "Debian"
@@ -250,22 +250,22 @@ struct LinuxInstallView: View {
     }
 
     private func finished(_ id: UUID) -> some View {
-        let mac = Machines.shared.all.first { $0.id == id }
+        let machine = Machines.shared.all.first { $0.id == id }
         return VStack(spacing: 14) {
             VStack(spacing: 14) {
                 Image(systemName: "checkmark.circle.fill").font(.system(size: 54)).foregroundStyle(Desk.good).padding(.top, 8)
                 Text("Installed").font(.system(size: 24, weight: .bold))
-                Text("\(mac?.name ?? "The machine") is ready to start.")
+                Text("\(machine?.name ?? "The machine") is ready to start.")
                     .font(.system(size: 15)).foregroundStyle(Desk.dim).multilineTextAlignment(.center)
             }
             .padding(20)
             .frame(maxWidth: .infinity)
             .deskCard(radius: 30)
 
-            if let mac {
+            if let machine {
                 Button("Start") {
                     linux.reset()
-                    start(mac)
+                    start(machine)
                 }
                 .buttonStyle(DeskButtonStyle(enabled: jitReady))
                 .disabled(!jitReady)

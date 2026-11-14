@@ -16,12 +16,12 @@ final class FakeScreen: ExternalScreen {
     let layer = CAMetalLayer()
     var told: [String] = []
 
-    func showMac(_ presentation: MacPresentation) {
+    func showMachine(_ presentation: MachinePresentation) {
         told.append("show")
         presentation.display.connect(surface, layer: layer, role: .external)
     }
 
-    func stopMac() { told.append("stop") }
+    func stopMachine() { told.append("stop") }
 }
 
 @main
@@ -37,7 +37,7 @@ struct LegacyExternalDisplayTests {
         let legacy = LegacyExternalDisplay()
         legacy.connect(a)
         legacy.connect(b)
-        legacy.begin(MacPresentation(display: router, aspect: 16.0 / 9.0))
+        legacy.begin(MachinePresentation(display: router, aspect: 16.0 / 9.0))
         precondition(a.told == ["show"] && b.told == ["show"])
         precondition(engineShows(b.layer))
 
@@ -48,7 +48,7 @@ struct LegacyExternalDisplayTests {
         precondition(engineShows(b.layer))
 
         // The session ending stops only the display still showing the guest, and the phone gets it back.
-        legacy.end(MacPresentation(display: router, aspect: 16.0 / 9.0))
+        legacy.end(MachinePresentation(display: router, aspect: 16.0 / 9.0))
         precondition(a.told == ["show", "stop"])
         precondition(b.told == ["show", "stop"])
         precondition(engineShows(phoneLayer) && !router.isExternal)

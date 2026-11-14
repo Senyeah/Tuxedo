@@ -467,7 +467,7 @@ $(B)/test_external_screen_plan: ios/Henge/ExternalScreenPlan.swift tests/test_ex
 	xcrun --sdk macosx swiftc $^ -o $@
 
 # The glue: fake screens and a real router, to check what each screen is told and what the engine draws.
-$(B)/test_legacy_external_display: ios/Henge/LegacyExternalDisplay.swift ios/Henge/ExternalScreenPlan.swift ios/Henge/MacPresentation.swift ios/Henge/DisplayRouter.swift ios/Henge/DisplayTargetSelection.swift tests/test_legacy_external_display.swift tests/display_engine_stub.h | $(B)
+$(B)/test_legacy_external_display: ios/Henge/LegacyExternalDisplay.swift ios/Henge/ExternalScreenPlan.swift ios/Henge/MachinePresentation.swift ios/Henge/DisplayRouter.swift ios/Henge/DisplayTargetSelection.swift tests/test_legacy_external_display.swift tests/display_engine_stub.h | $(B)
 	xcrun --sdk macosx swiftc -import-objc-header tests/display_engine_stub.h $(filter %.swift,$^) -o $@
 
 # Info.plist must declare the external display scene role with ExternalDisplaySceneDelegate, or iOS 17-26 never offer the display.

@@ -1,10 +1,10 @@
 import SwiftUI
 
 /// One machine: what it has, and what can be done with it.
-struct MacSettingsView: View {
+struct MachineSettingsView: View {
     @ObservedObject private var machines = Machines.shared
     @Environment(\.dismiss) private var dismiss
-    @State private var mac: VirtualMac
+    @State private var machine: VirtualMachine
     @State private var confirmDelete = false
     @State private var movingExport = false
     @AppStorage("henge.cpus") private var globalCpus = 4
@@ -12,13 +12,13 @@ struct MacSettingsView: View {
     @State private var confirmGrow = false
     @State private var growError: String?
 
-    init(mac: VirtualMac) { _mac = State(initialValue: mac) }
+    init(machine: VirtualMachine) { _machine = State(initialValue: machine) }
 
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
                 DeskHeading("Name")
-                TextField("Name", text: $mac.name)
+                TextField("Name", text: $machine.name)
                     .font(.system(size: 16))
                     .submitLabel(.done)
                     .padding(.horizontal, 17)
@@ -29,14 +29,14 @@ struct MacSettingsView: View {
                 DeskHeading("Memory")
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(alignment: .firstTextBaseline) {
-                        Text("\(mac.ramMB / 1024) GB").font(.system(size: 26, weight: .bold))
+                        Text("\(machine.ramMB / 1024) GB").font(.system(size: 26, weight: .bold))
                         Spacer()
                         Text(Entitlements.increasedMemory ? "Outside the app's limit once JIT is on" : "Used from free storage if needed")
                             .font(.system(size: 13)).foregroundStyle(Desk.dim).multilineTextAlignment(.trailing)
                     }
-                    Stepper("Memory", value: Binding(get: { mac.ramMB / 1024 }, set: { mac.ramMB = $0 * 1024; save() }), in: Device.memoryChoices)
+                    Stepper("Memory", value: Binding(get: { machine.ramMB / 1024 }, set: { machine.ramMB = $0 * 1024; save() }), in: Device.memoryChoices)
                         .font(.system(size: 16))
-                    if let note = Device.memoryNote(mac.ramMB / 1024) {
+                    if let note = Device.memoryNote(machine.ramMB / 1024) {
                         Text(note).font(.system(size: 13)).foregroundStyle(Desk.dim)
                     }
                 }
@@ -44,11 +44,11 @@ struct MacSettingsView: View {
                 .deskCard()
 
                 DeskHeading("Processors")
-                Stepper(value: Binding(get: { mac.cpuCount(fallback: globalCpus) }, set: { mac.cpus = $0; save() }), in: VirtualMac.cpuRange) {
+                Stepper(value: Binding(get: { machine.cpuCount(fallback: globalCpus) }, set: { machine.cpus = $0; save() }), in: VirtualMachine.cpuRange) {
                     HStack {
                         Text("CPUs").font(.system(size: 16))
                         Spacer()
-                        Text("\(mac.cpuCount(fallback: globalCpus))").font(.system(size: 16, weight: .semibold))
+                        Text("\(machine.cpuCount(fallback: globalCpus))").font(.system(size: 16, weight: .semibold))
                     }
                 }
                 .padding(.horizontal, 17)
@@ -67,14 +67,14 @@ struct MacSettingsView: View {
                         Spacer()
                         Text("of \(sizeText)").font(.system(size: 16)).foregroundStyle(Desk.dim)
                     }
-                    DeskBar(fraction: Double(mac.bytesUsed) / Double(max(diskBytes, 1)))
+                    DeskBar(fraction: Double(machine.bytesUsed) / Double(max(diskBytes, 1)))
                     growControls
                 }
                 .padding(17)
                 .deskCard()
 
-                FoldersSection(machine: mac.id)
-                ForwardsSection(machine: mac.id)
+                FoldersSection(machine: machine.id)
+                ForwardsSection(machine: machine.id)
 
                 DeskHeading("Manage")
                 manage
@@ -84,7 +84,7 @@ struct MacSettingsView: View {
             .deskColumn()
         }
         .background(Desk.page)
-        .navigationTitle(mac.name)
+        .navigationTitle(machine.name)
         .navigationBarTitleDisplayMode(.inline)
         .onDisappear(perform: save)
         .fileMover(isPresented: $movingExport, file: machines.lastExport) { result in
@@ -93,9 +93,9 @@ struct MacSettingsView: View {
             case .failure(let error): machines.lastError = error.localizedDescription
             }
         }
-        .confirmationDialog("Delete \(mac.name)?", isPresented: $confirmDelete, titleVisibility: .visible) {
+        .confirmationDialog("Delete \(machine.name)?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
-                machines.delete(mac.id)
+                machines.delete(machine.id)
                 dismiss()
             }
         } message: {
@@ -107,8 +107,8 @@ struct MacSettingsView: View {
     private enum LinuxScreen: Hashable { case phone, external, qhd, fhd }
 
     private var linuxChoice: LinuxScreen? {
-        if mac.screenWidth == nil { return mac.screenFollowsExternal == true ? .external : .phone }
-        switch PixelSize(width: mac.screenWidth ?? 0, height: mac.screenHeight ?? 0) {
+        if machine.screenWidth == nil { return machine.screenFollowsExternal == true ? .external : .phone }
+        switch PixelSize(width: machine.screenWidth ?? 0, height: machine.screenHeight ?? 0) {
         case ScreenPreset.qhd: return .qhd
         case ScreenPreset.fhd: return .fhd
         default: return nil
@@ -116,11 +116,11 @@ struct MacSettingsView: View {
     }
 
     private func pickLinux(_ choice: LinuxScreen) {
-        mac.screenFollowsExternal = choice == .external ? true : nil
+        machine.screenFollowsExternal = choice == .external ? true : nil
         switch choice {
-        case .phone, .external: (mac.screenWidth, mac.screenHeight) = (nil, nil)
-        case .qhd: (mac.screenWidth, mac.screenHeight) = (ScreenPreset.qhd.width, ScreenPreset.qhd.height)
-        case .fhd: (mac.screenWidth, mac.screenHeight) = (ScreenPreset.fhd.width, ScreenPreset.fhd.height)
+        case .phone, .external: (machine.screenWidth, machine.screenHeight) = (nil, nil)
+        case .qhd: (machine.screenWidth, machine.screenHeight) = (ScreenPreset.qhd.width, ScreenPreset.qhd.height)
+        case .fhd: (machine.screenWidth, machine.screenHeight) = (ScreenPreset.fhd.width, ScreenPreset.fhd.height)
         }
         save()
     }
@@ -151,7 +151,7 @@ struct MacSettingsView: View {
             .padding(.top, 8)
         if linuxChoice == .phone {
             VStack(alignment: .leading, spacing: 8) {
-                Toggle("Use the whole screen", isOn: Binding(get: { mac.wholeScreen ?? false }, set: { mac.wholeScreen = $0 ? true : nil; save() }))
+                Toggle("Use the whole screen", isOn: Binding(get: { machine.wholeScreen ?? false }, set: { machine.wholeScreen = $0 ? true : nil; save() }))
                     .font(.system(size: 16))
                 Text("Upright, the status bar hides and the desktop goes under it and the home bar. The rounded corners and the camera cut-out hide parts of it. Applies at once.")
                     .font(.system(size: 13)).foregroundStyle(Desk.dim)
@@ -165,28 +165,28 @@ struct MacSettingsView: View {
     private var linuxScreenNote: String {
         switch linuxChoice {
         case .phone?: return "The size of this iPhone's screen, in either orientation. A connected external display takes over. Applies at once."
-        case .external?: return mac.lastExternalScreen.map { "The external display's size, \($0.width) × \($0.height) when it was last connected. Applies at once." }
+        case .external?: return machine.lastExternalScreen.map { "The external display's size, \($0.width) × \($0.height) when it was last connected. Applies at once." }
             ?? "The external display's size. Connect one once and this machine remembers it. Applies at once."
-        default: return "\(mac.screen.width) × \(mac.screen.height), whatever screen is connected. Applies at once."
+        default: return "\(machine.screen.width) × \(machine.screen.height), whatever screen is connected. Applies at once."
         }
     }
 
     private var padScreenChoice: String {
-        if mac.screenFollowsExternal == true { return "external" }
-        if mac.screen.width == Device.performanceScreen.width, mac.screen.height == Device.performanceScreen.height { return "performance" }
-        if mac.screen.width == 1920, mac.screen.height == 1080, Device.fittingScreen.height != 1080 { return "wide" }
+        if machine.screenFollowsExternal == true { return "external" }
+        if machine.screen.width == Device.performanceScreen.width, machine.screen.height == Device.performanceScreen.height { return "performance" }
+        if machine.screen.width == 1920, machine.screen.height == 1080, Device.fittingScreen.height != 1080 { return "wide" }
         return "fit"
     }
 
     @ViewBuilder private var padScreen: some View {
         VStack(alignment: .leading, spacing: 12) {
             Picker("Screen", selection: Binding(get: { padScreenChoice }, set: { choice in
-                mac.screenFollowsExternal = choice == "external" ? true : nil
+                machine.screenFollowsExternal = choice == "external" ? true : nil
                 switch choice {
-                case "external": (mac.screenWidth, mac.screenHeight) = (nil, nil)
-                case "performance": (mac.screenWidth, mac.screenHeight) = Device.performanceScreen
-                case "wide": (mac.screenWidth, mac.screenHeight) = (1920, 1080)
-                default: (mac.screenWidth, mac.screenHeight) = Device.fittingScreen
+                case "external": (machine.screenWidth, machine.screenHeight) = (nil, nil)
+                case "performance": (machine.screenWidth, machine.screenHeight) = Device.performanceScreen
+                case "wide": (machine.screenWidth, machine.screenHeight) = (1920, 1080)
+                default: (machine.screenWidth, machine.screenHeight) = Device.fittingScreen
                 }
                 save()
             })) {
@@ -205,26 +205,26 @@ struct MacSettingsView: View {
     private var padScreenNote: String {
         let later = "Changes apply the next time this machine starts."
         if padScreenChoice == "external" {
-            let size = mac.lastExternalScreen.map { "\($0.width) × \($0.height) when it was last connected" } ?? "none remembered yet: connect one once"
-            return "The external display's size (\(size)). Without it, \(mac.screen.width) × \(mac.screen.height). \(later)"
+            let size = machine.lastExternalScreen.map { "\($0.width) × \($0.height) when it was last connected" } ?? "none remembered yet: connect one once"
+            return "The external display's size (\(size)). Without it, \(machine.screen.width) × \(machine.screen.height). \(later)"
         }
-        return "\(mac.screen.width) × \(mac.screen.height). \(Device.isPad ? "Performance renders about 30% fewer pixels. " : "")\(later)"
+        return "\(machine.screen.width) × \(machine.screen.height). \(Device.isPad ? "Performance renders about 30% fewer pixels. " : "")\(later)"
     }
 
     private var graphics: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Toggle("Graphics acceleration", isOn: Binding(get: { mac.accel ?? false }, set: { mac.accel = $0; save() }))
+            Toggle("Graphics acceleration", isOn: Binding(get: { machine.accel ?? false }, set: { machine.accel = $0; save() }))
                 .font(.system(size: 16))
             Text("The guest draws 3D and its desktop on this \(Device.name)'s GPU (OpenGL ES 3.0). It takes more memory, and a graphics fault can stop the machine. In the background the whole machine pauses, even while it plays sound, so its sound stops. Experimental. Applies the next time this machine starts.")
                 .font(.system(size: 13)).foregroundStyle(Desk.dim)
-            if mac.accel == true {
-                Toggle("Video decode", isOn: Binding(get: { mac.video ?? false }, set: { mac.video = $0; save() }))
+            if machine.accel == true {
+                Toggle("Video decode", isOn: Binding(get: { machine.video ?? false }, set: { machine.video = $0; save() }))
                     .font(.system(size: 16))
                     .padding(.top, 8)
                 Text("This \(Device.name)'s video decoder then parses data that the guest controls (H.264, VP9 and AV1 through VA-API). Applies the next time this machine starts.")
                     .font(.system(size: 13)).foregroundStyle(Desk.dim)
             }
-            Toggle("Video encode", isOn: Binding(get: { mac.encode ?? false }, set: { mac.encode = $0; save() }))
+            Toggle("Video encode", isOn: Binding(get: { machine.encode ?? false }, set: { machine.encode = $0; save() }))
                 .font(.system(size: 16))
                 .padding(.top, 8)
             Text("This \(Device.name)'s video codecs then take data that the guest controls (ffmpeg from henge-ffmpeg). Applies the next time this machine starts.")
@@ -234,11 +234,11 @@ struct MacSettingsView: View {
         .deskCard()
     }
 
-    private var diskBytes: Int64 { mac.logicalDiskBytes }
+    private var diskBytes: Int64 { machine.logicalDiskBytes }
     private var diskGB: Int { Int((diskBytes + (1 << 30) - 1) >> 30) }
     private var growTarget: Int { max(growToGB, diskGB) }
     // Linux sizes are in GB of 2^30 bytes, like Memory and the grow stepper.
-    private var usedText: String { String(format: "%.1f GB", Double(max(mac.bytesUsed, 0)) / Double(1 << 30)) }
+    private var usedText: String { String(format: "%.1f GB", Double(max(machine.bytesUsed, 0)) / Double(1 << 30)) }
     private var sizeText: String { "\(diskGB) GB" }
 
     @ViewBuilder private var growControls: some View {
@@ -264,11 +264,11 @@ struct MacSettingsView: View {
         let state = henge_vm_state()
         guard state != 1 && state != 3 else { growError = "Turn this machine off first."; return }
         do {
-            try DiskGrowth.grow(mac.disk, toBytes: Int64(growTarget) << 30)
-            mac.diskBytes = mac.logicalDiskBytes
+            try DiskGrowth.grow(machine.disk, toBytes: Int64(growTarget) << 30)
+            machine.diskBytes = machine.logicalDiskBytes
             growToGB = 0
             save()
-            HengeLog.log("machines", "grew \(mac.name)'s disk to \(mac.diskBytes >> 30) GB")
+            HengeLog.log("machines", "grew \(machine.name)'s disk to \(machine.diskBytes >> 30) GB")
         } catch {
             growError = error.localizedDescription
         }
@@ -283,7 +283,7 @@ struct MacSettingsView: View {
                 }
                 .padding(17)
             } else {
-                row("Export", symbol: "square.and.arrow.up", tint: Desk.accentLight) { machines.export(mac) }
+                row("Export", symbol: "square.and.arrow.up", tint: Desk.accentLight) { machines.export(machine) }
             }
             if let folder = machines.lastExport {
                 divider
@@ -318,7 +318,7 @@ struct MacSettingsView: View {
     }
 
     private func save() {
-        if mac.name.isEmpty { mac.name = "Linux" }
-        machines.update(mac)
+        if machine.name.isEmpty { machine.name = "Linux" }
+        machines.update(machine)
     }
 }

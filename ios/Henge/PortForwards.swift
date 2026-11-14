@@ -18,10 +18,10 @@ final class ForwardSession: ObservableObject {
     private var monitor: NWPathMonitor?
     private var poll: Task<Void, Never>?
 
-    func start(_ mac: VirtualMac) {
+    func start(_ machine: VirtualMachine) {
         end()
-        machine = mac.id
-        apply(mac.forwards ?? [])
+        self.machine = machine.id
+        apply(machine.forwards ?? [])
         let m = NWPathMonitor()
         m.pathUpdateHandler = { _ in
             henge_vm_forwards_refresh() // the engine's own poll would see it within 5 s
@@ -52,9 +52,9 @@ final class ForwardSession: ObservableObject {
     }
 
     /// Settings changed this machine's forwards while it runs: they apply at once.
-    func changed(_ mac: VirtualMac) {
-        guard machine == mac.id else { return }
-        apply(mac.forwards ?? [])
+    func changed(_ machine: VirtualMachine) {
+        guard self.machine == machine.id else { return }
+        apply(machine.forwards ?? [])
         read()
     }
 
@@ -85,7 +85,7 @@ final class ForwardSession: ObservableObject {
 enum ForwardEdit {
     @MainActor static func change(_ machine: UUID, _ edit: (inout [PortForward]) -> Void) {
         Machines.shared.updateForwards(of: machine, edit)
-        if let mac = Machines.shared.all.first(where: { $0.id == machine }) { ForwardSession.shared.changed(mac) }
+        if let machine = Machines.shared.all.first(where: { $0.id == machine }) { ForwardSession.shared.changed(machine) }
     }
 }
 

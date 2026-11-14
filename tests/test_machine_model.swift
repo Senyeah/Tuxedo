@@ -21,7 +21,7 @@ struct MachineModelTests {
         precondition(old[0].screenWidth == 1920 && old[0].screenHeight == 1080)
 
         // New list: two machines round-trip, and each has its own firmware path.
-        let linux = VirtualMac(name: "Debian", ramMB: 1024, diskBytes: 16 << 30)
+        let linux = VirtualMachine(name: "Debian", ramMB: 1024, diskBytes: 16 << 30)
         let both = old + [linux]
         let data = try JSONEncoder().encode(both)
         let back = MachineList.decode(data, diskExists: { _ in true })!
@@ -113,7 +113,7 @@ struct MachineModelTests {
 
         precondition(MachineFolder.required == ["u-boot.bin", "machine.json"])
         precondition(MachineFolder.files.contains("u-boot.bin") && MachineFolder.files.contains("disk.img"))
-        let exp = MachineFolder.exportInfo(VirtualMac(name: "Deb", ramMB: 1024, diskBytes: 0))
+        let exp = MachineFolder.exportInfo(VirtualMachine(name: "Deb", ramMB: 1024, diskBytes: 0))
         precondition(Set(exp.keys) == ["name", "ramMB"] && exp["ramMB"] as? Int == 1024)
         let exported = try JSONDecoder().decode(MachineFile.self, from: JSONSerialization.data(withJSONObject: exp))
         precondition(exported.name == "Deb" && exported.ramMB == 1024)

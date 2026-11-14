@@ -115,8 +115,8 @@ final class LinuxInstaller: ObservableObject {
                 Machines.excludeFromBackup(Self.folder)
                 HengeLog.log("linux", "\(image.id) downloaded and checked")
                 guard let options else { phase = .downloaded; return }
-                let mac = try await make(image, files: files, options: options)
-                phase = .installed(mac.id)
+                let machine = try await make(image, files: files, options: options)
+                phase = .installed(machine.id)
             } catch {
                 HengeLog.log("linux", "failed: \(error.localizedDescription)")
                 phase = .failed(error.localizedDescription)
@@ -125,20 +125,20 @@ final class LinuxInstaller: ObservableObject {
     }
 
     /// Unpacks into a new machine folder, lists it, and deletes the download unless it is kept.
-    private func make(_ image: LinuxImage, files: LinuxDownload.Files, options: Options) async throws -> VirtualMac {
+    private func make(_ image: LinuxImage, files: LinuxDownload.Files, options: Options) async throws -> VirtualMachine {
         try checkUnpackSpace(image)
         let name = options.name.trimmingCharacters(in: .whitespaces)
-        var mac = VirtualMac(name: name.isEmpty ? "Debian" : name, ramMB: options.ramMB, diskBytes: options.diskBytes)
-        mac.osName = image.name
-        if image.touch == true { mac.touchInput = true }
+        var machine = VirtualMachine(name: name.isEmpty ? "Debian" : name, ramMB: options.ramMB, diskBytes: options.diskBytes)
+        machine.osName = image.name
+        if image.touch == true { machine.touchInput = true }
         phase = .decoding
         received = 0
         expected = image.diskBytes
         let throttle = ProgressThrottle()
-        let dir = mac.directory, bytes = options.diskBytes, planned = mac
-        HengeLog.log("linux", "making \(mac.name): \(ByteText.string(UInt64(bytes))) disk, \(options.ramMB) MB")
+        let dir = machine.directory, bytes = options.diskBytes, planned = machine
+        HengeLog.log("linux", "making \(machine.name): \(ByteText.string(UInt64(bytes))) disk, \(options.ramMB) MB")
         try await Task.detached {
-            try LinuxUnpack.make(image, files: files, into: dir, mac: planned, diskBytes: bytes) { stage, done, total in
+            try LinuxUnpack.make(image, files: files, into: dir, machine: planned, diskBytes: bytes) { stage, done, total in
                 guard throttle.allow(done >= total) else { return }
                 Task { @MainActor in
                     let me = LinuxInstaller.shared
@@ -150,15 +150,15 @@ final class LinuxInstaller: ObservableObject {
             }
         }.value
         phase = .finishing
-        mac.diskBytes = mac.logicalDiskBytes
-        Machines.shared.add(mac)
+        machine.diskBytes = machine.logicalDiskBytes
+        Machines.shared.add(machine)
         if !options.keepDownload {
             var others: [LinuxImage] = []
             if case .loaded(let all) = catalogue { others = all }
             LinuxDownload.delete(image, in: Self.folder, others: others)
         }
-        HengeLog.log("linux", "made \(mac.name) (\(mac.id)), \(ByteText.string(UInt64(mac.diskBytes))) disk")
-        return mac
+        HengeLog.log("linux", "made \(machine.name) (\(machine.id)), \(ByteText.string(UInt64(machine.diskBytes))) disk")
+        return machine
     }
 
     func deleteDownload(_ image: LinuxImage) {

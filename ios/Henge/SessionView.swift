@@ -6,11 +6,11 @@ import LocalAuthentication
 /// and is its own trackpad. Zoomed in, the screen fills the device either way and follows the pointer.
 /// A keyboard, trackpad or mouse attached to an iPad works throughout.
 struct SessionView: View {
-    let mac: VirtualMac
+    let machine: VirtualMachine
     let close: () -> Void
 
-    init(mac: VirtualMac, close: @escaping () -> Void) {
-        self.mac = mac
+    init(machine: VirtualMachine, close: @escaping () -> Void) {
+        self.machine = machine
         self.close = close
         let check = SessionGate.Check.for(environment: ProcessInfo.processInfo.environment)
         var gate = SessionGate(check: check)
@@ -38,7 +38,7 @@ struct SessionView: View {
     @State private var started = Date()
     @State private var thermalState = ProcessInfo.processInfo.thermalState
     @AppStorage("henge.cpus") private var globalCpus = 4
-    private var cpus: Int { mac.cpuCount(fallback: globalCpus) }
+    private var cpus: Int { machine.cpuCount(fallback: globalCpus) }
     @AppStorage("henge.matchScreenColors") private var matchScreenColors = true
     @AppStorage("henge.display.brightness") private var screenBrightness = 1.0
     @AppStorage(HardwareMouse.scrollSpeedKey) private var scrollSpeed = 0.3
@@ -85,7 +85,7 @@ struct SessionView: View {
     /// What in the saved machine decides a Linux guest's size.
     private struct ScreenChoiceKey: Equatable {
         var width: Int?, height: Int?, external: Bool?, whole: Bool?
-        init(_ m: VirtualMac) { (width, height, external, whole) = (m.screenWidth, m.screenHeight, m.screenFollowsExternal, m.wholeScreen) }
+        init(_ m: VirtualMachine) { (width, height, external, whole) = (m.screenWidth, m.screenHeight, m.screenFollowsExternal, m.wholeScreen) }
     }
 
     private enum ConsoleChoice { case screen, console }
@@ -97,10 +97,10 @@ struct SessionView: View {
     }
 
     /// The machine as saved now: the screen choice in settings can change while it runs (R9).
-    private var current: VirtualMac { machines.all.first { $0.id == mac.id } ?? mac }
+    private var current: VirtualMachine { machines.all.first { $0.id == machine.id } ?? machine }
 
     /// A fixed Linux size (R9 choices, or an older saved size); nil follows the phone or an external screen.
-    private func fixedMode(_ m: VirtualMac) -> GuestMode? {
+    private func fixedMode(_ m: VirtualMachine) -> GuestMode? {
         guard !Device.isPad, m.screenWidth != nil else { return nil } // an iPad's saved size has always yielded to a screen
         return GuestMode(w: m.screen.width, h: m.screen.height)
     }
@@ -129,7 +129,7 @@ struct SessionView: View {
     /// The size the guest really has, for the pointer's pixels.
     private var guestScreen: (width: Int, height: Int) {
         if let m = liveMode { return (m.w, m.h) }
-        return mac.screen
+        return machine.screen
     }
 
 
@@ -291,10 +291,10 @@ struct SessionView: View {
             detailsPath = (note.object as? String) == "forwards" ? ["forwards"] : []
             showDetails = true
         }
-        .confirmationDialog("Shut down \(mac.name)?", isPresented: $confirmStop, titleVisibility: .visible) {
+        .confirmationDialog("Shut down \(machine.name)?", isPresented: $confirmStop, titleVisibility: .visible) {
             Button("Shut Down", role: .destructive) { finish() }
         } message: {
-            Text("\(mac.name) is asked to shut down, as if you pressed its power button. It can take a few seconds.")
+            Text("\(machine.name) is asked to shut down, as if you pressed its power button. It can take a few seconds.")
         }
         .onChange(of: zoomShown) { on in
             zoomFollowing?.cancel()
@@ -367,7 +367,7 @@ struct SessionView: View {
             FolderSession.shared.end()
             ForwardSession.shared.end()
         }
-        .modifier(ExternalMacDisplayModifier(presentation: MacPresentation(display: display, aspect: layoutAspect)))
+        .modifier(ExternalDisplayModifier(presentation: MachinePresentation(display: display, aspect: layoutAspect)))
         .task(id: bootAttempt) { await run() }
         .task { await Sharing.followGuestClipboard() }
         .task(id: bootAttempt) { await followGuestKeyboard() }
@@ -767,7 +767,7 @@ struct SessionView: View {
             if henge_vm_pointer(&x, &y) == 0 {
                 moveZoom(toward: CGPoint(x: CGFloat(x) / CGFloat(guestScreen.width), y: CGFloat(y) / CGFloat(guestScreen.height)))
             }
-            if tick % 60 == 0, let image = MacPreview.capture(width: 224, height: Int(224 / layoutAspect)) { map = UIImage(cgImage: image) }
+            if tick % 60 == 0, let image = MachinePreview.capture(width: 224, height: Int(224 / layoutAspect)) { map = UIImage(cgImage: image) }
             tick += 1
             try? await Task.sleep(nanoseconds: 33_000_000)
         }
@@ -852,7 +852,7 @@ struct SessionView: View {
     private func saveExternalScreen(_ pixels: CGSize?) {
         guard let pixels else { return }
         let size = PixelSize(width: Int(pixels.width), height: Int(pixels.height))
-        guard var current = Machines.shared.all.first(where: { $0.id == mac.id }), current.lastExternalScreen != size else { return }
+        guard var current = Machines.shared.all.first(where: { $0.id == machine.id }), current.lastExternalScreen != size else { return }
         current.lastExternalScreen = size
         Machines.shared.update(current)
     }
@@ -905,7 +905,7 @@ struct SessionView: View {
                 Text("Shutting down…").font(.system(size: 17, weight: .semibold))
             }
             if shutdownOverdue {
-                Text("\(mac.name) is taking a while. You can turn it off now; anything not saved on it is lost.")
+                Text("\(machine.name) is taking a while. You can turn it off now; anything not saved on it is lost.")
                     .font(.system(size: 14)).foregroundStyle(Desk.dim)
                 Button("Turn off now") {
                     henge_vm_stop()
@@ -939,7 +939,7 @@ struct SessionView: View {
                     LabeledContent("Network frames", value: "\(framesOut) out, \(framesIn) in")
                     LabeledContent("Up", value: "\(Int(Date().timeIntervalSince(started))) s")
                 }
-                Section("Port forwards") { ForwardsDetails(machine: mac.id) } // where to connect is what Details is opened for
+                Section("Port forwards") { ForwardsDetails(machine: machine.id) } // where to connect is what Details is opened for
                 Section("Display") {
                     Toggle("Color matching", isOn: $matchScreenColors)
                     LabeledContent("Brightness", value: "\(Int(screenBrightness * 100))%")
@@ -966,7 +966,7 @@ struct SessionView: View {
                 }
                 Section("Folders") {
                     NavigationLink {
-                        FoldersPage(machine: mac.id)
+                        FoldersPage(machine: machine.id)
                     } label: {
                         LabeledContent("Folders from Files", value: "\(current.folders?.count ?? 0)")
                     }
@@ -983,7 +983,7 @@ struct SessionView: View {
             }
             .navigationTitle("Details")
             .navigationBarTitleDisplayMode(.inline)
-            .navigationDestination(for: String.self) { _ in ForwardsPage(machine: mac.id) }
+            .navigationDestination(for: String.self) { _ in ForwardsPage(machine: machine.id) }
         }
     }
 
@@ -1031,7 +1031,7 @@ struct SessionView: View {
         }
         UIApplication.shared.isIdleTimerDisabled = true
         HardwareMouse.shared.start()
-        let ram = GuestMemory.prepare(mac)
+        let ram = GuestMemory.prepare(machine)
         HengeLog.log("session", "available memory \(henge_available_memory() >> 20) MB")
         guard ram >= 1024 else {
             error = "There is not room for this machine's memory: it needs a few GB of free storage."
@@ -1043,7 +1043,7 @@ struct SessionView: View {
         // After the Face ID check: the folders are private. They stay open while the wallet is locked (decision 6).
         FolderSession.shared.start(current)
         ForwardSession.shared.start(current)
-        KeychainStore.shared.attach(mac)
+        KeychainStore.shared.attach(machine)
         KeychainStore.shared.setUnlocked(gate.secretsUnlocked)
         DeviceStatus.shared.start { [display] in !display.isExternal }
         EngineTuning.apply()
@@ -1068,9 +1068,9 @@ struct SessionView: View {
         henge_vm_set_display_scale(guestScale(for: boot))
         henge_vm_set_display(UInt32(boot.w), UInt32(boot.h))
         let rc: Int32
-        HengeLog.log("session", "linux screen \(guestScreen.width)x\(guestScreen.height)\(current.followsPhoneScreen ? " (phone native, scale 2)" : "")\(mac.accel == true ? ", graphics acceleration" : "")\(mac.decodesVideo ? ", video decode" : "")\(mac.encodesVideo ? ", video encode" : "")")
-        rc = henge_vm_boot_linux(mac.firmware.path, mac.disk.path, ram, Int32(cpus), mac.accel == true ? 1 : 0,
-                                mac.decodesVideo ? 1 : 0, mac.encodesVideo ? 1 : 0, &buffer, buffer.count)
+        HengeLog.log("session", "linux screen \(guestScreen.width)x\(guestScreen.height)\(current.followsPhoneScreen ? " (phone native, scale 2)" : "")\(machine.accel == true ? ", graphics acceleration" : "")\(machine.decodesVideo ? ", video decode" : "")\(machine.encodesVideo ? ", video encode" : "")")
+        rc = henge_vm_boot_linux(machine.firmware.path, machine.disk.path, ram, Int32(cpus), machine.accel == true ? 1 : 0,
+                                machine.decodesVideo ? 1 : 0, machine.encodesVideo ? 1 : 0, &buffer, buffer.count)
         if rc != 0 {
             error = String(cString: buffer)
             FolderSession.shared.end()
@@ -1078,7 +1078,7 @@ struct SessionView: View {
             return
         }
         started = Date()
-        var used = Machines.shared.all.first { $0.id == mac.id } ?? mac // keeps lastExternalScreen
+        var used = Machines.shared.all.first { $0.id == machine.id } ?? machine // keeps lastExternalScreen
         used.lastUsed = started
         Machines.shared.update(used)
         var lastBlocks = henge_vm_blocks()
@@ -1141,7 +1141,7 @@ struct SessionView: View {
                 JITBootstrap.releaseLingeringDebugger()
             }
             if tick % 30 == 0 { HengeLog.logFootprint("session") } // how close to the limit, for a memory kill leaves no crash report
-            if tick % 60 == 0 { MacPreview.save(for: mac) }
+            if tick % 60 == 0 { MachinePreview.save(for: machine) }
             try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
     }
@@ -1188,7 +1188,7 @@ struct SessionView: View {
         case .check(let ticket):
             gateMessage = nil
             Task { @MainActor in
-                let outcome = await SessionAuth.check(mac.name)
+                let outcome = await SessionAuth.check(machine.name)
                 switch outcome {
                 case .passed:
                     gate.checked(ticket, passed: true)
@@ -1209,7 +1209,7 @@ struct SessionView: View {
             Color.black.frame(width: full.width, height: full.height)
             if gate.phase == .refused {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("\(mac.name) is locked").font(.system(size: 17, weight: .semibold))
+                    Text("\(machine.name) is locked").font(.system(size: 17, weight: .semibold))
                     Text(gateMessage ?? "Face ID did not pass.").font(.system(size: 14)).foregroundStyle(Desk.dim)
                     if state == 1 {
                         Text("Turn Off stops it at once: anything not saved on it is lost.").font(.system(size: 14)).foregroundStyle(Desk.dim)
@@ -1236,7 +1236,7 @@ struct SessionView: View {
 
     private func finish() {
         if state == 1 {
-            MacPreview.saveNow(for: mac)
+            MachinePreview.saveNow(for: machine)
             henge_vm_power_button()
             shutdownAsked = Date()
             shutdownOverdue = false

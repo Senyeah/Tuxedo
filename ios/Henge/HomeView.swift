@@ -5,15 +5,15 @@ import UniformTypeIdentifiers
 struct HomeView: View {
     @ObservedObject private var machines = Machines.shared
     @ObservedObject private var jit = JITCoordinator.shared
-    @Binding var running: VirtualMac?
+    @Binding var running: VirtualMachine?
     @Binding var tab: RootView.Tab
     @State private var picking = false
     @State private var jitReady = JITBootstrap.ready
     @State private var chosen: UUID?
 
     /// The machine on show: the one picked, or the one used last.
-    private var mac: VirtualMac? {
-        if let chosen, let mac = machines.all.first(where: { $0.id == chosen }) { return mac }
+    private var machine: VirtualMachine? {
+        if let chosen, let machine = machines.all.first(where: { $0.id == chosen }) { return machine }
         return machines.all.max { ($0.lastUsed ?? $0.added) < ($1.lastUsed ?? $1.added) }
     }
 
@@ -22,17 +22,17 @@ struct HomeView: View {
             ScrollView {
                 VStack(spacing: 14) {
                     notices
-                    if let mac {
-                        MacHero(mac: mac, jitReady: jitReady, start: { running = mac }, turnOnJIT: { jit.enable() },
+                    if let machine {
+                        MachineHero(machine: machine, jitReady: jitReady, start: { running = machine }, turnOnJIT: { jit.enable() },
                                 jitNote: jitReady ? nil
                                     : jit.busy ? (jit.status ?? "Turning on JIT…")
                                     : (JITBootstrap.lastFailure ?? jit.automaticDescription),
                                 jitBusy: jit.busy)
                         HStack(spacing: 10) {
-                            FactTile(title: "Disk", value: ByteText.string(UInt64(max(mac.bytesUsed, 0))))
-                            FactTile(title: "Last used", value: mac.lastUsedText)
+                            FactTile(title: "Disk", value: ByteText.string(UInt64(max(machine.bytesUsed, 0))))
+                            FactTile(title: "Last used", value: machine.lastUsedText)
                         }
-                        others(besides: mac)
+                        others(besides: machine)
                     } else {
                         firstMachine
                     }
@@ -43,7 +43,7 @@ struct HomeView: View {
             }
             .background(Desk.page)
             .navigationTitle("Henge")
-            .navigationDestination(for: VirtualMac.self) { MacSettingsView(mac: $0) }
+            .navigationDestination(for: VirtualMachine.self) { MachineSettingsView(machine: $0) }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
@@ -99,7 +99,7 @@ struct HomeView: View {
         .deskCard(radius: 30)
     }
 
-    @ViewBuilder private func others(besides shown: VirtualMac) -> some View {
+    @ViewBuilder private func others(besides shown: VirtualMachine) -> some View {
         let rest = machines.all.filter { $0.id != shown.id }
         if !rest.isEmpty {
             DeskHeading(MachineList.othersHeading)
@@ -126,7 +126,7 @@ struct HomeView: View {
     }
 }
 
-extension VirtualMac {
+extension VirtualMachine {
     var bytesUsed: Int64 {
         Int64((try? disk.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?.totalFileAllocatedSize ?? 0)
     }
@@ -147,8 +147,8 @@ extension VirtualMac {
 }
 
 /// The picture of the machine, its name, and Start.
-private struct MacHero: View {
-    let mac: VirtualMac
+private struct MachineHero: View {
+    let machine: VirtualMachine
     let jitReady: Bool
     let start: () -> Void
     let turnOnJIT: () -> Void
@@ -158,11 +158,11 @@ private struct MacHero: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            NavigationLink(value: mac) {
+            NavigationLink(value: machine) {
                 VStack(spacing: 0) {
                     preview
                     HStack {
-                        Text(mac.name).font(.system(size: 24, weight: .bold)).foregroundStyle(Desk.text).lineLimit(1)
+                        Text(machine.name).font(.system(size: 24, weight: .bold)).foregroundStyle(Desk.text).lineLimit(1)
                         Spacer()
                         Text(jitReady ? "JIT on" : "JIT off")
                             .font(.system(size: 13, weight: .semibold))
@@ -174,7 +174,7 @@ private struct MacHero: View {
                     }
                     .padding(.top, 15)
                     .padding(.horizontal, 5)
-                    Text("\(mac.summary) · \(mac.cpuCount(fallback: cpus)) CPUs")
+                    Text("\(machine.summary) · \(machine.cpuCount(fallback: cpus)) CPUs")
                         .font(.system(size: 15))
                         .foregroundStyle(Desk.dim)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -216,7 +216,7 @@ private struct MacHero: View {
     }
 
     @ViewBuilder private var preview: some View {
-        let image = UIImage(contentsOfFile: MacPreview.file(for: mac).path)
+        let image = UIImage(contentsOfFile: MachinePreview.file(for: machine).path)
         ZStack {
             Desk.raised.opacity(0.5)
             if let image {
@@ -227,7 +227,7 @@ private struct MacHero: View {
                     .foregroundStyle(Desk.faint)
             }
         }
-        .aspectRatio(image.map { MacPreview.aspect(of: $0, fallback: mac.aspect) } ?? mac.aspect, contentMode: .fit)
+        .aspectRatio(image.map { MachinePreview.aspect(of: $0, fallback: machine.aspect) } ?? machine.aspect, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Desk.hairline, lineWidth: 0.5))
         .accessibilityHidden(true)

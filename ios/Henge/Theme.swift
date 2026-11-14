@@ -145,8 +145,8 @@ struct DeskBar: View {
 }
 
 /// The picture of a machine as it was last seen, kept beside its disk.
-enum MacPreview {
-    static func file(for mac: VirtualMac) -> URL { mac.directory.appendingPathComponent("preview.jpg") }
+enum MachinePreview {
+    static func file(for machine: VirtualMachine) -> URL { machine.directory.appendingPathComponent("preview.jpg") }
 
     /// The saved picture's own shape: a phone-native Linux screen is not 16:9.
     static func aspect(of image: UIImage, fallback: CGFloat) -> CGFloat {
@@ -164,13 +164,13 @@ enum MacPreview {
     }
 
     /// Off the main thread.
-    static func save(for mac: VirtualMac) {
-        let url = file(for: mac), height = Int(640 / mac.aspect)
+    static func save(for machine: VirtualMachine) {
+        let url = file(for: machine), height = Int(640 / machine.aspect)
         Task.detached(priority: .utility) { write(to: url, height: height) }
     }
 
     /// Before the machine stops, while there is still a screen to read.
-    static func saveNow(for mac: VirtualMac) { write(to: file(for: mac), height: Int(640 / mac.aspect)) }
+    static func saveNow(for machine: VirtualMachine) { write(to: file(for: machine), height: Int(640 / machine.aspect)) }
 
     private static func write(to url: URL, height: Int) {
         guard let image = capture(width: 640, height: height), let data = UIImage(cgImage: image).jpegData(compressionQuality: 0.8) else { return }
