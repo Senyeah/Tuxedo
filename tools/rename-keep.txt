@@ -30,3 +30,5 @@ line-re:henge_angle_archive
 line-re:Copyright \(C\) 2026 Henge contributors
 # Text about images, catalogues, guests and packages that are from Henge (the app refuses or names them).
 line-re:Henge (image|catalogue|guest)|image for Henge|old Henge packages|henge-(\*|guest)
+# The live server path of the Henge catalogue.
+line-re:henge-linux-catalogue
