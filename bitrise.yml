@@ -8,9 +8,7 @@ meta:
 
 workflows:
   build_ipa:
-    triggers:
-      push:
-        - branch: codex/fix-ipad-color
+    # No push trigger: the old one named a branch of a community fork (codex/fix-ipad-color). Start it by hand.
     steps:
       - git-clone@8: {}
       - script@1:

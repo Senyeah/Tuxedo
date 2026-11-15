@@ -1,9 +1,9 @@
 # .github/workflows/build-tux.yml
 #
 # Builds a Tuxedo.ipa from your fork's main branch on a GitHub-hosted macOS
-# runner, no Mac needed. Free on a PUBLIC repo: public repos get unlimited
-# minutes on hosted runners, including macOS. On a private repo, macOS minutes
-# bill at 10x, so the free tier's ~2000 min/month is only ~200 macOS minutes.
+# runner, no Mac needed. This repository is private: macOS minutes bill at 10x,
+# so the free tier's ~2000 min/month is only ~200 macOS minutes. (A public
+# repository gets unlimited minutes on hosted runners.)
 #
 # The IPA comes out unsigned with ad-hoc signing (package_ipa.sh's normal
 # output). SideStore/AltStore re-signs it with your certificate on install
@@ -46,6 +46,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Leviidev/Husk
+          # Pinned: Husk's code goes into the IPA. This is the commit of the Mac's build/husk on 15/11/2026.
+          ref: 29abb512d81bf8cc08babcbe7f7007cb557208ef
           path: Husk
 
       - name: Cache Husk's sources and prebuilt iOS pieces
