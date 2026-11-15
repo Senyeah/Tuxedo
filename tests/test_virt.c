@@ -1777,7 +1777,7 @@ static void test_touch(void) {
     vdev_init(&touch_dev, TOUCH_SLOT, 2, TOUCH_BAR);
     touch_posted = 0;
     uint32_t n = touch_cfg(0x01, 0, data);
-    check("touch: name", n == 19 && !memcmp(data, "HengeVM Touchscreen", 19), 1);
+    check("touch: name", n == 17 && !memcmp(data, "TuxVM Touchscreen", 17), 1);
     n = touch_cfg(0x03, 0, data);
     uint16_t ids[4];
     memcpy(ids, data, sizeof ids);
@@ -2040,7 +2040,7 @@ static void test_blk(const char *disk_path) {
     Seg id[1] = {{VD_BUF + 0x2000, 20, 1}};
     check("blk: get id", blk_request(&d, 8, 0, id, 1, &len), 0);
     check("blk: id length", len, 21);
-    check("blk: id text", memcmp(r, "hengevm-disk", 12), 0);
+    check("blk: id text", memcmp(r, "tuxvm-disk", 11), 0);
     Seg id4[1] = {{VD_BUF + 0x2000, 4, 1}};
     check("blk: a short id buffer", blk_request(&d, 8, 0, id4, 1, &len), 0);
     check("blk: short id length", len, 5);

@@ -43,7 +43,7 @@ static int sbs_start(void *opaque, int read) {
         b->got_cmd = b->ndata = 0;
         return 0;
     }
-    static const char *const block[3] = {"Henge", "Device battery", "LION"}; /* 0x20 maker, 0x21 model, 0x22 chemistry */
+    static const char *const block[3] = {"Tux", "Device battery", "LION"}; /* 0x20 maker, 0x21 model, 0x22 chemistry */
     if (b->cmd >= 0x20 && b->cmd <= 0x22) {
         const char *s = block[b->cmd - 0x20];
         b->out_len = 1 + (int)strlen(s);

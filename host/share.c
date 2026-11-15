@@ -289,7 +289,7 @@ static char *body_small(Conn *c, Request *r, size_t *len) {
 
 static int respond(Conn *c, Request *r, int status, const char *reason, const char *headers, const char *body, size_t len) {
     char head[2048];
-    int n = snprintf(head, sizeof head, "HTTP/1.1 %d %s\r\nServer: Henge\r\nContent-Length: %zu\r\n%s%s\r\n", status, reason, len,
+    int n = snprintf(head, sizeof head, "HTTP/1.1 %d %s\r\nServer: Tux\r\nContent-Length: %zu\r\n%s%s\r\n", status, reason, len,
                      headers ? headers : "", r->close ? "Connection: close\r\n" : "");
     if (send_all(c->fd, head, (size_t)n) != 0) return -1;
     return (body && len && strcmp(r->method, "HEAD") != 0) ? send_all(c->fd, body, len) : 0;
@@ -384,7 +384,7 @@ static int do_propfind(Conn *c, Request *r) {
     adds(&t, "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\">");
     const char *slash = strrchr(r->path, '/');
     int is_root = safe_is_root(r->path);
-    add_entry(&t, r->path, is_root ? "Henge" : (slash && slash[1] ? slash + 1 : r->path), &st, is_root);
+    add_entry(&t, r->path, is_root ? "Tux" : (slash && slash[1] ? slash + 1 : r->path), &st, is_root);
     if (S_ISDIR(st.st_mode) && r->depth != 0) {
         int fd = safe_open(rootfd, r->path, O_RDONLY | O_DIRECTORY, 0);
         DIR *d = fd >= 0 ? fdopendir(fd) : NULL;
@@ -453,7 +453,7 @@ static int do_get(Conn *c, Request *r) {
     strftime(modified, sizeof modified, "%a, %d %b %Y %H:%M:%S GMT", &tm);
     char head[1024];
     int n = snprintf(head, sizeof head,
-                     "HTTP/1.1 %s\r\nServer: Henge\r\nContent-Length: %lld\r\nContent-Type: application/octet-stream\r\nAccept-Ranges: bytes\r\n"
+                     "HTTP/1.1 %s\r\nServer: Tux\r\nContent-Length: %lld\r\nContent-Type: application/octet-stream\r\nAccept-Ranges: bytes\r\n"
                      "Last-Modified: %s\r\nETag: \"%llx-%llx\"\r\n",
                      partial ? "206 Partial Content" : "200 OK", len, modified, (unsigned long long)st.st_size,
                      (unsigned long long)st.st_mtimespec.tv_sec);

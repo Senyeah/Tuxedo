@@ -2864,7 +2864,7 @@ index 00000000..4ed0e8ea
 +
 +const HWContextType ff_hwcontext_type_henge = {
 +    .type                   = AV_HWDEVICE_TYPE_HENGE,
-+    .name                   = "Henge",
++    .name                   = "Tux",
 +
 +    .device_hwctx_size      = sizeof(HengeDevicePriv),
 +    .frames_hwctx_size      = sizeof(AVHengeFramesContext),

@@ -7,7 +7,7 @@
 
 Boots a clone of debian-desktop.img on `tuxvm` at --display 1920x1080 with --share and drives the
 touchscreen with ts / tsframe / tscancel lines in HV_INPUT_FILE. In the guest it checks:
-- dmesg names "HengeVM Touchscreen" in PCI slot 9, udev marks it ID_INPUT_TOUCHSCREEN=1, and
+- dmesg names "TuxVM Touchscreen" in PCI slot 9, udev marks it ID_INPUT_TOUCHSCREEN=1, and
   libinput lists it with the capability touch;
 - evtest shows the raw events of one contact in TS1's order (the kernel drops an ABS_MT_SLOT that
   does not change the slot);
@@ -210,11 +210,11 @@ def main():
 
 
 def run(p, args, infile, err):
-    out, _ = sh(p, "sudo dmesg | grep -E 'HengeVM Touchscreen'")
+    out, _ = sh(p, "sudo dmesg | grep -E 'TuxVM Touchscreen'")
     print("--- dmesg ---\n" + out.strip())
-    if not re.search(r"input: HengeVM Touchscreen as /devices/.*/0000:00:09\.0/", out):
-        raise Fail("dmesg has no HengeVM Touchscreen in PCI slot 9")
-    node, _ = sh(p, "for e in /sys/class/input/event*; do grep -qx 'HengeVM Touchscreen' $e/device/name && echo /dev/input/${e##*/}; done; true")
+    if not re.search(r"input: TuxVM Touchscreen as /devices/.*/0000:00:09\.0/", out):
+        raise Fail("dmesg has no TuxVM Touchscreen in PCI slot 9")
+    node, _ = sh(p, "for e in /sys/class/input/event*; do grep -qx 'TuxVM Touchscreen' $e/device/name && echo /dev/input/${e##*/}; done; true")
     node = node.strip()
     if not re.fullmatch(r"/dev/input/event\d+", node):
         raise Fail(f"no event node for the touchscreen: {node!r}")
@@ -230,10 +230,10 @@ def run(p, args, infile, err):
         if rc:
             raise Fail("apt-get install libinput-tools evtest failed")
     out, _ = sh(p, "sudo libinput list-devices 2>&1")
-    block = re.search(r"Device:\s+HengeVM Touchscreen\n(?:.+\n)+", out + "\n")
+    block = re.search(r"Device:\s+TuxVM Touchscreen\n(?:.+\n)+", out + "\n")
     print("--- libinput list-devices ---\n" + (block.group(0).strip() if block else out[-1500:]))
     if not block or not re.search(r"Capabilities:\s+touch", block.group(0)):
-        raise Fail("libinput does not list HengeVM Touchscreen with the capability touch")
+        raise Fail("libinput does not list TuxVM Touchscreen with the capability touch")
     warn = [l for l in out.splitlines() if re.search(r"Touchscreen.*(bug|error|ignor)", l, re.I)]
     print("libinput warnings for the device: " + ("; ".join(warn) if warn else "none"))
     send_file(p, os.path.join(HERE, "evcaps.py"), "/tmp/evcaps.py")

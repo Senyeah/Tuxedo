@@ -1,6 +1,6 @@
 # Tuxedo for iOS
 
-The Tuxedo app on HengeVM's engine. Build: `ios/scripts/package_ipa.sh` (writes
+The Tuxedo app on TuxVM's engine. Build: `ios/scripts/package_ipa.sh` (writes
 `~/Desktop/Tuxedo.ipa`; `--trollstore` writes `Tuxedo.tipa`, for TrollStore and
 TrollStore Lite, without the entitlements TrollStore bans). Needs Xcode 27 or later, xcodegen,
 and the prebuilt pieces

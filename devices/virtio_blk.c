@@ -81,7 +81,7 @@ static int handle(HvVirtioBlk *b, HvVirtqElem *e, uint32_t *written) {
         if (hv_disk_flush(b->disk) != 0) status = S_IOERR;
         break;
     case T_GET_ID: {
-        char id[20] = "hengevm-disk";
+        char id[20] = "tuxvm-disk";
         uint32_t n = data < 20 ? data : 20;
         hv_virtq_write(v, e, 0, id, n);
         *written = n;

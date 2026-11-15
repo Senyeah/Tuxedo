@@ -32,7 +32,7 @@ static void answer(HvVirtioInput *d) {
     int kbd = d->kind == HV_VINPUT_KEYBOARD, mouse = d->kind == HV_VINPUT_MOUSE, touch = d->kind == HV_VINPUT_TOUCH;
     switch (select) {
     case CFG_ID_NAME: {
-        const char *name = kbd ? "HengeVM Keyboard" : touch ? "HengeVM Touchscreen" : "HengeVM Mouse";
+        const char *name = kbd ? "TuxVM Keyboard" : touch ? "TuxVM Touchscreen" : "TuxVM Mouse";
         size = (uint32_t)strlen(name);
         memcpy(data, name, size);
         break;

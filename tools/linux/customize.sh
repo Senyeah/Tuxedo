@@ -24,7 +24,7 @@ ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 mkdir -p /etc/systemd/system/getty.target.wants
 ln -sf /usr/lib/systemd/system/serial-getty@.service /etc/systemd/system/getty.target.wants/serial-getty@ttyAMA0.service
 
-# U_BOOT_PROMPT=0 boots the default entry without the 1 s menu wait (P2). panic=-1 reboots at once: a boot panic loops unless hengevm has --no-reboot
+# U_BOOT_PROMPT=0 boots the default entry without the 1 s menu wait (P2). panic=-1 reboots at once: a boot panic loops unless tuxvm has --no-reboot
 cat > /etc/default/u-boot <<EOT
 U_BOOT_UPDATE="true"
 U_BOOT_ALTERNATIVES="default"

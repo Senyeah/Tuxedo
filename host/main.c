@@ -939,7 +939,7 @@ int main(int argc, char **argv) {
     uint64_t ram_mb = 0;
     const char *firmware = NULL, *kernel = NULL, *initrd = NULL, *append = NULL, *dump_dtb = NULL;
     const char *share_folder = NULL;
-    const char *secrets_dir = NULL, *machine_id = "hengevm";
+    const char *secrets_dir = NULL, *machine_id = "tuxvm";
     int log = 1, trace = 0, no_chain = 0, gpu_accel = 0, gpu_video = 0, vcodec = 0; /* vcodec 2: and the device */
     const char *screenshot = NULL;
     uint64_t watch = 0, watch_pa = 0;

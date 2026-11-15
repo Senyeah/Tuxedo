@@ -9,7 +9,7 @@
 #include "dispatch.h"
 #include "mmu.h"
 
-/* Only EL0 and EL1 exist for the guest; HengeVM plays EL2 (PSCI over HVC, as
+/* Only EL0 and EL1 exist for the guest; TuxVM plays EL2 (PSCI over HVC, as
    as QEMU's virt machine sets up) and there is no EL3. */
 
 #define PSTATE_EXTRA_MASK ((1ull << 22) | (1ull << 23) | (1ull << 12) | (1ull << 24) | (1ull << 25))

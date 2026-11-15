@@ -85,7 +85,7 @@ static NSUInteger device_mask(uint16_t k) {
     } else {
         [NSCursor unhide];
     }
-    self.window.title = on ? @"HengeVM Linux — press Control+Option to release the mouse" : @"HengeVM Linux — click to use the mouse";
+    self.window.title = on ? @"TuxVM Linux — press Control+Option to release the mouse" : @"TuxVM Linux — click to use the mouse";
 }
 
 - (void)keyDown:(NSEvent *)e { if (!e.isARepeat) key(e.keyCode, 1); }
@@ -210,7 +210,7 @@ void hv_virt_window_run(unsigned width, unsigned height) {
         static VWDelegate *delegate;
         delegate = [VWDelegate new];
         w.delegate = delegate;
-        w.title = hv_virt_window_touch ? @"HengeVM Linux — a click is a touch on the screen" : @"HengeVM Linux — click to use the mouse";
+        w.title = hv_virt_window_touch ? @"TuxVM Linux — a click is a touch on the screen" : @"TuxVM Linux — click to use the mouse";
         [w center];
         [w makeKeyAndOrderFront:nil];
         [w makeFirstResponder:v];

@@ -1,7 +1,7 @@
-/* tuxvm-ref: a Mac-only test tool. Runs the same machine (HengeVM's RAM,
+/* tuxvm-ref: a Mac-only test tool. Runs the same machine (TuxVM's RAM,
    devices and disks) with the guest CPU on Hypervisor.framework
    instead of the JIT, so a JIT run can be compared against real hardware at
-   a breakpoint. HengeVM itself never uses a hypervisor.
+   a breakpoint. TuxVM itself never uses a hypervisor.
 
    tuxvm-ref (--firmware FILE | --kernel FILE [--initrd FILE] [--append STR]) [--disk FILE] [--ram MB] [--break PC [--break-hits N]] [--log N]
    It runs one CPU, and the console is write-only. Linux stops at GICv3 init: HVF has no ICC_* registers without its own GIC. */
@@ -105,12 +105,12 @@ static void mmio(uint64_t esr, uint64_t pa) {
 static void hvc(void) {
     cpu.x[0] = gpr(0);
     cpu.x[1] = gpr(1);
-    hv_exception_insn(&cpu, 0xd4000002, 0); /* HVC #0, handled by HengeVM's PSCI */
+    hv_exception_insn(&cpu, 0xd4000002, 0); /* HVC #0, handled by TuxVM's PSCI */
     set_gpr(0, cpu.x[0]);
     /* HVC's preferred return already points past the instruction. */
 }
 
-/* Trapped MRS/MSR: GIC CPU interface registers go to HengeVM's GIC. */
+/* Trapped MRS/MSR: GIC CPU interface registers go to TuxVM's GIC. */
 static void sysreg_trap(uint64_t esr) {
     uint32_t iss = esr & 0x1ffffff;
     int read = iss & 1, rt = (iss >> 5) & 31;

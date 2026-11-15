@@ -421,7 +421,7 @@ int hv_net_attach(HvMachine *m, HvVirtioNet *n) {
     inet_pton(AF_INET, "10.0.2.2", &cfg.vhost);
     inet_pton(AF_INET, "10.0.2.15", &cfg.vdhcp_start);
     inet_pton(AF_INET, "10.0.2.3", &cfg.vnameserver);
-    cfg.vhostname = "hengevm";
+    cfg.vhostname = "tuxvm";
     cfg.if_mtu = 1500;
     cfg.if_mru = 1500;
     slirp = slirp_new(&cfg, &callbacks, NULL);

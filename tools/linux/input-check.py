@@ -158,13 +158,13 @@ def main():
 
 
 def run(p, args, infile):
-    out, _ = sh(p, "sudo dmesg | grep -E 'xhci|usb [0-9]|usb[0-9]|magicmouse|apple 0003|hid-generic|HengeVM'")
+    out, _ = sh(p, "sudo dmesg | grep -E 'xhci|usb [0-9]|usb[0-9]|magicmouse|apple 0003|hid-generic|TuxVM'")
     print("--- dmesg (usb and input) ---\n" + out.strip())
     bad = [l for l in out.splitlines() if re.search(r"can't setup|Invalid ep0|unable to enumerate|error|fail", l, re.I)]
     if bad:
         raise Fail("xHCI or USB errors in dmesg:\n" + "\n".join(bad))
     for what, pat in (("xHCI probe", r"xhci_hcd 0000:00:04\.0: xHCI Host Controller"),
-                      ("keyboard", r"usb 1-1: Product: HengeVM USB Keyboard"),
+                      ("keyboard", r"usb 1-1: Product: TuxVM USB Keyboard"),
                       ("trackpad", r"usb 1-2: Product: Magic Trackpad 2"),
                       ("hid-magicmouse bound", r"magicmouse 0003:05AC:0265\.\d+: input.*Magic Trackpad 2")):
         if not re.search(pat, out):
@@ -177,8 +177,8 @@ def run(p, args, infile):
             raise Fail("apt-get install libinput-tools evtest failed")
     out, _ = sh(p, "sudo libinput list-devices | grep -E '^(Device|Capabilities|Kernel)'")
     print("--- libinput list-devices ---\n" + out.strip())
-    for dev, cap in (("HengeVM HengeVM USB Keyboard", "keyboard"), ("Apple Inc. Magic Trackpad 2", "pointer gesture"),
-                     ("HengeVM Mouse", "pointer")):
+    for dev, cap in (("TuxVM TuxVM USB Keyboard", "keyboard"), ("Apple Inc. Magic Trackpad 2", "pointer gesture"),
+                     ("TuxVM Mouse", "pointer")):
         if not re.search(re.escape(dev) + r"\n.*\n.*" + cap, out):
             raise Fail(f"libinput does not list {dev} with {cap}")
 
@@ -218,7 +218,7 @@ def check_capture(cap):
     ids = {}
     for m in re.finditer(r"^-?(event\d+)\s+DEVICE_ADDED\s+(.+?)\s+seat", cap, re.M):
         ids[m.group(2).strip()] = m.group(1)
-    kbd, mouse, tp = (ids.get(n) for n in ("HengeVM HengeVM USB Keyboard", "HengeVM Mouse", "Apple Inc. Magic Trackpad 2"))
+    kbd, mouse, tp = (ids.get(n) for n in ("TuxVM TuxVM USB Keyboard", "TuxVM Mouse", "Apple Inc. Magic Trackpad 2"))
     if not (kbd and mouse and tp):
         raise Fail(f"libinput added no device for one of the three: {ids}")
     lines = {k: [l for l in cap.splitlines() if re.match(rf"^\s*-?{v}\s", l)] for k, v in
