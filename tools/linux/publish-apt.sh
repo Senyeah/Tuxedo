@@ -1,14 +1,14 @@
 #!/bin/sh
 # The Tuxedo apt repository and the source offer, built on the Mac (docs/guest-video-encode-plan.md, VE3.3):
 #   $OUT/apt     dists/trixie/{Release,InRelease,Release.gpg}, main/binary-{arm64,all}, pool/main/h/<package>/,
-#                henge-archive.asc
+#                tux-archive.asc
 #   $OUT/source  ffmpeg-<release>-henge<N>/: the FFmpeg tarball, the patch, build-ffmpeg.sh, ffmpeg.manifest, the Tuxedo
 #                files of the build (henge-ffmpeg-src.tar.xz), README.txt, SHA256SUMS
 # It adds henge-ffmpeg (build-ffmpeg-pkg.sh), henge-codec-dkms (build-codec-dkms-pkg.sh), henge-va (build-va-pkg.sh)
 # and henge-guest (built now)
 # to the pool. A pool file is never replaced
 # with other content: raise the version instead. Each henge-ffmpeg in the pool must have its source directory.
-# The private key is only in $TUX_APT_GNUPGHOME (default ~/.henge-apt-key), never in the repository.
+# The private key is only in $TUX_APT_GNUPGHOME (default ~/.tux-apt-key), never in the repository.
 #
 #   publish-apt.sh [--new-key] [--rsync] [--check-remote]
 #     --new-key       make the signing key if there is none, and write its public part into the repository
@@ -104,10 +104,10 @@ EOF
         gzip -9n -k "$D/main/binary-$arch/Packages"
         xz -9 -k "$D/main/binary-$arch/Packages"
     done
-    apt-ftparchive -o APT::FTPArchive::Release::Origin=Henge -o APT::FTPArchive::Release::Label=Henge \
+    apt-ftparchive -o APT::FTPArchive::Release::Origin=Tuxedo -o APT::FTPArchive::Release::Label=Tuxedo \
         -o APT::FTPArchive::Release::Suite="$SUITE" -o APT::FTPArchive::Release::Codename="$SUITE" \
         -o APT::FTPArchive::Release::Architectures="arm64 all" -o APT::FTPArchive::Release::Components=main \
-        -o APT::FTPArchive::Release::Description="Henge guest packages" release "$D" > /tmp/Release
+        -o APT::FTPArchive::Release::Description="Tuxedo guest packages" release "$D" > /tmp/Release
     mv /tmp/Release "$D/Release"
     for arch in arm64 all; do
         echo "binary-$arch: $(grep -c '^Package:' "$D/main/binary-$arch/Packages") packages"
@@ -126,11 +126,11 @@ for a in "$@"; do
 done
 
 OUT=${TUX_LINUX_OUT:-$(cd "$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)/build/linux}
-GNUPGHOME=${TUX_APT_GNUPGHOME:-$HOME/.henge-apt-key}
-REMOTE=${TUX_APT_REMOTE:-root@walkies.site:/home/USER/henge-linux-catalogue/files}
-URL=${TUX_APT_URL:-https://walkies.site/henge-linux-catalogue}
-PUBKEY=$HERE/henge-archive.asc
-KEYRING=$HERE/henge-guest/usr/share/keyrings/henge-archive.gpg
+GNUPGHOME=${TUX_APT_GNUPGHOME:-$HOME/.tux-apt-key}
+REMOTE=${TUX_APT_REMOTE:-root@walkies.site:/home/USER/tux-linux-catalogue/files}
+URL=${TUX_APT_URL:-https://walkies.site/tux-linux-catalogue}
+PUBKEY=$HERE/tux-archive.asc
+KEYRING=$HERE/henge-guest/usr/share/keyrings/tux-archive.gpg
 FFDEB=$OUT/ffmpeg/henge-ffmpeg_${VER}_arm64.deb
 CODECDEB=$OUT/codec/henge-codec-dkms_$(sed -n 's/^Version: //p' "$HERE/henge-codec-dkms/DEBIAN/control")_all.deb
 VADEB=$OUT/va/henge-va_$(sed -n 's/^Version: //p' "$HERE/henge-va/DEBIAN/control")_arm64.deb
@@ -140,7 +140,7 @@ fpr_of() { hgpg --with-colons --show-keys "$1" 2>/dev/null | awk -F: '$1 == "fpr
 if [ $NEW_KEY = 1 ] && ! hgpg --list-secret-keys --with-colons 2>/dev/null | grep -q '^sec'; then
     mkdir -p "$GNUPGHOME" && chmod 700 "$GNUPGHOME"
     # No passphrase, so the script can sign; the directory is the protection. gpg --passwd adds one.
-    hgpg --pinentry-mode loopback --passphrase '' --quick-gen-key "Henge apt repository <henge@localhost>" ed25519 sign never
+    hgpg --pinentry-mode loopback --passphrase '' --quick-gen-key "Tuxedo apt repository <tux@localhost>" ed25519 sign never
     F=$(hgpg --list-secret-keys --with-colons | awk -F: '$1 == "fpr" {print $10; exit}')
     hgpg --armor --export "$F" > "$PUBKEY"
     mkdir -p "$(dirname "$KEYRING")"
@@ -171,7 +171,7 @@ else
     hgpg --yes --local-user "$FPR" --digest-algo SHA512 --armor --detach-sign -o "$D/Release.gpg" "$D/Release"
     gpgv --keyring "$KEYRING" "$D/InRelease" 2>/dev/null || die "InRelease does not verify against $KEYRING"
     gpgv --keyring "$KEYRING" "$D/Release.gpg" "$D/Release" 2>/dev/null || die "Release.gpg does not verify against $KEYRING"
-    cp "$PUBKEY" "$OUT/apt/henge-archive.asc"
+    cp "$PUBKEY" "$OUT/apt/tux-archive.asc"
     gpgconf --homedir "$GNUPGHOME" --kill gpg-agent 2>/dev/null || true
     echo "signed $D/InRelease with $FPR"
     echo "the repository is in $OUT/apt and the source in $OUT/source"

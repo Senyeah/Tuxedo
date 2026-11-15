@@ -44,7 +44,7 @@ APT_PKGS="dpkg-dev pandoc man-db python3-minimal xz-utils $(get runtime)"
 . /src/tools/linux/snapshot-apt.sh
 
 VER=$FFMPEG_VERSION-henge$FFMPEG_TUX_REV
-SOURCE_URL=https://walkies.site/henge-linux-catalogue/source/ffmpeg-$VER/
+SOURCE_URL=https://walkies.site/tux-linux-catalogue/source/ffmpeg-$VER/
 DEB=/out/ffmpeg/henge-ffmpeg_${VER}_arm64.deb
 export SOURCE_DATE_EPOCH=1762905600
 T=$(mktemp -d)

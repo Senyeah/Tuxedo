@@ -371,11 +371,11 @@ def apt_checks(p, share, tree, clips):
             if f["Package"] not in pool or deb_key(f["Version"]) > deb_key(pool[f["Package"]]):
                 pool[f["Package"]] = f["Version"]
     print(f"     repository {tree}: " + ", ".join(f"{k} {v}" for k, v in sorted(pool.items())))
-    keyring_sha = subprocess.run(["shasum", "-a", "256", os.path.join(ROOT, "tools/linux/henge-guest/usr/share/keyrings/henge-archive.gpg")],
+    keyring_sha = subprocess.run(["shasum", "-a", "256", os.path.join(ROOT, "tools/linux/henge-guest/usr/share/keyrings/tux-archive.gpg")],
                                  capture_output=True, text=True, check=True).stdout.split()[0]
     need(p, "mkdir -p ~/hv && cd ~/hv", "work folder")
     fetch(p, "manpage-check.py", "manpage-check.py")
-    fetch(p, "apt/henge-archive.asc", "/tmp/henge-test.asc")
+    fetch(p, "apt/tux-archive.asc", "/tmp/henge-test.asc")
     old = need(p, "dpkg-query -W -f '${Version}' henge-guest", "henge-guest version").strip()
     deb_sums = need(p, "sha256sum /usr/bin/ffmpeg /usr/bin/ffprobe", "Debian's ffmpeg")
     rc, base, _ = apt_update(p)
@@ -389,9 +389,9 @@ def apt_checks(p, share, tree, clips):
     print("     " + "\n     ".join(nonblank(pol)))
     apt_install(p, "henge-guest")
     got = need(p, "dpkg-query -W -f '${Version}' henge-guest", "henge-guest version").strip()
-    src = need(p, "cat /etc/apt/sources.list.d/henge.sources; sha256sum /usr/share/keyrings/henge-archive.gpg", "henge.sources")
+    src = need(p, "cat /etc/apt/sources.list.d/henge.sources; sha256sum /usr/share/keyrings/tux-archive.gpg", "henge.sources")
     check(got == pool.get("henge-guest"), f"henge-guest {old} to {got} from the repository")
-    check(re.search(r"^Enabled: no$", src, re.M) and "URIs: https://walkies.site/henge-linux-catalogue/apt" in src and keyring_sha in src,
+    check(re.search(r"^Enabled: no$", src, re.M) and "URIs: https://walkies.site/tux-linux-catalogue/apt" in src and keyring_sha in src,
           "henge-guest ships henge.sources (walkies.site, Enabled: no) and the repository's key")
 
     need(p, f"sudo rm -f {LOCAL}", "remove the local source")
@@ -423,7 +423,7 @@ def apt_checks(p, share, tree, clips):
     got_next = need(p, "dpkg-query -W -f '${Version}' henge-guest", "henge-guest version").strip()
     out = nonblank(out)
     check(out[:2] == ["rc=0", "0"] and got_next == nxt and "Enabled: yes" in out
-          and "URIs: https://walkies.site/henge-linux-catalogue/apt" in out,
+          and "URIs: https://walkies.site/tux-linux-catalogue/apt" in out,
           f"henge-guest {got} to {nxt} (another default): no prompt, the edit stays: {out}")
     need(p, f"sudo sed -i 's/^Enabled: yes/Enabled: no/' {SRC}; rm -rf /tmp/hgn /tmp/hg.deb /tmp/hg-next.deb", "turn the source off again")
 
