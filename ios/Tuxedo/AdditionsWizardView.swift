@@ -567,6 +567,7 @@ struct AdditionsWizardView: View {
                 .disabled(cancelling)
                 .accessibilityLabel("Cancel the job")
                 .accessibilityHint("The agent stops after the step it runs.")
+            if cancelling { note("Cancel takes effect when the running step ends. A download or an install that has started will finish.") }
             note("It is safe to close this page. The job goes on.")
         }
     }

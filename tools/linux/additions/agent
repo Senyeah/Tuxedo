@@ -749,6 +749,9 @@ class Agent:
         except (OSError, StepError) as e:
             raise StepError("The account file was not written. Root sign-in stays open") from e
         self.after_done.append(["systemctl", "restart", "serial-getty@ttyAMA0.service"])
+        # tty1 is the console the app shows: end the root shell there too, unless a desktop owns tty1
+        if not any(self.fs.exists(b) for b in ("/usr/bin/labwc", "/usr/bin/plasmashell", "/usr/bin/xfce4-session")):
+            self.after_done.append(["systemctl", "restart", "getty@tty1.service"])
         if name != "tux" and "tux" in self.passwd() and caps_mod.shadow_hash(self.fs.read("/etc/shadow"), "tux") == "":
             if self.run(["passwd", "-l", "tux"]).rc != 0:
                 raise StepError("The stock account tux was not locked")

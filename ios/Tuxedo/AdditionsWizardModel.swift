@@ -255,7 +255,7 @@ struct AdditionsWizardModel {
             let installed = caps?.desktop == d.id
             list.append(Choice(id: d.id, title: d.title, sizeMB: d.sizeMB, selected: desktop == d.id,
                                disabledReason: installed ? AdditionsText.installed : (network ? nil : AdditionsText.noNetwork),
-                               marks: installed ? [AdditionsText.installed] : [AdditionsText.needsNetwork]))
+                               marks: installed ? [AdditionsText.installed] : (network ? [] : [AdditionsText.needsNetwork])))
         }
         return list
     }
@@ -271,7 +271,7 @@ struct AdditionsWizardModel {
             let installed = caps?.apps[a.id] == true
             return Choice(id: a.id, title: a.title, sizeMB: a.sizeMB, selected: apps.contains(a.id),
                           disabledReason: installed ? AdditionsText.installed : (network ? nil : AdditionsText.noNetwork),
-                          marks: installed ? [AdditionsText.installed] : [AdditionsText.needsNetwork])
+                          marks: installed ? [AdditionsText.installed] : (network ? [] : [AdditionsText.needsNetwork]))
         }
     }
 

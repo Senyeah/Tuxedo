@@ -1096,9 +1096,18 @@ class User(Case):
         self.assertEqual(seen, [("chpasswd", False), ("passwd", True)])
         names = [c.argv[0] for c in self.runner.calls if c.argv[0] in ("useradd", "chpasswd", "passwd", "systemctl")
                  and c.argv[:2] != ["systemctl", "is-enabled"]]
-        self.assertEqual(names, ["useradd", "chpasswd", "passwd", "systemctl"])
+        self.assertEqual(names, ["useradd", "chpasswd", "passwd", "systemctl", "systemctl"])
+        self.assertEqual([c.argv[2] for c in self.runner.called("systemctl", "restart")],
+                         ["serial-getty@ttyAMA0.service", "getty@tty1.service"])
         done_index = next(i for i, e in enumerate(self.host.events) if e["t"] == "done")
         self.assertGreater(self.runner.called("systemctl", "restart")[0].at, done_index)
+
+    def test_a_desktop_keeps_tty1(self):
+        self.make_root(tux_user=True)
+        (self.root / "usr/bin").mkdir(parents=True, exist_ok=True)
+        (self.root / "usr/bin/labwc").write_text("")
+        self.run_job(self.job(name="tux", password=PASSWORD))
+        self.assertEqual([c.argv[2] for c in self.runner.called("systemctl", "restart")], ["serial-getty@ttyAMA0.service"])
 
     def test_a_marker_that_cannot_be_written_leaves_root_open(self):
         self.make_root(tux_user=True)
