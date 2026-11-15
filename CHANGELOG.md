@@ -9,7 +9,13 @@ Every change keeps its original author in the git history.
 ## Unreleased
 
 ### Rename
-- The project is now called Tuxedo (formerly Henge). This release changes the docs and the comments. The code, the app name and the bundle id follow in the next releases.
+- The project is now called Tuxedo (formerly Henge). Tuxedo is a new app: it installs beside Henge and shares no data with it.
+- The app: bundle id `nz.jackgreenhill.tuxedo`, URL scheme `tux`, settings keys `tux.*`, Documents files `tux-*`, and a new Keychain service prefix. No old name is read. Build 103 is the first Tuxedo build.
+- The engine: `hengevm` is `tuxvm`, `henge_vm_*` is `tux_vm_*`, and `HENGE_*` variables are `TUX_*`.
+- Host and guest: `/.tux/*`, `X-Tux-Seq`, the virtio-fs tag `tux-files`, and `/media/tux`. The guest packages are `tux-guest`, `tux-ffmpeg`, `tux-va` and `tux-codec-dkms`. A guest with `henge-*` packages loses the clipboard, status, keyboard, wallet and Files folders. Re-create it from a Tuxedo image.
+- Images: the user and the hostname are `tux`. The app refuses a catalogue entry with no `guestUser` (a Henge image).
+- apt: a new repository at `walkies.site/tux-linux-catalogue/apt` with a new signing key (`60E3070A44CF4B9F1F4B27E8FA32ECDBA657D9FF`).
+- The Trackpad Lab and upstream's public source files (`repo.json`, `tools/update-source.py`) are removed.
 
 ### Linux guests
 - Henge boots Debian 13 (arm64) as a second kind of machine, on a `virt` board that copies QEMU's, started by U-Boot v2026.10 and a 16 KB-page Debian kernel. `hengevm --board virt` runs it on the Mac, and the app runs it as a machine of kind Linux, with a SwiftTerm console, a screen that follows the phone's size and rotation or an external display, a shared folder and clipboard, sound, and opt-in 3D (virgl on ANGLE and Metal, OpenGL ES 3.0). Images come from a catalogue set in Settings or from a folder in Files. Verified on the Mac tool and in the iOS Simulator; the iPhone checks are not done. `tools/linux/README.md` builds the firmware and images, `docs/licensing.md` has the licences and source offers, and the root README lists the limits.
