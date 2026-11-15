@@ -70,7 +70,7 @@ struct FoldersSection: View {
         case .failure(let e): error = e.localizedDescription
         case .success(let url):
             guard let made = FolderPick.bookmark(url) else {
-                error = "Henge cannot keep access to that folder."
+                error = "Tuxedo cannot keep access to that folder."
                 return
             }
             var added: SharedFolder?
@@ -180,7 +180,7 @@ struct FolderDetailView: View {
                     .padding(17)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .deskCard()
-                    note("Pick the folder again after it moved, after a reinstall of Henge, or to use another. Copy-on-write changes stay on top of the new one.")
+                    note("Pick the folder again after it moved, after a reinstall of Tuxedo, or to use another. Copy-on-write changes stay on top of the new one.")
 
                     DeskHeading("Mode")
                     modes(folder)
@@ -281,7 +281,7 @@ struct FolderDetailView: View {
             case .discarding?: ProgressView("Discarding…").font(.system(size: 13))
             case .exported(let url, let summary)?:
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Exported to Files, under Henge, Shared, Exports, \(url.lastPathComponent)\(summary.isEmpty ? "" : ": \(summary)"). Files opens in front of Henge, and the machine can pause until you come back.")
+                    Text("Exported to Files, under Tuxedo, Shared, Exports, \(url.lastPathComponent)\(summary.isEmpty ? "" : ": \(summary)"). Files opens in front of Tuxedo, and the machine can pause until you come back.")
                         .font(.system(size: 13)).foregroundStyle(Desk.dim)
                     Button("Show in Files") {
                         if let files = FolderPolicy.filesURL(url) { UIApplication.shared.open(files) }
@@ -328,7 +328,7 @@ struct FolderDetailView: View {
         case .failure(let e): error = e.localizedDescription
         case .success(let url):
             guard let made = FolderPick.bookmark(url) else {
-                error = "Henge cannot keep access to that folder."
+                error = "Tuxedo cannot keep access to that folder."
                 return
             }
             save {

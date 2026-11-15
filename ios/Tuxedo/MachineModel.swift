@@ -24,7 +24,7 @@ struct VirtualMachine: Identifiable, Codable, Hashable {
     /// The size the guest is told its screen is. Missing: the phone's own screen, or 16:9 on an iPad.
     var screenWidth: Int?
     var screenHeight: Int?
-    /// This machine's own CPU count. Missing: the global henge.cpus setting.
+    /// This machine's own CPU count. Missing: the global tux.cpus setting.
     var cpus: Int?
     /// The external screen this machine last ran on; the "External display" choice boots at its size when none is there.
     var lastExternalScreen: PixelSize?
@@ -170,7 +170,7 @@ enum DiskGrowth {
         defer { try? handle.close() }
         let now = Int64(try handle.seekToEnd())
         guard toBytes > now else {
-            throw NSError(domain: "Henge", code: 2, userInfo: [NSLocalizedDescriptionKey: "A disk can only grow."])
+            throw NSError(domain: "Tux", code: 2, userInfo: [NSLocalizedDescriptionKey: "A disk can only grow."])
         }
         try handle.truncate(atOffset: UInt64(toBytes))
     }

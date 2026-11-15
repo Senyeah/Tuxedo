@@ -43,7 +43,7 @@ enum JITPairingFileStore {
     }
     static var url: URL { directory.appendingPathComponent("pairingFile.plist") }
     static var exists: Bool { FileManager.default.fileExists(atPath: url.path) }
-    private static let sourceKey = "henge.jitPairingSource"
+    private static let sourceKey = "tux.jitPairingSource"
 
     static var source: JITPairingSource? {
         guard exists else { return nil }
@@ -66,7 +66,7 @@ enum JITPairingFileStore {
               let publicKey = dictionary["public_key"] as? Data, publicKey.count == 32,
               let privateKey = dictionary["private_key"] as? Data, privateKey.count == 32,
               let identifier = dictionary["identifier"] as? String, !identifier.isEmpty else {
-            throw NSError(domain: "HengeJIT", code: 10,
+            throw NSError(domain: "TuxJIT", code: 10,
                           userInfo: [NSLocalizedDescriptionKey:
                             "That is not a remote pairing file. Make one with the StikDebug pairing-file guide and try again."])
         }
@@ -81,7 +81,7 @@ final class JITCoordinator: ObservableObject {
     static let shared = JITCoordinator()
 
     @Published var method: JITMethod {
-        didSet { UserDefaults.standard.set(method.rawValue, forKey: "henge.jitMethod") }
+        didSet { UserDefaults.standard.set(method.rawValue, forKey: "tux.jitMethod") }
     }
     @Published var showSetup = false
     @Published private(set) var connectionProblem: JITConnectionProblem?
@@ -114,9 +114,9 @@ final class JITCoordinator: ObservableObject {
     }
 
     private init() {
-        method = UserDefaults.standard.string(forKey: "henge.jitMethod")
+        method = UserDefaults.standard.string(forKey: "tux.jitMethod")
             .flatMap(JITMethod.init(rawValue:)) ?? .automatic
-        pathMonitor.start(queue: DispatchQueue(label: "com.henge.app.jit-path", qos: .utility))
+        pathMonitor.start(queue: DispatchQueue(label: "nz.jackgreenhill.tuxedo.jit-path", qos: .utility))
     }
 
     var resolvedMethod: JITMethod {
@@ -130,12 +130,12 @@ final class JITCoordinator: ObservableObject {
 
     var automaticDescription: String {
         switch resolvedMethod {
-        case .stikDebug: return "StikDebug is installed, so Henge will open it."
-        case .trollStore: return "TrollStore is installed, so Henge will ask it to enable JIT."
+        case .stikDebug: return "StikDebug is installed, so Tuxedo will open it."
+        case .trollStore: return "TrollStore is installed, so Tuxedo will ask it to enable JIT."
         case .jailbreak: return "This device is jailbroken, so JIT comes from the jailbreak's Allow JIT in Apps setting."
         default: return hasPairing
-            ? "Henge will use its paired built-in helper."
-            : "StikDebug, TrollStore and a jailbreak were not found, so Henge will use its built-in helper."
+            ? "Tuxedo will use its paired built-in helper."
+            : "StikDebug, TrollStore and a jailbreak were not found, so Tuxedo will use its built-in helper."
         }
     }
 
@@ -150,12 +150,12 @@ final class JITCoordinator: ObservableObject {
     /// "Turn on JIT at launch": when Tuxedo opens without JIT, ask the built-in StikJIT for it straight away, once per launch.
     /// Only when StikJIT can do it unattended -- it is available here and already paired -- so opening Tuxedo never lands in
     /// the setup walkthrough by surprise.
-    static let autoEnableKey = "henge.jit.autoEnable"
+    static let autoEnableKey = "tux.jit.autoEnable"
     private var autoTried = false
 
     /// A Tuxedo TrollStore installed asks TrollStore for JIT each time it opens without it (#135), unless turned off in Settings:
     /// TrollStore attaches to the running Tuxedo for a moment, with nothing to tap.
-    static let trollStoreAutoKey = "henge.jit.trollStoreAuto"
+    static let trollStoreAutoKey = "tux.jit.trollStoreAuto"
     static var trollStoreAuto: Bool { UserDefaults.standard.object(forKey: trollStoreAutoKey) as? Bool ?? true }
 
     /// JIT at launch opened LocalDevVPN to connect it; the next return to the foreground goes on with the built-in helper.
@@ -186,7 +186,7 @@ final class JITCoordinator: ObservableObject {
             return
         }
         // The helper reaches this device through LocalDevVPN. When it is not connected, connect it first: LocalDevVPN
-        // connects and comes back (henge://), and the return to the foreground goes on above.
+        // connects and comes back (tux://), and the return to the foreground goes on above.
         if LocalDevVPN.isInstalled, !LocalDevVPN.isConnected {
             log("JIT at launch: LocalDevVPN is not connected; opening it to connect")
             awaitingVPN = true
@@ -229,12 +229,12 @@ final class JITCoordinator: ObservableObject {
             if JITBootstrap.requestTrollStoreAttach() {
                 awaitTrollStore()
             } else {
-                error = "TrollStore could not be opened. Install Henge through TrollStore, or choose another method."
+                error = "TrollStore could not be opened. Install Tuxedo through TrollStore, or choose another method."
                 showSetup = true
             }
         case .jailbreak:
             // Nothing to ask: a jailbreak marks an app as debugged as it opens, if it has been told to. Say what to turn on.
-            error = "Turn on Allow JIT in Apps in Dopamine's settings, then open Henge again."
+            error = "Turn on Allow JIT in Apps in Dopamine's settings, then open Tuxedo again."
             showSetup = true
         case .builtIn:
             guard TuxBuiltInJIT.isAvailable, hasPairing else {
@@ -263,7 +263,7 @@ final class JITCoordinator: ObservableObject {
                 log("TrollStore enabled JIT")
             } else {
                 status = nil
-                error = "TrollStore did not enable JIT. In TrollStore's Settings turn on URL Scheme, and make sure Henge was "
+                error = "TrollStore did not enable JIT. In TrollStore's Settings turn on URL Scheme, and make sure Tuxedo was "
                       + "installed through TrollStore (or is signed with get-task-allow)."
                 log("TrollStore did not enable JIT within a minute")
                 showSetup = true
@@ -355,7 +355,7 @@ final class JITCoordinator: ObservableObject {
     func enableBuiltIn(attempt: Int = 1) {
         guard let pairing = builtInPairing() else { return }
         guard let script = JITBootstrap.scriptBase64 else {
-            error = "Henge's JIT script is missing from this installation. Reinstall Henge."
+            error = "Tuxedo's JIT script is missing from this installation. Reinstall Tuxedo."
             return
         }
 
@@ -364,7 +364,7 @@ final class JITCoordinator: ObservableObject {
         error = nil
         connectionProblem = nil
         advice = nil
-        if attempt == 1 { status = "Starting Henge's JIT helper…" }
+        if attempt == 1 { status = "Starting Tuxedo's JIT helper…" }
         log("enabling JIT with the built-in helper" + (attempt > 1 ? " (attempt \(attempt))" : ""))
         var readiness: Timer?
         var finished = false
@@ -501,7 +501,7 @@ final class JITCoordinator: ObservableObject {
 enum LocalDevVPN {
     static let appStore = URL(string: "https://apps.apple.com/us/app/localdevvpn/id6755608044")!
     /// `enable` connects the VPN; `scheme` has LocalDevVPN return to Tuxedo afterwards.
-    static let connect = URL(string: "localdevvpn://enable?scheme=henge")!
+    static let connect = URL(string: "localdevvpn://enable?scheme=tux")!
 
     static var isInstalled: Bool { UIApplication.shared.canOpenURL(URL(string: "localdevvpn://")!) }
 
@@ -536,7 +536,7 @@ enum LocalDevVPN {
 /// Built-in StikJIT keeps working after the device restarts.
 enum RemotePairingPortDiscovery {
     private static let serviceType = "_remotepairing._tcp"
-    private static let queue = DispatchQueue(label: "com.henge.app.remotepairing-discovery", qos: .utility)
+    private static let queue = DispatchQueue(label: "nz.jackgreenhill.tuxedo.remotepairing-discovery", qos: .utility)
     private static let lock = NSLock()
     private static var cachedPort: UInt16?
     private static var lastFailure: Date?

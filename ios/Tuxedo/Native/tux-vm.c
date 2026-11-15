@@ -51,7 +51,7 @@ static void on_exit(int reason) {
     stopped_rx = hv_net_rx_frames;
     hv_vm_destroy();
     state = 2;
-    fprintf(stderr, "henge: the machine stopped (%s, halt reason %d); CPU threads ended, disks flushed, machine released\n",
+    fprintf(stderr, "tux: the machine stopped (%s, halt reason %d); CPU threads ended, disks flushed, machine released\n",
             exit_description(), halt);
     pthread_rwlock_unlock(&api_lock);
 }
@@ -187,7 +187,7 @@ static const char *vcodec_socket(void) {
         size_t n = strlen(dir);
         int w = snprintf(path, sizeof path, "%s%sv.sock", dir, n && dir[n - 1] == '/' ? "" : "/");
         rc = w > 0 && (size_t)w < sizeof path ? hv_vcodec_start(path) : -1;
-        if (rc) fprintf(stderr, "henge: video encode: cannot listen on %s; /dev/hvcodec only\n", path);
+        if (rc) fprintf(stderr, "tux: video encode: cannot listen on %s; /dev/hvcodec only\n", path);
     }
     return rc == 0 ? path : NULL;
 }
@@ -202,7 +202,7 @@ int tux_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb, i
     if (begin_start(err, errlen)) return -1;
     TuxDualMapping *jit = tux_ios_jit_get_mapping();
     if (!jit || !jit->rw_addr) {
-        snprintf(err, errlen, "Henge has no JIT region. Turn on JIT first.");
+        snprintf(err, errlen, "Tuxedo has no JIT region. Turn on JIT first.");
         return failed_start();
     }
     HvVmFolder folders[HV_FS_MAX_FOLDERS] = {{0}};
@@ -219,7 +219,7 @@ int tux_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb, i
                     .codec_ops = encode ? hv_vcodec_device_ops() : NULL,
                     .jit_rx = jit->rx_addr, .jit_rw = jit->rw_addr, .jit_bytes = jit->size};
     hv_net_set_vcodec_socket(encode ? vcodec_socket() : NULL); /* 10.0.2.4:8470 */
-    fprintf(stderr, "henge: booting Linux with %d CPUs, %llu MB RAM, a %zu MB JIT region%s%s%s\n", cpus,
+    fprintf(stderr, "tux: booting Linux with %d CPUs, %llu MB RAM, a %zu MB JIT region%s%s%s\n", cpus,
             (unsigned long long)ram_mb, jit->size >> 20, accel ? ", graphics acceleration" : "", accel && video ? ", video decode" : "",
             encode ? ", video encode" : "");
     console_clear();
@@ -234,7 +234,7 @@ int tux_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb, i
         if (!folder_slots[i].online) hv_fs_folder_online(i, 0);
     }
     pthread_mutex_unlock(&folders_mu);
-    if (used) fprintf(stderr, "henge: %d folder%s from Files\n", used, used == 1 ? "" : "s");
+    if (used) fprintf(stderr, "tux: %d folder%s from Files\n", used, used == 1 ? "" : "s");
     return started(err, errlen);
 }
 

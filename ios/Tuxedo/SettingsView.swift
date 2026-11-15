@@ -43,12 +43,12 @@ struct SettingsView: View {
                     Picker("Method", selection: $jit.method) {
                         ForEach(JITMethod.allCases) { Text($0.title).tag($0) }
                     }
-                    Text(jit.method == .automatic ? jit.automaticDescription : "Henge uses \(jit.method.title).")
+                    Text(jit.method == .automatic ? jit.automaticDescription : "Tuxedo uses \(jit.method.title).")
                         .font(.footnote).foregroundStyle(.secondary)
                     Button("Set up JIT") { jit.showSetup = true }
-                    Toggle("Turn on JIT when Henge opens", isOn: $jitAtLaunch)
+                    Toggle("Turn on JIT when Tuxedo opens", isOn: $jitAtLaunch)
                     if jitAtLaunch {
-                        Text("Henge connects LocalDevVPN first when it is off, and comes back.")
+                        Text("Tuxedo connects LocalDevVPN first when it is off, and comes back.")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     LabeledContent("Code region", value: "\(JITBootstrap.jitBytes >> 20) MB, claimed once per launch")
@@ -56,11 +56,11 @@ struct SettingsView: View {
                 .listRowBackground(Desk.card)
                 Section("Memory") {
                     LabeledContent("Extra memory", value: Entitlements.increasedMemory ? "On" : "Off")
-                    LabeledContent("Henge's limit", value: ByteText.string(UInt64(Entitlements.memoryLimitAtLaunch)))
-                    LabeledContent("Free for Henge", value: ByteText.string(UInt64(tux_available_memory())))
+                    LabeledContent("Tuxedo's limit", value: ByteText.string(UInt64(Entitlements.memoryLimitAtLaunch)))
+                    LabeledContent("Free for Tuxedo", value: ByteText.string(UInt64(tux_available_memory())))
                     Text(Entitlements.increasedMemory
                          ? "A machine's memory is kept out of this limit once JIT is on. If iOS refuses that, it uses free storage instead."
-                         : "This install isn't signed with the increased memory limit entitlement. Reinstall Henge with a certificate that has it. Export your machines first if the reinstall replaces the app's data.")
+                         : "This install isn't signed with the increased memory limit entitlement. Reinstall Tuxedo with a certificate that has it. Export your machines first if the reinstall replaces the app's data.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 .listRowBackground(Desk.card)
@@ -99,7 +99,7 @@ struct SettingsView: View {
                             .pickerStyle(.menu)
                             Toggle("Swap buttons", isOn: $swapButtons)
                         }
-                        Text("Henge is able to emulate a Magic Trackpad, allowing you to use native gestures, such as two-finger scrolling, on your device's touchscreen.\n\n\(inputDescription)\n\nIn both modes, a quick two-finger tap is a right-click. While the on-screen keyboard is up, a tap is a click.")
+                        Text("Tuxedo is able to emulate a Magic Trackpad, allowing you to use native gestures, such as two-finger scrolling, on your device's touchscreen.\n\n\(inputDescription)\n\nIn both modes, a quick two-finger tap is a right-click. While the on-screen keyboard is up, a tap is a click.")
                             .font(.footnote).foregroundStyle(.secondary)
                         Picker("Haptics", selection: $haptics) {
                             Text("All").tag(PadHaptics.Level.all)
@@ -130,7 +130,7 @@ struct SettingsView: View {
                         Text("1 GB").tag(1024)
                         Text("1.5 GB").tag(1536)
                     }
-                    Text("A bigger code cache empties less often and takes more memory; Henge picks 1.5 GB where there is room for it. Applies the next time Henge opens. If JIT stops turning on, choose 1 GB.")
+                    Text("A bigger code cache empties less often and takes more memory; Tuxedo picks 1.5 GB where there is room for it. Applies the next time Tuxedo opens. If JIT stops turning on, choose 1 GB.")
                         .font(.footnote).foregroundStyle(.secondary)
                     Text("Faster disk writes order them without waiting for a full sync; a sudden power loss could lose the last ones. Quicker wake keeps an idle CPU watching for work for 50 µs, at some battery cost. Superblocks let translated code run past conditional branches. Changes apply the next time a machine starts.")
                         .font(.footnote).foregroundStyle(.secondary)
@@ -141,7 +141,7 @@ struct SettingsView: View {
                         ForEach(DeskAppearance.allCases) { Text($0.title).tag($0) }
                     }
                     .pickerStyle(.segmented)
-                    Text("System follows the \(Device.name)'s Light or Dark setting. Henge stays dark while a machine is running.")
+                    Text("System follows the \(Device.name)'s Light or Dark setting. Tuxedo stays dark while a machine is running.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 .listRowBackground(Desk.card)
@@ -156,12 +156,12 @@ struct SettingsView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
-                    Text("Where Henge reads the list of Linux images it can download (linux-images.json). Leave it empty to install Linux from a folder brought in from a computer.")
+                    Text("Where Tuxedo reads the list of Linux images it can download (linux-images.json). Leave it empty to install Linux from a folder brought in from a computer.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 .listRowBackground(Desk.card)
                 Section("Log") {
-                    ShareLink(item: TuxLog.logFileURL) { Label("Share henge.log", systemImage: "square.and.arrow.up") }
+                    ShareLink(item: TuxLog.logFileURL) { Label("Share tux.log", systemImage: "square.and.arrow.up") }
                 }
                 .listRowBackground(Desk.card)
             }

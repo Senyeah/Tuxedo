@@ -562,9 +562,9 @@ def check_fsx(vm, seconds, times):
 
 
 def check_bench(vm, args, share, times):
-    bundle = os.path.join(share, "henge.bundle")
+    bundle = os.path.join(share, "tux.bundle")
     subprocess.run(["git", "-C", ROOT, "bundle", "create", bundle, "HEAD"], check=True, capture_output=True)
-    vm.need("cp ~/Henge/henge.bundle /var/tmp/ && rm -rf /var/tmp/small && python3 -c \"import os,sys\n"
+    vm.need("cp ~/Henge/tux.bundle /var/tmp/ && rm -rf /var/tmp/small && python3 -c \"import os,sys\n"
             "for n, tar in ((int(sys.argv[1]), 'small'), (int(sys.argv[2]), 'small-dav')):\n"
             "    for i in range(n):\n"
             "        d = f'/var/tmp/{tar}/small/d{i // 100:03d}'\n"
@@ -579,14 +579,14 @@ def check_bench(vm, args, share, times):
                               ("root disk (ext4)", "/var/tmp/rootbench", "/var/tmp/small.tar", args.dd_mb),
                               ("~/Henge (davfs2)", "/home/henge/Henge", "/var/tmp/small-dav.tar", args.davfs_mb)):
         n = args.davfs_files if "davfs" in where else args.files
-        r = vm.probe("bench", d, where, tar, "/var/tmp/henge.bundle", mb, limit=7200)
+        r = vm.probe("bench", d, where, tar, "/var/tmp/tux.bundle", mb, limit=7200)
         r["files"] = n
         rows.append(r)
         print(f"  {where}: tar x of {n} files {r['tar_x']} s, rm -r {r['rm_r']} s, git clone {r['git_clone']} s, "
               f"git status {r['git_status']} s cold and {r['git_status_warm']} s warm, dd {mb} MB write "
               f"{r['dd_write']} s ({mb / max(r['dd_write'], 0.01):.0f} MB/s), read {r['dd_read']} s "
               f"({mb / max(r['dd_read'], 0.01):.0f} MB/s)", flush=True)
-    vm.need("rm -f /var/tmp/small.tar /var/tmp/small-dav.tar /var/tmp/henge.bundle")
+    vm.need("rm -f /var/tmp/small.tar /var/tmp/small-dav.tar /var/tmp/tux.bundle")
     os.remove(bundle)
     vm.need("henge-files reset b", what="reset after the bench")
     times["bench"] = rows

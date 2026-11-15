@@ -1,11 +1,11 @@
 import Foundation
 import UIKit
 
-/// Testing a build on a phone nobody is holding. Tuxedo follows Documents/henge-autopilot.txt when it is
+/// Testing a build on a phone nobody is holding. Tuxedo follows Documents/tux-autopilot.txt when it is
 /// launched with TUX_AUTOPILOT set, as in
 ///   xcrun devicectl device process launch -e '{"TUX_AUTOPILOT":"1"}' --device ID BUNDLE
 /// or, for a launch by hand (a locked phone driven through iPhone Mirroring), once: at launch
-/// Documents/henge-autopilot-once.txt is renamed to henge-autopilot.txt and followed, so the next
+/// Documents/tux-autopilot-once.txt is renamed to tux-autopilot.txt and followed, so the next
 /// launch runs nothing. Put the files there with devicectl device copy to. One command per line,
 /// picking up lines added later while it runs:
 ///   start [NAME]       start that machine (the one used last without a name) once JIT is on
@@ -13,7 +13,7 @@ import UIKit
 ///   type TEXT          typed into the guest's keyboard (the log shows only how long it is)
 ///   console TEXT       a line typed into a Linux machine's console, with Return (the log shows only how long it is)
 ///   console-wait SECONDS TEXT   wait until TEXT is in the console's newest output, or SECONDS pass (the log says which)
-///   console-tail N     the last N characters of the console's newest output, into the log (raw guest text: keep henge.log private)
+///   console-tail N     the last N characters of the console's newest output, into the log (raw guest text: keep tux.log private)
 ///   key CODE           a Linux key code (28 is Return, 1 is Escape)
 ///   move X Y, click X Y  the pointer to a spot on the guest's screen (its pixels), and a click there
 ///   pointer            where the pointer is now, into the log
@@ -25,21 +25,21 @@ import UIKit
 ///   linux-download ID  download that catalogue entry and wait; linux-delete ID removes it
 ///   linux-install ID NAME DISK_GB RAM_MB keep|delete  download, unpack and list a machine, then wait
 ///   snap [NAME]        the guest's screen (1920x1080) into Documents/NAME.jpg (snap.jpg)
-///   log TEXT           a marker in henge.log
+///   log TEXT           a marker in tux.log
 ///   details [forwards] open the session's Details (and its Port Forwards page), for a screenshot
 ///   stop               stop the machine
 ///   exit               quit Tuxedo
-/// Each command is written to henge.log as it runs, so the log has the timeline.
+/// Each command is written to tux.log as it runs, so the log has the timeline.
 /// TUX_AUTOPILOT in the launch environment (not the once file) also skips a Linux machine's Face ID check
 /// (SessionGate). The wallet stays locked unless TUX_AUTOPILOT_WALLET=unlocked is in the launch environment too.
 enum Autopilot {
-    static let details = Notification.Name("henge.autopilot.details")
+    static let details = Notification.Name("tux.autopilot.details")
     private static let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
 
     /// Launched for testing: by environment, or by a one-time file (used up here).
     static let enabled: Bool = {
         if ProcessInfo.processInfo.environment["TUX_AUTOPILOT"] != nil { return true }
-        let once = docs.appendingPathComponent("henge-autopilot-once.txt"), plan = docs.appendingPathComponent("henge-autopilot.txt")
+        let once = docs.appendingPathComponent("tux-autopilot-once.txt"), plan = docs.appendingPathComponent("tux-autopilot.txt")
         guard FileManager.default.fileExists(atPath: once.path) else { return false }
         try? FileManager.default.removeItem(at: plan)
         return (try? FileManager.default.moveItem(at: once, to: plan)) != nil
@@ -47,7 +47,7 @@ enum Autopilot {
 
     @MainActor static func run(start: @escaping (VirtualMachine) -> Void) async {
         guard enabled else { return }
-        let url = docs.appendingPathComponent("henge-autopilot.txt")
+        let url = docs.appendingPathComponent("tux-autopilot.txt")
         TuxLog.log("autopilot", "following \(url.lastPathComponent)")
         var done = 0 // lines already run
         while !Task.isCancelled {
@@ -176,12 +176,12 @@ enum Autopilot {
             }
         case "cpus": // "cpus 2": the CPU count the next machine started gets (the CPUs setting, kept: put it back after a test)
             if let n = Int(arg), (1...6).contains(n) {
-                UserDefaults.standard.set(n, forKey: "henge.cpus")
+                UserDefaults.standard.set(n, forKey: "tux.cpus")
                 TuxLog.log("autopilot", "cpus \(n) for the next start")
             } else {
                 TuxLog.log("autopilot", "cpus wants 1 to 6")
             }
-        case "env": // "env HV_QOS ui": an engine setting read when the next machine starts (one not in henge-env.txt, which wins)
+        case "env": // "env HV_QOS ui": an engine setting read when the next machine starts (one not in tux-env.txt, which wins)
             let kv = arg.split(separator: " ", maxSplits: 1).map(String.init)
             if kv.count == 2 {
                 setenv(kv[0], kv[1], 1)
@@ -190,9 +190,9 @@ enum Autopilot {
                 unsetenv(kv[0])
                 TuxLog.log("autopilot", "env \(kv[0]) unset")
             }
-        case "balloon": // "balloon 2048": ask the guest to hand 2 GB of its memory back (needs HV_BALLOON in henge-env.txt)
+        case "balloon": // "balloon 2048": ask the guest to hand 2 GB of its memory back (needs HV_BALLOON in tux-env.txt)
             let got = tux_vm_balloon(Int(arg) ?? -1)
-            TuxLog.log("autopilot", got < 0 ? "no balloon (set HV_BALLOON in henge-env.txt)" : "balloon: the guest has handed over \(got) MB")
+            TuxLog.log("autopilot", got < 0 ? "no balloon (set HV_BALLOON in tux-env.txt)" : "balloon: the guest has handed over \(got) MB")
         case "log": // already in the log; the wall clock too, to line it up with things measured elsewhere
             TuxLog.log("autopilot", String(format: "at %.3f", Date().timeIntervalSince1970))
         case "details":

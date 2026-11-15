@@ -40,7 +40,7 @@ enum SessionAuth {
         case .userCancel, .appCancel, .systemCancel, .userFallback:
             return "Face ID was cancelled."
         case .passcodeNotSet:
-            return "Set a passcode for this device in Settings, Face ID & Passcode. Henge needs Face ID or the passcode to open a machine."
+            return "Set a passcode for this device in Settings, Face ID & Passcode. Tuxedo needs Face ID or the passcode to open a machine."
         case .biometryNotEnrolled:
             return "Set up Face ID in Settings, Face ID & Passcode."
         case .biometryLockout:

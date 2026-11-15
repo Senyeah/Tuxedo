@@ -3,7 +3,7 @@
 # Usage: ios/scripts/sim_build.sh [device name or UDID]   (default: the booted simulator, else "iPhone 18 Pro")
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-BUNDLE=com.henge.app
+BUNDLE=nz.jackgreenhill.tuxedo
 DD=build/ios-sim-app
 
 . ios/scripts/gfx_env.sh
@@ -35,4 +35,4 @@ xcrun simctl bootstatus "$DEVICE" -b >/dev/null
 xcrun simctl terminate "$DEVICE" "$BUNDLE" 2>/dev/null || true
 xcrun simctl install "$DEVICE" "$APP"
 xcrun simctl launch "$DEVICE" "$BUNDLE"
-echo "log: $(xcrun simctl get_app_container "$DEVICE" "$BUNDLE" data)/Documents/henge.log"
+echo "log: $(xcrun simctl get_app_container "$DEVICE" "$BUNDLE" data)/Documents/tux.log"

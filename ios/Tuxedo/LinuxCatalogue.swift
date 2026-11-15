@@ -33,7 +33,7 @@ struct LinuxImage: Codable, Identifiable, Hashable {
 }
 
 enum LinuxCatalogue {
-    static let urlKey = "henge.linux.catalogueURL"
+    static let urlKey = "tux.linux.catalogueURL"
 
     /// The catalogue URL typed in Settings, or nil.
     static var configuredURL: URL? {
@@ -62,7 +62,7 @@ enum LinuxCatalogue {
         } catch let error as LinuxError {
             throw error
         } catch {
-            throw LinuxError.text("The catalogue is not in the format Henge expects (\(error.localizedDescription)).")
+            throw LinuxError.text("The catalogue is not in the format Tuxedo expects (\(error.localizedDescription)).")
         }
     }
 
@@ -82,7 +82,7 @@ enum LinuxCatalogue {
         guard safeName(image.version) else { throw LinuxError.text("\(image.name) has a version that is not a plain name.") }
         let sizes = [image.diskBytes, image.unpackedBytes, image.logicalBytes, image.firmwareBytes]
         guard sizes.allSatisfy({ $0 >= 0 && $0 <= maxBytes }) else { throw LinuxError.text("\(image.name) has a size that is out of range.") }
-        guard image.logicalBytes <= Int64(maxDiskGB) << 30 else { throw LinuxError.text("\(image.name) needs a bigger disk than Henge can make.") }
+        guard image.logicalBytes <= Int64(maxDiskGB) << 30 else { throw LinuxError.text("\(image.name) needs a bigger disk than Tuxedo can make.") }
     }
 
     static func fetch(_ url: URL) async throws -> [LinuxImage] {
@@ -91,7 +91,7 @@ enum LinuxCatalogue {
         request.timeoutInterval = 20
         let data: Data, response: URLResponse
         do { (data, response) = try await URLSession.shared.data(for: request) }
-        catch { throw LinuxError.text("Henge could not reach the catalogue at \(url.absoluteString): \(error.localizedDescription)") }
+        catch { throw LinuxError.text("Tuxedo could not reach the catalogue at \(url.absoluteString): \(error.localizedDescription)") }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 200 else { throw LinuxError.text("The catalogue server answered \(status).") }
         return try decode(data, base: url)
@@ -100,7 +100,7 @@ enum LinuxCatalogue {
     /// An entry that needs a newer Tuxedo is refused.
     static func checkBuild(_ image: LinuxImage, appBuild: Int) throws {
         if let min = image.minBuild, min > appBuild {
-            throw LinuxError.text("\(image.name) needs a newer Henge (build \(min); this is build \(appBuild)). Update Henge to install it.")
+            throw LinuxError.text("\(image.name) needs a newer Tuxedo (build \(min); this is build \(appBuild)). Update Tuxedo to install it.")
         }
     }
 
@@ -156,7 +156,7 @@ enum FileHash {
         let actual = try sha256(of: url, progress: progress)
         if actual != expected.lowercased() {
             try? FileManager.default.removeItem(at: url)
-            throw LinuxError.text("The \(what) download was damaged (its checksum does not match). Henge deleted it: try again.")
+            throw LinuxError.text("The \(what) download was damaged (its checksum does not match). Tuxedo deleted it: try again.")
         }
     }
 }

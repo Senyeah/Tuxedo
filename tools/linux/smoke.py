@@ -142,7 +142,7 @@ def command(args, kernel, initrd, tmp, append=APPEND, disk=None, firmware=None):
         if not args.tux_dtb:
             return argv + ["-append", append]
         # Tuxedo's tree carries the command line; QEMU adds only the initrd range.
-        dtb = os.path.join(tmp, "henge.dtb")
+        dtb = os.path.join(tmp, "tux.dtb")
         r = subprocess.run([args.tuxvm, "--dump-dtb", dtb, "--append", append,
                             "--ram", str(args.ram), "--cpus", str(args.cpus)], capture_output=True, text=True)
         if r.returncode != 0:

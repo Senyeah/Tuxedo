@@ -9,7 +9,7 @@ struct TuxApp: App {
 
     init() {
         // Order matters: TuxLog takes over stderr, so the engine's and the JIT
-        // allocator's first lines land in Documents/henge.log too.
+        // allocator's first lines land in Documents/tux.log too.
         TuxLog.start()
         TuxLog.log("boot", "address space: \(tux_largest_reservation_gb()) GB can be reserved in one piece")
         EngineTuning.apply()
@@ -25,7 +25,7 @@ struct TuxApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
-                .onOpenURL { url in TuxLog.log("app", "opened with \(url.absoluteString)") } // henge:// back from LocalDevVPN
+                .onOpenURL { url in TuxLog.log("app", "opened with \(url.absoluteString)") } // tux:// back from LocalDevVPN
         }
     }
 }

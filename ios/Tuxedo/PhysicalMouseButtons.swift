@@ -4,7 +4,7 @@ import Foundation
 /// Guest button IDs are 0 = left, 1 = right, 2 = middle; touch controls retain those IDs.
 /// State is per device: with AssistiveTouch one click can come from a device that then disconnects.
 struct PhysicalMouseButtons {
-    static let swapKey = "henge.mouse.swapRightAndMiddle"
+    static let swapKey = "tux.mouse.swapRightAndMiddle"
 
     /// Captured when the VM session starts, so a held button's release uses the same mapping.
     let swapsRightAndMiddle: Bool

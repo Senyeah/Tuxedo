@@ -283,7 +283,7 @@ final class Machines: ObservableObject {
     }
 
     private func message(_ text: String) -> NSError {
-        NSError(domain: "Henge", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
+        NSError(domain: "Tux", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
     }
 }
 

@@ -19,7 +19,6 @@ final class KeychainStore {
     /// The machine the guest's wallet is for.
     func attach(_ machine: VirtualMachine) {
         var store = HvSecretStore(ctx: nil, list: storeList, read: storeRead, write: storeWrite, remove: storeRemove)
-        Self.dropOldLayout(machine: machine.id)
         tux_vm_secrets(&store, WalletScope.id(machine.id))
     }
 
@@ -39,25 +38,9 @@ final class KeychainStore {
 
     /// A deleted machine's items go with it.
     static func removeAll(machine: UUID) {
-        for service in [WalletScope.service(machine), WalletScope.oldService(machine)] {
-            let status = SecItemDelete([kSecClass: kSecClassGenericPassword, kSecAttrService: service,
-                                        kSecUseDataProtectionKeychain: true] as CFDictionary)
-            if status != errSecSuccess && status != errSecItemNotFound { TuxLog.log("wallet", "remove all: \(status)") }
-        }
-    }
-
-    /// Once for each machine: the items of the first layout had a Face ID rule each, so they could not be listed.
-    private static func dropOldLayout(machine: UUID) {
-        let done = "walletOldLayoutDropped." + WalletScope.id(machine)
-        guard !UserDefaults.standard.bool(forKey: done) else { return }
-        let status = SecItemDelete([kSecClass: kSecClassGenericPassword, kSecAttrService: WalletScope.oldService(machine),
+        let status = SecItemDelete([kSecClass: kSecClassGenericPassword, kSecAttrService: WalletScope.service(machine),
                                     kSecUseDataProtectionKeychain: true] as CFDictionary)
-        if status == errSecSuccess || status == errSecItemNotFound {
-            if status == errSecSuccess { TuxLog.log("wallet", "removed the items of the old layout") }
-            UserDefaults.standard.set(true, forKey: done)
-        } else {
-            TuxLog.log("wallet", "old layout: keychain status \(status)") // tried again at the next start
-        }
+        if status != errSecSuccess && status != errSecItemNotFound { TuxLog.log("wallet", "remove all: \(status)") }
     }
 
     private func base(_ scope: String, _ id: String? = nil) -> [CFString: Any] {

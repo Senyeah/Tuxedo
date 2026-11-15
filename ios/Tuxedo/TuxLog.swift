@@ -11,7 +11,7 @@ import os
 /// before anything else runs, stdout and stderr are redirected into a pipe that a
 /// reader thread drains, writing every line to three places at once:
 ///
-///   * `Documents/henge.log`, retrievable over the Files app or the share sheet
+///   * `Documents/tux.log`, retrievable over the Files app or the share sheet
 ///   * `os_log`, so Console.app shows it live with the device attached
 ///   * an in-memory ring buffer the app can display without leaving the device
 ///
@@ -20,7 +20,7 @@ import os
 /// translating" is preserved, which is exactly the ordering that matters when
 /// something goes wrong.
 enum TuxLog {
-    private static let osLog = Logger(subsystem: "com.henge.app", category: "henge")
+    private static let osLog = Logger(subsystem: "nz.jackgreenhill.tuxedo", category: "tux")
 
     /// Exposed because a C signal handler closure cannot capture context.
     fileprivate static var rawLogFD: Int32 { logFD }
@@ -52,7 +52,7 @@ enum TuxLog {
 
     static var logFileURL: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("henge.log")
+            .appendingPathComponent("tux.log")
     }
 
     static func recentLines(_ n: Int = 400) -> [String] {
@@ -75,10 +75,10 @@ enum TuxLog {
         // Fresh file each launch. StikDebug relaunches us after attaching, so the
         // run that matters is always the most recent one; keeping the previous
         // run's noise would make the log harder to read, not easier.
-        // ...but the previous run is kept as henge-prev.log, because when a game took Tuxedo down with it, that run's log is
+        // ...but the previous run is kept as tux-prev.log, because when a game took Tuxedo down with it, that run's log is
         // the crash report (CrashReport.swift).
         let url = logFileURL
-        let prev = url.deletingLastPathComponent().appendingPathComponent("henge-prev.log")
+        let prev = url.deletingLastPathComponent().appendingPathComponent("tux-prev.log")
         try? FileManager.default.removeItem(at: prev)
         try? FileManager.default.moveItem(at: url, to: prev)
         logFD = open(url.path, O_CREAT | O_WRONLY | O_TRUNC, 0o644)
@@ -91,10 +91,10 @@ enum TuxLog {
 
     /// Put the last run's native output into this run's log.
     ///
-    /// When QEMU aborts, its reason lands in henge-native.log and the process is
+    /// When QEMU aborts, its reason lands in tux-native.log and the process is
     /// gone before anything mirrors it -- and that file was not in the share
     /// sheet either, so the one artefact explaining a crash was the one nobody
-    /// could retrieve. Replaying it here puts it in henge.log, which is the file
+    /// could retrieve. Replaying it here puts it in tux.log, which is the file
     /// people already know how to send.
     private static func replayPreviousNativeLog() {
         guard let data = try? Data(contentsOf: previousNativeLogURL),
@@ -113,11 +113,11 @@ enum TuxLog {
     /// QEMU's own stderr, this run and the one before it.
     static var nativeLogURL: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("henge-native.log")
+            .appendingPathComponent("tux-native.log")
     }
     static var previousNativeLogURL: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("henge-native-prev.log")
+            .appendingPathComponent("tux-native-prev.log")
     }
 
     /// Force everything out to disk.
@@ -142,23 +142,23 @@ enum TuxLog {
     ///
     /// The previous run's copy is kept rather than overwritten, because the run
     /// that crashed is exactly the one worth reading, and it is replayed into
-    /// the next run's henge.log by replayPreviousNativeLog().
+    /// the next run's tux.log by replayPreviousNativeLog().
     private static func redirectStdio() {
         let dir = FileManager.default.urls(for: .documentDirectory,
                                            in: .userDomainMask)[0]
-        let cURL = dir.appendingPathComponent("henge-native.log")
-        let prevURL = dir.appendingPathComponent("henge-native-prev.log")
+        let cURL = dir.appendingPathComponent("tux-native.log")
+        let prevURL = dir.appendingPathComponent("tux-native-prev.log")
         try? FileManager.default.removeItem(at: prevURL)
         try? FileManager.default.moveItem(at: cURL, to: prevURL)
 
         pipeWriteFD = open(cURL.path, O_CREAT | O_WRONLY | O_TRUNC, 0o644)
         pipeReadFD = open(cURL.path, O_RDONLY)
         guard pipeWriteFD >= 0, pipeReadFD >= 0 else {
-            log("boot", "WARNING: could not open henge-native.log (errno \(errno)); "
+            log("boot", "WARNING: could not open tux-native.log (errno \(errno)); "
                       + "C-side stderr will not be captured")
             return
         }
-        log("boot", "native stderr -> henge-native.log (mirrored here)")
+        log("boot", "native stderr -> tux-native.log (mirrored here)")
 
         if let mode = ProcessInfo.processInfo.environment["HV_LOG_CONSOLE"], !mode.isEmpty {
             consoleFD = dup(STDERR_FILENO)
@@ -296,7 +296,7 @@ enum TuxLog {
         // well as stderr, because those are the lines most worth surviving a hard
         // crash. Mirroring them again here would double every one of them in
         // Console.app.
-        if !fromStream || (!line.contains("[henge-jit]") && !line.contains("[henge-dpy]")) {
+        if !fromStream || (!line.contains("[tux-jit]") && !line.contains("[tux-dpy]")) {
             osLog.log("\(line, privacy: .public)")
         }
 
@@ -344,7 +344,7 @@ enum TuxLog {
         let model = deviceModel
         let mem = ProcessInfo.processInfo.physicalMemory / (1024 * 1024)
 
-        log("boot", "================ Henge starting ================")
+        log("boot", "================ Tuxedo starting ================")
         log("boot", "device      : \(model)")
         log("boot", "system      : \(d.systemName) \(d.systemVersion)")
         log("boot", "physical RAM: \(mem) MiB")

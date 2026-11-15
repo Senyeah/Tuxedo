@@ -63,7 +63,7 @@ struct LinuxCatalogueTests {
         // minBuild: an entry above the app's build is refused with a message that says to update.
         precondition(fails { try LinuxCatalogue.checkBuild(a, appBuild: 102) } == nil)
         let tooNew = fails { try LinuxCatalogue.checkBuild(a, appBuild: 101) }
-        precondition(tooNew?.contains("Update Henge") == true)
+        precondition(tooNew?.contains("Update Tuxedo") == true)
         precondition(fails { try LinuxCatalogue.checkBuild(images[1], appBuild: 102) } != nil)
 
         // Hashes: right one passes, wrong one deletes the file and says it was damaged.

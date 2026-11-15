@@ -31,9 +31,9 @@ final class VolumeClicks: NSObject {
     enum Mode: String, CaseIterable {
         case delayHold, tapThenDrag, intercept
     }
-    static let inputModeKey = "henge.trackpad.inputMode"
-    static let modeKey = "henge.trackpad.volumeMode"
-    static let swapKey = "henge.trackpad.swapButtons"
+    static let inputModeKey = "tux.trackpad.inputMode"
+    static let modeKey = "tux.trackpad.volumeMode"
+    static let swapKey = "tux.trackpad.swapButtons"
     static let shared = VolumeClicks()
 
     static var inputMode: InputMode { InputMode(rawValue: UserDefaults.standard.string(forKey: inputModeKey) ?? "") ?? .touchscreen }

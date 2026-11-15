@@ -37,10 +37,10 @@ struct SessionView: View {
     @State private var log: [String] = []
     @State private var started = Date()
     @State private var thermalState = ProcessInfo.processInfo.thermalState
-    @AppStorage("henge.cpus") private var globalCpus = 4
+    @AppStorage("tux.cpus") private var globalCpus = 4
     private var cpus: Int { machine.cpuCount(fallback: globalCpus) }
-    @AppStorage("henge.matchScreenColors") private var matchScreenColors = true
-    @AppStorage("henge.display.brightness") private var screenBrightness = 1.0
+    @AppStorage("tux.matchScreenColors") private var matchScreenColors = true
+    @AppStorage("tux.display.brightness") private var screenBrightness = 1.0
     @AppStorage(HardwareMouse.scrollSpeedKey) private var scrollSpeed = 0.3
 
     @State private var typing = false
@@ -50,13 +50,13 @@ struct SessionView: View {
     @State private var controlsHidden = false
     @State private var showRevealHint = false
     @State private var pointerRefused = false
-    @AppStorage("henge.controls.hintsShown") private var revealHintsShown = 0
+    @AppStorage("tux.controls.hintsShown") private var revealHintsShown = 0
     @AppStorage(VolumeClicks.inputModeKey) private var inputMode = VolumeClicks.InputMode.touchscreen
     @AppStorage(VolumeClicks.modeKey) private var volumeMode = VolumeClicks.Mode.delayHold
     @AppStorage(TrackpadFeel.hapticsKey) private var hapticLevel = PadHaptics.Level.all
     @AppStorage(TrackpadFeel.motionKey) private var motionFeel = PadTuning.Motion().style
     // Not observed here: only the pill follows the pad's layout.
-    @State private var externalPad = PadSession(ghostKey: "henge.trackpad.ghostShown")
+    @State private var externalPad = PadSession(ghostKey: "tux.trackpad.ghostShown")
     @State private var panelPad = PadSession()
     @State private var confirmStop = false
     @State private var shutdownAsked: Date? // Linux: when the power button was pressed
@@ -194,7 +194,7 @@ struct SessionView: View {
                         floatingControls(layout)
                     }
                     if pointerRefused && !showRevealHint {
-                        Label("Make Henge full screen to use the trackpad or mouse as the machine's", systemImage: "cursorarrow.rays")
+                        Label("Make Tuxedo full screen to use the trackpad or mouse as the machine's", systemImage: "cursorarrow.rays")
                             .font(.system(size: 15, weight: .medium))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 18).padding(.vertical, 12)

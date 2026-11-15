@@ -224,12 +224,12 @@ __attribute__((format(printf, 4, 5))) static int fail(Ctx *c, const HvVcHeader *
 
 static int vt_fail(Ctx *c, const HvVcHeader *req, const char *what, OSStatus st) {
     if (hv_vtd_session_lost(st))
-        return fail(c, req, HV_VC_E_LOST, "%s: the system stopped the video session (%d); on iOS, Henge left the screen. Open a new session", what, (int)st);
+        return fail(c, req, HV_VC_E_LOST, "%s: the system stopped the video session (%d); on iOS, Tuxedo left the screen. Open a new session", what, (int)st);
     return fail(c, req, HV_VC_E_CODEC, "%s: %s (%d)", what, hv_vtd_error(st), (int)st);
 }
 
 static int background_fail(Ctx *c, const HvVcHeader *req, const char *what) {
-    return fail(c, req, HV_VC_E_LOST, "%s: Henge is in the background on iOS, so no video session opens. Open one when it returns", what);
+    return fail(c, req, HV_VC_E_LOST, "%s: Tuxedo is in the background on iOS, so no video session opens. Open one when it returns", what);
 }
 
 /* H.273 code points to CoreVideo's strings: 0 and 2 are "none"; *bad is set for a code CoreVideo does not know. */

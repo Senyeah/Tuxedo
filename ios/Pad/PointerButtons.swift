@@ -10,7 +10,7 @@ final class PointerButtons {
         case hold           // a touch-and-hold drag on the pad
         case latch          // a held left key that the keyboard covered: it lets go at the last lift
         case accessibility  // VoiceOver's "Hold"
-        case volume         // Henge's volume buttons: a physical key, so the keyboard leaves it held
+        case volume         // Tuxedo's volume buttons: a physical key, so the keyboard leaves it held
         case mouse          // a hardware mouse or trackpad
     }
 

@@ -24,7 +24,7 @@ private let CS_DEBUGGED = UInt32(0x10000000)
 /// Tuxedo's own built-in StikJIT helper (JITSetup.swift), which runs the same
 /// script from an app extension.
 enum JITBootstrap {
-    private static let log = Logger(subsystem: "com.henge.app", category: "jit")
+    private static let log = Logger(subsystem: "nz.jackgreenhill.tuxedo", category: "jit")
 
     enum State: Equatable {
         case unknown
@@ -59,7 +59,7 @@ enum JITBootstrap {
     // prewarmed region whenever it is at least what tb-size asks for.
     /// The one region TuxVM's translator gets for the whole session (it flushes and starts over when full,
     /// never asks for more). 1 GB takes about 1.5 s to prepare, and a first boot through Setup makes that much code; a full flush drops all of it.
-    static let codeCacheKey = "henge.perf.codeCacheMB"
+    static let codeCacheKey = "tux.perf.codeCacheMB"
     /// 1 GB, or 1.5 GB (Settings > Performance > Code cache; without a choice there, 1.5 GB where the memory limit
     /// has room for it: about 6 GB on 12 GB iPhones). A bigger cache fills and empties less often (macOS 27 filled
     /// 1 GB about once a minute) and costs more memory (its blocks' records come to about 0.75 of its size). Fixed for
@@ -89,10 +89,10 @@ enum JITBootstrap {
         if tux_ios_jit_prewarm_self(jitBytes) {
             prewarmed = true
             lastFailure = nil
-            TuxLog.log("jit", "JIT region made by Henge itself (simulator)")
+            TuxLog.log("jit", "JIT region made by Tuxedo itself (simulator)")
             return true
         }
-        lastFailure = "The simulator refused the JIT region; see henge.log."
+        lastFailure = "The simulator refused the JIT region; see tux.log."
         return false
         #else
         // Before iOS 26 Tuxedo can make the region itself where the device allows it (a jailbreak,
@@ -122,7 +122,7 @@ enum JITBootstrap {
             if tux_ios_jit_prewarm_self(jitBytes) {
                 prewarmed = true
                 lastFailure = nil
-                TuxLog.log("jit", "JIT region made by Henge itself (\(tux_ios_jit_self_route().map { String(cString: $0) } ?? "self"))")
+                TuxLog.log("jit", "JIT region made by Tuxedo itself (\(tux_ios_jit_self_route().map { String(cString: $0) } ?? "self"))")
                 return true
             }
             releaseUnusedCompressedHeap()
@@ -149,8 +149,8 @@ enum JITBootstrap {
             lastFailure = "The debugger is attached but is not answering trap "
                         + "requests, and this device will not execute a MAP_JIT "
                         + "mapping either, so no executable memory could be "
-                        + "claimed. This happens when Henge was opened from StikDebug's "
-                        + "app list, which attaches without Henge's script: open Henge "
+                        + "claimed. This happens when Tuxedo was opened from StikDebug's "
+                        + "app list, which attaches without Tuxedo's script: open Tuxedo "
                         + "from the Home Screen and tap Turn On JIT. It also happens "
                         + "inside another container app."
         }
@@ -170,13 +170,13 @@ enum JITBootstrap {
     /// (AetherPS4 runs this way on TXM devices), so detaching once the region is
     /// held removes the debugger from the picture.
     static var keepDebuggerAttached: Bool {
-        get { UserDefaults.standard.bool(forKey: "henge.keepDebuggerAttached") }
-        set { UserDefaults.standard.set(newValue, forKey: "henge.keepDebuggerAttached") }
+        get { UserDefaults.standard.bool(forKey: "tux.keepDebuggerAttached") }
+        set { UserDefaults.standard.set(newValue, forKey: "tux.keepDebuggerAttached") }
     }
 
     /// Whether StikDebug's script may be the debugger: the only one that answers a brk.
     private static var stikDebugMayServiceTraps: Bool {
-        let method = UserDefaults.standard.string(forKey: "henge.jitMethod") ?? JITMethod.automatic.rawValue
+        let method = UserDefaults.standard.string(forKey: "tux.jitMethod") ?? JITMethod.automatic.rawValue
         return method == JITMethod.stikDebug.rawValue || (method == JITMethod.automatic.rawValue && isStikDebugInstalled)
     }
 
@@ -430,7 +430,7 @@ enum JITBootstrap {
         // checked against whichever app iOS actually installed — a container app hosting Tuxedo
         // fails the query even when StikDebug is installed. open() has no such restriction.
         TuxLog.log("jit", "opening stikjit:// for bundle \(bundleID), pid \(getpid()); "
-                         + "Henge will be backgrounded and relaunched after attach")
+                         + "Tuxedo will be backgrounded and relaunched after attach")
         UIApplication.shared.open(launchURL, options: [:]) { success in
             if !success {
                 TuxLog.log("jit", "FAIL: open(stikjit://) did not succeed -- StikDebug is not installed")

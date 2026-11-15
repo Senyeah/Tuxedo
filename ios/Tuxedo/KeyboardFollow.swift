@@ -4,7 +4,7 @@ import Foundation
 /// The on-screen keyboard follows a Linux desktop: henge-keyboard in the guest says when the focused program
 /// wants text (host/share.c, /.henge/keyboard). Pure policy, no UIKit.
 struct KeyboardFollow {
-    static let storageKey = "henge.linux.keyboardFollows"
+    static let storageKey = "tux.linux.keyboardFollows"
 
     /// The last request this has seen. The count goes on from one machine to the next.
     private(set) var seq: UInt

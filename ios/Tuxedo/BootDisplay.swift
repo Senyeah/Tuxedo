@@ -14,8 +14,8 @@ struct BootDisplay: View {
 
     @State private var gpuLive = false
     @State private var stopped = false
-    @AppStorage("henge.matchScreenColors") private var matchScreenColors = true
-    @AppStorage("henge.display.brightness") private var screenBrightness = 1.0
+    @AppStorage("tux.matchScreenColors") private var matchScreenColors = true
+    @AppStorage("tux.display.brightness") private var screenBrightness = 1.0
 
     var body: some View {
         ZStack {

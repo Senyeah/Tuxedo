@@ -5,7 +5,7 @@ import Foundation
 /// both targets. Each travels as JSON in an extension request's item
 /// (userInfo[itemKey]), to the helper and back.
 struct TuxJITRequest: Codable, Sendable {
-    static let itemKey = "henge-jit-request"
+    static let itemKey = "tux-jit-request"
 
     enum Operation: String, Codable, Sendable {
         /// Check LocalDevVPN and download, mount and verify the Developer Disk Image.
@@ -40,7 +40,7 @@ struct TuxJITRequest: Codable, Sendable {
     }
 
     struct Response: Codable, Sendable {
-        static let itemKey = "henge-jit-response"
+        static let itemKey = "tux-jit-response"
         let success: Bool
         let message: String
         let txmPresent: Bool?

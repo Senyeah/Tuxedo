@@ -147,7 +147,7 @@ Add temporary log lines in `ios/Tuxedo/Hardware.swift` and `ios/Tuxedo/Trackpad.
 4. In `Trackpad.Surface`, log the `type` of each new touch. Add a `UIHoverGestureRecognizer` that logs the first 40 locations.
 5. Optional, for P2: log each HID event type from `_setHIDEventObserver:onQueue:`.
 
-Test on the phone, with the trackpad connected and a guest running. Do each row for 20 seconds, then read `henge.log`.
+Test on the phone, with the trackpad connected and a guest running. Do each row for 20 seconds, then read `tux.log`.
 
 | Run | AssistiveTouch | Perform Touch Gestures | Actions |
 | --- | --- | --- | --- |

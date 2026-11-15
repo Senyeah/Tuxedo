@@ -88,7 +88,7 @@ final class LinuxInstaller: ObservableObject {
         received = LinuxDownload.present(image, in: Self.folder)
         expected = image.downloadBytes
         UIApplication.shared.isIdleTimerDisabled = true
-        grace = UIApplication.shared.beginBackgroundTask(withName: "Henge Linux download") {
+        grace = UIApplication.shared.beginBackgroundTask(withName: "Tuxedo Linux download") {
             MainActor.assumeIsolated { LinuxInstaller.shared.endGrace() }
         }
         LinuxDownload.log = { TuxLog.log("linux", $0) }

@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Lets StikDebug (or Henge's built-in StikJIT helper) attach. On iOS 26 and
+	<!-- Lets StikDebug (or Tuxedo's built-in StikJIT helper) attach. On iOS 26 and
 	     later only an attached debugger can give an app executable memory. -->
 	<key>get-task-allow</key>
 	<true/>

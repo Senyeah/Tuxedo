@@ -12,7 +12,7 @@ import UserNotifications
 /// the iPhone: Settings › Privacy & Security › Developer Mode lists every
 /// `_remotepairing-pairable-host._tcp` service, and pairing with one asks for the
 /// PIN that host shows. Tuxedo plays that computer for its own iPhone:
-/// libhenge_rppairing (src/rppairing-ios, idevice's PairableHost) listens on a
+/// libhusk_rppairing (src/rppairing-ios, idevice's PairableHost) listens on a
 /// port and runs the pairing; this publishes the port through mDNSResponder
 /// (dns_sd, so only the Local Network permission is needed, not the multicast
 /// entitlement) and stores the resulting RPPairing file where Built-in StikJIT
@@ -30,7 +30,7 @@ import UserNotifications
     static let shared = OnDevicePairing()
 
     /// Shown on the iPhone as "Pair with Tuxedo"; the host identifier is derived from it.
-    static let hostName = "Henge"
+    static let hostName = "Tuxedo"
     static let timeout: TimeInterval = 300
 
     enum Phase: Equatable {
@@ -79,7 +79,7 @@ import UserNotifications
         guard Self.isSupported, !active, session == nil else { return }
         var error: UnsafeMutablePointer<CChar>?
         guard let session = husk_rppairing_new(Self.hostName, &error) else {
-            fail(Self.take(error) ?? "Henge could not open its pairing port.")
+            fail(Self.take(error) ?? "Tuxedo could not open its pairing port.")
             return
         }
         self.session = session
@@ -140,12 +140,12 @@ import UserNotifications
         log("code shown")
         #if compiler(>=6.2)
         if #available(iOS 26.0, *), let task = continued as? BGContinuedProcessingTask {
-            task.updateTitle("Pairing code \(pin)", subtitle: "Enter it on this \(Self.deviceKind) to pair with Henge")
+            task.updateTitle("Pairing code \(pin)", subtitle: "Enter it on this \(Self.deviceKind) to pair with Tuxedo")
             task.progress.completedUnitCount = 1
         }
         #endif
         if UIApplication.shared.applicationState != .active {
-            notify("Henge pairing code: \(pin)", body: "Enter this code on your \(Self.deviceKind) to finish pairing.")
+            notify("Tuxedo pairing code: \(pin)", body: "Enter this code on your \(Self.deviceKind) to finish pairing.")
         }
     }
 
@@ -158,16 +158,16 @@ import UserNotifications
         switch status {
         case 0:
             do {
-                guard let data else { throw NSError(domain: "HengeJIT", code: 20) }
+                guard let data else { throw NSError(domain: "TuxJIT", code: 20) }
                 try JITCoordinator.shared.storeOnDevicePairing(data)
                 phase = .paired(device: device ?? "this \(Self.deviceKind)")
                 log("paired")
                 if UIApplication.shared.applicationState != .active {
-                    notify("Paired with Henge", body: "Return to Henge to finish setting up JIT.")
+                    notify("Paired with Tuxedo", body: "Return to Tuxedo to finish setting up JIT.")
                 }
                 endBackground(success: true)
             } catch {
-                fail("Pairing finished, but Henge could not save the pairing file.")
+                fail("Pairing finished, but Tuxedo could not save the pairing file.")
             }
         case 2:
             endBackground(success: false)
@@ -224,8 +224,8 @@ import UserNotifications
         guard active else { return }
         log("advertising failed error=\(error)")
         fail(error == DNSServiceErrorType(kDNSServiceErr_PolicyDenied)
-             ? "Henge needs Local Network access to pair. Allow it in Settings › Apps › Henge, then try again."
-             : "Henge could not announce itself on the local network. Check that Wi-Fi is on, then try again.")
+             ? "Tuxedo needs Local Network access to pair. Allow it in Settings › Apps › Tuxedo, then try again."
+             : "Tuxedo could not announce itself on the local network. Check that Wi-Fi is on, then try again.")
     }
 
     private func stopAdvertising() {
@@ -243,11 +243,11 @@ import UserNotifications
     }
 
     private func beginBackground() {
-        grace = UIApplication.shared.beginBackgroundTask(withName: "Henge pairing") {
+        grace = UIApplication.shared.beginBackgroundTask(withName: "Tuxedo pairing") {
             MainActor.assumeIsolated {
                 let pairing = OnDevicePairing.shared
                 if pairing.continued == nil && pairing.active {
-                    pairing.cancel(reason: "iOS stopped Henge in the background before pairing finished. "
+                    pairing.cancel(reason: "iOS stopped Tuxedo in the background before pairing finished. "
                                          + "Try again, and pair from Settings straight away.")
                 }
                 pairing.endGrace()
@@ -272,7 +272,7 @@ import UserNotifications
             guard ok else { log("register refused"); backgroundLimited = true; return }
             registered = identifier
         }
-        let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: "Pairing with Henge",
+        let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: "Pairing with Tuxedo",
                                                        subtitle: "Settings › Privacy & Security › Developer Mode")
         request.strategy = .fail
         do {
@@ -290,7 +290,7 @@ import UserNotifications
         continued = task
         task.progress.totalUnitCount = 2
         if case .pin(let pin) = phase {
-            task.updateTitle("Pairing code \(pin)", subtitle: "Enter it on this \(Self.deviceKind) to pair with Henge")
+            task.updateTitle("Pairing code \(pin)", subtitle: "Enter it on this \(Self.deviceKind) to pair with Tuxedo")
             task.progress.completedUnitCount = 1
         }
         task.expirationHandler = {
@@ -331,7 +331,7 @@ import UserNotifications
         content.title = title
         content.body = body
         content.sound = .default
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "henge.pairing.\(UUID().uuidString)",
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "tux.pairing.\(UUID().uuidString)",
                                                                      content: content, trigger: nil))
     }
 }

@@ -4,7 +4,7 @@ import UIKit
 /// Where AssistiveTouch's pointer is, from the HID events UIKit sees (private API, docs/mouse-capture-ios.md).
 /// Each pointer report is a digitizer event with a pointer child (type 17) whose X and Y fields hold the
 /// position, already held inside the phone's screen. EdgePush uses it to see that the pointer is at an edge.
-/// With Documents/henge-mouse-probe present it also logs a summary each second.
+/// With Documents/tux-mouse-probe present it also logs a summary each second.
 enum PointerWatch {
     /// Called on the main queue with each position, in the system's own axes.
     static var onPosition: ((Double, Double) -> Void)?
@@ -23,7 +23,7 @@ enum PointerWatch {
         guard !started else { return }
         started = true
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        logging = FileManager.default.fileExists(atPath: docs.appendingPathComponent("henge-mouse-probe").path)
+        logging = FileManager.default.fileExists(atPath: docs.appendingPathComponent("tux-mouse-probe").path)
         let rtldDefault = UnsafeMutableRawPointer(bitPattern: -2)
         guard let tp = dlsym(rtldDefault, "IOHIDEventGetType"), let fp = dlsym(rtldDefault, "IOHIDEventGetFloatValue"),
               let cp = dlsym(rtldDefault, "IOHIDEventGetChildren") else {

@@ -7,7 +7,7 @@ struct MachineSettingsView: View {
     @State private var machine: VirtualMachine
     @State private var confirmDelete = false
     @State private var movingExport = false
-    @AppStorage("henge.cpus") private var globalCpus = 4
+    @AppStorage("tux.cpus") private var globalCpus = 4
     @State private var growToGB = 0 // 0: no change picked
     @State private var confirmGrow = false
     @State private var growError: String?
@@ -278,7 +278,7 @@ struct MachineSettingsView: View {
         VStack(spacing: 0) {
             if let name = machines.exporting {
                 VStack(alignment: .leading, spacing: 9) {
-                    Text("Exporting \(name)… keep Henge open").font(.system(size: 15))
+                    Text("Exporting \(name)… keep Tuxedo open").font(.system(size: 15))
                     DeskBar(fraction: machines.exported)
                 }
                 .padding(17)
@@ -288,9 +288,9 @@ struct MachineSettingsView: View {
             if let folder = machines.lastExport {
                 divider
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Saved in Files, under Henge, Exports, \(folder.lastPathComponent). Deleting Henge deletes it too, so move it somewhere else first.")
+                    Text("Saved in Files, under Tuxedo, Exports, \(folder.lastPathComponent). Deleting Tuxedo deletes it too, so move it somewhere else first.")
                         .font(.system(size: 13)).foregroundStyle(Desk.dim)
-                    Button("Move Out of Henge…") { movingExport = true }
+                    Button("Move Out of Tuxedo…") { movingExport = true }
                         .font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.accentLight)
                 }
                 .padding(17)

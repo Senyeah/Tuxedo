@@ -9,7 +9,7 @@ import StikJIT
 /// LocalDevVPN and services the script's trap requests until Tuxedo detaches.
 private enum TuxJITWork {
     /// One request at a time: enabling JIT holds this queue while the debugger is attached.
-    static let queue = DispatchQueue(label: "com.henge.app.jit-helper")
+    static let queue = DispatchQueue(label: "nz.jackgreenhill.tuxedo.jit-helper")
 
     static func handle(_ request: TuxJITRequest) -> TuxJITRequest.Response {
         let manager = FileManager.default
@@ -39,7 +39,7 @@ private enum TuxJITWork {
             }
 
             guard let pairingData = request.pairingData, !pairingData.isEmpty else {
-                throw NSError(domain: "HengeJITHelper", code: 1,
+                throw NSError(domain: "TuxJITHelper", code: 1,
                               userInfo: [NSLocalizedDescriptionKey: "The pairing file was not provided."])
             }
             let pairingURL = root.appendingPathComponent("pairingFile-\(UUID().uuidString).plist")
@@ -73,9 +73,9 @@ private enum TuxJITWork {
             case .enable:
                 guard let targetPID = request.targetPID,
                       let scriptBase64 = request.scriptBase64, !scriptBase64.isEmpty else {
-                    throw NSError(domain: "HengeJITHelper", code: 2,
+                    throw NSError(domain: "TuxJITHelper", code: 2,
                                   userInfo: [NSLocalizedDescriptionKey:
-                                    "The target process or Henge's JIT script was not provided."])
+                                    "The target process or Tuxedo's JIT script was not provided."])
                 }
                 try StikJIT.enableJIT(
                     targetPID: targetPID,
@@ -86,7 +86,7 @@ private enum TuxJITWork {
                     forceScript: true,
                     preparationProgress: { NSLog("[TuxJIT] prepare: %@", String(describing: $0)) },
                     progress: { NSLog("[TuxJIT] %@", $0) })
-                return .init(success: true, message: "Henge detached cleanly from its built-in JIT helper." + portNote,
+                return .init(success: true, message: "Tuxedo detached cleanly from its built-in JIT helper." + portNote,
                              txmPresent: StikJIT.isTXMPresent)
             case .resetDDI:
                 preconditionFailure("Handled above")
@@ -97,7 +97,7 @@ private enum TuxJITWork {
         }
     }
 
-    private static let lastPortKey = "henge.lastRSDPort"
+    private static let lastPortKey = "tux.lastRSDPort"
 
     /// The last port that worked, then every open port in iOS's range, each probed with a real StikJIT call.
     /// The port changes at each reboot of the device, so a stale remembered one just falls through to the scan.
@@ -132,7 +132,7 @@ final class TuxJITHelperHandler: NSObject, NSExtensionRequestHandling {
             if let data, let request = try? JSONDecoder().decode(TuxJITRequest.self, from: data) {
                 response = TuxJITWork.handle(request)
             } else {
-                response = .init(success: false, message: "Henge's JIT helper received no request.",
+                response = .init(success: false, message: "Tuxedo's JIT helper received no request.",
                                  txmPresent: nil)
             }
             let item = NSExtensionItem()

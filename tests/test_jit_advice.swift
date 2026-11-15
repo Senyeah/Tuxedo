@@ -36,7 +36,7 @@ struct JITAdviceTests {
 
         // Advice: on Wi-Fi the same timeout still means LocalDevVPN is off.
         let wifiAdvice = JITNetworkAdvice.advice(forHelperMessage: timeout, situation: .wifi)
-        precondition(wifiAdvice?.message == "Henge couldn't reach this device. Connect LocalDevVPN, then try again.")
+        precondition(wifiAdvice?.message == "Tuxedo couldn't reach this device. Connect LocalDevVPN, then try again.")
         precondition(wifiAdvice?.actions == [.connectLocalDevVPN])
 
         // Advice: a pairing error keeps the pairing advice on every network.

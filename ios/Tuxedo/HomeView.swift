@@ -42,7 +42,7 @@ struct HomeView: View {
                 .deskColumn()
             }
             .background(Desk.page)
-            .navigationTitle("Henge")
+            .navigationTitle("Tuxedo")
             .navigationDestination(for: VirtualMachine.self) { MachineSettingsView(machine: $0) }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -154,7 +154,7 @@ private struct MachineHero: View {
     let turnOnJIT: () -> Void
     let jitNote: String?
     let jitBusy: Bool
-    @AppStorage("henge.cpus") private var cpus = 4
+    @AppStorage("tux.cpus") private var cpus = 4
 
     var body: some View {
         VStack(spacing: 0) {

@@ -118,7 +118,7 @@ struct ForwardsSection: View {
             .disabled(forwards.count >= ForwardPolicy.maxRules)
         }
         .deskCard()
-        Text("Another device on the same Wi-Fi, Ethernet or VPN (Tailscale too) connects to this \(Device.name) at the phone port, and reaches the guest's port. Never over cellular. While Henge is in the background a paused machine answers when you come back. Changes apply at once.")
+        Text("Another device on the same Wi-Fi, Ethernet or VPN (Tailscale too) connects to this \(Device.name) at the phone port, and reaches the guest's port. Never over cellular. While Tuxedo is in the background a paused machine answers when you come back. Changes apply at once.")
             .font(.system(size: 13)).foregroundStyle(Desk.dim)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 17)

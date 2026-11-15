@@ -38,7 +38,7 @@ enum Sharing {
     enum PasteKeys: String {
         case control, controlShift
 
-        static let storageKey = "henge.linux.pasteKeys"
+        static let storageKey = "tux.linux.pasteKeys"
     }
 
     /// Text from this device, pasted at the guest's cursor. Without the helper it is typed, as far as the keyboard can.

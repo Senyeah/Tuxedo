@@ -21,7 +21,7 @@ enum RSDPortResolver {
     /// Blocks for at most `timeout`. Call it off the main thread.
     static func resolve(timeout: TimeInterval = 4) -> Result {
         let state = State()
-        let queue = DispatchQueue(label: "com.henge.app.jit-helper.rsd-port")
+        let queue = DispatchQueue(label: "nz.jackgreenhill.tuxedo.jit-helper.rsd-port")
         let context = Unmanaged.passRetained(state)
         defer { context.release() }
 
@@ -104,7 +104,7 @@ enum RSDPortResolver {
 
     private static func describe(_ error: DNSServiceErrorType) -> String {
         switch Int(error) {
-        case Int(kDNSServiceErr_PolicyDenied): return "PolicyDenied: Local Network access is off for Henge"
+        case Int(kDNSServiceErr_PolicyDenied): return "PolicyDenied: Local Network access is off for Tuxedo"
         case Int(kDNSServiceErr_NoAuth): return "NoAuth"
         case Int(kDNSServiceErr_ServiceNotRunning): return "ServiceNotRunning"
         default: return "DNSServiceErrorType \(error)"

@@ -97,8 +97,8 @@ static double tux_now_ms(void)
 
 #define TUX_LOG(fmt, ...)                                                     \
     do {                                                                       \
-        os_log(OS_LOG_DEFAULT, "[henge-jit] " fmt, ##__VA_ARGS__);              \
-        fprintf(stderr, "[%9.2fms][henge-jit] " fmt "\n",                       \
+        os_log(OS_LOG_DEFAULT, "[tux-jit] " fmt, ##__VA_ARGS__);              \
+        fprintf(stderr, "[%9.2fms][tux-jit] " fmt "\n",                       \
                 tux_now_ms(), ##__VA_ARGS__);                                 \
         fflush(stderr);                                                        \
     } while (0)
@@ -570,7 +570,7 @@ TUX_EXPORT bool tux_ios_jit_prewarm(size_t bytes)
     }
     tux_prewarm_done = true;
     tux_prewarmed = tux_ios_jit_allocate_real(bytes);
-    fprintf(stderr, "[henge-jit] prewarm %s: %zu bytes\n",
+    fprintf(stderr, "[tux-jit] prewarm %s: %zu bytes\n",
             tux_prewarmed.rw_addr ? "OK" : "FAILED", bytes);
     return tux_prewarmed.rw_addr != NULL;
 }
@@ -586,7 +586,7 @@ TUX_EXPORT bool tux_ios_jit_prewarm_self(size_t bytes)
     if (!m.rw_addr) return false;
     tux_prewarmed = m;
     tux_prewarm_done = true;
-    fprintf(stderr, "[henge-jit] prewarm (self, %s) OK: %zu bytes\n", g_self_route ? g_self_route : "?", m.size);
+    fprintf(stderr, "[tux-jit] prewarm (self, %s) OK: %zu bytes\n", g_self_route ? g_self_route : "?", m.size);
     return true;
 }
 
@@ -612,7 +612,7 @@ TUX_EXPORT bool tux_ios_jit_reserve_bottom(size_t end)
     if (ok && end > tux_runtime_high) tux_runtime_high = end;
     pthread_mutex_unlock(&tux_share_lock);
     if (!ok) {
-        fprintf(stderr, "[henge-jit] the native runtime wants %zu MiB of the JIT region, but QEMU holds its top %zu MiB\n",
+        fprintf(stderr, "[tux-jit] the native runtime wants %zu MiB of the JIT region, but QEMU holds its top %zu MiB\n",
                 end >> 20, tux_qemu_top >> 20);
     }
     return ok;
@@ -632,12 +632,12 @@ TuxDualMapping tux_ios_jit_allocate(size_t bytes)
         if (fits) tux_qemu_top = tux_prewarmed.size - off;
         pthread_mutex_unlock(&tux_share_lock);
         if (!fits) {
-            fprintf(stderr, "[henge-jit] the native runtime already uses %zu MiB of the %zu MiB region; no room for %zu MiB of TCG\n",
+            fprintf(stderr, "[tux-jit] the native runtime already uses %zu MiB of the %zu MiB region; no room for %zu MiB of TCG\n",
                     tux_runtime_high >> 20, tux_prewarmed.size >> 20, bytes >> 20);
             TuxDualMapping none = { NULL, NULL, 0 };
             return none;
         }
-        fprintf(stderr, "[henge-jit] using the top %zu MiB of the prewarmed region (%zu MiB)\n",
+        fprintf(stderr, "[tux-jit] using the top %zu MiB of the prewarmed region (%zu MiB)\n",
                 (tux_prewarmed.size - off) >> 20, tux_prewarmed.size >> 20);
         TuxDualMapping top = { tux_prewarmed.rw_addr + off, tux_prewarmed.rx_addr + off, tux_prewarmed.size - off };
         return top;
@@ -650,7 +650,7 @@ TuxDualMapping tux_ios_jit_allocate(size_t bytes)
      * fall back to MAP_JIT, or lets qemu_init report the error.
      */
     if (tux_prewarm_done) {
-        fprintf(stderr, "[henge-jit] prewarm failed earlier; not trapping again\n");
+        fprintf(stderr, "[tux-jit] prewarm failed earlier; not trapping again\n");
         TuxDualMapping none = { NULL, NULL, 0 };
         return none;
     }
@@ -728,7 +728,7 @@ static TuxDualMapping tux_ios_jit_allocate_real(size_t bytes)
     if (rx != NULL && (uint64_t)(uintptr_t)rx + bytes > TUX_JIT_LOW_LIMIT) {
         /* Calling into it would hang the app with the debugger still attached. */
         TUX_LOG("#%llu: the JIT region came back at %p, above %#llx where generated code does not run; "
-                  "giving it back. Quit Henge and open it again.", (unsigned long long)n, rx, TUX_JIT_LOW_LIMIT);
+                  "giving it back. Quit Tuxedo and open it again.", (unsigned long long)n, rx, TUX_JIT_LOW_LIMIT);
         vm_deallocate(mach_task_self(), (vm_address_t)rx, bytes);
         return region;
     }

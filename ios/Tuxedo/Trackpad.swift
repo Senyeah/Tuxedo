@@ -15,7 +15,7 @@ import UIKit
 /// Only fingers count: a real trackpad or mouse goes through HardwareMouse, which shares the owners.
 struct Trackpad: UIViewRepresentable {
     /// Four fingers tapped together: the session shows its hidden controls.
-    static let revealTap = Notification.Name("henge.trackpad.revealTap")
+    static let revealTap = Notification.Name("tux.trackpad.revealTap")
 
     /// The on-screen keyboard is up.
     var keyboardUp = false
@@ -275,8 +275,8 @@ extension PointerButtons {
 
 /// The trackpad's haptic settings (Settings > Trackpad), for every pad.
 enum TrackpadFeel {
-    static let hapticsKey = "henge.trackpad.haptics"
-    static let motionKey = "henge.trackpad.motionFeel"
+    static let hapticsKey = "tux.trackpad.haptics"
+    static let motionKey = "tux.trackpad.motionFeel"
 
     static var level: PadHaptics.Level {
         PadHaptics.Level(rawValue: UserDefaults.standard.string(forKey: hapticsKey) ?? "") ?? .all

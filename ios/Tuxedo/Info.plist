@@ -12,7 +12,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Henge</string>
+	<string>Tuxedo</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -32,7 +32,7 @@
 			<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>henge</string>
+				<string>tux</string>
 			</array>
 		</dict>
 	</array>
@@ -67,11 +67,11 @@
 		<string>_remotepairing._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Henge can use the volume buttons as the trackpad's mouse buttons. Receiving those presses needs the camera active; no video is recorded, saved or shown.</string>
+	<string>Tuxedo can use the volume buttons as the trackpad's mouse buttons. Receiving those presses needs the camera active; no video is recorded, saved or shown.</string>
 	<key>NSFaceIDUsageDescription</key>
-	<string>Henge asks for Face ID before a machine opens or comes back, and to unlock the passwords a Linux machine keeps in the Keychain.</string>
+	<string>Tuxedo asks for Face ID before a machine opens or comes back, and to unlock the passwords a Linux machine keeps in the Keychain.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Henge uses the local network to pair with this iPhone for JIT, to download Linux images from a computer on your network, and to accept connections from your other devices to a Linux machine's port forwards, such as SSH.</string>
+	<string>Tuxedo uses the local network to pair with this iPhone for JIT, to download Linux images from a computer on your network, and to accept connections from your other devices to a Linux machine's port forwards, such as SSH.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

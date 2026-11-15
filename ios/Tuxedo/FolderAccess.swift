@@ -42,7 +42,7 @@ final class FolderSession: ObservableObject {
     /// An empty folder for one that cannot be reached: the guest sees it as unavailable, not gone. One for each
     /// folder, and no one can write in it.
     private static func placeholder(_ id: UUID) -> String {
-        let dir = (NSTemporaryDirectory() as NSString).appendingPathComponent("henge-unavailable/\(id.uuidString)")
+        let dir = (NSTemporaryDirectory() as NSString).appendingPathComponent("tux-unavailable/\(id.uuidString)")
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         try? FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir)
         return dir
@@ -333,7 +333,7 @@ final class FolderSession: ObservableObject {
                 last = bytes
                 if still >= 60 { // 30 s with nothing new
                     TuxLog.log("folders", "export to \(url.lastPathComponent): \(found.count) of \(want.files) files, \(bytes) of \(want.bytes) bytes")
-                    asks[id] = .failed("Only part of the export reached Files, in Henge, Shared, Exports, \(url.lastPathComponent). Keep Henge open while it exports, then export again.")
+                    asks[id] = .failed("Only part of the export reached Files, in Tuxedo, Shared, Exports, \(url.lastPathComponent). Keep Tuxedo open while it exports, then export again.")
                     return
                 }
                 try? await Task.sleep(nanoseconds: 500_000_000)

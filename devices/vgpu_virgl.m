@@ -645,7 +645,7 @@ static void blob_init(void) {
     blob_dir[0] = 0;
     const char *env = getenv("HV_GL_CACHE");
     if (env && !strcmp(env, "off")) return;
-    NSString *base = env && *env ? @(env) : [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject stringByAppendingPathComponent:@"Henge"];
+    NSString *base = env && *env ? @(env) : [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject stringByAppendingPathComponent:@"Tux"];
     if (!base) return;
     NSString *dir = [base stringByAppendingPathComponent:@"angle-" HV_ANGLE_COMMIT];
     if (![[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil]) return;

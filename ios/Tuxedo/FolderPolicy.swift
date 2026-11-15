@@ -126,7 +126,7 @@ enum FolderPolicy {
     }
 
     static func unreachableNotice(_ name: String) -> String {
-        "Henge cannot reach \(name). Pick it again in Details, Folders."
+        "Tuxedo cannot reach \(name). Pick it again in Details, Folders."
     }
 
     static func downloadingNotice(_ file: String) -> String { "Downloading \(file)…" }
@@ -165,7 +165,7 @@ enum FolderPolicy {
         }
         let shown: [String]
         if let docs = appDocuments, path == docs || path.hasPrefix(docs + "/") {
-            shown = ["Henge"] + path.dropFirst(docs.count).split(separator: "/").map(String.init)
+            shown = ["Tuxedo"] + path.dropFirst(docs.count).split(separator: "/").map(String.init)
         } else if let rest = after(["Mobile Documents", "com~apple~CloudDocs"]) {
             shown = ["iCloud Drive"] + rest
         } else if let rest = after(["Mobile Documents"]), let app = rest.first {

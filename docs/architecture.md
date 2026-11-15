@@ -169,7 +169,7 @@ virgl 3D commands. `devices/vgpu_virgl.m` runs virglrenderer on ANGLE's Metal ba
 one thread that owns every GL call. The guest gets OpenGL ES 3.0 and compatibility GL 2.1.
 ES 3.0 is the ceiling, because ANGLE's Metal backend refuses ES 3.1. A 3D scanout is blitted
 into an `IOSurface` that the presenter draws. ANGLE's blob cache keeps compiled shaders in the
-app's `Library/Caches/Henge` folder, so a program stalls only the first time. The libraries
+app's `Library/Caches/Tux` folder, so a program stalls only the first time. The libraries
 are static and built by `tools/gfx/build-deps.sh` ([tools/gfx](../tools/gfx/README.md)).
 
 The A8 gate (`make test-linux-accel`) boots virgl and a software renderer back to back in one

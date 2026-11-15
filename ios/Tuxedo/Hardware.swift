@@ -34,7 +34,7 @@ enum Device {
 
     /// What a choice risks on this device, if anything.
     static func memoryNote(_ gb: Int) -> String? {
-        gb > suggestedRAMGB ? "More than \(suggestedRAMGB) GB is a lot for this \(name): iOS may close Henge when Linux gets busy." : nil
+        gb > suggestedRAMGB ? "More than \(suggestedRAMGB) GB is a lot for this \(name): iOS may close Tuxedo when Linux gets busy." : nil
     }
 
     /// The virtual CPU offers Armv8.5 instructions (core/sysreg.c), and Linux uses them. They run as
@@ -46,7 +46,7 @@ enum Device {
         return major < 13
     }()
 
-    static let chipTooOldText = "Linux won't run on this \(name). Henge needs an A14 or M1 chip or newer."
+    static let chipTooOldText = "Linux won't run on this \(name). Tuxedo needs an A14 or M1 chip or newer."
 }
 
 /// A keyboard attached to the device. iOS reports each key going down and coming up by its HID usage,
@@ -139,9 +139,9 @@ enum PointerLock {
 /// which the guest then accelerates as it would for its own mouse.
 final class HardwareMouse {
     static let shared = HardwareMouse()
-    static let speedKey = "henge.mouse.speed"
-    static let reverseKey = "henge.mouse.reverse"
-    static let scrollSpeedKey = "henge.mouse.scrollSpeed"
+    static let speedKey = "tux.mouse.speed"
+    static let reverseKey = "tux.mouse.reverse"
+    static let scrollSpeedKey = "tux.mouse.scrollSpeed"
 
     private var observers: [NSObjectProtocol] = []
     private var mice: [GCMouse] = []

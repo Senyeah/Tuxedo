@@ -9,7 +9,7 @@ enum LinuxDownload {
 
     static let folderName = "Linux images"
     static let source = "The image server"
-    /// The app points this at henge.log; tests leave it silent.
+    /// The app points this at tux.log; tests leave it silent.
     nonisolated(unsafe) static var log: @Sendable (String) -> Void = { _ in }
 
     static func folder(root: URL) -> URL { root.appendingPathComponent(folderName, isDirectory: true) }
@@ -84,7 +84,7 @@ enum LinuxDownload {
                 return
             } catch let error as NSError {
                 // A refusal (status, wrong range, no file) does not get better by waiting.
-                let refused = error.domain == "Henge" && (error.code == 3 || error.code == 4 || error.code == 5)
+                let refused = error.domain == "Tux" && (error.code == 3 || error.code == 4 || error.code == 5)
                 if Task.isCancelled || attempt == 20 || refused { throw error }
                 log("download interrupted (\(error.localizedDescription)) at \(RangedDownload.size(of: part)) bytes; going on")
                 try await Task.sleep(nanoseconds: 3_000_000_000)

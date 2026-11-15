@@ -100,7 +100,7 @@ struct FolderPolicyTests {
         check("a notice once for each folder", notices.first(id) && !notices.first(id) && notices.first(UUID()))
         notices.reset()
         check("and again in the next session", notices.first(id))
-        check("the unreachable notice", FolderPolicy.unreachableNotice("Projects") == "Henge cannot reach Projects. Pick it again in Details, Folders.")
+        check("the unreachable notice", FolderPolicy.unreachableNotice("Projects") == "Tuxedo cannot reach Projects. Pick it again in Details, Folders.")
         check("the download notice", FolderPolicy.downloadingNotice("a.pdf") == "Downloading a.pdf…")
         check("add: at most 8", FolderPolicy.addNote(count: 8, running: false, device: false) != nil)
         check("add: no device means a restart", FolderPolicy.addNote(count: 0, running: true, device: false)?.contains("restarts") == true)
@@ -128,12 +128,12 @@ struct FolderPolicyTests {
         check("an app's iCloud folder", p("/private/var/mobile/Library/Mobile Documents/iCloud~com~example~Notes/Documents", nil) == "iCloud Drive › Notes › Documents")
         check("On My iPhone", p("/private/var/mobile/Containers/Shared/AppGroup/ABC/File Provider Storage/Music", nil) == "On My iPhone › Music")
         check("a drive", p("/private/var/mobile/Library/LiveFiles/com.apple.filesystems.userfsd/USB/Photos", nil) == "USB › Photos")
-        check("Henge's own", p("/var/mobile/Containers/Data/Application/X/Documents/Shared/src", "/var/mobile/Containers/Data/Application/X/Documents") == "Henge › Shared › src")
+        check("Tuxedo's own", p("/var/mobile/Containers/Data/Application/X/Documents/Shared/src", "/var/mobile/Containers/Data/Application/X/Documents") == "Tuxedo › Shared › src")
         check("anything else: the last two parts", p("/Users/me/tmp/Folder", nil) == "tmp › Folder")
         check("provider: iCloud", FolderPolicy.isProvider(path: "/private/var/mobile/Library/Mobile Documents/com~apple~CloudDocs/a", ubiquitous: false))
         check("provider: File Provider storage", FolderPolicy.isProvider(path: "/x/File Provider Storage/a", ubiquitous: false))
         check("provider: ubiquitous", FolderPolicy.isProvider(path: "/x", ubiquitous: true))
-        check("local: Henge's own and drives", !FolderPolicy.isProvider(path: "/var/mobile/Containers/Data/Application/X/Documents/a", ubiquitous: false))
+        check("local: Tuxedo's own and drives", !FolderPolicy.isProvider(path: "/var/mobile/Containers/Data/Application/X/Documents/a", ubiquitous: false))
     }
 
     static func exports() {

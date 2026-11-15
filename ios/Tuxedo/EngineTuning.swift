@@ -1,12 +1,12 @@
 import Foundation
 
 /// Engine settings, without a rebuild. Defaults below, then the Performance settings,
-/// then Documents/henge-env.txt (KEY=VALUE per line, # comments; {Documents} in a value is that folder) overrides them all.
+/// then Documents/tux-env.txt (KEY=VALUE per line, # comments; {Documents} in a value is that folder) overrides them all.
 /// Applied at launch and again before each machine starts, so changes need no relaunch.
 enum EngineTuning {
-    static let superblocksKey = "henge.perf.superblocks"
-    static let wfiSpinKey = "henge.perf.wfiSpin"
-    static let fastFlushKey = "henge.perf.fastFlush"
+    static let superblocksKey = "tux.perf.superblocks"
+    static let wfiSpinKey = "tux.perf.wfiSpin"
+    static let fastFlushKey = "tux.perf.fastFlush"
 
     static let defaults: [String: String] = [
         "HV_WFI_SPIN": "0",    // microseconds an idle CPU watches for work before sleeping
@@ -21,7 +21,7 @@ enum EngineTuning {
         if d.bool(forKey: wfiSpinKey) { env["HV_WFI_SPIN"] = "50" }
         if d.object(forKey: fastFlushKey) as? Bool == false { env["HV_FLUSH"] = "0" }
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let url = docs.appendingPathComponent("henge-env.txt")
+        let url = docs.appendingPathComponent("tux-env.txt")
         if let text = try? String(contentsOf: url, encoding: .utf8) {
             for raw in text.split(whereSeparator: \.isNewline) {
                 let line = raw.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init)?

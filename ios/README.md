@@ -55,7 +55,7 @@ the packager as an environment variable (`TUX_ENTITLEMENTS=... ios/scripts/packa
   USB keyboard by HID usage, which is how iOS reports them. A trackpad or mouse
   goes through GameController with the pointer locked, which iPadOS allows only
   for an app filling the screen. The first scroll values are logged to
-  `henge.log`, to tune scrolling from a real device.
+  `tux.log`, to tune scrolling from a real device.
 - **Chips**: the virtual CPU offers Armv8.5 instructions (`core/sysreg.c`), which
   Linux uses and which run as they are, so Tuxedo needs an A14 or M1 or newer.
 
@@ -66,7 +66,7 @@ A machine folder needs `u-boot.bin` and `machine.json` (`MachineFolder.required`
 - **Boot**: `tux_vm_boot_linux(firmware, disk, ram_mb, cpus, accel, video, encode, ...)` in `Native/tux-vm.h` starts `tuxvm`'s `virt` board with U-Boot. The same header has `tux_vm_console_read` and `tux_vm_console_write` for the serial console, and `tux_vm_power_button`, which presses the guest's power key. Shut Down on a Linux session presses it, so Debian shuts down by itself.
 - **Session**: `SessionView` shows the console (`ConsoleView.swift`, a SwiftTerm terminal over the engine's 256 KB ring) or the screen. A machine opens on the console. The console model lives with the session, so its scrollback survives a switch to the screen and back. The serial line has no window size and the guest shell assumes 80 columns, so `ConsoleModel.fit()` types `stty rows R cols C` on request.
 - **Install**: `LinuxCatalogue.swift` reads `linux-images.json`, `LinuxDownload.swift` and `RangedDownload.swift` fetch the firmware and the disk and resume with byte ranges, `LinuxUnpack.swift` decodes the LZFSE package and runs `hv_sparse_unpack`, and `LinuxInstaller.swift` grows the disk to the chosen size and writes the installed marker last. `tools/linux/package-image.sh` writes the catalogue and its packages (see [tools/linux/README.md](../tools/linux/README.md)).
-- **Catalogue setting**: Settings, Linux images, Catalogue URL (the `henge.linux.catalogueURL` default). Empty means no catalogue: import a folder instead. File names in the catalogue may be relative to its URL. A public host must use `https`, because App Transport Security refuses plain `http` except to local hosts (`NSAllowsLocalNetworking`). An image's `minBuild` is checked against `CFBundleVersion`.
+- **Catalogue setting**: Settings, Linux images, Catalogue URL (the `tux.linux.catalogueURL` default). Empty means no catalogue: import a folder instead. File names in the catalogue may be relative to its URL. A public host must use `https`, because App Transport Security refuses plain `http` except to local hosts (`NSAllowsLocalNetworking`). An image's `minBuild` is checked against `CFBundleVersion`.
 - **Screen**: a Linux machine on the phone follows the phone's safe area at scale 2 and the device's rotation (`DisplayModePolicy.swift`). Settings also offers an external display, 2560x1440 and 1920x1080. The guest follows a mode change through `/.henge/display` and `henge-display`.
 - **Graphics acceleration**: see below. **Sharing**: the shared folder is `~/Henge` in the guest, and the desktop image shares the clipboard.
 - **SwiftTerm**: the console's terminal, a Swift package (MIT) in `project.yml`, pinned to 1.99.1. It is the app's only Swift package. Its build plugin needs `-skipPackagePluginValidation`, and `xcodebuild` must not get `-sdk`. Its licence is in `Tuxedo/Resources/legal/LICENSE-SwiftTerm-MIT.txt`. `ios/scripts/check_display.sh` clones it over the network on its first run.
@@ -75,14 +75,14 @@ A machine folder needs `u-boot.bin` and `machine.json` (`MachineFolder.required`
 ## iOS Simulator
 
 `ios/scripts/sim_build.sh [device]` builds the `TuxSim` target, boots a simulator if none is booted
-(default "iPhone 18 Pro"), installs and launches Tuxedo, and prints the path of `henge.log`. It needs no
+(default "iPhone 18 Pro"), installs and launches Tuxedo, and prints the path of `tux.log`. It needs no
 phone, signing, Husk checkout or libslirp: the engine is built for `iphonesimulator` in `build/ios-sim`
 (`make ios-sim-lib`).
 
 What differs from the device app: networking is a stub (`host/net_stub.c`, the guest has no network),
 pairing is a stub (`TuxSim/sim_stubs.c`), and there is no JIT helper or StikJIT. The JIT region is
 made in-process the way `host/jit_region.c` does (RW map, alias, R-X): a simulator process is a macOS
-process, so no debugger is needed. Settings shows JIT "On" and `henge.log` has "self: PASS ... simulator memory".
+process, so no debugger is needed. Settings shows JIT "On" and `tux.log` has "self: PASS ... simulator memory".
 Launch with `simctl`, not under a debugger. Memory figures in Settings read zero in the simulator.
 
 ## Graphics acceleration (Linux machines)

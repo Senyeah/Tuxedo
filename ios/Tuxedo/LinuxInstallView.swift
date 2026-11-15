@@ -45,7 +45,7 @@ struct LinuxInstallView: View {
             switch linux.catalogue {
             case .none:
                 note(LinuxCatalogue.configuredURL == nil
-                     ? "To download a Linux machine, Henge needs a catalogue URL: enter it in Settings. Or bring in a machine made on a computer: the + button on the Machines tab, then \"Bring in a machine from a computer\"."
+                     ? "To download a Linux machine, Tuxedo needs a catalogue URL: enter it in Settings. Or bring in a machine made on a computer: the + button on the Machines tab, then \"Bring in a machine from a computer\"."
                      : "")
                 if LinuxCatalogue.configuredURL != nil { Button("Load the catalogue") { Task { await linux.refresh() } }.padding(17) }
             case .loading:
@@ -144,7 +144,7 @@ struct LinuxInstallView: View {
             .buttonStyle(DeskButtonStyle())
             .padding(.top, 20)
             let need = image.spaceNeeded(alreadyDownloaded: LinuxDownload.present(image, in: LinuxInstaller.folder))
-            Text("Keep Henge open and the \(Device.name) plugged in. Needs about \(ByteText.string(need)) free.")
+            Text("Keep Tuxedo open and the \(Device.name) plugged in. Needs about \(ByteText.string(need)) free.")
                 .font(.system(size: 13))
                 .foregroundStyle(Desk.dim)
                 .multilineTextAlignment(.center)
@@ -195,7 +195,7 @@ struct LinuxInstallView: View {
     }
 
     @ViewBuilder private var progress: some View {
-        Text("\(linux.current?.name ?? "Linux") on this \(Device.name). Keep Henge open.")
+        Text("\(linux.current?.name ?? "Linux") on this \(Device.name). Keep Tuxedo open.")
             .font(.system(size: 16))
             .foregroundStyle(Desk.dim)
             .frame(maxWidth: .infinity, alignment: .leading)
