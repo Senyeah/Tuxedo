@@ -72,7 +72,7 @@ int main(void) {
     char *bare[] = {"build/tuxvm", NULL};
     run(bare, err, sizeof err);
     check("the usage text names none of the removed flags", !strstr(err, "--board") && !strstr(err, "--rom") && !strstr(err, "--aux") &&
-                                                              !strstr(err, "--ecid") && !strstr(err, "--install") && !strstr(err, "--no-pvg"));
+                                                              !strstr(err, "--ecid") && !strstr(err, "--seed") && !strstr(err, "--install") && !strstr(err, "--no-pvg"));
     printf("CLI: %d failures\n", failures);
     return failures != 0;
 }
