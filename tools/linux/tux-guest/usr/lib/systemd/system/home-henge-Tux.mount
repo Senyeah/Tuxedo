@@ -1,0 +1,12 @@
+[Unit]
+Description=Tuxedo shared folder
+After=network-online.target
+Wants=network-online.target
+
+[Mount]
+What=http://10.0.2.4/
+Where=/home/henge/Tux
+Type=davfs
+Options=noauto,uid=henge,gid=henge,conf=/etc/tux/davfs2.conf
+# A boot or a host without the share must not leave a process stuck in the folder
+TimeoutSec=20

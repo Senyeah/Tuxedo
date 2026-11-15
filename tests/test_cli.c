@@ -39,7 +39,7 @@ static int run(char *const argv[], char *err, size_t cap) {
 
 int main(void) {
     alarm(60);
-    char err[4096], dtb[] = "/tmp/henge-cli-XXXXXX";
+    char err[4096], dtb[] = "/tmp/tux-cli-XXXXXX";
     int fd = mkstemp(dtb);
     if (fd < 0) return 1;
     close(fd);

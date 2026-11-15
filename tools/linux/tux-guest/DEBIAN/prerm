@@ -1,0 +1,20 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = remove ]; then
+    # A reinstall enables it again only if it was enabled now
+    if systemctl --global is-enabled tux-secrets.service >/dev/null 2>&1; then
+        mkdir -p /var/lib/tux && touch /var/lib/tux/secrets-removed
+    fi
+    systemctl --global disable tux-secrets.service >/dev/null 2>&1 || true
+    systemctl --global disable tux-files-places.service >/dev/null 2>&1 || true
+fi
+if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
+    deb-systemd-invoke stop tux-status.service home-henge-Tux.automount home-henge-Tux.mount tux-grow.service tux-firstboot.service tux-secrets-firewall.service tux-files.service >/dev/null || true
+fi
+if [ "$1" = remove ]; then
+    /usr/lib/tux/tux-secrets-firewall remove # stopping the unit keeps the rule
+    # The Copy-on-write layers stay in /var/lib/tux/files
+    /usr/lib/tux/tux-files unmount || true
+    if [ -d /run/systemd/system ]; then deb-systemd-invoke stop run-tux-files.mount >/dev/null || true; fi
+fi

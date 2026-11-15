@@ -45,7 +45,7 @@ struct VirtualMachine: Identifiable, Codable, Hashable {
     var wholeScreen: Bool?
     /// Linux: the session opens on the serial console, as it was left. Missing: the screen.
     var showsConsole: Bool?
-    /// Linux: folders from the Files app, at /media/henge/<name> in the guest. Missing: none.
+    /// Linux: folders from the Files app, at /media/tux/<name> in the guest. Missing: none.
     var folders: [SharedFolder]?
     /// Linux: TCP ports on the phone's local networks that lead into the guest (ForwardPolicy). Missing: none.
     var forwards: [PortForward]?
@@ -63,7 +63,7 @@ struct VirtualMachine: Identifiable, Codable, Hashable {
     }
 }
 
-/// A folder from the Files app that a Linux machine sees at /media/henge/<name> (docs/files-mount-plan.md).
+/// A folder from the Files app that a Linux machine sees at /media/tux/<name> (docs/files-mount-plan.md).
 struct SharedFolder: Codable, Hashable, Identifiable {
     var id = UUID()
     /// The guest's name for it (FolderPolicy.safeName).

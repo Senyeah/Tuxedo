@@ -6,13 +6,13 @@
 """The hvcodec DMA channel in the guest (docs/guest-video-encode-plan.md, VE4.2 to VE4.5).
 
 Boots a clone of the desktop image through U-Boot with `tuxvm --vcodec-dma --share DIR` and, over the serial console:
-  1. the device is on the bus, and no driver has it before henge-codec-dkms;
-  2. installs henge-codec-dkms (--out codec/) with apt, which brings dkms, gcc and the headers: DKMS must build the
+  1. the device is on the bus, and no driver has it before tux-codec-dkms;
+  2. installs tux-codec-dkms (--out codec/) with apt, which brings dkms, gcc and the headers: DKMS must build the
      module, and /dev/hvcodec must be there at once, root:video 0660, with no restart;
   3. builds hvcodec/hvxfer.c with libhvcodec, and measures 4K NV12 and P010 upload and download in fps on
      /dev/hvcodec and on TCP (VE4.4), with the frames in RAM already; the first frame must come back unchanged;
   4. with the patched ffmpeg (--out ffmpeg/bin): the plan's main command and a hwdownload, software filter, hwupload
-     chain, on /dev/hvcodec and on TCP (HENGE_VCODEC=10.0.2.4:8470), each output checked on the Mac (frames, decode,
+     chain, on /dev/hvcodec and on TCP (TUX_VCODEC=10.0.2.4:8470), each output checked on the Mac (frames, decode,
      PSNR, audio in sync), and ffmpeg must say which channel it has;
   5. the fallback: with the module unloaded the chain works on TCP and ffmpeg warns; a ninth open is refused; a
      process killed during transfers leaves the device working;
@@ -40,7 +40,7 @@ vc = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(vc)
 Fail, sh, need, put, fetch, probe, ffmpeg_case = vc.Fail, vc.sh, vc.need, vc.put, vc.fetch, vc.probe, vc.ffmpeg_case
 SHELL = vc.SHELL
-TCP = "HENGE_VCODEC=10.0.2.4:8470"
+TCP = "TUX_VCODEC=10.0.2.4:8470"
 
 
 def boot(args, disk, share, err_log):
@@ -77,7 +77,7 @@ def main():
     ap.add_argument("--linux-dir", help="u-boot.bin and the images (default: build/linux of the main checkout)")
     ap.add_argument("--image", help="default: KW-out/debian-desktop.img in --linux-dir")
     ap.add_argument("--firmware", help="default: u-boot.bin in --linux-dir")
-    ap.add_argument("--out", required=True, help="the build output: codec/henge-codec-dkms_*.deb and ffmpeg/bin")
+    ap.add_argument("--out", required=True, help="the build output: codec/tux-codec-dkms_*.deb and ffmpeg/bin")
     ap.add_argument("--clips", help="a folder with hevc8_4k.mp4 and hevc8_1080p.mp4 (made if missing)")
     ap.add_argument("--work-dir")
     ap.add_argument("--cpus", type=int, default=4)
@@ -92,12 +92,12 @@ def main():
     args.linux_dir = args.linux_dir or vc.linux_dir()
     image = args.image or os.path.join(args.linux_dir, "KW-out", "debian-desktop.img")
     args.firmware = args.firmware or os.path.join(args.linux_dir, "u-boot.bin")
-    debs = sorted(f for f in os.listdir(os.path.join(args.out, "codec")) if f.startswith("henge-codec-dkms_") and f.endswith(".deb"))
+    debs = sorted(f for f in os.listdir(os.path.join(args.out, "codec")) if f.startswith("tux-codec-dkms_") and f.endswith(".deb"))
     for f in (args.tuxvm, image, args.firmware):
         if not os.path.exists(f):
             raise Fail(f"missing {f}")
     if not debs:
-        raise Fail(f"no henge-codec-dkms in {args.out}/codec: run tools/linux/build-codec-dkms-pkg.sh")
+        raise Fail(f"no tux-codec-dkms in {args.out}/codec: run tools/linux/build-codec-dkms-pkg.sh")
     ok = True
     res = {"xfer": [], "ffmpeg": {}, "checks": {}}
 
@@ -137,7 +137,7 @@ def main():
             print(f"     kernel {kver}; {need(p, 'df -h / | tail -1', 'df').strip()}")
             out = need(p, "for d in /sys/bus/pci/devices/*; do [ \"$(cat $d/device)\" = 0x107f ] && echo $d $(cat $d/class) "
                           "$(readlink $d/virtio*/driver 2>/dev/null | xargs -r basename); done", "the device")
-            check("the device is on the bus (1af4:107f), with no driver before the package", "0x048000" in out and "henge_codec" not in out, out.strip())
+            check("the device is on the bus (1af4:107f), with no driver before the package", "0x048000" in out and "tux_codec" not in out, out.strip())
             src = need(p, "grep -rhE '^(URIs|Suites|deb |Enabled)' /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null | sort -u", "apt sources")
             print("     apt sources: " + "; ".join(l.strip() for l in src.splitlines() if l.strip()))
             # the install: dkms, the compiler and the headers come with the package (decision 11)
@@ -146,11 +146,11 @@ def main():
             deb = debs[-1]
             fetch(p, deb, f"/tmp/{deb}")
             text = need(p, f"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q linux-headers-$(uname -r) /tmp/{deb} >/tmp/apt.log 2>&1; "
-                           "echo APT_RC=$?; grep -E 'henge-codec|dkms|Building|Installing|newly installed|Need to get|After this operation' /tmp/apt.log | tail -18", "install", 3600)
+                           "echo APT_RC=$?; grep -E 'tux-codec|dkms|Building|Installing|newly installed|Need to get|After this operation' /tmp/apt.log | tail -18", "install", 3600)
             res["install_secs"] = time.time() - t0
-            check("apt install henge-codec-dkms", "APT_RC=0" in text, f"{res['install_secs']:.0f} s\n" + text.strip())
-            st = need(p, "sudo dkms status henge-codec; ls -l /dev/hvcodec; id henge | tr ' ' '\\n' | grep -c video; lsmod | grep -c henge_codec; "
-                         "sudo dmesg | grep -iE 'henge|hvcodec' | tail -3", "after the install")
+            check("apt install tux-codec-dkms", "APT_RC=0" in text, f"{res['install_secs']:.0f} s\n" + text.strip())
+            st = need(p, "sudo dkms status tux-codec; ls -l /dev/hvcodec; id henge | tr ' ' '\\n' | grep -c video; lsmod | grep -c tux_codec; "
+                         "sudo dmesg | grep -iE 'tux|hvcodec' | tail -3", "after the install")
             print(st)
             check("DKMS built and installed the module for the running kernel", re.search(rf"{re.escape(kver)}.*installed", st))
             check("/dev/hvcodec at once, root:video 0660", re.search(r"crw-rw---- 1 root video .* /dev/hvcodec", st))
@@ -185,10 +185,10 @@ def main():
                 for f in ("ffmpeg", "ffprobe", "hevc8_4k.mp4", "hevc8_1080p.mp4"):
                     fetch(p, f, f)
                 need(p, "chmod +x ffmpeg ffprobe", "chmod")
-                out = need(p, "./ffmpeg -hide_banner -v verbose -init_hw_device henge -f lavfi -i nullsrc -frames:v 1 -f null - 2>&1 | grep 'Henge codec'", "channel")
+                out = need(p, "./ffmpeg -hide_banner -v verbose -init_hw_device tux -f lavfi -i nullsrc -frames:v 1 -f null - 2>&1 | grep 'Tuxedo codec'", "channel")
                 check("ffmpeg names /dev/hvcodec", "at /dev/hvcodec" in out, out.strip())
-                main_cmd = "-hwaccel henge -hwaccel_output_format henge -i {c} -c:v hevc_henge -b:v 20M -c:a copy"
-                chain = "-init_hw_device henge -hwaccel henge -hwaccel_output_format henge -i {c} -vf hwdownload,format=nv12,hflip,hflip,hwupload -c:v hevc_henge -b:v 20M -c:a copy"
+                main_cmd = "-hwaccel tux -hwaccel_output_format tux -i {c} -c:v hevc_tux -b:v 20M -c:a copy"
+                chain = "-init_hw_device tux -hwaccel tux -hwaccel_output_format tux -i {c} -vf hwdownload,format=nv12,hflip,hflip,hwupload -c:v hevc_tux -b:v 20M -c:a copy"
                 for size in ("4k", "1080p"):
                     clip = f"hevc8_{size}.mp4"
                     for name, cmd in (("main", main_cmd), ("chain", chain)):
@@ -197,14 +197,14 @@ def main():
                             ok &= good
                             res["ffmpeg"][f"{name}-{size}-{chan}"] = dict(r, good=good)
                 # the fallback: no module
-                need(p, "sudo modprobe -r henge_codec; ! ls /dev/hvcodec 2>/dev/null", "unload the module")
+                need(p, "sudo modprobe -r tux_codec; ! ls /dev/hvcodec 2>/dev/null", "unload the module")
                 out = need(p, f"./ffmpeg -hide_banner -nostats -y {chain.format(c='hevc8_1080p.mp4')} /tmp/fb.mp4 2>&1 | grep -iE 'TCP|rror' | head -3",
                            "fallback", 600)
                 check("with no module, ffmpeg warns and uses TCP", "over TCP" in out, out.strip())
                 good, r = ffmpeg_case(p, share, "chain-1080p-nomodule", "hevc8_1080p.mp4", 180, chain.format(c="hevc8_1080p.mp4"))
                 ok &= good
                 res["ffmpeg"]["chain-1080p-nomodule"] = dict(r, good=good)
-                need(p, "sudo modprobe henge_codec && sleep 1 && ls -l /dev/hvcodec", "load the module again")
+                need(p, "sudo modprobe tux_codec && sleep 1 && ls -l /dev/hvcodec", "load the module again")
 
             if args.kernel_update:
                 # A kernel update needs a newer kernel in the guest's sources. The image's sources are the pinned snapshot,
@@ -223,8 +223,8 @@ def main():
                     res["kernel_source"] = "the image's own sources"
                 t0 = time.time()
                 text = need(p, "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q linux-image-arm64-16k linux-headers-arm64-16k "
-                               ">/tmp/k.log 2>&1; echo APT_RC=$?; grep -iE 'linux-image|linux-headers|dkms|henge|Building|Installing|u-boot' /tmp/k.log | tail -25; "
-                               "ls /boot; sudo dkms status henge-codec; grep -m3 -E '^\\s*(linux|label|default)' /boot/extlinux/extlinux.conf", "kernel update", 3600)
+                               ">/tmp/k.log 2>&1; echo APT_RC=$?; grep -iE 'linux-image|linux-headers|dkms|tux|Building|Installing|u-boot' /tmp/k.log | tail -25; "
+                               "ls /boot; sudo dkms status tux-codec; grep -m3 -E '^\\s*(linux|label|default)' /boot/extlinux/extlinux.conf", "kernel update", 3600)
                 print(text)
                 res["kernel_update_secs"] = time.time() - t0
                 vers = sorted(set(re.findall(r"vmlinuz-(\S+)", text)))
@@ -236,7 +236,7 @@ def main():
                 p = boot(args, disk, share, err_log)
                 now = need(p, "uname -r", "kernel").strip().splitlines()[-1]
                 check("the machine came back on the new kernel", now == newest, now)
-                st = need(p, "ls -l /dev/hvcodec; sudo dkms status henge-codec; sudo dmesg | grep -i hvcodec | tail -2", "after the restart")
+                st = need(p, "ls -l /dev/hvcodec; sudo dkms status tux-codec; sudo dmesg | grep -i hvcodec | tail -2", "after the restart")
                 print(st)
                 check("/dev/hvcodec after the restart", "crw-rw---- 1 root video" in st)
                 rows = hvxfer(p, "/dev/hvcodec", "nv12", 60)

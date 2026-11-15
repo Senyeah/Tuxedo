@@ -1,19 +1,19 @@
 #!/bin/sh
 # Run by labwc once the compositor is up. WAYLAND_DISPLAY is set.
-log=${XDG_RUNTIME_DIR:-/tmp}/henge-times
+log=${XDG_RUNTIME_DIR:-/tmp}/tux-times
 echo "labwc-up $(cut -d' ' -f1 /proc/uptime)" >> "$log"
 
 foot -e sh -c 'echo "terminal $(cut -d" " -f1 /proc/uptime)" >> "$0"; exec bash' "$log" &
 
 # Clipboard sharing (P7): a user service, which needs the compositor's variables
 systemctl --user import-environment WAYLAND_DISPLAY DISPLAY
-systemctl --user start --no-block henge-clipboard.service
+systemctl --user start --no-block tux-clipboard.service
 # The device shows its keyboard when the focused program wants text
-systemctl --user start --no-block henge-keyboard.service
+systemctl --user start --no-block tux-keyboard.service
 
-/usr/local/bin/henge-display > "${XDG_RUNTIME_DIR:-/tmp}/henge-display.log" 2>&1 &
+/usr/local/bin/tux-display > "${XDG_RUNTIME_DIR:-/tmp}/tux-display.log" 2>&1 &
 
-# Optional unattended run. Its output goes to $XDG_RUNTIME_DIR/henge-bench.log
-if [ -x /etc/henge/bench.sh ]; then
-    /etc/henge/bench.sh > "${XDG_RUNTIME_DIR:-/tmp}/henge-bench.log" 2>&1 &
+# Optional unattended run. Its output goes to $XDG_RUNTIME_DIR/tux-bench.log
+if [ -x /etc/tux/bench.sh ]; then
+    /etc/tux/bench.sh > "${XDG_RUNTIME_DIR:-/tmp}/tux-bench.log" 2>&1 &
 fi

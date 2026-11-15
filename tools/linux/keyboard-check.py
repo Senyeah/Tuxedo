@@ -3,7 +3,7 @@
 # requires-python = ">=3.9"
 # dependencies = ["pexpect"]
 # ///
-"""Check: henge-keyboard in the desktop image tells the host when the focused program wants text (host/share.c).
+"""Check: tux-keyboard in the desktop image tells the host when the focused program wants text (host/share.c).
 
 Boots a clone of the desktop image on tuxvm with --share and HV_INPUT_FILE. The input file's "getkbd" prints
 what the guest last asked for ("show" or "hide") and the request count on tuxvm's stderr. In the labwc session
@@ -11,7 +11,7 @@ it checks: the service runs; foot with the focus gives "show" and still gets key
 "hide", and "show" comes back when it closes; no window gives "hide"; the helper says "hide" when it stops, and
 "show" when it starts with a text field in focus; the guest reads the height that "kbdheight F" sets. --gtk also installs zenity in the clone (needs the network):
 a GTK entry gives "show", a GTK dialog with no entry does not.
-The image needs henge-guest 1.2.2 or later (--image FILE names a rebuilt copy). The shared image never changes: the guest
+The image needs tux-guest 1.2.2 or later (--image FILE names a rebuilt copy). The shared image never changes: the guest
 writes to a clone. Exit 1 on a failed check.
 """
 import argparse
@@ -127,7 +127,7 @@ def one(args):
                 return out.strip()
 
             def journal():
-                return sh(p, "journalctl --user -u henge-keyboard --no-pager | tail -n 20", 20)[0]
+                return sh(p, "journalctl --user -u tux-keyboard --no-pager | tail -n 20", 20)[0]
 
             def start(cmd):
                 need(f"{WL} setsid {cmd} > /dev/null 2>&1 < /dev/null & true", what=cmd)
@@ -136,11 +136,11 @@ def one(args):
                 # The service starts with labwc
                 end = time.monotonic() + 120
                 while True:
-                    out, _ = sh(p, "systemctl --user is-active henge-keyboard", 20)
+                    out, _ = sh(p, "systemctl --user is-active tux-keyboard", 20)
                     if out.strip() == "active":
                         break
                     if time.monotonic() > end:
-                        raise Fail("henge-keyboard is not active 120 s after login: " + out.strip())
+                        raise Fail("tux-keyboard is not active 120 s after login: " + out.strip())
                     time.sleep(1)
                 print("ok: the service is active", flush=True)
 
@@ -173,19 +173,19 @@ def one(args):
                 print(f"ok: a new foot: show ({t:.1f} s)", flush=True)
 
                 # The helper stops and starts with a text field in focus
-                need("systemctl --user stop henge-keyboard", what="stop the service")
+                need("systemctl --user stop tux-keyboard", what="stop the service")
                 t = host.wait("hide", "the helper stopped", 20)
                 print(f"ok: the helper stops: hide ({t:.1f} s)", flush=True)
-                need("systemctl --user start henge-keyboard", what="start the service")
+                need("systemctl --user start tux-keyboard", what="start the service")
                 t = host.wait("show", "the helper started with foot in focus", 30)
                 print(f"ok: the helper starts with a text field in focus: show ({t:.1f} s)", flush=True)
 
                 # The device keyboard's height reaches the guest (KWin's panel reads it; labwc has no use for it)
                 get = ("python3 -c 'import urllib.request;print(urllib.request.urlopen"
-                       "(\"http://10.0.2.4/.henge/keyboard\",timeout=5).read().decode().strip())'")
+                       "(\"http://10.0.2.4/.tux/keyboard\",timeout=5).read().decode().strip())'")
                 for line, want in (("kbdheight 0.4", "height 0.400"), ("kbdheight 0", "height 0.000")):
                     host.line(line)
-                    got = need(f"sleep 1; {get}", what="GET /.henge/keyboard")
+                    got = need(f"sleep 1; {get}", what="GET /.tux/keyboard")
                     if got != want:
                         raise Fail(f"after '{line}' the guest reads {got!r}, not {want!r}")
                 print("ok: the guest reads the device keyboard's height", flush=True)
@@ -207,7 +207,7 @@ def one(args):
                     t = host.wait("hide", "the GTK entry closed", 20)
                     print(f"ok: the GTK entry closes: hide ({t:.1f} s)", flush=True)
             except Fail as e:
-                raise Fail(f"{e}\nhenge-keyboard's journal:\n{journal()}")
+                raise Fail(f"{e}\ntux-keyboard's journal:\n{journal()}")
 
             p.sendline("sudo poweroff")
             p.expect(pexpect.EOF, timeout=90)

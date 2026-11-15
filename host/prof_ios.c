@@ -3,7 +3,7 @@
    1000 times a second and sorts it into: asleep, in translated code, or in a host
    function (kept as an offset into the app image, symbolized afterwards with the
    unstripped binary: tools/prof_symbolize.sh). Every HV_PROF_IOS_SECS seconds
-   (default 30) the totals go to stderr, which Henge mirrors to tux-native.log.
+   (default 30) the totals go to stderr, which Tuxedo mirrors to tux-native.log.
    Off unless HV_PROF_IOS is set (Documents/tux-env.txt can set it): reading a running
    thread's PC stops it for a moment, so sampling is not free. HV_PROF_IOS=2 also counts the
    instruction word under each translated-code sample and appends them to Documents/hvprof-words.txt

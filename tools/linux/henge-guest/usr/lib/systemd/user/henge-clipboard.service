@@ -1,7 +1,0 @@
-[Unit]
-Description=Henge clipboard sharing with the device
-
-[Service]
-ExecStart=/usr/lib/henge/henge-clipboard
-Restart=on-failure
-RestartSec=2

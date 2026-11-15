@@ -32,7 +32,7 @@ PKGS="linux-image-arm64-16k,systemd-sysv,udev,dbus,kmod,initramfs-tools,u-boot-m
 if [ "$DESKTOP" = 1 ]; then
     NAME=debian-desktop
     WORK=/work/G6
-    # Variant A: labwc on Wayland. The GL libraries let henge-session pick gles2 when virgl is present (A7)
+    # Variant A: labwc on Wayland. The GL libraries let tux-session pick gles2 when virgl is present (A7)
     PKGS="$PKGS,labwc,foot,fonts-dejavu-core,libpam-systemd,xkb-data,mesa-utils,mesa-utils-bin,glmark2-es2-wayland,libgl1-mesa-dri,libgles2,libegl1,wlr-randr,wl-clipboard,xclip,python3,pipewire,pipewire-bin,pipewire-alsa,wireplumber,python3-cryptography,libsecret-tools"
     PARTUUID=${TUX_PARTUUID:-9c4e7a21-3d58-4b0f-a6c2-1f8d5e90b3a7}
     FSUUID=${TUX_FSUUID:-6d0b8e35-c1a2-47f9-9e64-b7a13c52d80f}
@@ -53,29 +53,29 @@ rm -rf "$ROOT" "$FSIMG" "$IMG"
 mkdir -p "$ROOT"
 
 # Installed by a hook after the other packages: apt cannot see a local file in the chroot
-rm -f "$WORK"/henge-guest_*.deb
+rm -f "$WORK"/tux-guest_*.deb
 sh /tools/build-guest-pkg.sh --inner "$WORK" >/dev/null
-GUEST_DEB=$(ls "$WORK"/henge-guest_*.deb)
+GUEST_DEB=$(ls "$WORK"/tux-guest_*.deb)
 
 # From build-ffmpeg-pkg.sh, which refuses a build that is not from the current sources
-FFMPEG_DEB=/out/ffmpeg/henge-ffmpeg_${FFMPEG_VERSION}-henge${FFMPEG_TUX_REV}_arm64.deb
+FFMPEG_DEB=/out/ffmpeg/tux-ffmpeg_${FFMPEG_VERSION}-tux${FFMPEG_TUX_REV}_arm64.deb
 if [ ! -f "$FFMPEG_DEB" ]; then
     echo "build-image.sh: no $FFMPEG_DEB; run make linux-ffmpeg linux-ffmpeg-pkg first" >&2
     exit 1
 fi
 
 # From build-va-pkg.sh: Firefox needs it for VA-API decode once mesa-va-drivers is there
-VA_DEB=/out/va/henge-va_$(sed -n 's/^Version: //p' /tools/henge-va/DEBIAN/control)_arm64.deb
+VA_DEB=/out/va/tux-va_$(sed -n 's/^Version: //p' /tools/tux-va/DEBIAN/control)_arm64.deb
 if [ ! -f "$VA_DEB" ]; then
     echo "build-image.sh: no $VA_DEB; run make linux-va-pkg first" >&2
     exit 1
 fi
 
 # The desktop files are copied after the packages, so they replace the packages' own defaults.
-# apt brings henge-ffmpeg's Debian libraries; man-db (its Recommends) lets man ffmpeg-henge open.
-set -- --customize-hook='cp "'"$GUEST_DEB"'" "$1/tmp/henge-guest.deb"; chroot "$1" dpkg -i /tmp/henge-guest.deb; rm -f "$1/tmp/henge-guest.deb"' \
-    --customize-hook='cp "'"$FFMPEG_DEB"'" "$1/tmp/henge-ffmpeg.deb"; chroot "$1" env DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends /tmp/henge-ffmpeg.deb man-db; rm -f "$1/tmp/henge-ffmpeg.deb"' \
-    --customize-hook='cp "'"$VA_DEB"'" "$1/tmp/henge-va.deb"; chroot "$1" dpkg -i /tmp/henge-va.deb; rm -f "$1/tmp/henge-va.deb"' \
+# apt brings tux-ffmpeg's Debian libraries; man-db (its Recommends) lets man ffmpeg-tux open.
+set -- --customize-hook='cp "'"$GUEST_DEB"'" "$1/tmp/tux-guest.deb"; chroot "$1" dpkg -i /tmp/tux-guest.deb; rm -f "$1/tmp/tux-guest.deb"' \
+    --customize-hook='cp "'"$FFMPEG_DEB"'" "$1/tmp/tux-ffmpeg.deb"; chroot "$1" env DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends /tmp/tux-ffmpeg.deb man-db; rm -f "$1/tmp/tux-ffmpeg.deb"' \
+    --customize-hook='cp "'"$VA_DEB"'" "$1/tmp/tux-va.deb"; chroot "$1" dpkg -i /tmp/tux-va.deb; rm -f "$1/tmp/tux-va.deb"' \
     --customize-hook='cp /tools/customize.sh "$1/tmp/customize.sh"; chroot "$1" sh -e /tmp/customize.sh; rm -f "$1/tmp/customize.sh"'
 if [ "$DESKTOP" = 1 ]; then
     set -- "$@" \

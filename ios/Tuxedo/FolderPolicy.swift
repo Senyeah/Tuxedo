@@ -7,7 +7,7 @@ enum FolderPolicy {
     static let maxFolders = 8
     static let maxNameBytes = 64
 
-    /// A name the guest can use as /media/henge/<name>: one path part, no leading dot (.henge-folders is the host's),
+    /// A name the guest can use as /media/tux/<name>: one path part, no leading dot (.tux-folders is the host's),
     /// no control characters, at most 64 bytes of UTF-8, and none that another folder has ("Name 2").
     static func safeName(_ raw: String, taken: [String]) -> String {
         var name = String(String.UnicodeScalarView(raw.unicodeScalars.filter { $0.value >= 0x20 && $0.value != 0x7f }))
@@ -75,7 +75,7 @@ enum FolderPolicy {
 
     /// A folder in a session.
     enum State: Equatable {
-        /// In the guest at /media/henge/<name>.
+        /// In the guest at /media/tux/<name>.
         case ready
         /// In the guest's table, but everything in it gives EIO until it is back (moved away, a drive pulled out).
         case unavailable
@@ -147,7 +147,7 @@ enum FolderPolicy {
 
     static func removeMessage(_ folder: SharedFolder) -> String {
         folder.mode == .copyOnWrite
-            ? "Linux no longer sees it. The changes Linux made stay on the machine's disk: discard them first to free the space, or remove them later with henge-files reset."
+            ? "Linux no longer sees it. The changes Linux made stay on the machine's disk: discard them first to free the space, or remove them later with tux-files reset."
             : "Linux no longer sees it. The folder stays in Files."
     }
 
@@ -216,7 +216,7 @@ enum FolderPolicy {
     /// Whether an export folder has it all, from (name, size) of each file below it. The share server's temporary
     /// file for an upload not yet done (host/share.c) does not count.
     static func exportArrived(_ found: [(name: String, size: Int64)], expected: (files: Int, bytes: Int64)) -> Bool {
-        let done = found.filter { !$0.name.hasPrefix(".henge-put-") }
+        let done = found.filter { !$0.name.hasPrefix(".tux-put-") }
         return done.count >= expected.files && done.reduce(0) { $0 + $1.size } >= expected.bytes
     }
 

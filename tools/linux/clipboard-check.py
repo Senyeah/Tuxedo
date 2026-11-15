@@ -3,14 +3,14 @@
 # requires-python = ">=3.9"
 # dependencies = ["pexpect"]
 # ///
-"""P7 check: henge-clipboard in the desktop image shares the clipboard with the host (host/share.c).
+"""P7 check: tux-clipboard in the desktop image shares the clipboard with the host (host/share.c).
 
 Boots a clone of the desktop image on tuxvm with --share and HV_INPUT_FILE. The input file's
 "clip TEXT" sets the device's clipboard and "getclip" prints what the guest sent (and when the helper
 was last heard) on tuxvm's stderr. It checks: the service runs, text from before the helper started
 is not applied, device to guest (with non-ASCII text), guest to device (newlines, 1 MB), no echo in
 either direction, a clipboard that is not text is not sent, and the same agent on X11 through XWayland.
-The image needs henge-guest 1.2 and wl-clipboard (--image FILE names a rebuilt copy). The shared image
+The image needs tux-guest 1.2 and wl-clipboard (--image FILE names a rebuilt copy). The shared image
 never changes: the guest writes to a clone. Exit 1 on a failed check.
 """
 import argparse
@@ -50,7 +50,7 @@ class Host:
             for _ in range(40):
                 time.sleep(0.25)
                 rest = open(self.err, errors="replace").read()[before:]
-                m = re.search(r"guest clipboard: (.*) \(agent seen (-?\d+) s ago\)\n", rest, re.S)
+                m = re.search(r"guest clipboard: (.*) \(helper seen (-?\d+) s ago\)\n", rest, re.S)
                 if m:
                     break
             else:
@@ -103,12 +103,12 @@ def one(args):
             # The service starts with labwc
             end = time.monotonic() + 120
             while True:
-                out, _ = sh(p, "systemctl --user is-active henge-clipboard", 20)
+                out, _ = sh(p, "systemctl --user is-active tux-clipboard", 20)
                 if out.strip() == "active":
                     break
                 if time.monotonic() > end:
-                    raise Fail("henge-clipboard is not active 120 s after login: " + out.strip()
-                               + "\n" + sh(p, "journalctl --user -u henge-clipboard --no-pager | tail -n 20", 20)[0])
+                    raise Fail("tux-clipboard is not active 120 s after login: " + out.strip()
+                               + "\n" + sh(p, "journalctl --user -u tux-clipboard --no-pager | tail -n 20", 20)[0])
                 time.sleep(1)
             print("ok: the service is active", flush=True)
 
@@ -170,9 +170,9 @@ def one(args):
             print("ok: a clipboard that is not text is not sent", flush=True)
 
             # The X11 mode through XWayland
-            need("systemctl --user stop henge-clipboard", what="stop the service")
-            x11 = f"{WL} DISPLAY=:0 HENGE_CLIPBOARD=x11"
-            need(f"{x11} setsid /usr/lib/henge/henge-clipboard > /tmp/x11.log 2>&1 < /dev/null & sleep 3; true", what="x11 agent")
+            need("systemctl --user stop tux-clipboard", what="stop the service")
+            x11 = f"{WL} DISPLAY=:0 TUX_CLIPBOARD=x11"
+            need(f"{x11} setsid /usr/lib/tux/tux-clipboard > /tmp/x11.log 2>&1 < /dev/null & sleep 3; true", what="x11 agent")
             host.line("clip x11 from the device ✓")
             got = guest_clip(p, env=f"{WL} DISPLAY=:0", want="x11 from the device ✓")
             xout, _ = sh(p, f"{x11} xclip -selection clipboard -out", 20)

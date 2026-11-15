@@ -113,7 +113,7 @@ def probe_lines(p):
 
 
 def output(p, size, scale, limit=60):
-    """Waits for labwc's output to have this mode and scale (henge-display follows the host); its size in logical pixels."""
+    """Waits for labwc's output to have this mode and scale (tux-display follows the host); its size in logical pixels."""
     end, raw = time.monotonic() + limit, ""
     while time.monotonic() < end:
         raw, rc = sh(p, f"{ENV} wlr-randr 2>&1", 15)
@@ -187,7 +187,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="touch-", dir=args.work_dir) as tmp:
         clone, infile, err, share = (os.path.join(tmp, n) for n in ("disk.img", "input", "stderr", "share"))
         open(infile, "w").close()
-        os.mkdir(share)  # henge-display reads the scale from the share (as in the app)
+        os.mkdir(share)  # tux-display reads the scale from the share (as in the app)
         r = subprocess.run(["/bin/cp", "-c", image, clone], capture_output=True, text=True)
         if r.returncode:
             raise Fail(f"cannot clone {image}: {r.stderr.strip()}")
@@ -238,7 +238,7 @@ def run(p, args, infile, err):
     print("libinput warnings for the device: " + ("; ".join(warn) if warn else "none"))
     send_file(p, os.path.join(HERE, "evcaps.py"), "/tmp/evcaps.py")
     caps, _ = sh(p, "sudo python3 /tmp/evcaps.py")
-    print("--- evcaps (Henge) ---\n" + caps.strip())
+    print("--- evcaps (Tuxedo) ---\n" + caps.strip())
 
     # Raw order: TS1's list for one contact; the kernel drops ABS_MT_SLOT 0 (no change from its start).
     sh(p, f"sudo sh -c 'timeout 6 evtest {node} > /tmp/evtest.txt 2>&1 &'; sleep 1.5")
@@ -355,7 +355,7 @@ def qemu_compare(args, image, kernel, initrd, partuuid, tux_caps):
     print("--- udev (QEMU) ---\n" + udev.strip())
     h = [l for l in tux_caps.strip().splitlines() if not l.startswith("device ")]
     q = [l for l in qcaps.strip().splitlines() if not l.startswith("device ")]
-    diff = [f"Henge only: {l}" for l in h if l not in q] + [f"QEMU only:  {l}" for l in q if l not in h]
+    diff = [f"Tuxedo only: {l}" for l in h if l not in q] + [f"QEMU only:  {l}" for l in q if l not in h]
     print("--- differences (names aside) ---\n" + ("\n".join(diff) if diff else "none"))
 
 

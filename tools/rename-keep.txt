@@ -17,3 +17,8 @@ line-re:formerly Henge
 # Dated result records that quote the old binary name (Decision 20): a date in the line or in the block opener.
 lines:docs/files-mount-plan.md:595
 lines:docs/guest-video-encode-plan.md:705
+# Copyright holders of the Henge code (credit, Decision 20).
+line-re:^Copyright: (the )?Henge (contributors|authors)
+# Dated result records that quote the old package names and versions (Decision 20).
+lines:docs/guest-video-encode-plan.md:806-809
+lines:docs/guest-video-encode-plan.md:955

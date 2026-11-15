@@ -1,10 +1,10 @@
 #!/bin/sh
-# henge-keyboard as KWin's input method, with the panel that keeps windows above the device keyboard.
+# tux-keyboard as KWin's input method, with the panel that keeps windows above the device keyboard.
 # Runs kwin_wayland with its virtual backend in a container (kwin-panel/check.py has the checks). Runs on the Mac.
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-IMAGE=${TUX_KWIN_IMAGE:-henge-kwin-panel}
+IMAGE=${TUX_KWIN_IMAGE:-tux-kwin-panel}
 
 docker build -q --platform linux/arm64 -t "$IMAGE" "$HERE/kwin-panel" >/dev/null
 

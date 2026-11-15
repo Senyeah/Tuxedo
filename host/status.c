@@ -53,7 +53,7 @@ static void bump_locked(void) {
     pthread_cond_broadcast(&cond);
 }
 
-/* What the guest is given is what GET /.henge/status prints ("%.3f"), so henge-status, which rounds
+/* What the guest is given is what GET /.tux/status prints ("%.3f"), so tux-status, which rounds
    that times 255 half up as lround does, writes exactly the level the echo test expects. */
 static double served(double v) { return round(v * 1000) / 1000; }
 static int to255(double v) { return (int)lround(v * 255); }

@@ -81,7 +81,7 @@ xs = new()
 send(wm, 2, struct.pack("<II", xs, surface))  # get_xdg_surface
 top = new()
 send(xs, 1, struct.pack("<I", top))  # get_toplevel
-send(top, 2, string("henge keyboard test"))
+send(top, 2, string("tux keyboard test"))
 if not FLOAT:
     send(top, 9)  # set_maximized
 text = None

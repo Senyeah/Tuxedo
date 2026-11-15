@@ -29,7 +29,7 @@ Tuxedo is an arm64 JIT emulator. It runs a Debian Linux guest on an iPhone or iP
 - **Debian 13** — Debian (arm64) boots through U-Boot on a virtual machine that follows QEMU's `virt` board. A text console, or a desktop with labwc (Wayland).
 - **Accelerated graphics** — Opt-in. Tuxedo replays the guest's virgl 3D commands with ANGLE on Metal, with OpenGL ES 3.0.
 - **Video decode and encode** — Opt-in. The guest decodes H.264, VP9 and AV1 (VA-API) and encodes with `ffmpeg` on the device's VideoToolbox.
-- **Files folders** — Folders from the Files app appear in the guest at `/media/henge/<name>`. A shared folder and a shared clipboard (desktop image) are there too.
+- **Files folders** — Folders from the Files app appear in the guest at `/media/tux/<name>`. A shared folder and a shared clipboard (desktop image) are there too.
 - **Port forwards** — Another device on the local network can reach a TCP port in the guest, for example SSH, through a port on the phone.
 - **Touch and trackpad** — The screen is a Magic Trackpad 2 to the guest. The volume buttons can click. A hardware keyboard and a mouse or trackpad also work on iPad.
 - **External display** — Connect a display with a video-capable USB-C cable or a USB-C/HDMI dock. The guest moves to the monitor, up to 4K, and the device keeps its trackpad and keyboard controls.
@@ -67,7 +67,7 @@ The Mac tool (`build/tuxvm`) runs all of this under `make test-linux-*`. The app
 
 - Boot through U-Boot to a login in about 5 to 7 s on the Mac tool at one CPU, restart, power off, and a power key (Shut Down in the app, `SIGTERM` or Ctrl-A p in `tuxvm`). In the simulator the console prompt took about 12 s.
 - 1 to 4 CPUs, virtio disk (with discard), network (user-mode NAT, `10.0.2.15`), entropy, USB keyboard and Magic Trackpad 2, sound, and the memory balloon device (off by default and not driven by the app).
-- A screen that follows the phone's size and rotation, or an external display up to 4K, a shared folder at `~/Henge` and a shared clipboard (desktop image).
+- A screen that follows the phone's size and rotation, or an external display up to 4K, a shared folder at `~/Tux` and a shared clipboard (desktop image).
 - Graphics acceleration, off by default: virgl on ANGLE and Metal, with OpenGL ES 3.0. It takes more memory on the phone, and a graphics fault can stop the machine.
 
 ### Known limits
@@ -78,7 +78,7 @@ The Mac tool (`build/tuxvm`) runs all of this under `make test-linux-*`. The app
 - Debuggers in the guest cannot single-step or set hardware breakpoints. There are no performance counters, and no KVM inside the guest.
 - 3D stops at OpenGL ES 3.0. There is no Vulkan.
 - If the app is suspended while the guest runs, Linux can report an RCU stall when it resumes.
-- Without a shared folder, the first visit to `~/Henge` takes about 12 s.
+- Without a shared folder, the first visit to `~/Tux` takes about 12 s.
 - One machine runs at a time.
 
 ## Building

@@ -24,7 +24,7 @@ as the direct run, so the two paths differ only in who loads the files. The wall
 is reported (the plan's "Starting kernel" line is the start of the kernel marks).
 
 Files come from TUX_LINUX_OUT or build/linux in the main checkout (read only; the disk is cloned).
-Usage: kernel-boot-time.py [--machine henge|qemu ...] [--boot direct|uboot ...] [--initrd on|off ...]
+Usage: kernel-boot-time.py [--machine tux|qemu ...] [--boot direct|uboot ...] [--initrd on|off ...]
        [--runs N] [--cpus N] [--json FILE]. With no selection it runs the whole matrix.
 """
 import argparse
@@ -187,7 +187,7 @@ def summarize(rows):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--machine", nargs="+", choices=["henge", "qemu"], default=["qemu", "henge"])
+    ap.add_argument("--machine", nargs="+", choices=["tux", "qemu"], default=["qemu", "tux"])
     ap.add_argument("--boot", nargs="+", choices=["direct", "uboot"], default=["uboot", "direct"])
     ap.add_argument("--initrd", nargs="+", choices=["on", "off"], default=["on", "off"])
     ap.add_argument("--runs", type=int, default=3)

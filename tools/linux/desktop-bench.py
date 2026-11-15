@@ -6,7 +6,7 @@
 """G6: desktop timings on tuxvm (not part of make test).
 
 Each run boots a clone of debian-desktop.img (direct kernel boot, 1920x1080 unless --display) and reads
-/run/user/1000/henge-times: guest uptime at tty1 login, labwc up and the terminal's shell start.
+/run/user/1000/tux-times: guest uptime at tty1 login, labwc up and the terminal's shell start.
 Then it runs `seq 1 20000` in a full-screen foot, --seqs times, timed in the guest's own clock.
 Pass --gpu-accel to add tuxvm's --gpu-accel. The shared image never changes.
 """
@@ -53,14 +53,14 @@ def one(args, d, n):
             end = time.monotonic() + 120
             times = {}
             while time.monotonic() < end:
-                out, _ = sh(p, "cat /run/user/1000/henge-times 2>/dev/null; true", 30)
+                out, _ = sh(p, "cat /run/user/1000/tux-times 2>/dev/null; true", 30)
                 times = {l.split()[0]: float(l.split()[1]) for l in out.split("\n") if len(l.split()) == 2}
                 if "terminal" in times:
                     break
                 time.sleep(0.5)
             else:
-                raise Fail(f"no terminal in 120 s; henge-times: {times}")
-            renderer, _ = sh(p, "cat /run/user/1000/henge-session.log", 15)
+                raise Fail(f"no terminal in 120 s; tux-times: {times}")
+            renderer, _ = sh(p, "cat /run/user/1000/tux-session.log", 15)
             seqs = []
             for _ in range(args.seqs):
                 sh(p, "rm -f /tmp/seq.times.one", 15)

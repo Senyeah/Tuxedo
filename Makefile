@@ -138,7 +138,7 @@ $(B)/test_cli: tests/test_cli.c $(B)/tuxvm | $(B)
 $(B)/test_virt: tests/test_virt.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(NET_OBJ) $(B)/dns_proxy.o
 	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -o $@
 
-# PUT /.henge/keyboard: what henge-keyboard in a Linux desktop asks of the device.
+# PUT /.tux/keyboard: what tux-keyboard in a Linux desktop asks of the device.
 $(B)/test_share_keyboard: tests/test_share_keyboard.c $(B)/share.o $(B)/safe_path.o $(B)/fs_server.o $(B)/secrets.o $(B)/status.o
 	$(CC) $(CFLAGS) $^ -o $@
 
@@ -251,14 +251,14 @@ test-linux-display: $(B)/tuxvm
 	uv run tools/linux/display-check.py $(DISPLAY_ARGS)
 .PHONY: test-linux-display
 
-# VE0.4, VE0.5: hvcodec from a clone of the desktop image: henge-xcode built against Debian's libavformat transcodes
+# VE0.4, VE0.5: hvcodec from a clone of the desktop image: tux-xcode built against Debian's libavformat transcodes
 # 4K60 and 1080p60 clips with the frames on the host, and the speeds are measured. VCODEC_ARGS="--image FILE --clips DIR".
 test-linux-vcodec: $(B)/tuxvm
 	uv run tools/linux/vcodec-check.py --tuxvm $(B)/tuxvm $(VCODEC_ARGS)
 .PHONY: test-linux-vcodec
 
 # VE2: the patched ffmpeg (tools/linux/build-ffmpeg.sh, in the arm64 container) and the plan's main command in the
-# guest, checked on the Mac against henge-xcode on the same clips.
+# guest, checked on the Mac against tux-xcode on the same clips.
 LINUX_OUT ?= $(dir $(shell git rev-parse --path-format=absolute --git-common-dir))build/linux
 linux-ffmpeg:
 	TUX_LINUX_OUT=$(LINUX_OUT) tools/linux/build-ffmpeg.sh
@@ -266,7 +266,7 @@ test-linux-ffmpeg: $(B)/tuxvm
 	uv run tools/linux/vcodec-check.py --tuxvm $(B)/tuxvm --ffmpeg $(LINUX_OUT)/ffmpeg/bin --no-software $(VCODEC_ARGS)
 .PHONY: linux-ffmpeg test-linux-ffmpeg
 
-# VE3: the henge-ffmpeg package, then the signed apt repository and the source offer in $(LINUX_OUT)/apt and /source
+# VE3: the tux-ffmpeg package, then the signed apt repository and the source offer in $(LINUX_OUT)/apt and /source
 # (publish-apt.sh; nothing leaves the Mac without its --rsync), then both packages from it in a clone of the desktop image.
 linux-ffmpeg-pkg:
 	TUX_LINUX_OUT=$(LINUX_OUT) tools/linux/build-ffmpeg-pkg.sh
@@ -276,7 +276,7 @@ test-linux-ffmpeg-pkg: $(B)/tuxvm
 	uv run tools/linux/vcodec-check.py --tuxvm $(B)/tuxvm --apt $(LINUX_OUT)/apt --sizes 4k,1080p --codecs hevc8,h264 --no-software $(VCODEC_ARGS)
 .PHONY: linux-ffmpeg-pkg linux-apt test-linux-ffmpeg-pkg
 
-# VE4: the henge-codec-dkms package (the module is built against the pinned 16 KB kernel's headers with -Werror, and
+# VE4: the tux-codec-dkms package (the module is built against the pinned 16 KB kernel's headers with -Werror, and
 # installed by DKMS in the container), then the DMA channel in a clone of the desktop image booted through U-Boot with
 # --vcodec-dma: DKMS, /dev/hvcodec, 4K NV12 and P010 transfers in fps on it and on TCP, the ffmpeg chain, the fallback
 # and a kernel update. It takes the ffmpeg build from $(LINUX_OUT). CODEC_ARGS="--clips DIR --results FILE".
@@ -286,13 +286,13 @@ test-linux-codec-dma: $(B)/tuxvm
 	uv run tools/linux/codec-dma-check.py --tuxvm $(B)/tuxvm --out $(LINUX_OUT) --kernel-update $(CODEC_ARGS)
 .PHONY: linux-codec-dkms test-linux-codec-dma
 
-# The henge-va package: the VA-API driver in front of Mesa's virgl driver that offers NV12 decode surfaces only, so
+# The tux-va package: the VA-API driver in front of Mesa's virgl driver that offers NV12 decode surfaces only, so
 # Firefox keeps VA-API decode. The build tests it against a stand-in for Mesa's driver, then installs and removes it.
 linux-va-pkg:
 	TUX_LINUX_OUT=$(LINUX_OUT) tools/linux/build-va-pkg.sh
 .PHONY: linux-va-pkg
 
-# P6: the shared folder (~/Tuxedo, davfs2) against --share. SHARE_ARGS="--image FILE" for an image that has davfs2.
+# P6: the shared folder (~/Tux, davfs2) against --share. SHARE_ARGS="--image FILE" for an image that has davfs2.
 test-linux-share: $(B)/tuxvm
 	uv run tools/linux/share-check.py $(SHARE_ARGS)
 .PHONY: test-linux-share
@@ -303,8 +303,8 @@ test-linux-forward: $(B)/tuxvm
 	uv run tools/linux/forward-check.py $(FORWARD_ARGS)
 .PHONY: test-linux-forward
 
-# FM6: the folders from the Files app (virtio-fs, henge-files) at /media/henge against --folder. Installs henge-guest from
-# tools/linux/henge-guest in the clone (needs Docker); FILES_ARGS="--image FILE --no-install" for a disk saved with --save-image.
+# FM6: the folders from the Files app (virtio-fs, tux-files) at /media/tux against --folder. Installs tux-guest from
+# tools/linux/tux-guest in the clone (needs Docker); FILES_ARGS="--image FILE --no-install" for a disk saved with --save-image.
 test-linux-files: $(B)/tuxvm
 	uv run tools/linux/files-check.py $(FILES_ARGS)
 .PHONY: test-linux-files
@@ -314,18 +314,18 @@ test-linux-files-posix: $(B)/tuxvm
 	uv run tools/linux/files-check.py --pjdfstest $(FILES_ARGS)
 .PHONY: test-linux-files-posix
 
-# P7: the clipboard helper in the desktop image against the host's clipboard. CLIP_ARGS="--image FILE" for an image that has henge-guest 1.2.
+# P7: the clipboard helper in the desktop image against the host's clipboard. CLIP_ARGS="--image FILE" for an image that has tux-guest 1.2.
 test-linux-clipboard: $(B)/tuxvm
 	uv run tools/linux/clipboard-check.py $(CLIP_ARGS)
 .PHONY: test-linux-clipboard
 
 # The keyboard helper in the desktop image: the host hears "show" when the focused program wants text, then "hide".
-# KBD_ARGS="--image FILE" for an image that has henge-guest 1.2.2; "--gtk" adds a GTK entry (installs zenity in the clone).
+# KBD_ARGS="--image FILE" for an image that has tux-guest 1.2.2; "--gtk" adds a GTK entry (installs zenity in the clone).
 test-linux-keyboard: $(B)/tuxvm
 	uv run tools/linux/keyboard-check.py $(KBD_ARGS)
 .PHONY: test-linux-keyboard
 
-# henge-keyboard as KWin's input method: its panel keeps a window above the device keyboard. KWin runs in a container (needs Docker).
+# tux-keyboard as KWin's input method: its panel keeps a window above the device keyboard. KWin runs in a container (needs Docker).
 test-linux-keyboard-panel:
 	sh tools/linux/keyboard-panel-check.sh
 .PHONY: test-linux-keyboard-panel
@@ -346,12 +346,12 @@ test-linux-suspend: $(B)/tuxvm
 .PHONY: test-linux-suspend
 
 # DS6: the device's battery, brightness, volume, clock and time zone in a desktop guest (upower and brightnessctl are installed in the clone).
-# STATUS_ARGS="--image FILE" for an image with henge-guest 1.3.1.
+# STATUS_ARGS="--image FILE" for an image with tux-guest 1.3.1.
 test-linux-status: $(B)/tuxvm
 	uv run tools/linux/status-check.py $(STATUS_ARGS)
 .PHONY: test-linux-status
 
-# The guest's wallet (henge-secrets) in tuxvm's folder store, scoped to the machine; and with kwallet6 in a container.
+# The guest's wallet (tux-secrets) in tuxvm's folder store, scoped to the machine; and with kwallet6 in a container.
 test-linux-secrets: $(B)/tuxvm
 	uv run tools/linux/secrets-check.py $(SECRETS_ARGS)
 test-linux-secrets-container:
@@ -641,7 +641,7 @@ test-machine-model: $(B)/test_machine_model
 $(B)/test_linux_catalogue: ios/Tuxedo/LinuxCatalogue.swift ios/Tuxedo/LinuxDownload.swift ios/Tuxedo/RangedDownload.swift tests/test_linux_catalogue.swift | $(B)
 	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
 
-# When the on-screen keyboard follows a Linux desktop (henge-keyboard): pure policy, no UIKit.
+# When the on-screen keyboard follows a Linux desktop (tux-keyboard): pure policy, no UIKit.
 $(B)/test_keyboard_follow: ios/Tuxedo/KeyboardFollow.swift tests/test_keyboard_follow.swift | $(B)
 	xcrun --sdk macosx swiftc $^ -o $@
 

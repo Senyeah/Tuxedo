@@ -1,0 +1,124 @@
+#!/usr/bin/python3
+"""Follows the device's clock, time zone and screen brightness (host/share.c, /.tux/status).
+The battery and the volume need no helper: the guest has them as devices.
+A long GET waits for news (a change, a resume, or 120 s); a short one then measures the clock."""
+import http.client
+import math
+import os
+import re
+import subprocess
+import sys
+import time
+
+HOST = "10.0.2.4"
+BACKLIGHT = "/sys/class/backlight/tux-backlight"
+ZONES = "/usr/share/zoneinfo"
+STEP = 0.5  # seconds off before the clock is stepped
+ZONE = re.compile(r"[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*")
+
+
+def log(*a):
+    print(*a, file=sys.stderr, flush=True)
+
+
+def get(path, timeout):
+    c = http.client.HTTPConnection(HOST, 80, timeout=timeout)
+    try:
+        c.request("GET", path)
+        r = c.getresponse()
+        return r.status, int(r.getheader("X-Tux-Seq") or 0), r.read().decode(errors="replace")
+    finally:
+        c.close()
+
+
+def fields(body):
+    out = {}
+    for line in body.splitlines():
+        k, _, v = line.partition(" ")
+        out[k] = v.strip()
+    return out
+
+
+def measure():
+    """The status, and the device's clock minus ours at the middle of a short request; None when it was slow."""
+    for _ in range(3):
+        m0, r0 = time.monotonic(), time.time()
+        status, _, body = get("/.tux/status", 5)
+        m1, r1 = time.monotonic(), time.time()
+        f = fields(body) if status == 200 else {}
+        if "time" in f and m1 - m0 < 1.0:
+            return f, float(f["time"]) - (r0 + r1) / 2
+    return {}, None
+
+
+def follow_clock(offset):
+    if offset is None or abs(offset) < STEP:
+        return
+    time.clock_settime(time.CLOCK_REALTIME, time.time() + offset)
+    log(f"clock stepped by {offset:+.3f} s")
+
+
+def follow_zone(name):
+    if not name or not ZONE.fullmatch(name) or ".." in name:
+        return
+    path = os.path.realpath(os.path.join(ZONES, name))
+    if not path.startswith(ZONES + "/") or not os.path.isfile(path):
+        log(f"no zone file for {name}")
+        return
+    cur = subprocess.run(["timedatectl", "show", "-p", "Timezone", "--value"], capture_output=True, text=True).stdout.strip()
+    if cur == name:
+        return
+    r = subprocess.run(["timedatectl", "set-timezone", name], capture_output=True, text=True)
+    log(f"time zone {name}" if r.returncode == 0 else f"time zone {name}: {r.stderr.strip()}")
+
+
+def level255(level, top):
+    """Half up, as the host's lround: Python's round() goes to even, so 0.3 would give 76, not 77, and look like a slider move."""
+    q = level * top
+    want = math.floor(q)
+    if q - want >= 0.5:
+        want += 1
+    return max(0, min(top, want))
+
+
+def follow_brightness(value):
+    try:
+        level = float(value)
+        with open(BACKLIGHT + "/max_brightness") as f:
+            top = int(f.read())
+        with open(BACKLIGHT + "/brightness") as f:
+            cur = int(f.read())
+    except (TypeError, ValueError, OSError):
+        return
+    want = level255(level, top)
+    if want != cur:
+        with open(BACKLIGHT + "/brightness", "w") as f:  # the kernel's uevent tells powerdevil
+            f.write(str(want))
+
+
+def main():
+    seq = 0
+    while True:
+        try:
+            status, seq_now, _ = get(f"/.tux/status?since={seq}", 130)
+        except (OSError, http.client.HTTPException):
+            time.sleep(30)  # no share yet, or none at all
+            continue
+        if status == 404:
+            time.sleep(600)  # a Tuxedo without this endpoint
+            continue
+        if status != 200:
+            time.sleep(30)
+            continue
+        seq = seq_now
+        try:
+            f, offset = measure()
+        except (OSError, http.client.HTTPException):
+            continue
+        follow_clock(offset)
+        follow_zone(f.get("tz"))
+        follow_brightness(f.get("brightness"))
+
+
+if __name__ == "__main__":
+    main()

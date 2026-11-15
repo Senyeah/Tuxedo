@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Tuxedo display and clipboard
+Comment=labwc runs these from its own autostart
+OnlyShowIn=KDE;
+X-KDE-autostart-phase=2
+Exec=sh -c 'systemctl --user import-environment WAYLAND_DISPLAY DISPLAY; systemctl --user start --no-block tux-clipboard.service; exec /usr/local/bin/tux-display > "$XDG_RUNTIME_DIR/tux-display.log" 2>&1'

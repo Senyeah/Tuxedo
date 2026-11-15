@@ -1,0 +1,17 @@
+Package: tux-codec-dkms
+Version: 1.0.0
+Architecture: all
+Maintainer: Tuxedo <tux@localhost>
+Section: kernel
+Priority: optional
+Depends: dkms (>= 3), gcc, make, linux-headers-arm64-16k
+Description: Tuxedo video codec channel (/dev/hvcodec), as a DKMS module
+ tux_codec drives Tuxedo's hvcodec device: each open file of /dev/hvcodec is
+ a context of the host's video codecs, and raw frames go to and from the host
+ from the caller's own pages, with no copy in the guest. libhvcodec (in
+ tux-ffmpeg) uses it when it is there, and TCP to 10.0.2.4:8470 when not.
+ The machine must run with the codec device on (tuxvm --vcodec-dma).
+ .
+ DKMS builds the module for each installed kernel with headers, and again
+ after each kernel update. The module has no signature: the kernel accepts it
+ and records a taint.

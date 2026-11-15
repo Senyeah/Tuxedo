@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 /// What a running guest shares with this device: the Shared folder in Files, and the clipboard. The clipboard
-/// follows through a small helper: henge-clipboard in a Debian desktop (host/share.c).
+/// follows through a small helper: tux-clipboard in a Debian desktop (host/share.c).
 enum Sharing {
     static var folder: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Shared", isDirectory: true)
@@ -42,7 +42,7 @@ enum Sharing {
     }
 
     /// Text from this device, pasted at the guest's cursor. Without the helper it is typed, as far as the keyboard can.
-    /// The guest's helper (henge-clipboard) runs on a Linux desktop only: on the console the text goes to the console.
+    /// The guest's helper (tux-clipboard) runs on a Linux desktop only: on the console the text goes to the console.
     static func paste(_ text: String, console: Bool = false, keys: PasteKeys = .control) {
         Task { @MainActor in
             if console {

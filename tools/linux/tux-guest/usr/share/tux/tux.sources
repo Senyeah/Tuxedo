@@ -1,0 +1,10 @@
+# The Tuxedo apt repository: tux-ffmpeg, and later tux-guest updates.
+# Off until the repository is on the server. To turn it on, change "Enabled: no" to "Enabled: yes",
+# then run: sudo apt update && sudo apt install tux-ffmpeg
+Types: deb
+URIs: https://walkies.site/tux-linux-catalogue/apt
+Suites: trixie
+Components: main
+Architectures: arm64
+Signed-By: /usr/share/keyrings/tux-archive.gpg
+Enabled: no

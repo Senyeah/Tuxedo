@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ffmpeg-henge(7) must list each *_henge encoder, each of its options and their named values, and each scale_henge
+"""ffmpeg-tux(7) must list each *_tux encoder, each of its options and their named values, and each scale_tux
 option (docs/guest-video-encode-plan.md, VE3.2). Python 3 standard library only: build-ffmpeg-pkg.sh runs it in the
 build container and vcodec-check.py --apt in the guest.
 
@@ -11,7 +11,7 @@ import re
 import subprocess
 import sys
 
-FILTERS = ["scale_henge"]
+FILTERS = ["scale_tux"]
 
 
 def run(argv, env=None):
@@ -68,12 +68,12 @@ def main():
     heads = terms(text)
     words = set(re.findall(r"[\w.:-]+", text)) | {w.strip(".") for w in re.findall(r"[\w.:-]+", text)}
     encs = [l.split()[1] for l in run([args.ffmpeg, "-hide_banner", "-encoders"]).splitlines()
-            if len(l.split()) > 1 and l.split()[1].endswith("_henge")]
+            if len(l.split()) > 1 and l.split()[1].endswith("_tux")]
     missing, n = [], 0
     if not encs:
-        missing.append("ffmpeg lists no *_henge encoder")
-    if "henge" not in run([args.ffmpeg, "-hide_banner", "-hwaccels"]).split() or "-hwaccel" not in heads:
-        missing.append("the henge hwaccel")
+        missing.append("ffmpeg lists no *_tux encoder")
+    if "tux" not in run([args.ffmpeg, "-hide_banner", "-hwaccels"]).split() or "-hwaccel" not in heads:
+        missing.append("the tux hwaccel")
     for kind, names in (("encoder", encs), ("filter", FILTERS)):
         for name in names:
             n += 1
@@ -91,8 +91,8 @@ def main():
                 if c not in words:
                     missing.append(f"{kind} {name}: value {c}")
     for m in missing:
-        print(f"FAIL ffmpeg-henge(7) does not list {m}")
-    print(f"{'ok  ' if not missing else 'FAIL'} ffmpeg-henge(7): {n - len(missing)} of {n} names listed "
+        print(f"FAIL ffmpeg-tux(7) does not list {m}")
+    print(f"{'ok  ' if not missing else 'FAIL'} ffmpeg-tux(7): {n - len(missing)} of {n} names listed "
           f"({len(encs)} encoders: {', '.join(encs)}; filters: {', '.join(FILTERS)})")
     return 1 if missing else 0
 

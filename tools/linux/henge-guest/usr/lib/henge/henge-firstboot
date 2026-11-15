@@ -1,9 +1,0 @@
-#!/bin/sh
-# One-time work. Growing the disk is henge-grow's job, as it must also run on later boots.
-set -eu
-
-if [ ! -s /etc/machine-id ]; then
-    systemd-machine-id-setup
-fi
-mkdir -p /var/lib/henge
-touch /var/lib/henge/firstboot-done

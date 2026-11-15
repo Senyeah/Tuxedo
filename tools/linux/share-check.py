@@ -3,13 +3,13 @@
 # requires-python = ">=3.9"
 # dependencies = ["pexpect"]
 # ///
-"""P6 check: the shared folder at ~/Henge in the guest is the --share directory on the Mac.
+"""P6 check: the shared folder at ~/Tux in the guest is the --share directory on the Mac.
 
 Boot 1 has --share. It checks the automount and the mount, create, rename, delete, names with
 spaces and non-ASCII characters, a 100 MB copy each way, the lock traffic, and that a file written
 just before poweroff reaches the Mac. Boot 2 has no --share: the machine must reach "running", and
-a visit to ~/Henge must fail in time and not hang.
-The image needs davfs2 and henge-guest 1.1 (--image FILE names a rebuilt copy). The shared image never
+a visit to ~/Tux must fail in time and not hang.
+The image needs davfs2 and tux-guest 1.1 (--image FILE names a rebuilt copy). The shared image never
 changes: the guest writes to a clone. Exit 1 on a failed check.
 """
 import argparse
@@ -106,11 +106,11 @@ def main():
     try:
         subprocess.run(["/bin/cp", "-c", args.image, disk], check=True)
         p = boot(args, disk, share)
-        home = "/home/henge/Henge"
+        home = "/home/henge/Tux"
 
-        need(p, "systemctl is-enabled home-henge-Henge.automount", lambda o: o == "enabled", "automount enabled")
-        need(p, "systemctl is-active home-henge-Henge.automount", lambda o: o == "active", "automount active")
-        need(p, "systemctl is-active home-henge-Henge.mount; true", lambda o: o == "inactive", "not mounted before use")
+        need(p, "systemctl is-enabled home-henge-Tux.automount", lambda o: o == "enabled", "automount enabled")
+        need(p, "systemctl is-active home-henge-Tux.automount", lambda o: o == "active", "automount active")
+        need(p, "systemctl is-active home-henge-Tux.mount; true", lambda o: o == "inactive", "not mounted before use")
         t = time.monotonic()
         need(p, f"ls -la {home}", what="first visit", limit=60)
         print(f"  first visit mounts the share: {time.monotonic() - t:.2f} s")
@@ -213,7 +213,7 @@ def main():
 
         # No share: boot must reach running, and the folder must give up in time and not hang
         p = boot(args, disk, None)
-        need(p, "systemctl is-active home-henge-Henge.automount", lambda o: o == "active", "automount active")
+        need(p, "systemctl is-active home-henge-Tux.automount", lambda o: o == "active", "automount active")
         t = time.monotonic()
         out, rc = sh(p, f"ls {home}", 90)
         waited = time.monotonic() - t

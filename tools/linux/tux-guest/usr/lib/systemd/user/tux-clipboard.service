@@ -1,0 +1,7 @@
+[Unit]
+Description=Tuxedo clipboard sharing with the device
+
+[Service]
+ExecStart=/usr/lib/tux/tux-clipboard
+Restart=on-failure
+RestartSec=2

@@ -44,7 +44,7 @@ def wait_mode(p, want, limit=15):
 
 
 FETCH = ("python3 -c 'import urllib.request;print(urllib.request.urlopen"
-         "(\"http://10.0.2.4/.henge/display\").read().decode().strip())'")
+         "(\"http://10.0.2.4/.tux/display\").read().decode().strip())'")
 
 
 def wait_display(p, want, limit=15):
@@ -55,7 +55,7 @@ def wait_display(p, want, limit=15):
         if got == want:
             return
         time.sleep(0.5)
-    raise Fail(f"/.henge/display is {got!r}, expected {want!r} within {limit} s")
+    raise Fail(f"/.tux/display is {got!r}, expected {want!r} within {limit} s")
 
 
 def main():
@@ -88,7 +88,7 @@ def main():
             wait_mode(p, "1920x1080", 5)
             print("ok   boot mode 1920x1080")
             wait_display(p, "1920 1080 1", 10)
-            print("ok   /.henge/display is '1920 1080 1'")
+            print("ok   /.tux/display is '1920 1080 1'")
             for line, want, disp in (("mode 1280x800", "1280x800", "1280 800 1"),
                                      ("mode 1024x768 2", "1024x768", "1024 768 2"),
                                      ("mode 1280x800", "1280x800", "1280 800 2")):  # scale stays until set
@@ -97,7 +97,7 @@ def main():
                 wait_mode(p, want)
                 print(f"ok   '{line}' -> {want}")
                 wait_display(p, disp, 5)
-                print(f"ok   /.henge/display is '{disp}'")
+                print(f"ok   /.tux/display is '{disp}'")
             for bad in ("mode 0x0", "mode junk", "mode 640"):
                 with open(infile, "a") as f:
                     f.write(bad + "\n")

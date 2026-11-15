@@ -1,7 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Henge keyboard
-Comment=labwc runs this from its own autostart
-OnlyShowIn=KDE;
-X-KDE-autostart-phase=2
-Exec=sh -c 'systemctl --user import-environment WAYLAND_DISPLAY DISPLAY; systemctl --user start --no-block henge-keyboard.service'

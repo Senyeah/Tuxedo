@@ -1,7 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Henge display and clipboard
-Comment=labwc runs these from its own autostart
-OnlyShowIn=KDE;
-X-KDE-autostart-phase=2
-Exec=sh -c 'systemctl --user import-environment WAYLAND_DISPLAY DISPLAY; systemctl --user start --no-block henge-clipboard.service; exec /usr/local/bin/henge-display > "$XDG_RUNTIME_DIR/henge-display.log" 2>&1'

@@ -2,9 +2,9 @@
 # /// script
 # requires-python = ">=3.9"
 # ///
-"""Compares Henge's virt device tree with QEMU's, node by node.
+"""Compares Tuxedo's virt device tree with QEMU's, node by node.
 
-QEMU: -M virt,gic-version=3,highmem=off,dumpdtb. Henge: build/tuxvm --dump-dtb.
+QEMU: -M virt,gic-version=3,highmem=off,dumpdtb. Tuxedo: build/tuxvm --dump-dtb.
 Exit 1 on any difference that is not in the allow lists below.
 """
 import argparse
@@ -130,17 +130,17 @@ def compare(q, h, ncpus, ram_mb):
             (allowed if is_qemu_only(path) else errors).append(f"{path}: only in QEMU")
             continue
         if path not in q:
-            (allowed if path.split("/")[1] in TUX_ONLY_NODES else errors).append(f"{path}: only in Henge")
+            (allowed if path.split("/")[1] in TUX_ONLY_NODES else errors).append(f"{path}: only in Tuxedo")
             continue
         ignored = set(IGNORED_PROPS.get(path, ()))
         if re.fullmatch(r"/cpus/cpu@\d+", path):
             ignored |= CPU_IGNORED
             if ncpus == 1:
-                ignored.add("enable-method")  # QEMU leaves it out for one CPU; Henge always names psci
+                ignored.add("enable-method")  # QEMU leaves it out for one CPU; Tuxedo always names psci
         for name in sorted(set(q[path]) | set(h[path])):
             qv, hv = q[path].get(name), h[path].get(name)
             if qv != hv:
-                msg = f"{path}: {name}: QEMU {fmt(qv)}, Henge {fmt(hv)}"
+                msg = f"{path}: {name}: QEMU {fmt(qv)}, Tuxedo {fmt(hv)}"
                 (allowed if name in ignored else errors).append(msg)
 
     # Properties checked by rule rather than by value.
@@ -150,17 +150,17 @@ def compare(q, h, ncpus, ram_mb):
         errors.append(f"/memory@40000000: reg {fmt(mem)}, expected base 0x40000000 and {ram_mb} MB")
     qmem = q.get("/memory@40000000", {}).get("reg")
     if ram_mb <= QEMU_MAX_MB and qmem != mem:
-        errors.append(f"/memory@40000000: reg QEMU {fmt(qmem)}, Henge {fmt(mem)}")
+        errors.append(f"/memory@40000000: reg QEMU {fmt(qmem)}, Tuxedo {fmt(mem)}")
     qg, hg = q.get("/intc@8000000", {}).get("reg"), h.get("/intc@8000000", {}).get("reg")
     if not qg or not hg or len(qg) != 8 or len(hg) != 8 or qg[:6] != hg[:6]:
-        errors.append(f"/intc@8000000: reg QEMU {fmt(qg)}, Henge {fmt(hg)}")
+        errors.append(f"/intc@8000000: reg QEMU {fmt(qg)}, Tuxedo {fmt(hg)}")
     elif hg[6:] != [0, 0x20000 * ncpus]:
         errors.append(f"/intc@8000000: redistributor size {fmt(hg[6:])}, expected 0x20000 * {ncpus}")
     else:
-        allowed.append(f"/intc@8000000: redistributor size QEMU {hex(qg[7])}, Henge {hex(hg[7])}")
+        allowed.append(f"/intc@8000000: redistributor size QEMU {hex(qg[7])}, Tuxedo {hex(hg[7])}")
     cpus = [p for p in h if re.fullmatch(r"/cpus/cpu@\d+", p)]
     if len(cpus) != ncpus:
-        errors.append(f"Henge has {len(cpus)} cpu nodes, expected {ncpus}")
+        errors.append(f"Tuxedo has {len(cpus)} cpu nodes, expected {ncpus}")
     return errors, allowed
 
 

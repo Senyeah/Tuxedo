@@ -10,7 +10,7 @@
 /* The virtual machine as a host app drives it: build it from files, run it, feed
    it input, stop it. The command-line tool and the iOS app both use this. */
 
-/* A folder from the Files app (fs_server.h). The guest's helper mounts it at /media/henge/<name>. */
+/* A folder from the Files app (fs_server.h). The guest's helper mounts it at /media/tux/<name>. */
 typedef struct HvVmFolder {
     const char *id, *name, *path; /* id: the app's, for the guest's changes; NULL is the name */
     int mode;                     /* HV_FS_RO, HV_FS_COW or HV_FS_RW */

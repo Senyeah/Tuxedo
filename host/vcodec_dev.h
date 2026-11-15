@@ -1,5 +1,5 @@
-/* The hvcodec DMA channel: the virtio device (devices/virtio_hvcodec.c), the guest's henge_codec module
-   (tools/linux/henge-codec-dkms) and libhvcodec's /dev/hvcodec client. docs/guest-video-encode-plan.md has the design.
+/* The hvcodec DMA channel: the virtio device (devices/virtio_hvcodec.c), the guest's tux_codec module
+   (tools/linux/tux-codec-dkms) and libhvcodec's /dev/hvcodec client. docs/guest-video-encode-plan.md has the design.
 
    The device carries hvcodec messages (vcodec_proto.h) and does not parse them. One request is one descriptor chain:
      readable: HvcdReq, the message (msg_len), the raw data to the host (in_len)
@@ -25,7 +25,7 @@ typedef uint64_t hvcd_u64;
 #endif
 
 /* Linux's virtio-pci binds 0x1040 to 0x107f, so 63 is its last type. VIRTIO 1.4 (and the draft after it) assigns up to
-   50, Linux 6.12 names up to 48, and Henge uses 1, 2, 4, 5, 16, 18 and 25. The module also checks HVCD_MAGIC. */
+   50, Linux 6.12 names up to 48, and Tuxedo uses 1, 2, 4, 5, 16, 18 and 25. The module also checks HVCD_MAGIC. */
 #define HVCD_DEVICE_ID 63
 #define HVCD_MAGIC 0x44435648u /* "HVCD" */
 #define HVCD_VERSION 1

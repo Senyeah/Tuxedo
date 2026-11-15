@@ -376,7 +376,7 @@ static void test_helpers(const char *mode) {
 }
 
 int main(void) {
-    snprintf(base, sizeof base, "/tmp/henge-paths-XXXXXX");
+    snprintf(base, sizeof base, "/tmp/tux-paths-XXXXXX");
     if (!mkdtemp(base)) return 1;
     snprintf(root, sizeof root, "%s/root", base);
     snprintf(outside, sizeof outside, "%s/outside", base);

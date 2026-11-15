@@ -74,7 +74,7 @@ config:
 flowchart LR
   app["Guest player: FFmpeg, mpv, GStreamer"] --> va["libva + Mesa virtio_gpu_drv_video.so"]
   va -->|"slices and parsed fields in guest-RAM resources"| sub["virtio-gpu SUBMIT_3D"]
-  sub --> hv["Henge: virtio_gpu.c, vgpu_virgl.m"]
+  sub --> hv["Tuxedo: virtio_gpu.c, vgpu_virgl.m"]
   hv --> vr["virglrenderer: vrend_decode.c, vrend_video.c"]
   vr -->|"new back end"| vt["VTDecompressionSession"]
   vt -->|"CVPixelBuffer on an IOSurface"| ang["ANGLE IOSurface pbuffer"]
@@ -171,7 +171,7 @@ A guest library that sends the raw stream to the host over a socket or a small v
 | mpv | `--hwdec=vaapi` | `--hwdec=v4l2m2m-copy` | `--hwdec=vulkan` | No |
 | FFmpeg | `-hwaccel vaapi` | `-c:v h264_v4l2m2m` | `-hwaccel vulkan` | Only a patched build |
 | GStreamer | `va` plugin | `v4l2` plugin | `vulkan` plugin | Only a new element |
-| Firefox | VA-API, with `henge-va` (see Firefox) | H.264 | Off by default | No |
+| Firefox | VA-API, with `tux-va` (see Firefox) | H.264 | Off by default | No |
 | Chromium | VA-API, may need `VaapiIgnoreDriverChecks` (not verified) | No on desktop | No | No |
 | Rough effort | 2 to 3 weeks for H.264 and VP9; 2 more for AV1 | 4 to 6 weeks | Unknown; blocked upstream | 2 to 3 weeks, few users |
 
@@ -231,12 +231,12 @@ The spike passes when the checksums match and the frame rate is above real time 
 
 ## Parts shared with encode
 
-`docs/guest-video-encode-plan.md` uses path 4 for encode. It plans an `hvcodec` service in the app, a guest client library and an `ffmpeg` patch. The patch has its own hardware decode, `-hwaccel henge` (stages VE0 to VE2). That decode keeps each frame on the host as an IOSurface for the encoder. The encode plan keeps this decode path because virgl VA-API cannot do HEVC, and HEVC is the usual codec of a 4K60 file. Its section "Relation to the decode research" compares the two paths.
+`docs/guest-video-encode-plan.md` uses path 4 for encode. It plans an `hvcodec` service in the app, a guest client library and an `ffmpeg` patch. The patch has its own hardware decode, `-hwaccel tux` (stages VE0 to VE2). That decode keeps each frame on the host as an IOSurface for the encoder. The encode plan keeps this decode path because virgl VA-API cannot do HEVC, and HEVC is the usual codec of a 4K60 file. Its section "Relation to the decode research" compares the two paths.
 
 The two plans do not compete:
 
 - Path 1 (this file) is for playback. It serves every VA-API application, keeps frames on the host GPU for the display, and does not need a patched `ffmpeg`. It cannot do HEVC.
-- `-hwaccel henge` is for a transcode in the patched `ffmpeg` only. It can do HEVC, because FFmpeg's decoder has the original parameter sets.
+- `-hwaccel tux` is for a transcode in the patched `ffmpeg` only. It can do HEVC, because FFmpeg's decoder has the original parameter sets.
 
 Code that both can share, written one time:
 
@@ -250,7 +250,7 @@ Code that both can share, written one time:
 - That FFmpeg's VA-API VP9 path sends the whole frame and the AV1 path sends only tile data. This is from memory of FFmpeg's `vaapi_vp9.c` and `vaapi_av1.c`.
 - That common HEVC encoders refer to SPS reference picture sets by index. This is expected; it makes path 1 fail for HEVC.
 - That VideoToolbox gives one output frame for each synchronous decode call, in decode order, for H.264 with B-frames. The spike verified it on the Mac.
-- That Chromium on Debian uses VA-API on virgl, and with which flags. (Firefox does, with `henge-va`: see Firefox.)
+- That Chromium on Debian uses VA-API on virgl, and with which flags. (Firefox does, with `tux-va`: see Firefox.)
 - Hardware VP9 and AV1 on the iPhone 18 Pro.
 - All effort numbers.
 
@@ -484,9 +484,9 @@ Cause, from the sources:
 - FFmpeg 7.1 `vaapi_decode_find_best_format` (`libavcodec/vaapi_decode.c`) goes through that list with `av_find_best_pix_fmt_of_2` against the stream's `yuv420p`. YV12 and I420 both map to `yuv420p`, and the later one wins: I420. Firefox's `ffvpx` has the same code for VP9 and AV1.
 - Firefox `VideoFramePool::GetVideoFrameSurface` (`dom/media/platforms/ffmpeg/FFmpegVideoFramePool.cpp`) refuses a surface whose fourcc is not NV12, YV12, P010 or P016.
 
-Fix: the guest package `henge-va` (`tools/linux/henge-va`, `tools/linux/README.md`). It puts a small driver (a 10 KB package) in front of Mesa's that lists NV12 only for an 8-bit decode config. No host change, no new app build. A patched `mesa-va-drivers` was the other choice; it would hold back Debian's Mesa updates.
+Fix: the guest package `tux-va` (`tools/linux/tux-va`, `tools/linux/README.md`). It puts a small driver (a 10 KB package) in front of Mesa's that lists NV12 only for an 8-bit decode config. No host change, no new app build. A patched `mesa-va-drivers` was the other choice; it would hold back Debian's Mesa updates.
 
-On the owner's iPhone 18 Pro, 14/11/2026, `henge-va` 1.0.0 installed, Firefox 160 with a new profile and its RDD sandbox on, 1080p30 clips, 20 s each (evidence in `build/evidence/firefox-vaapi`):
+On the owner's iPhone 18 Pro, 14/11/2026, `tux-va` 1.0.0 installed, Firefox 160 with a new profile and its RDD sandbox on, 1080p30 clips, 20 s each (evidence in `build/evidence/firefox-vaapi`):
 
 | | Before, H.264 | H.264 | VP9 | AV1 |
 |---|---|---|---|---|

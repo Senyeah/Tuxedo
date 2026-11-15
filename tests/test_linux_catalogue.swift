@@ -72,7 +72,7 @@ struct LinuxCatalogueTests {
         try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: tmp) }
         let file = tmp.appendingPathComponent("blob")
-        try Data("henge".utf8).write(to: file)
+        try Data("tux".utf8).write(to: file)
         let hello = try FileHash.sha256(of: file)
         precondition(hello == "90961d66d0be50ec2ba9eb0bc994120ebd6e0d61052185c53bdf9107778436bd")
         precondition(fails { try FileHash.verify(file, expected: hello.uppercased(), what: "disk") } == nil && fm.fileExists(atPath: file.path))

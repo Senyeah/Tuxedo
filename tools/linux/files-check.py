@@ -3,9 +3,9 @@
 # requires-python = ">=3.9"
 # dependencies = ["pexpect"]
 # ///
-"""FM6 check: the folders from the Files app at /media/henge/<name> (virtio-fs and henge-files).
+"""FM6 check: the folders from the Files app at /media/tux/<name> (virtio-fs and tux-files).
 
-Boot 0 installs henge-guest (built from tools/linux/henge-guest, or --deb) and the tools the checks use (gcc, git,
+Boot 0 installs tux-guest (built from tools/linux/tux-guest, or --deb) and the tools the checks use (gcc, git,
 make; fsx from LTP; pjdfstest with --pjdfstest) in a clone of --image. Boot 1 has --folder a=DIR:ro, b=DIR:cow,
 c=DIR (Read-write, the default) and --share, and checks the mounts and owners, that a Read-only folder refuses
 every change (also after root remounts it rw), the same changes in Copy-on-write (the Mac's folder stays as it
@@ -14,8 +14,8 @@ guest's changes stay on top), two layers with no folder and one name, host chang
 export and discard asks, a new mode,
 offline and online, a folder added and removed while running, a program built and run on the folder, a shared
 mmap, links from the Mac that point out of the folder, fsx, and times for tar, git, dd and rm on each folder, on
-~/Henge (davfs2) and on the root disk.
-Boot 2 has no --folder: the system is running and /media/henge is empty.
+~/Tux (davfs2) and on the root disk.
+Boot 2 has no --folder: the system is running and /media/tux is empty.
 --pjdfstest runs FM7 instead: pjdfstest's groups on the Read-write folder, with the failures by cause.
 The shared image never changes: the guest writes to a clone. Exit 1 on a failed check.
 """
@@ -37,7 +37,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 HERE = os.path.dirname(os.path.abspath(__file__))
 SHELL = r"henge@henge:\S*\$ "
 MARK = "TUX_RC_"
-MEDIA = "/media/henge"
+MEDIA = "/media/tux"
 FSX_URL = "https://raw.githubusercontent.com/linux-test-project/ltp/20230127/testcases/kernel/fs/fsx-linux/fsx-linux.c"
 FSX_SHA = "cafcbd6a6afcf3486908a601f355c4824f99a2f4a9dbd5153ba5bfeddd738575"
 PJD_URL = "https://github.com/pjd/pjdfstest.git"
@@ -214,17 +214,17 @@ def build_deb(tmp):
 
 
 def prepare(vm, args, deb):
-    """Boot 0: henge-guest and the tools, in the clone."""
+    """Boot 0: tux-guest and the tools, in the clone."""
     vm.boot()
     pkgs = "gcc libc6-dev make git perl" + (" autoconf automake" if args.pjdfstest else "")
     t = time.monotonic()
     if deb:
-        vm.need(f"cp ~/Henge/{os.path.basename(deb)} /tmp/")
+        vm.need(f"cp ~/Tux/{os.path.basename(deb)} /tmp/")
     vm.need("sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq >/var/tmp/apt.log 2>&1 && sudo DEBIAN_FRONTEND="
             f"noninteractive apt-get install -y -qq --reinstall --no-install-recommends {pkgs} "
             f"{'/tmp/' + os.path.basename(deb) if deb else ''} >>/var/tmp/apt.log 2>&1; tail -2 /var/tmp/apt.log",
             what="apt-get install", limit=1200)
-    vm.need("dpkg --compare-versions $(dpkg-query -W -f='${Version}' henge-guest) ge 1.8.0", what="henge-guest 1.8.0")
+    vm.need("dpkg --compare-versions $(dpkg-query -W -f='${Version}' tux-guest) ge 1.8.0", what="tux-guest 1.8.0")
     vm.need(f"python3 -c \"import urllib.request; open('/tmp/fsx.c','wb').write(urllib.request.urlopen('{FSX_URL}').read())\" "
             f"&& echo '{FSX_SHA}  /tmp/fsx.c' | sha256sum -c --quiet && gcc -O2 -w -include libgen.h -o /tmp/fsx /tmp/fsx.c "
             "&& sudo install -m 0755 /tmp/fsx /usr/local/bin/fsx", what="fsx", limit=300)
@@ -232,7 +232,7 @@ def prepare(vm, args, deb):
         vm.need(f"(sudo rm -rf /opt/pjdfstest && sudo git clone -q {PJD_URL} /opt/pjdfstest && cd /opt/pjdfstest && "
                 f"sudo git checkout -q {PJD_COMMIT} && sudo autoreconf -ifs >/dev/null 2>&1 && sudo ./configure -q "
                 ">/dev/null && sudo make -s pjdfstest >/dev/null 2>&1)", what="pjdfstest", limit=900)
-    ok(f"boot 0 installed henge-guest and the tools in {time.monotonic() - t:.0f} s")
+    ok(f"boot 0 installed tux-guest and the tools in {time.monotonic() - t:.0f} s")
     vm.poweroff()
 
 
@@ -243,7 +243,7 @@ def host_unchanged(d, before, what):
 
 
 def check_mounts(vm):
-    vm.need("systemctl is-active henge-files.service run-henge-files.mount", what="units active")
+    vm.need("systemctl is-active tux-files.service run-tux-files.mount", what="units active")
     out = vm.need(f"findmnt -rn -o TARGET,FSTYPE,OPTIONS | grep '^{MEDIA}/'", what="mounts")
     mounts = {line.split()[0]: line.split()[1:] for line in out.splitlines()}
     want = {"a": ("virtiofs", "ro"), "b": ("overlay", "rw"), "c": ("virtiofs", "rw")}
@@ -255,7 +255,7 @@ def check_mounts(vm):
             lambda o: set(o.split()) == {"henge:henge"}, "owners")
     vm.need(f"touch {MEDIA}/c/owned && stat -c %U:%G {MEDIA}/c/owned && rm {MEDIA}/c/owned", lambda o: o == "henge:henge",
             "owner of a new file")
-    ok("a, b and c are mounted at /media/henge as ro virtiofs, overlay and rw virtiofs, owned by henge")
+    ok("a, b and c are mounted at /media/tux as ro virtiofs, overlay and rw virtiofs, owned by henge")
 
 
 def check_ro(vm, dirs, before):
@@ -300,9 +300,9 @@ def check_changes(vm, dirs, before, share):
         raise Fail("Read-write: the hard link is not one inode on the Mac")
     ok("Read-write: the same changes, the directory rename too, are on the Mac (the hard link is one inode there)")
 
-    out = vm.need("henge-files export b", what="export")
+    out = vm.need("tux-files export b", what="export")
     dest = out.splitlines()[-1].rsplit(": ", 1)[-1]
-    rel = os.path.relpath(dest, "/home/henge/Henge")
+    rel = os.path.relpath(dest, "/home/henge/Tux")
     host_dest = os.path.join(share, rel)
     want_files = {"new.txt", "f.txt", "dir/inner.txt", "renamed.txt", "rendir2/x.txt", "newdir/a.txt", "hl.txt",
                   "hl2.txt", "big.bin"}
@@ -321,12 +321,12 @@ def check_changes(vm, dirs, before, share):
         time.sleep(0.5)
     if exported() != want_all:
         raise Fail(f"export: {exported()}")
-    ok(f"export: ~/Henge/{rel} has the 9 changed files, deletions.txt and links.txt (davfs2 has no links)")
+    ok(f"export: ~/Tux/{rel} has the 9 changed files, deletions.txt and links.txt (davfs2 has no links)")
 
-    vm.need("henge-files reset b", what="reset")
+    vm.need("tux-files reset b", what="reset")
     if vm.probe("view", f"{MEDIA}/b")["tree"] != fixture_tree():
         raise Fail("reset: b is not the original again")
-    vm.need("sudo find /var/lib/henge/files/b/upper -mindepth 1 | wc -l", lambda o: o == "0", "reset: the upper layer is empty")
+    vm.need("sudo find /var/lib/tux/files/b/upper -mindepth 1 | wc -l", lambda o: o == "0", "reset: the upper layer is empty")
     ok("reset: b is the original again and its upper layer is empty")
 
 
@@ -343,7 +343,7 @@ def check_new_original(vm, dirs, tmp):
     vm.input_line(f"folder add b {dirs['b']} cow")
     vm.wait_guest(f"! [ -e {MEDIA}/b/only-in-b2.txt ]", "the first original under b again", 30)
     vm.need(f"rm {MEDIA}/b/kept.txt")
-    vm.need("henge-files reset b", what="reset")
+    vm.need("tux-files reset b", what="reset")
     if tree_of(b2) != dict(fixture_tree(), **{"only-in-b2.txt": ["file", "0o644", h16(b"b2\n")]}):
         raise Fail("the new original changed")
     ok(f"a new original for b: the overlay moved onto it in {took} s and kept the guest's file")
@@ -351,19 +351,19 @@ def check_new_original(vm, dirs, tmp):
 
 def check_orphans(vm):
     """Two layers with no folder and one name: list gives each key, the name is refused, the keys work."""
-    L = "/var/lib/henge/files"
+    L = "/var/lib/tux/files"
     for k in ("o1", "o2"):
         vm.need(f"sudo mkdir -p {L}/{k}/upper && echo {k} | sudo tee {L}/{k}/upper/note.txt >/dev/null && "
                 f"echo '{{\"id\": \"{k}\", \"name\": \"Docs\", \"seen\": 0}}' | sudo tee {L}/{k}/info.json >/dev/null")
-    out = vm.need("henge-files list", what="list")
+    out = vm.need("tux-files list", what="list")
     lines = [line for line in out.splitlines() if line.startswith("Docs: ")]
     if len(lines) != 2 or not all(f"by its key {k}" in line for k, line in zip(("o1", "o2"), lines)):
         raise Fail(f"list: two layers called Docs: {out!r}")
-    out, rc = vm.sh("henge-files reset Docs")
+    out, rc = vm.sh("tux-files reset Docs")
     if rc == 0 or "o1, o2" not in out:
         raise Fail(f"reset Docs with two such layers: status {rc}, {out!r}")
-    vm.need("henge-files export o1 /tmp/exp-o1 && cat /tmp/exp-o1/note.txt", lambda o: o.endswith("o1"), "export o1")
-    vm.need("henge-files reset o1 && henge-files reset Docs", what="reset o1, then Docs")
+    vm.need("tux-files export o1 /tmp/exp-o1 && cat /tmp/exp-o1/note.txt", lambda o: o.endswith("o1"), "export o1")
+    vm.need("tux-files reset o1 && tux-files reset Docs", what="reset o1, then Docs")
     vm.need(f"sudo ls {L}", lambda o: not {"o1", "o2"} & set(o.split()), "reset: both layers are gone")
     vm.need(f"mountpoint -q {MEDIA}/b", what="b is mounted after the resets")
     ok("two layers with no folder called Docs: list gives each key, reset Docs refuses, export and reset by key work")
@@ -404,15 +404,15 @@ def check_host_change(vm, dirs, times):
     # An overlay keeps its own "no such file" for a name it looked up, so a file new in the original shows after a remount
     with open(os.path.join(dirs["b"], "from-mac.txt"), "w") as f:
         f.write("from the mac")
-    vm.need(f"cat {MEDIA}/b/from-mac.txt 2>/dev/null; henge-files remount b >/dev/null && cat {MEDIA}/b/from-mac.txt",
-            lambda o: o.endswith("from the mac"), "a file new in b's original, after henge-files remount b")
+    vm.need(f"cat {MEDIA}/b/from-mac.txt 2>/dev/null; tux-files remount b >/dev/null && cat {MEDIA}/b/from-mac.txt",
+            lambda o: o.endswith("from the mac"), "a file new in b's original, after tux-files remount b")
     for name, (n, text) in there.items():
         os.remove(os.path.join(dirs[name], "from-mac.txt"))
         with open(os.path.join(dirs[name], n), "w") as f:
             f.write(text)
     ok(f"a file made on the Mac shows in c in {want['host new file seen (c)']} s; a changed file in c in "
        f"{want['host changed file seen (c)']} s and in b in {want['host changed file seen (b)']} s; a file new in b's "
-       "original after henge-files remount b")
+       "original after tux-files remount b")
 
 
 def answer_of(vm, name, since, limit=60):
@@ -454,7 +454,7 @@ def check_app_asks(vm, dirs, share):
 
     def arrived():  # what the app counts (FolderPolicy.exportArrived)
         got = [os.path.getsize(os.path.join(t, n)) for t, _, ns in os.walk(host_dest) for n in ns
-               if not n.startswith(".henge-put-")]
+               if not n.startswith(".tux-put-")]
         return len(got), sum(got)
 
     end = time.monotonic() + 60  # davfs2 uploads a second after close
@@ -470,7 +470,7 @@ def check_app_asks(vm, dirs, share):
     state, text, _ = answer_of(vm, "b", since)
     if state != "ok":
         raise Fail(f"discard for the app: {state} {text!r}")
-    vm.need(f"! [ -e {MEDIA}/b/app-export.txt ] && sudo find /var/lib/henge/files/b/upper -mindepth 1 | wc -l",
+    vm.need(f"! [ -e {MEDIA}/b/app-export.txt ] && sudo find /var/lib/tux/files/b/upper -mindepth 1 | wc -l",
             lambda o: o == "0", "discard: the upper layer is empty")
     since = os.path.getsize(vm.err)
     vm.input_line("folder export c")
@@ -520,12 +520,12 @@ def check_offline(vm, dirs, tmp, times):
 
 def check_programs(vm, dirs):
     r = vm.probe("build", f"{MEDIA}/c", limit=300)
-    if r["build"] != ["henge 33", "henge 33", "henge 66", "henge 66", "henge 99", "henge 99"]:
+    if r["build"] != ["tux 33", "tux 33", "tux 66", "tux 66", "tux 99", "tux 99"]:
         raise Fail(f"a program built on c and run from there: {r['build']}")
     vm.probe("mmap", f"{MEDIA}/c/mapped")
     with open(os.path.join(dirs["c"], "mapped"), "rb") as f:
         data = f.read()
-    if len(data) != 65536 or any(data[i * 4096:i * 4096 + 8] != b"henge%03d" % i for i in range(16)):
+    if len(data) != 65536 or any(data[i * 4096:i * 4096 + 6] != b"tux%03d" % i for i in range(16)):
         raise Fail("mmap: the Mac's file does not have the mapped writes")
     vm.need(f"rm {MEDIA}/c/prog {MEDIA}/c/prog.c {MEDIA}/c/mapped")
     ok("a program built on c three times with new code runs the new code each time; a shared mmap write with msync reaches the Mac")
@@ -537,7 +537,7 @@ def check_escape(vm, dirs):
     os.makedirs(os.path.join(dirs["c"], "deep"))
     os.symlink("/private/etc", os.path.join(dirs["c"], "deep", "etc-link"))
     vm.need(f"readlink {MEDIA}/c/escape", lambda o: o == "/", "readlink")
-    listing = vm.need(f"ls {MEDIA}/c/escape/ /run/henge/files/c/escape/").split()
+    listing = vm.need(f"ls {MEDIA}/c/escape/ /run/tux/files/c/escape/").split()
     mac = {"Users", "Applications", "System", "Library", "private"}
     if mac & set(listing) or "etc" not in listing:
         raise Fail(f"escape: the link to / lists {listing}")
@@ -564,7 +564,7 @@ def check_fsx(vm, seconds, times):
 def check_bench(vm, args, share, times):
     bundle = os.path.join(share, "tux.bundle")
     subprocess.run(["git", "-C", ROOT, "bundle", "create", bundle, "HEAD"], check=True, capture_output=True)
-    vm.need("cp ~/Henge/tux.bundle /var/tmp/ && rm -rf /var/tmp/small && python3 -c \"import os,sys\n"
+    vm.need("cp ~/Tux/tux.bundle /var/tmp/ && rm -rf /var/tmp/small && python3 -c \"import os,sys\n"
             "for n, tar in ((int(sys.argv[1]), 'small'), (int(sys.argv[2]), 'small-dav')):\n"
             "    for i in range(n):\n"
             "        d = f'/var/tmp/{tar}/small/d{i // 100:03d}'\n"
@@ -577,7 +577,7 @@ def check_bench(vm, args, share, times):
     for where, d, tar, mb in (("c: Read-write (virtio-fs)", f"{MEDIA}/c", "/var/tmp/small.tar", args.dd_mb),
                               ("b: Copy-on-write (overlay)", f"{MEDIA}/b", "/var/tmp/small.tar", args.dd_mb),
                               ("root disk (ext4)", "/var/tmp/rootbench", "/var/tmp/small.tar", args.dd_mb),
-                              ("~/Henge (davfs2)", "/home/henge/Henge", "/var/tmp/small-dav.tar", args.davfs_mb)):
+                              ("~/Tux (davfs2)", "/home/henge/Tux", "/var/tmp/small-dav.tar", args.davfs_mb)):
         n = args.davfs_files if "davfs" in where else args.files
         r = vm.probe("bench", d, where, tar, "/var/tmp/tux.bundle", mb, limit=7200)
         r["files"] = n
@@ -588,19 +588,19 @@ def check_bench(vm, args, share, times):
               f"({mb / max(r['dd_read'], 0.01):.0f} MB/s)", flush=True)
     vm.need("rm -f /var/tmp/small.tar /var/tmp/small-dav.tar /var/tmp/tux.bundle")
     os.remove(bundle)
-    vm.need("henge-files reset b", what="reset after the bench")
+    vm.need("tux-files reset b", what="reset after the bench")
     times["bench"] = rows
-    ok("times for tar, git, dd and rm on c, b, the root disk and ~/Henge")
+    ok("times for tar, git, dd and rm on c, b, the root disk and ~/Tux")
 
 
 def check_no_folders(vm):
     vm.boot()
-    vm.need("systemctl is-active henge-files.service run-henge-files.mount; true",
+    vm.need("systemctl is-active tux-files.service run-tux-files.mount; true",
             lambda o: o.split() == ["inactive", "inactive"], "units without the device")
     vm.need(f"ls -A {MEDIA} | wc -l", lambda o: o == "0", f"{MEDIA} is empty")
     vm.need("systemctl --failed --no-legend | wc -l", lambda o: o == "0", "no failed unit")
     vm.poweroff()
-    ok("boot 2 without --folder: the system is running, no unit failed, /media/henge is empty")
+    ok("boot 2 without --folder: the system is running, no unit failed, /media/tux is empty")
 
 
 # The causes the README lists: everything is henge's (no chown), no devices or sockets on the host, PATH_MAX 1024
@@ -664,13 +664,13 @@ def main():
     ap.add_argument("--image", help="disk to clone (default debian-console.img)")
     ap.add_argument("--firmware", help="default u-boot.bin next to the image")
     ap.add_argument("--tuxvm", default=os.path.join(ROOT, "build", "tuxvm"))
-    ap.add_argument("--deb", help="henge-guest package to install (default: built from tools/linux/henge-guest)")
-    ap.add_argument("--no-install", action="store_true", help="the image has henge-guest 1.8.0, the tools and fsx")
+    ap.add_argument("--deb", help="tux-guest package to install (default: built from tools/linux/tux-guest)")
+    ap.add_argument("--no-install", action="store_true", help="the image has tux-guest 1.8.0, the tools and fsx")
     ap.add_argument("--save-image", help="keep the disk after boot 0 here, for --image and --no-install")
     ap.add_argument("--cpus", type=int, default=4)
     ap.add_argument("--ram", type=int, default=2048)
     ap.add_argument("--files", type=int, default=10000, help="small files for tar x")
-    ap.add_argument("--davfs-files", type=int, default=1000, help="small files for tar x on ~/Henge")
+    ap.add_argument("--davfs-files", type=int, default=1000, help="small files for tar x on ~/Tux")
     ap.add_argument("--dd-mb", type=int, default=1024)
     ap.add_argument("--davfs-mb", type=int, default=100)
     ap.add_argument("--fsx-seconds", type=int, default=600)
@@ -694,7 +694,7 @@ def main():
     times, vm = {}, None
     try:
         subprocess.run(["/bin/cp", "-c", image, disk], check=True)
-        os.truncate(disk, max(os.path.getsize(disk), 8 << 30))  # henge-grow takes it: room for 1 GB on the root disk twice
+        os.truncate(disk, max(os.path.getsize(disk), 8 << 30))  # tux-grow takes it: room for 1 GB on the root disk twice
         shutil.copy(os.path.join(HERE, "files-probe.py"), share)
         vm = Vm(args, disk, share, tmp)
         if not args.no_install:
@@ -707,7 +707,7 @@ def main():
             make_fixture(p)
         before = {n: tree_of(p) for n, p in dirs.items()}
         vm.boot([f"a={dirs['a']}:ro", f"b={dirs['b']}:cow", f"c={dirs['c']}"])
-        vm.need("cp ~/Henge/files-probe.py /tmp/")
+        vm.need("cp ~/Tux/files-probe.py /tmp/")
         if args.pjdfstest:
             run_pjdfstest(vm, times)
         else:

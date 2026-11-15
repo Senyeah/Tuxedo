@@ -36,7 +36,7 @@ SHELL = r"henge@henge:\S*\$ "
 MARK = "TUX_RC_"
 KERNEL_BAD = (r"WARNING:|BUG:|Oops|Call trace:|soft lockup|hard LOCKUP|rcu: INFO|detected stall|"
               r"blocked for more than|watchdog|clocksource|Unable to handle|Internal error")
-SAMPLES = "/tmp/henge-clock"
+SAMPLES = "/tmp/tux-clock"
 
 
 class Fail(Exception):

@@ -283,6 +283,93 @@ S7_LITERALS = [
 S7_APP_GLOBS = [("ios/*", S7_APP_RULES), ("tests/*.swift", S7_APP_RULES)]
 
 
+# Stage 9 (docs/rename-tuxedo-plan.md): wire names, guest packages, guest paths, units, FFmpeg names, DKMS module.
+# Host and guest change together. Stage 10 keeps: the guest user, hostname and fs label (a bare `henge` is kept unless a
+# rule below names its context), /home/henge, sudoers, autologin, `henge@`. Kept forever: hv_*, hvcodec, credit lines.
+S9_KEEP_PATHS = ("tools/linux/rootfs/etc/sudoers.d/henge", "tools/linux/u-boot-henge.config")
+S9_KEEP_TOKENS = ("henge16k", "henge_angle_archive", "libhenge_angle_archive")
+S9_LITERALS = [
+    ("dev.henge.Keyboard", "nz.jackgreenhill.tuxedo.Keyboard"),
+    ("Maintainer: Henge <henge@localhost>", "Maintainer: Tuxedo <tux@localhost>"),
+    ("henge@localhost", "tux@localhost"),
+    ("X-Henge-Seq", "X-Tux-Seq"),
+    ("/home/henge/Henge", "/home/@U@/Tux"),
+    ("home-henge-Henge", "home-@U@-Tux"),
+    ("home-henge-Tux", "home-@U@-Tux"),
+    ("~/Henge", "~/Tux"),
+    ("pool/main/h/", "pool/main/t/"),
+    ('pw_dir, "Henge"', 'pw_dir, "Tux"'),
+    ('"/Henge"', '"/Tux"'),
+    ('"henge", f"kwallet-imported-', '"tux", f"kwallet-imported-'),
+    ("opaquelocktoken:henge-", "opaquelocktoken:tux-"),
+    ("henge.sources", "tux.sources"),
+    ("henge/keep-device-volume", "tux/keep-device-volume"),
+    ('"henge-" + key', '"tux-" + key'),
+    (":-henge-kwin-panel", ":-tux-kwin-panel"),
+    ('"*henge*"', '"*tux*"'),
+    ("henge%03d", "tux%03d"),
+    ('"henge" in ', '"tux" in '), ('"henge" not in ', '"tux" not in '), ("no henge hwaccel", "no tux hwaccel"),
+    ("'henge|hvcodec'", "'tux|hvcodec'"), ("dkms|henge|Building", "dkms|tux|Building"),
+    ('"henge 33", "henge 33", "henge 66", "henge 66", "henge 99", "henge 99"', '"tux 33", "tux 33", "tux 66", "tux 66", "tux 99", "tux 99"'),
+    ('printf("henge %%d', 'printf("tux %%d'),
+    ('--machine henge|qemu', '--machine tux|qemu'), ('choices=["henge", "qemu"], default=["qemu", "henge"]', 'choices=["tux", "qemu"], default=["qemu", "tux"]'),
+    ('"henge keyboard test"', '"tux keyboard test"'), ('PAGE = "henge forward check"', 'PAGE = "tux forward check"'),
+    ('"henge,test"', '"tux,test"'), ('\\"henge,test\\"', '\\"tux,test\\"'), ('Data("henge".utf8)', 'Data("tux".utf8)'),
+    ('"/nonexistent/henge"', '"/nonexistent/tux"'),
+]
+S9_WORD = re.compile(r"[A-Za-z0-9_]*[Hh][Ee][Nn][Gg][Ee][A-Za-z0-9_]*")
+S9_HW = re.compile(r"(?:hwaccel|hwaccel_output_format|init_hw_device|hwcontext|grep -qx|hwaccels?) ?$")
+# Files where every bare `henge` is the FFmpeg name (-hwaccel henge, the henge frame type).
+S9_FFMPEG_FILES = ("tools/linux/hvcodec/", "docs/guest-video-encode-plan.md", "docs/guest-video-decode-research.md")
+
+
+def s9_bare_lower(path, b, a):
+    """True when a bare `henge` is a Stage 9 name. The guest user, hostname and label (Stage 10) are not."""
+    if re.match(r"-root\b", a) or b.endswith(("/home/", "sudoers.d/", "/nonexistent/", "@", "henge:", ":-", "u-boot-")):
+        return False
+    if a.startswith("@") or a.startswith(":henge") or re.search(r"\buser `?$", b):
+        return False
+    if path.startswith(S9_FFMPEG_FILES) or path.endswith(".patch"):
+        return True
+    if a.startswith("$"):
+        return True
+    if re.match(r"-[A-Za-z]", a) or b.endswith(("-", ".", "/")):
+        return True
+    return bool(S9_HW.search(b)) or a.startswith("=NAME")
+
+
+def s9_line(path, line):
+    for old, new in S9_LITERALS:
+        line = line.replace(old, new)
+
+    def sub(m):
+        tok, s, e = m.group(0), m.start(), m.end()
+        if tok.startswith(S9_KEEP_TOKENS):
+            return tok
+        pre = ""
+        if tok in ("nhenge", "shenge"):   # "\nhenge-ffmpeg", "%shenge-beneath"
+            pre, tok, s = tok[0], "henge", s + 1
+        if tok == "henge":
+            return pre + ("tux" if s9_bare_lower(path, line[:s], line[e:]) else tok)
+        if tok == "Henge":
+            return pre + "Tuxedo"
+        return pre + map_token(tok)
+    return S9_WORD.sub(sub, line).replace("@U@", "henge")
+
+
+def s9_path(p):
+    if p in S9_KEEP_PATHS:
+        return p
+    p = p.replace("home-henge-Henge", "home-@U@-Tux").replace("home-henge-Tux", "home-@U@-Tux")
+    p = re.sub(r"(?<![A-Za-z0-9])henge(?![A-Za-z0-9])", "tux", p)
+    p = p.replace("home-@U@-Tux", "home-henge-Tux")
+    return p
+
+
+def s9_moves():
+    return [(p, s9_path(p)) for p in tracked() if "henge" in p and s9_path(p) != p and not Keep().path(p)]
+
+
 STAGES = {
     3: dict(globs=["*.md", "ios/*", "host/*", "core/*", "devices/*", "tests/*", "tools/*", "Makefile", "ci/*", ".github/*"],
             skip=["docs/rename-tuxedo-plan.md", "CHANGELOG.md", "tools/rename*", "*.json", "*.plist", "*.yml", "*.yaml", "*.patch", "*.pbxproj"],
@@ -298,6 +385,9 @@ STAGES = {
             token=lambda t: t in ("HengeVM", "hengevm"), literals=S6_LITERALS),
     7: dict(globs=["*"], skip=["tools/rename*", "repo.json", "tools/update-source.py", "*.patch", "tools/linux/henge-*/*"],
             token=lambda t: False, rules=S7_RULES, file_rules=S7_APP_GLOBS, literals=S7_LITERALS, phrases=S7_PHRASES),
+    9: dict(globs=["*"], skip=["tools/rename*", "repo.json", "tools/update-source.py", "tools/gfx/*", "tools/linux/u-boot-henge.config",
+                              "tools/linux/build-uboot.sh", "tools/linux/rootfs/etc/*", "LINUX-PLAN-04-kernel-16k.md"],
+            token=lambda t: False, moves=s9_moves, custom=s9_line),
 }
 
 
@@ -316,7 +406,7 @@ def run_stage(n, apply):
     st, keep, m = STAGES[n], Keep(), load_map()
     changed = Counter()
     if st.get("moves"):
-        mv = s5_moves()
+        mv = st["moves"]() if callable(st["moves"]) else s5_moves()
         for a, b in mv:
             print(f"mv  {a} -> {b}")
             if apply:
@@ -361,6 +451,8 @@ def run_stage(n, apply):
             if ok:
                 for rx, rep in rules:
                     new = rx.sub(rep, new)
+            if ok and st.get("custom"):
+                new = st["custom"](p, new)
             for g, a, b in st.get("literals", []):
                 if fnmatch.fnmatch(p, g) and not keep.line(p, i, line):
                     new = new.replace(a, b)

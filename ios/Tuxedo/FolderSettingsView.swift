@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// A Linux machine's folders from Files, in its settings: each at /media/henge/<name> in the guest.
+/// A Linux machine's folders from Files, in its settings: each at /media/tux/<name> in the guest.
 struct FoldersSection: View {
     let machine: UUID
     @ObservedObject private var machines = Machines.shared
@@ -37,7 +37,7 @@ struct FoldersSection: View {
         VStack(alignment: .leading, spacing: 6) {
             if let error { Text(error).foregroundStyle(Desk.bad) }
             if let note = FolderPolicy.addNote(count: folders.count, running: running, device: session.device) { Text(note) }
-            Text("Linux sees each folder at /media/henge/<name>. Changes apply at once while the machine runs.")
+            Text("Linux sees each folder at /media/tux/<name>. Changes apply at once while the machine runs.")
         }
         .font(.system(size: 13)).foregroundStyle(Desk.dim)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -163,7 +163,7 @@ struct FolderDetailView: View {
                         .padding(.vertical, 14)
                         .deskCard()
                         .onSubmit(rename)
-                    note("/media/henge/\(name.isEmpty ? folder.name : name)")
+                    note("/media/tux/\(name.isEmpty ? folder.name : name)")
 
                     DeskHeading("Where")
                     VStack(alignment: .leading, spacing: 10) {

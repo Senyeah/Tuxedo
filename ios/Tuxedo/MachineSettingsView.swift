@@ -227,7 +227,7 @@ struct MachineSettingsView: View {
             Toggle("Video encode", isOn: Binding(get: { machine.encode ?? false }, set: { machine.encode = $0; save() }))
                 .font(.system(size: 16))
                 .padding(.top, 8)
-            Text("This \(Device.name)'s video codecs then take data that the guest controls (ffmpeg from henge-ffmpeg). Applies the next time this machine starts.")
+            Text("This \(Device.name)'s video codecs then take data that the guest controls (ffmpeg from tux-ffmpeg). Applies the next time this machine starts.")
                 .font(.system(size: 13)).foregroundStyle(Desk.dim)
         }
         .padding(17)

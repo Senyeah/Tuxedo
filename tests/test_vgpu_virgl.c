@@ -29,7 +29,7 @@ static HvMachine m;
 static HvCpu cpus[1];
 static HvVirt b;
 static HvDisk root = {.fd = -1, .wfd = -1};
-static char dir[] = "/tmp/henge-vgpu-virgl-XXXXXX";
+static char dir[] = "/tmp/tux-vgpu-virgl-XXXXXX";
 
 #define GPU_SLOT 7 // after the virtio block device; the board puts the GPU here when it has a disk
 #define GPU_CFG (VIRT_PCIE_ECAM + ((uint64_t)GPU_SLOT << 15))

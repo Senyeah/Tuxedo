@@ -1,13 +1,13 @@
 #!/bin/sh
 # The Tuxedo apt repository and the source offer, built on the Mac (docs/guest-video-encode-plan.md, VE3.3):
-#   $OUT/apt     dists/trixie/{Release,InRelease,Release.gpg}, main/binary-{arm64,all}, pool/main/h/<package>/,
+#   $OUT/apt     dists/trixie/{Release,InRelease,Release.gpg}, main/binary-{arm64,all}, pool/main/t/<package>/,
 #                tux-archive.asc
-#   $OUT/source  ffmpeg-<release>-henge<N>/: the FFmpeg tarball, the patch, build-ffmpeg.sh, ffmpeg.manifest, the Tuxedo
-#                files of the build (henge-ffmpeg-src.tar.xz), README.txt, SHA256SUMS
-# It adds henge-ffmpeg (build-ffmpeg-pkg.sh), henge-codec-dkms (build-codec-dkms-pkg.sh), henge-va (build-va-pkg.sh)
-# and henge-guest (built now)
+#   $OUT/source  ffmpeg-<release>-tux<N>/: the FFmpeg tarball, the patch, build-ffmpeg.sh, ffmpeg.manifest, the Tuxedo
+#                files of the build (tux-ffmpeg-src.tar.xz), README.txt, SHA256SUMS
+# It adds tux-ffmpeg (build-ffmpeg-pkg.sh), tux-codec-dkms (build-codec-dkms-pkg.sh), tux-va (build-va-pkg.sh)
+# and tux-guest (built now)
 # to the pool. A pool file is never replaced
-# with other content: raise the version instead. Each henge-ffmpeg in the pool must have its source directory.
+# with other content: raise the version instead. Each tux-ffmpeg in the pool must have its source directory.
 # The private key is only in $TUX_APT_GNUPGHOME (default ~/.tux-apt-key), never in the repository.
 #
 #   publish-apt.sh [--new-key] [--rsync] [--check-remote]
@@ -21,7 +21,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 . "$HERE/versions.env"
 SUITE=$DEBIAN_SUITE
-VER=$FFMPEG_VERSION-henge$FFMPEG_TUX_REV
+VER=$FFMPEG_VERSION-tux$FFMPEG_TUX_REV
 die() { echo "publish-apt.sh: $*" >&2; exit 1; }
 
 if [ "${1:-}" = --inner ]; then
@@ -43,36 +43,36 @@ if [ "${1:-}" = --inner ]; then
         fi
     done
 
-    # The source offer for this henge-ffmpeg: fixed names and times, so a rebuild gives the same files.
+    # The source offer for this tux-ffmpeg: fixed names and times, so a rebuild gives the same files.
     S=/out/source/ffmpeg-$VER
     N=$(mktemp -d)/ffmpeg-$VER
     mkdir -p "$N"
     cp "/out/ffmpeg/src/ffmpeg-$FFMPEG_VERSION.tar.xz" /out/ffmpeg/ffmpeg.manifest "$N/"
-    cp /src/tools/linux/hvcodec/ffmpeg-henge.patch /src/tools/linux/build-ffmpeg.sh "$N/"
+    cp /src/tools/linux/hvcodec/ffmpeg-tux.patch /src/tools/linux/build-ffmpeg.sh "$N/"
     [ "$(sha256sum "$N/ffmpeg-$FFMPEG_VERSION.tar.xz" | cut -d' ' -f1)" = "$FFMPEG_SHA256" ] || die "the FFmpeg tarball is not FFMPEG_SHA256"
-    [ "$(sed -n 's/^patch_sha256=//p' "$N/ffmpeg.manifest")" = "$(sha256sum "$N/ffmpeg-henge.patch" | cut -d' ' -f1)" ] ||
+    [ "$(sed -n 's/^patch_sha256=//p' "$N/ffmpeg.manifest")" = "$(sha256sum "$N/ffmpeg-tux.patch" | cut -d' ' -f1)" ] ||
         die "ffmpeg.manifest is not from this patch; run make linux-ffmpeg linux-ffmpeg-pkg"
     (cd /src && tar --sort=name --mtime=@$SOURCE_DATE_EPOCH --owner=0 --group=0 --numeric-owner --mode=u+rwX,go+rX,go-w \
         -cf - LICENSE host/vcodec_proto.h host/vcodec_dev.h tools/linux/versions.env tools/linux/snapshot-apt.sh tools/linux/build-ffmpeg.sh \
-        tools/linux/build-ffmpeg-pkg.sh tools/linux/henge-ffmpeg tools/linux/hvcodec/ffmpeg-henge.patch \
-        tools/linux/hvcodec/ffmpeg-henge.7.md tools/linux/hvcodec/manpage-check.py tools/linux/hvcodec/henge-codec-info.c \
-        tools/linux/hvcodec/libhvcodec) | xz -9 -T1 > "$N/henge-ffmpeg-src.tar.xz"
+        tools/linux/build-ffmpeg-pkg.sh tools/linux/tux-ffmpeg tools/linux/hvcodec/ffmpeg-tux.patch \
+        tools/linux/hvcodec/ffmpeg-tux.7.md tools/linux/hvcodec/manpage-check.py tools/linux/hvcodec/tux-codec-info.c \
+        tools/linux/hvcodec/libhvcodec) | xz -9 -T1 > "$N/tux-ffmpeg-src.tar.xz"
     cat > "$N/README.txt" <<EOF
-henge-ffmpeg $VER: the source of the binaries in henge-ffmpeg_${VER}_arm64.deb.
+tux-ffmpeg $VER: the source of the binaries in tux-ffmpeg_${VER}_arm64.deb.
 
 ffmpeg-$FFMPEG_VERSION.tar.xz   the unmodified FFmpeg release (https://ffmpeg.org/releases/)
-ffmpeg-henge.patch          the Henge patch to it
+ffmpeg-tux.patch            the Tuxedo patch to it
 build-ffmpeg.sh             the build script
-henge-ffmpeg-src.tar.xz     the Henge files of the build, at their places in the Henge repository:
-                            libhvcodec, henge-codec-info, vcodec_proto.h, vcodec_dev.h, the man page, the package scripts
+tux-ffmpeg-src.tar.xz       the Tuxedo files of the build, at their places in the Tuxedo repository:
+                            libhvcodec, tux-codec-info, vcodec_proto.h, vcodec_dev.h, the man page, the package scripts
 ffmpeg.manifest             the hashes of each part, the configure line, and the Debian package versions
 SHA256SUMS                  the SHA-256 of each file here
 
-To build: unpack henge-ffmpeg-src.tar.xz, put ffmpeg-$FFMPEG_VERSION.tar.xz in build/linux/ffmpeg/src/, and run
+To build: unpack tux-ffmpeg-src.tar.xz, put ffmpeg-$FFMPEG_VERSION.tar.xz in build/linux/ffmpeg/src/, and run
 TUX_LINUX_OUT=\$PWD/build/linux tools/linux/build-ffmpeg.sh, then tools/linux/build-ffmpeg-pkg.sh. They need Docker
 with arm64 containers. The Debian packages come from snapshot.debian.org at the time in versions.env.
 EOF
-    (cd "$N" && sha256sum ffmpeg-$FFMPEG_VERSION.tar.xz ffmpeg-henge.patch build-ffmpeg.sh henge-ffmpeg-src.tar.xz ffmpeg.manifest README.txt > SHA256SUMS)
+    (cd "$N" && sha256sum ffmpeg-$FFMPEG_VERSION.tar.xz ffmpeg-tux.patch build-ffmpeg.sh tux-ffmpeg-src.tar.xz ffmpeg.manifest README.txt > SHA256SUMS)
     if [ -d "$S" ]; then
         # The manifest holds the binaries' hashes. A change only to other files of the offer (LICENSE, the U-Boot line
         # of versions.env) keeps the published directory: it is still the source of those binaries.
@@ -87,12 +87,12 @@ EOF
         echo "added $S"
     fi
 
-    # GPL: each henge-ffmpeg in the pool has the source directory of its own build
-    for deb in "$A"/pool/main/h/henge-ffmpeg/*.deb; do
+    # GPL: each tux-ffmpeg in the pool has the source directory of its own build
+    for deb in "$A"/pool/main/t/tux-ffmpeg/*.deb; do
         [ -e "$deb" ] || continue
         m=$(mktemp)
-        dpkg-deb --fsys-tarfile "$deb" | tar -xOf - ./usr/share/doc/henge-ffmpeg/ffmpeg.manifest > "$m"
-        d=/out/source/ffmpeg-$(sed -n 's/^release=//p' "$m")-henge$(sed -n 's/^henge_rev=//p' "$m")
+        dpkg-deb --fsys-tarfile "$deb" | tar -xOf - ./usr/share/doc/tux-ffmpeg/ffmpeg.manifest > "$m"
+        d=/out/source/ffmpeg-$(sed -n 's/^release=//p' "$m")-tux$(sed -n 's/^tux_rev=//p' "$m")
         cmp -s "$m" "$d/ffmpeg.manifest" || die "$(basename "$deb") has no source directory with its manifest ($d)"
     done
 
@@ -130,10 +130,10 @@ GNUPGHOME=${TUX_APT_GNUPGHOME:-$HOME/.tux-apt-key}
 REMOTE=${TUX_APT_REMOTE:-root@walkies.site:/home/USER/tux-linux-catalogue/files}
 URL=${TUX_APT_URL:-https://walkies.site/tux-linux-catalogue}
 PUBKEY=$HERE/tux-archive.asc
-KEYRING=$HERE/henge-guest/usr/share/keyrings/tux-archive.gpg
-FFDEB=$OUT/ffmpeg/henge-ffmpeg_${VER}_arm64.deb
-CODECDEB=$OUT/codec/henge-codec-dkms_$(sed -n 's/^Version: //p' "$HERE/henge-codec-dkms/DEBIAN/control")_all.deb
-VADEB=$OUT/va/henge-va_$(sed -n 's/^Version: //p' "$HERE/henge-va/DEBIAN/control")_arm64.deb
+KEYRING=$HERE/tux-guest/usr/share/keyrings/tux-archive.gpg
+FFDEB=$OUT/ffmpeg/tux-ffmpeg_${VER}_arm64.deb
+CODECDEB=$OUT/codec/tux-codec-dkms_$(sed -n 's/^Version: //p' "$HERE/tux-codec-dkms/DEBIAN/control")_all.deb
+VADEB=$OUT/va/tux-va_$(sed -n 's/^Version: //p' "$HERE/tux-va/DEBIAN/control")_arm64.deb
 hgpg() { gpg --homedir "$GNUPGHOME" --batch "$@"; }
 fpr_of() { hgpg --with-colons --show-keys "$1" 2>/dev/null | awk -F: '$1 == "fpr" {print $10; exit}'; }
 

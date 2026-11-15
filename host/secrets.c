@@ -1,4 +1,4 @@
-/* /.henge/secrets: the store behind a Linux guest's wallet (henge-secrets). See secrets.h and tools/linux/README.md.
+/* /.tux/secrets: the store behind a Linux guest's wallet (tux-secrets). See secrets.h and tools/linux/README.md.
 
    GET    /state[?since=N]  "locked" or "unlocked"; with since, waits up to 25 s for a change after N.
    GET    /items            one line per item: "ID BASE64(META)". Metadata only, so it works while locked.
@@ -189,7 +189,7 @@ static void state_get(const char *query, HvSecretsReply *out) {
     out->status = 200;
     out->body = strdup(on ? "locked\n" : "unlocked\n");
     out->len = strlen(out->body);
-    snprintf(out->headers, sizeof out->headers, "Content-Type: text/plain\r\nCache-Control: no-store\r\nX-Henge-Seq: %lu\r\n", n);
+    snprintf(out->headers, sizeof out->headers, "Content-Type: text/plain\r\nCache-Control: no-store\r\nX-Tux-Seq: %lu\r\n", n);
 }
 
 void hv_secrets_handle(const char *method, const char *path, const char *query, const char *body, size_t len, HvSecretsReply *out) {

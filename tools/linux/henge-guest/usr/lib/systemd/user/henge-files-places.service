@@ -1,9 +1,0 @@
-[Unit]
-Description=Henge: a Places entry for the folders from the Files app
-
-[Service]
-Type=oneshot
-ExecStart=/usr/lib/henge/henge-files places
-
-[Install]
-WantedBy=default.target

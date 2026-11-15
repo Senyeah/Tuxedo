@@ -1,0 +1,9 @@
+[Unit]
+Description=Tuxedo: a Places entry for the folders from the Files app
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/tux/tux-files places
+
+[Install]
+WantedBy=default.target

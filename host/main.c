@@ -547,7 +547,7 @@ static void *input_thread(void *unused) {
             free(text);
         }
         else if (!strncmp(line, "kbdheight ", 10)) hv_share_set_keyboard_height(atof(line + 10)); /* the device keyboard's part of the screen */
-        else if (!strncmp(line, "getkbd", 6)) { /* what henge-keyboard in a Linux desktop last asked for */
+        else if (!strncmp(line, "getkbd", 6)) { /* what tux-keyboard in a Linux desktop last asked for */
             unsigned long seq;
             int wanted = hv_share_keyboard_wanted(&seq);
             fprintf(stderr, "tuxvm: guest keyboard: %s (request %lu)\n", wanted ? "show" : "hide", seq);

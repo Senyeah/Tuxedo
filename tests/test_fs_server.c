@@ -257,11 +257,11 @@ static void test_init(void) {
     call(FUSE_INIT, 0, &in, sizeof in, NULL, 0);
 }
 
-/* The gen of a folder in .henge-folders, as text. */
+/* The gen of a folder in .tux-folders, as text. */
 static void folder_gen(char *out, const char *name) {
     char want[96];
     snprintf(want, sizeof want, "\"name\":\"%s\",", name);
-    const char *j = read_text(FUSE_ROOT_ID, ".henge-folders"), *at = strstr(j, want), *g = at ? strstr(at, "\"gen\":") : NULL;
+    const char *j = read_text(FUSE_ROOT_ID, ".tux-folders"), *at = strstr(j, want), *g = at ? strstr(at, "\"gen\":") : NULL;
     out[0] = 0;
     if (g) sscanf(g + 6, "%63[0-9]", out);
 }
@@ -270,19 +270,19 @@ static void test_root(void) {
     const char *l = listing(FUSE_ROOT_ID);
     check("root: lists a", strstr(l, "|a|") != NULL, 1);
     check("root: lists ro", strstr(l, "|ro|") != NULL, 1);
-    check("root: lists .henge-folders", strstr(l, ".henge-folders|") != NULL, 1);
-    const char *j = read_text(FUSE_ROOT_ID, ".henge-folders");
-    check(".henge-folders: a is rw", strstr(j, "\"name\":\"a\",\"mode\":\"rw\",\"state\":\"ready\"") != NULL, 1);
-    check(".henge-folders: ro is ro", strstr(j, "\"name\":\"ro\",\"mode\":\"ro\"") != NULL, 1);
-    check(".henge-folders: cow is cow", strstr(j, "\"name\":\"cow\",\"mode\":\"cow\"") != NULL, 1);
-    check(".henge-folders: a's id", strstr(j, "\"id\":\"id-a\"") != NULL, 1);
+    check("root: lists .tux-folders", strstr(l, ".tux-folders|") != NULL, 1);
+    const char *j = read_text(FUSE_ROOT_ID, ".tux-folders");
+    check(".tux-folders: a is rw", strstr(j, "\"name\":\"a\",\"mode\":\"rw\",\"state\":\"ready\"") != NULL, 1);
+    check(".tux-folders: ro is ro", strstr(j, "\"name\":\"ro\",\"mode\":\"ro\"") != NULL, 1);
+    check(".tux-folders: cow is cow", strstr(j, "\"name\":\"cow\",\"mode\":\"cow\"") != NULL, 1);
+    check(".tux-folders: a's id", strstr(j, "\"id\":\"id-a\"") != NULL, 1);
     check("root: a missing name", lookup(FUSE_ROOT_ID, "nope"), -LX_ENOENT);
     FuseMkdirIn m = {0755, 0};
     check("root: no mkdir", name_call(FUSE_MKDIR, FUSE_ROOT_ID, &m, sizeof m, "x"), -LX_EPERM);
     check("root: no unlink of a folder", name_call(FUSE_UNLINK, FUSE_ROOT_ID, NULL, 0, "a"), -LX_EPERM);
     check("root: no rmdir of a folder", name_call(FUSE_RMDIR, FUSE_ROOT_ID, NULL, 0, "a"), -LX_EPERM);
     check("root: no rename of a folder", rename2(FUSE_ROOT_ID, "a", FUSE_ROOT_ID, "z", 0), -LX_EPERM);
-    check(".henge-folders: no write", open_node(2, 1, 0), -LX_EACCES);
+    check(".tux-folders: no write", open_node(2, 1, 0), -LX_EACCES);
     check("root: no create", create_in(FUSE_ROOT_ID, "x", 1, NULL), -LX_EPERM);
     check("root: getattr", getattr(FUSE_ROOT_ID), 0);
     check("root: a directory", last_attr.mode, S_IFDIR | 0555);
@@ -364,7 +364,7 @@ static void test_escapes(void) {
     FuseLinkIn l = {(uint64_t)f};
     check("hard link from a folder into another", name_call(FUSE_LINK, rw2, &l, sizeof l, "stolen"), -LX_EXDEV);
     l.oldnodeid = 2;
-    check("hard link of .henge-folders", name_call(FUSE_LINK, a, &l, sizeof l, "h"), -LX_EPERM);
+    check("hard link of .tux-folders", name_call(FUSE_LINK, a, &l, sizeof l, "h"), -LX_EPERM);
     l.oldnodeid = rw2;
     check("hard link of a folder's root", name_call(FUSE_LINK, a, &l, sizeof l, "h"), -LX_EPERM);
     check("no hard link made in b", host_exists("b/stolen"), 0);
@@ -744,7 +744,7 @@ static void test_folder_changes(void) {
     check("offline: getattr inside", getattr((uint64_t)af), -LX_EIO);
     check("offline: read from an open file", read_fh((uint64_t)af, (uint64_t)afh, 0, 10), -LX_EIO);
     check("offline: opendir", open_node(a, 0, 1), -LX_EIO);
-    check("offline: .henge-folders says so", strstr(read_text(FUSE_ROOT_ID, ".henge-folders"), "\"name\":\"a\",\"mode\":\"rw\",\"state\":\"unavailable\"") != NULL, 1);
+    check("offline: .tux-folders says so", strstr(read_text(FUSE_ROOT_ID, ".tux-folders"), "\"name\":\"a\",\"mode\":\"rw\",\"state\":\"unavailable\"") != NULL, 1);
     hv_fs_folder_online(hv_fs_folder_find("a"), 1);
     check("online: lookup", lookup(a, "f"), af);
     check("online: read from the open file", read_fh((uint64_t)af, (uint64_t)afh, 0, 10), 2);
@@ -759,7 +759,7 @@ static void test_folder_changes(void) {
     hv_fs_folder_set(1, NULL, "b", to, HV_FS_RW);
     check("picked again: old nodes stale", getattr((uint64_t)bn), -LX_ESTALE);
     folder_gen(gen1, "b");
-    check("picked again: .henge-folders has a new gen", strcmp(gen0, gen1) != 0 && gen1[0], 1);
+    check("picked again: .tux-folders has a new gen", strcmp(gen0, gen1) != 0 && gen1[0], 1);
     hv_fs_folder_set(1, NULL, "b", to, HV_FS_RO);
     folder_gen(gen2, "b");
     check("a new mode: the gen stays", strcmp(gen1, gen2), 0);
@@ -779,7 +779,7 @@ static void test_table(void) {
     check("table: a name of 65 bytes", hv_fs_folder_set(7, NULL, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", p, HV_FS_RW), -1);
     check("table: a name another folder has", hv_fs_folder_set(7, NULL, "a", p, HV_FS_RW), -1);
     check("table: index 8", hv_fs_folder_set(HV_FS_MAX_FOLDERS, NULL, "z", p, HV_FS_RW), -1);
-    check("table: a missing path", hv_fs_folder_set(7, NULL, "z", "/nonexistent/henge", HV_FS_RW), -1);
+    check("table: a missing path", hv_fs_folder_set(7, NULL, "z", "/nonexistent/tux", HV_FS_RW), -1);
     check("table: a bad mode", hv_fs_folder_set(7, NULL, "z", p, 3), -1);
     check("table: modes", hv_fs_mode_parse("ro") * 100 + hv_fs_mode_parse("cow") * 10 + hv_fs_mode_parse("rw"), 12);
     check("table: no mode x", hv_fs_mode_parse("x"), -1);
@@ -836,14 +836,14 @@ static void test_app(void) {
     hv_fs_set_hook(NULL, NULL);
     hv_fs_folder_kind(a, HV_FS_LOCAL);
 
-    const char *j = read_text(FUSE_ROOT_ID, ".henge-folders");
-    check(".henge-folders: orig 0", strstr(j, "\"name\":\"cow\",") && strstr(strstr(j, "\"name\":\"cow\","), "\"orig\":0") != NULL, 1);
+    const char *j = read_text(FUSE_ROOT_ID, ".tux-folders");
+    check(".tux-folders: orig 0", strstr(j, "\"name\":\"cow\",") && strstr(strstr(j, "\"name\":\"cow\","), "\"orig\":0") != NULL, 1);
     unsigned long seq = 0;
     free(hv_fs_folders_json(&seq));
     check("touch", hv_fs_folder_touch(cw), 0);
     check("touch: news", hv_fs_folders_wait(seq, 50), seq + 1);
-    j = read_text(FUSE_ROOT_ID, ".henge-folders");
-    check(".henge-folders: orig 1 after a touch", strstr(strstr(j, "\"name\":\"cow\","), "\"orig\":1") != NULL, 1);
+    j = read_text(FUSE_ROOT_ID, ".tux-folders");
+    check(".tux-folders: orig 1 after a touch", strstr(strstr(j, "\"name\":\"cow\","), "\"orig\":1") != NULL, 1);
     check("touch: an empty index", hv_fs_folder_touch(6), -1);
 
     check("ask: not for a Read-write folder", hv_fs_folder_ask(a, HV_FS_ASK_EXPORT), -1);
@@ -852,7 +852,7 @@ static void test_app(void) {
     check("ask: export", n > 0, 1);
     char want[96];
     snprintf(want, sizeof want, "\"ask\":{\"n\":%ld,\"do\":\"export\"}", n);
-    check(".henge-folders: the ask", strstr(read_text(FUSE_ROOT_ID, ".henge-folders"), want) != NULL, 1);
+    check(".tux-folders: the ask", strstr(read_text(FUSE_ROOT_ID, ".tux-folders"), want) != NULL, 1);
     int ok = -1;
     char *text = NULL;
     check("ask: no answer yet", hv_fs_folder_answered(cw, n, &ok, &text), 0);
@@ -864,10 +864,10 @@ static void test_app(void) {
     check("answered: ok", ok, 1);
     check("answered: the text", text && !strcmp(text, "Exports/cow-14-11-2026-1200\n3 files"), 1);
     free(text);
-    check(".henge-folders: no ask once answered", strstr(read_text(FUSE_ROOT_ID, ".henge-folders"), "\"ask\"") == NULL, 1);
+    check(".tux-folders: no ask once answered", strstr(read_text(FUSE_ROOT_ID, ".tux-folders"), "\"ask\"") == NULL, 1);
     long d = hv_fs_folder_ask(cw, HV_FS_ASK_DISCARD);
     check("ask: discard has a new number", d > n, 1);
-    check(".henge-folders: discard", strstr(read_text(FUSE_ROOT_ID, ".henge-folders"), "\"do\":\"discard\"") != NULL, 1);
+    check(".tux-folders: discard", strstr(read_text(FUSE_ROOT_ID, ".tux-folders"), "\"do\":\"discard\"") != NULL, 1);
     check("answered: a new ask leaves the last answer", hv_fs_folder_answered(cw, n, &ok, NULL), 1);
     check("ask: taken back", hv_fs_folder_ask(cw, HV_FS_ASK_NONE), 0);
     check("answered: a taken-back ask is gone", hv_fs_folder_answered(cw, d, &ok, NULL), -1);
@@ -896,7 +896,7 @@ static void run(const char *name) {
 }
 
 int main(void) {
-    snprintf(base, sizeof base, "/tmp/henge-fs-XXXXXX");
+    snprintf(base, sizeof base, "/tmp/tux-fs-XXXXXX");
     if (!mkdtemp(base)) return 1;
     static const char *const dirs[] = {"a", "a/d", "b", "ro", "ro/kd", "cow", "cow/kd", "outside", "mv", "del"};
     for (size_t i = 0; i < sizeof dirs / sizeof *dirs; i++) host_mkdir(dirs[i]);
@@ -943,7 +943,7 @@ int main(void) {
     char cs[PATH_MAX];
     if (case_sensitive_image(cs)) {
         check("case-sensitive image", hv_fs_folder_set(7, NULL, "cs", cs, HV_FS_RW), 0);
-        check(".henge-folders: cs is case-sensitive", strstr(read_text(FUSE_ROOT_ID, ".henge-folders"), "\"name\":\"cs\",\"mode\":\"rw\",\"state\":\"ready\",\"case\":\"sensitive\"") != NULL, 1);
+        check(".tux-folders: cs is case-sensitive", strstr(read_text(FUSE_ROOT_ID, ".tux-folders"), "\"name\":\"cs\",\"mode\":\"rw\",\"state\":\"ready\",\"case\":\"sensitive\"") != NULL, 1);
         test_case("a case-sensitive image", folder_node("cs"), 1);
         hv_fs_folder_clear(7);
         char cmd[PATH_MAX + 64];
@@ -952,7 +952,7 @@ int main(void) {
     } else {
         fprintf(stderr, "test_fs_server: no case-sensitive image (hdiutil failed); its checks are skipped\n");
     }
-    check(".henge-folders: b is case-insensitive", strstr(read_text(FUSE_ROOT_ID, ".henge-folders"), "\"name\":\"b\",\"mode\":\"rw\",\"state\":\"ready\",\"case\":\"insensitive\"") != NULL, 1);
+    check(".tux-folders: b is case-insensitive", strstr(read_text(FUSE_ROOT_ID, ".tux-folders"), "\"name\":\"b\",\"mode\":\"rw\",\"state\":\"ready\",\"case\":\"insensitive\"") != NULL, 1);
     test_app();
     test_folder_changes();
     test_table();

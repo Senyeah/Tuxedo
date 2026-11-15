@@ -292,7 +292,7 @@ enum TuxLog {
         if ring.count > ringLimit { ring.removeFirst(ring.count - ringLimit) }
         ringLock.unlock()
 
-        // The C side (tux-ios-jit.c, henge-display.c) writes to os_log itself as
+        // The C side (tux-ios-jit.c, tux-display.c) writes to os_log itself as
         // well as stderr, because those are the lines most worth surviving a hard
         // crash. Mirroring them again here would double every one of them in
         // Console.app.

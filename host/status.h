@@ -5,7 +5,7 @@
 
 /* The device's battery, screen brightness, volume and time zone, for a Linux guest (LINUX-PLAN-13).
    Any thread sets them, before or while a machine runs. The board takes the battery and volume on
-   CPU 0; the share server gives the brightness, time and time zone to the guest's henge-status.
+   CPU 0; the share server gives the brightness, time and time zone to the guest's tux-status.
    Guest changes to the brightness and volume come back as requests for the host to apply. */
 
 #define HV_TZ_MAX 64

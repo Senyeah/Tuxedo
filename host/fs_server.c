@@ -1,6 +1,6 @@
 /* The file server for folders from the Files app (fs_server.h).
 
-   Node ids: 1 is the root the server makes, 2 is .henge-folders, 3 to 10 are the folders' own roots (fixed, so a
+   Node ids: 1 is the root the server makes, 2 is .tux-folders, 3 to 10 are the folders' own roots (fixed, so a
    folder picked again keeps its place in the guest), and the rest are entries below them. An entry's node keeps
    the host's device and inode and its path below the folder, never a descriptor: a path is opened below the
    folder's descriptor at each use, and an object that is no longer the node's inode is ESTALE, so the guest looks
@@ -38,7 +38,7 @@
 #define MAX_PENDING 4096
 #define MAX_FDS 512
 #define REQ_MAX (16 * 1024) /* a request's header and arguments: two names and a link's text at most */
-#define FOLDERS_FILE ".henge-folders"
+#define FOLDERS_FILE ".tux-folders"
 
 /* ---- the folder table ---- */
 
@@ -77,7 +77,7 @@ static void changed_locked(void) {
     pthread_cond_broadcast(&fcond);
 }
 
-/* One path part, at most HV_FS_NAME_MAX bytes, no leading '.' (so .henge-folders stays the server's) and no
+/* One path part, at most HV_FS_NAME_MAX bytes, no leading '.' (so .tux-folders stays the server's) and no
    control characters. */
 static int folder_name_ok(const char *s) {
     if (!s || !safe_name_ok(s) || strlen(s) > HV_FS_NAME_MAX || s[0] == '.') return 0;
@@ -250,7 +250,7 @@ int hv_fs_folder_answer(int index, long ask, int ok, const char *text) {
     if (!rc) {
         f->answered = ask, f->answer_ok = !!ok;
         snprintf(f->answer, sizeof f->answer, "%s", text ? text : "");
-        f->ask = 0, f->ask_what = 0; /* out of .henge-folders, so a helper that starts again does not do it twice */
+        f->ask = 0, f->ask_what = 0; /* out of .tux-folders, so a helper that starts again does not do it twice */
         changed_locked();
     }
     pthread_mutex_unlock(&fmu);
@@ -1449,7 +1449,7 @@ static size_t op_read(Req *r) {
     if (a.size > HV_FS_MAX_IO) return reply_err(r->o, LX_EINVAL);
     size_t room = r->o->cap > sizeof(FuseOutHeader) ? r->o->cap - sizeof(FuseOutHeader) : 0;
     size_t want = a.size < room ? a.size : room;
-    if (!a.fh) { /* .henge-folders */
+    if (!a.fh) { /* .tux-folders */
         if (r->h.nodeid != ID_FILE) return reply_err(r->o, LX_EBADF);
         char *j = hv_fs_folders_json(NULL);
         if (!j) return reply_err(r->o, LX_ENOMEM);
@@ -1611,7 +1611,7 @@ static size_t root_listing(Req *r, uint64_t from, uint32_t size, int plus) {
     uint8_t *buf = malloc(size ? size : 1);
     if (!buf) return reply_err(r->o, LX_ENOMEM);
     size_t used = 0;
-    /* 0 ".", 1 "..", 2 .henge-folders, then the folders by index */
+    /* 0 ".", 1 "..", 2 .tux-folders, then the folders by index */
     for (uint64_t i = from; i < 3 + HV_FS_MAX_FOLDERS; i++) {
         Ctx f = {.rootfd = -1};
         const char *name = i == 0 ? "." : i == 1 ? ".." : FOLDERS_FILE;

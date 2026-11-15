@@ -11,7 +11,7 @@ which must end tuxvm with status 0. With --no-reboot, reboot -f must end it
 with status 3 instead. --fatal sends tuxvm SIGILL at the prompt instead: its
 crash report must still reach stderr with the terminal in raw mode. --qemu runs
 the same checks on QEMU's virt machine (hvf), and --qemu --tux-dtb gives QEMU
-Henge's device tree (E8 step 1).
+Tuxedo's device tree (E8 step 1).
 --direct --disk: the same kernel with an APFS clone of debian-console.img as the
 root disk (E9). After autologin it checks systemd, the disk, the page size, the
 CPU count, the network (10.0.2.15, ping 10.0.2.2, DNS), the virtio entropy
@@ -412,11 +412,11 @@ def disk(args, times):
                       limit("running"), lambda o: o == "running", "systemd")
                 times["running"] = time.monotonic() - t
                 t = time.monotonic()
-                check(p, "dpkg-query -W -f='${db:Status-Abbrev} ${Package}\\n' henge-guest", limit("command"),
-                      lambda o: o == "ii  henge-guest", "henge-guest package")
-                check(p, "systemctl is-enabled henge-firstboot.service henge-grow.service "
-                      "home-henge-Henge.automount", limit("command"),
-                      lambda o: o.split() == ["enabled", "enabled", "enabled"], "henge-guest units enabled")
+                check(p, "dpkg-query -W -f='${db:Status-Abbrev} ${Package}\\n' tux-guest", limit("command"),
+                      lambda o: o == "ii  tux-guest", "tux-guest package")
+                check(p, "systemctl is-enabled tux-firstboot.service tux-grow.service "
+                      "home-henge-Tux.automount", limit("command"),
+                      lambda o: o.split() == ["enabled", "enabled", "enabled"], "tux-guest units enabled")
                 check(p, "lsblk -rno NAME,TYPE,MOUNTPOINTS /dev/vda", limit("command"),
                       lambda o: "vda1 part /" in o.split("\n"), "root on virtio-blk")
                 check(p, "getconf PAGESIZE", limit("command"), lambda o: o == "16384", "page size")

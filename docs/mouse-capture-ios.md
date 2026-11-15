@@ -33,7 +33,7 @@ config:
 flowchart LR
     dev[USB trackpad] --> bb[backboardd]
     bb --> at[AssistiveTouch pointer]
-    bb --> app[UIKit event queue in Henge]
+    bb --> app[UIKit event queue in Tuxedo]
     app --> gc[GCMouse handlers]
     app --> touch[Trackpad.Surface touches]
     at -->|simulated finger| touch

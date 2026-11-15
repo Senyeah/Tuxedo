@@ -7,7 +7,7 @@
 
 Boots a clone of debian-desktop.img at --display 1920x1080 with --share. A `mode WxH SCALE` line in
 HV_INPUT_FILE must, within 3 s, give labwc a framebuffer of that size and make wlr-randr report the
-scale (henge-display in the guest does this). A guest process samples the DRM framebuffer list every
+scale (tux-display in the guest does this). A guest process samples the DRM framebuffer list every
 100 ms; the test prints the peak number of scanout-sized framebuffers for each change.
 The image needs wlr-randr (--image FILE names a rebuilt copy). The shared image never changes.
 """
@@ -130,7 +130,7 @@ def run(p, args, infile, err):
     if rc:
         raise Fail("the image has no wlr-randr; rebuild it (build-image.sh --desktop) and pass --image")
     end = time.monotonic() + 60
-    while time.monotonic() < end:  # labwc and henge-display settle
+    while time.monotonic() < end:  # labwc and tux-display settle
         out = randr(p)
         if current(out) == ("1920x1080", "1.000000"):
             break
@@ -138,8 +138,8 @@ def run(p, args, infile, err):
     else:
         raise Fail("labwc is not up at 1920x1080 scale 1 within 60 s; wlr-randr says:\n" + out)
     print("ok   boot: labwc at 1920x1080, scale 1")
-    out, _ = sh(p, "pgrep -a -f henge-display | head -n 3; cat /run/user/1000/henge-display.log")
-    print("--- henge-display ---\n" + out.strip())
+    out, _ = sh(p, "pgrep -a -f tux-display | head -n 3; cat /run/user/1000/tux-display.log")
+    print("--- tux-display ---\n" + out.strip())
 
     b64 = base64.b64encode(WATCH.encode()).decode()
     sh(p, f"echo {b64} | base64 -d > /tmp/fbwatch.py; : > /tmp/fbwatch.log; chmod 644 /tmp/fbwatch.log")

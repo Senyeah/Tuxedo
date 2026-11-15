@@ -1,9 +1,0 @@
-[Unit]
-Description=Henge shared folder (on first use)
-
-[Automount]
-Where=/home/henge/Henge
-TimeoutIdleSec=0
-
-[Install]
-WantedBy=multi-user.target

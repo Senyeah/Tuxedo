@@ -1,0 +1,14 @@
+[Unit]
+Description=Tuxedo first-boot setup
+DefaultDependencies=no
+ConditionPathExists=!/var/lib/tux/firstboot-done
+After=local-fs.target
+Before=multi-user.target systemd-networkd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/tux/tux-firstboot
+
+[Install]
+WantedBy=multi-user.target

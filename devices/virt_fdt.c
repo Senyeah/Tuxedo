@@ -59,7 +59,7 @@ uint8_t *hv_virt_build_fdt(const HvVirt *b, const char *bootargs, uint64_t initr
     hv_fdt_prop_u32(f, "cpu_on", 0xc4000003);
     hv_fdt_prop_u32(f, "cpu_off", 0x84000002);
     hv_fdt_prop_u32(f, "cpu_suspend", 0xc4000001);
-    hv_fdt_prop_str(f, "method", "hvc"); /* SMC is undefined in Henge */
+    hv_fdt_prop_str(f, "method", "hvc"); /* SMC is undefined in Tuxedo */
     const char *psci[3] = {"arm,psci-1.0", "arm,psci-0.2", "arm,psci"};
     hv_fdt_prop_strs(f, "compatible", psci, 3);
     hv_fdt_end(f);
@@ -127,7 +127,7 @@ uint8_t *hv_virt_build_fdt(const HvVirt *b, const char *bootargs, uint64_t initr
     uint8_t init = b->backlight.reg[0], ctrl = 0x01; /* lp855x reads both as one byte */
     hv_fdt_prop(f, "init-brt", &init, 1);
     hv_fdt_prop(f, "dev-ctrl", &ctrl, 1);
-    hv_fdt_prop_str(f, "bl-name", "henge-backlight");
+    hv_fdt_prop_str(f, "bl-name", "tux-backlight");
     hv_fdt_prop_u32(f, "reg", VIRT_I2C_BACKLIGHT);
     hv_fdt_prop_str(f, "compatible", "ti,lp8556");
     hv_fdt_end(f);

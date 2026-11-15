@@ -67,7 +67,7 @@ Magic Trackpad II emulation.
 
 `host/share.c` is a small WebDAV server. The guest reaches it at 10.0.2.4, which the
 user-mode network hands to a Unix socket in the app's storage: no TCP port is open,
-so other apps on the device can't reach it. Under `/.henge/` it also has the
+so other apps on the device can't reach it. Under `/.tux/` it also has the
 clipboard and the display size. See [Sharing, sound and memory](#sharing-sound-and-memory).
 
 ## Linux guests
@@ -140,7 +140,7 @@ boot is for tests and bring-up. The app always boots through U-Boot.
 2. U-Boot prints on the PL011, scans PCIe, starts virtio and finds
    `/boot/extlinux/extlinux.conf` on the disk. Tuxedo's build has no countdown.
 3. U-Boot loads the kernel and the initrd and jumps to the kernel with the tree in `x0`.
-4. Linux mounts the root from virtio block. `henge-grow.service` then grows the partition
+4. Linux mounts the root from virtio block. `tux-grow.service` then grows the partition
    and the file system when the disk file has grown.
 
 On the Mac tool, one CPU reaches the login prompt in 4.6 to 4.8 s from a warm start and 6
@@ -184,13 +184,13 @@ otherwise, at every session start.
 The host sets the screen size with `hv_vm_set_display_mode`, and the device tells the guest
 through a display change. The app's `DisplayModePolicy` picks the size (the phone's native
 size with rotation, an external display, or a fixed size). The share server answers
-`GET /.henge/display` with `W H SCALE`, and `henge-display` in the desktop image follows it
+`GET /.tux/display` with `W H SCALE`, and `tux-display` in the desktop image follows it
 within 0.5 s. With only fbcon as a client (the console image), the guest accepts only modes up
 to its boot size.
 
 ### Sharing, sound and memory
 
 The shared folder is the WebDAV server of `host/share.c`, at `10.0.2.4`. The guest mounts it
-at `~/Henge` with davfs2, and `henge-clipboard` speaks its clipboard protocol. Sound is `snd_virtio` on `host/audio_mac.c`. Virtio block offers
+at `~/Tux` with davfs2, and `tux-clipboard` speaks its clipboard protocol. Sound is `snd_virtio` on `host/audio_mac.c`. Virtio block offers
 discard on this board, and the host punches holes in the disk file. The balloon device exists,
 and Linux's `virtio_balloon` binds to it, but no policy in the app drives it yet.

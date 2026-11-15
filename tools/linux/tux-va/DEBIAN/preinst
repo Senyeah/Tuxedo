@@ -1,0 +1,9 @@
+#!/bin/sh
+set -e
+D=/usr/lib/aarch64-linux-gnu/dri
+case "$1" in
+    install|upgrade)
+        # Mesa's link moves aside, also one that mesa-va-drivers installs later
+        dpkg-divert --package tux-va --add --rename --divert $D/mesa_virtio_gpu_drv_video.so $D/virtio_gpu_drv_video.so >/dev/null
+        ;;
+esac

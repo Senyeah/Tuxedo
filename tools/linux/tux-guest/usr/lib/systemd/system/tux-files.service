@@ -1,0 +1,13 @@
+[Unit]
+Description=Tuxedo folders from the Files app at /media/tux
+ConditionDirectoryNotEmpty=/sys/fs/virtiofs
+Requires=run-tux-files.mount
+After=run-tux-files.mount network.target
+
+[Service]
+ExecStart=/usr/lib/tux/tux-files run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

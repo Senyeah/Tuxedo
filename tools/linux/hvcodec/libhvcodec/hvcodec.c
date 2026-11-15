@@ -117,7 +117,7 @@ static int connect_tcp(const char *spec) {
 HvClient *hv_client_open(const char *addr, char *err, size_t errlen) {
     char note[200] = "";
     int fd = -1, dev = 0;
-    if (!addr || !*addr) addr = getenv("HENGE_VCODEC");
+    if (!addr || !*addr) addr = getenv("TUX_VCODEC");
     if (!addr || !*addr) {
 #ifdef HAVE_DEV
         fd = open("/dev/hvcodec", O_RDWR | O_CLOEXEC);
@@ -131,7 +131,7 @@ HvClient *hv_client_open(const char *addr, char *err, size_t errlen) {
 #ifdef HAVE_DEV
         fd = open(addr, O_RDWR | O_CLOEXEC);
         if (fd < 0) {
-            set_err(err, errlen, "cannot open %s (%s): is henge-codec-dkms installed and the machine running with the codec device on?", addr,
+            set_err(err, errlen, "cannot open %s (%s): is tux-codec-dkms installed and the machine running with the codec device on?", addr,
                     strerror(errno));
             return NULL;
         }
@@ -143,7 +143,7 @@ HvClient *hv_client_open(const char *addr, char *err, size_t errlen) {
     }
     if (!dev) fd = !strncmp(addr, "unix:", 5) ? connect_unix(addr + 5) : connect_tcp(addr);
     if (fd < 0) {
-        set_err(err, errlen, "cannot connect to the Henge codec service at %s (%s): is the machine running with the video codecs on?", addr, strerror(errno));
+        set_err(err, errlen, "cannot connect to the Tuxedo codec service at %s (%s): is the machine running with the video codecs on?", addr, strerror(errno));
         return NULL;
     }
     if (dev) {
@@ -277,7 +277,7 @@ static int broken(HvClient *c, HvReply *r) {
     if (r) {
         r->status = HV_CLIENT_E_IO;
         r->len = 0;
-        snprintf(r->err, sizeof r->err, "the connection to the Henge codec service at %s failed", c->addr);
+        snprintf(r->err, sizeof r->err, "the connection to the Tuxedo codec service at %s failed", c->addr);
     }
     return HV_CLIENT_E_IO;
 }

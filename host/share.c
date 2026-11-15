@@ -4,11 +4,11 @@
    network drive (davfs2). The network hands each connection the guest makes to
    10.0.2.4:80 to a Unix socket in the app's own storage: no TCP port is open, so other apps can't reach this.
 
-   /.henge/ is not part of the folder. It has the clipboard, where the helper in the guest (henge-clipboard)
+   /.tux/ is not part of the folder. It has the clipboard, where the helper in the guest (tux-clipboard)
    waits for the device's clipboard and sends the guest's.
-   It also serves the Linux display follower: GET /.henge/display is "W H SCALE"; henge-status:
-   GET /.henge/status is the device's time, time zone and brightness; and henge-files: GET /.henge/folders is the
-   Files folders' table (fs_server.h), and POST /.henge/folders/done answers the app's export or discard.
+   It also serves the Linux display follower: GET /.tux/display is "W H SCALE"; tux-status:
+   GET /.tux/status is the device's time, time zone and brightness; and tux-files: GET /.tux/folders is the
+   Files folders' table (fs_server.h), and POST /.tux/folders/done answers the app's export or discard.
 
    Locks are accepted but not enforced: a WebDAV client may write only to a server that offers them, and there is one client. */
 #include "share.h"
@@ -38,7 +38,9 @@
 
 #define HEAD_MAX (32 * 1024)
 #define SMALL_BODY_MAX (16 * 1024 * 1024) /* a clipboard, or a request's XML */
-#define TEMP_PREFIX ".henge-put-"
+#define TEMP_PREFIX ".tux-put-"
+#define TUX_PREFIX "/.tux/"
+#define WALLET_PREFIX "/.tux/secrets"
 
 static int rootfd = -1; /* the folder: every path opens below it (safe_path.h) */
 
@@ -75,7 +77,7 @@ long hv_share_helper_seen(void) {
     return ago;
 }
 
-/* ---- the keyboard: PUT /.henge/keyboard from a Linux desktop (henge-keyboard) ---- */
+/* ---- the keyboard: PUT /.tux/keyboard from a Linux desktop (tux-keyboard) ---- */
 
 static int kbd_wanted; /* the guest's last request */
 static unsigned long kbd_seq;
@@ -613,7 +615,7 @@ static int do_lock(Conn *c, Request *r) {
     if (open_ && end && (size_t)(end - open_) < sizeof token) { /* a refresh keeps its token */
         snprintf(token, sizeof token, "%.*s", (int)(end - open_ - 1), open_ + 1);
     } else {
-        snprintf(token, sizeof token, "opaquelocktoken:henge-%lx-%lx", (unsigned long)time(NULL), __atomic_add_fetch(&counter, 1, __ATOMIC_RELAXED));
+        snprintf(token, sizeof token, "opaquelocktoken:tux-%lx-%lx", (unsigned long)time(NULL), __atomic_add_fetch(&counter, 1, __ATOMIC_RELAXED));
     }
     int status = 200;
     struct stat st;
@@ -638,7 +640,7 @@ static int do_lock(Conn *c, Request *r) {
     return rc;
 }
 
-/* ---- /.henge/ ---- */
+/* ---- /.tux/ ---- */
 
 /* GET ?since=N waits up to 25 s for a newer clipboard than N. */
 static int clipboard_get(Conn *c, Request *r) {
@@ -659,7 +661,7 @@ static int clipboard_get(Conn *c, Request *r) {
     char *text = seq > since && device_clip ? strdup(device_clip) : NULL;
     pthread_mutex_unlock(&clip_mu);
     char headers[64];
-    snprintf(headers, sizeof headers, "X-Henge-Seq: %lu\r\n", seq);
+    snprintf(headers, sizeof headers, "X-Tux-Seq: %lu\r\n", seq);
     int rc = text ? respond(c, r, 200, "OK", headers, text, strlen(text)) : respond(c, r, 204, "No Content", headers, NULL, 0);
     free(text);
     return rc;
@@ -701,7 +703,7 @@ static int keyboard_get(Conn *c, Request *r) {
     pthread_mutex_unlock(&clip_mu);
     char body[32], headers[96];
     int n = snprintf(body, sizeof body, "height %d.%03d\n", h / 1000, h % 1000);
-    snprintf(headers, sizeof headers, "Content-Type: text/plain\r\nCache-Control: no-store\r\nX-Henge-Seq: %lu\r\n", seq);
+    snprintf(headers, sizeof headers, "Content-Type: text/plain\r\nCache-Control: no-store\r\nX-Tux-Seq: %lu\r\n", seq);
     return respond(c, r, 200, "OK", headers, body, (size_t)n);
 }
 
@@ -731,11 +733,11 @@ static int status_get(Conn *c, Request *r) {
     int n = snprintf(body, sizeof body, "time %lld.%03ld\n", (long long)ts.tv_sec, ts.tv_nsec / 1000000);
     if (v.tz[0] && hv_status_valid_timezone(v.tz)) n += snprintf(body + n, sizeof body - (size_t)n, "tz %s\n", v.tz);
     if (v.brightness >= 0) n += snprintf(body + n, sizeof body - (size_t)n, "brightness %.3f\n", v.brightness);
-    snprintf(headers, sizeof headers, "Content-Type: text/plain\r\nCache-Control: no-store\r\nX-Henge-Seq: %lu\r\n", v.seq);
+    snprintf(headers, sizeof headers, "Content-Type: text/plain\r\nCache-Control: no-store\r\nX-Tux-Seq: %lu\r\n", v.seq);
     return respond(c, r, 200, "OK", headers, body, (size_t)n);
 }
 
-/* The Files folders, as .henge-folders has them. ?since=N waits up to 120 s for news after N (a folder added,
+/* The Files folders, as .tux-folders has them. ?since=N waits up to 120 s for news after N (a folder added,
    removed, renamed, a new mode, offline or online); with no since the answer comes at once. */
 static int folders_get(Conn *c, Request *r) {
     if (body_discard(c, r) != 0) return -1;
@@ -744,13 +746,13 @@ static int folders_get(Conn *c, Request *r) {
     unsigned long seq = 0;
     char *body = hv_fs_folders_json(&seq), headers[128];
     if (!body) return respond_empty(c, r, 500, "Internal Server Error");
-    snprintf(headers, sizeof headers, "Content-Type: application/json\r\nCache-Control: no-store\r\nX-Henge-Seq: %lu\r\n", seq);
+    snprintf(headers, sizeof headers, "Content-Type: application/json\r\nCache-Control: no-store\r\nX-Tux-Seq: %lu\r\n", seq);
     int rc = respond(c, r, 200, "OK", headers, body, strlen(body));
     free(body);
     return rc;
 }
 
-/* henge-files' answer to an ask in .henge-folders: POST /.henge/folders/done?index=I&ask=N&ok=0|1, with the text as
+/* tux-files' answer to an ask in .tux-folders: POST /.tux/folders/done?index=I&ask=N&ok=0|1, with the text as
    the body. 409 for an ask that is no longer open. */
 static int folders_done(Conn *c, Request *r) {
     size_t len;
@@ -783,8 +785,8 @@ static int secrets_route(Conn *c, Request *r, const char *path) {
     return rc;
 }
 
-static int serve_henge(Conn *c, Request *r) {
-    const char *what = r->path + strlen("/.henge/");
+static int serve_tux(Conn *c, Request *r) {
+    const char *what = r->path + strlen(TUX_PREFIX);
     if (!strcmp(what, "display") && !strcmp(r->method, "GET")) {
         if (body_discard(c, r) != 0) return -1;
         uint32_t w, h;
@@ -885,13 +887,14 @@ static int read_request(Conn *c, Request *r) {
 }
 
 static int handle(Conn *c, Request *r) {
-    int wallet = !strncmp(r->path, "/.henge/secrets", 15) && (!r->path[15] || r->path[15] == '/');
+    const size_t wl = strlen(WALLET_PREFIX);
+    int wallet = !strncmp(r->path, WALLET_PREFIX, wl) && (!r->path[wl] || r->path[wl] == '/');
     if (wallet != c->wallet) { /* the wallet only on its own port, and nothing else there */
         if (body_discard(c, r) != 0) return -1;
         return respond_empty(c, r, 404, "Not Found");
     }
-    if (wallet) return secrets_route(c, r, r->path + 15);
-    if (!strncmp(r->path, "/.henge/", 8)) return serve_henge(c, r);
+    if (wallet) return secrets_route(c, r, r->path + wl);
+    if (!strncmp(r->path, TUX_PREFIX, strlen(TUX_PREFIX))) return serve_tux(c, r);
     const char *m = r->method;
     if (!strcmp(m, "OPTIONS")) {
         if (body_discard(c, r) != 0) return -1;

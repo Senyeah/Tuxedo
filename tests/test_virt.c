@@ -28,7 +28,7 @@ static void check(const char *what, uint64_t got, uint64_t want) {
 static HvMachine m;
 static HvCpu cpus[4];
 static HvVirt b;
-static char dir[] = "/tmp/henge-virt-XXXXXX";
+static char dir[] = "/tmp/tux-virt-XXXXXX";
 
 static uint32_t rd32(HvMachine *mm, uint64_t pa) {
     uint32_t v = 0;
@@ -299,7 +299,7 @@ static void check_nodes(const char *dts, int ncpus) {
     check("battery supplied by the mains", strstr(dts, "power-supplies = <0x04>;") != NULL, 1);
     check("backlight node", strstr(dts, "backlight@2c {") != NULL, 1);
     check("backlight compatible", strstr(dts, "compatible = \"ti,lp8556\";") != NULL, 1);
-    check("backlight name", strstr(dts, "bl-name = \"henge-backlight\";") != NULL, 1);
+    check("backlight name", strstr(dts, "bl-name = \"tux-backlight\";") != NULL, 1);
     check("backlight level at boot is one byte", strstr(dts, "init-brt = [") != NULL, 1);
     check("mains node", strstr(dts, "ac-power {") != NULL, 1);
     check("mains on GPIO pin 4", strstr(dts, "gpios = <0x03 0x04 0x00>;") != NULL, 1);

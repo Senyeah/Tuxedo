@@ -2,7 +2,7 @@
 """Runs in the guest (or a Debian container) for secrets-check.py: one step of the wallet through its D-Bus
 clients. Prints "OK ..." and exits 0, or prints "FAIL ..." and exits 1.
 
-  store ATTR              secret-tool store (attribute henge-probe-attr=ATTR), the value on stdin
+  store ATTR              secret-tool store (attribute tux-probe-attr=ATTR), the value on stdin
   lookup ATTR [VALUE]     secret-tool lookup; with VALUE, it must match
   absent ATTR             secret-tool lookup finds nothing
   search ATTR             secret-tool search --all lists the item with its label
@@ -25,8 +25,8 @@ from jeepney.io.blocking import open_dbus_connection
 
 SS = DBusAddress("/org/freedesktop/secrets", bus_name="org.freedesktop.secrets", interface="org.freedesktop.Secret.Service")
 KWD = DBusAddress("/modules/kwalletd6", bus_name="org.kde.kwalletd6", interface="org.kde.KWallet")
-APP = "henge-secrets-probe"
-ATTR = "henge-probe-attr"
+APP = "tux-secrets-probe"
+ATTR = "tux-probe-attr"
 
 
 def ok(*a):
@@ -64,7 +64,7 @@ def qmap(m):
 def main():
     step, args = sys.argv[1], sys.argv[2:]
     if step == "store":
-        r = tool("store", "--label", f"Henge probe {args[0]}", ATTR, args[0], stdin=sys.stdin.buffer.read())
+        r = tool("store", "--label", f"Tuxedo probe {args[0]}", ATTR, args[0], stdin=sys.stdin.buffer.read())
         ok("stored") if r.returncode == 0 else fail("store", r.returncode, r.stderr.decode()[:200])
     if step == "lookup":
         r = tool("lookup", ATTR, args[0], timeout=180)
@@ -80,7 +80,7 @@ def main():
     if step == "search":
         r = tool("search", "--all", ATTR, args[0])
         out = r.stdout.decode() + r.stderr.decode()
-        ok("search") if f"Henge probe {args[0]}" in out else fail("search", out[:300])
+        ok("search") if f"Tuxedo probe {args[0]}" in out else fail("search", out[:300])
     if step == "clear":
         r = tool("clear", ATTR, args[0])
         ok("clear") if r.returncode == 0 else fail("clear", r.returncode)
@@ -102,7 +102,7 @@ def main():
         e = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
         sealed = e.update(p.update(args[1].encode()) + p.finalize()) + e.finalize()
         (coll,) = call(conn, SS, "ReadAlias", "s", ("default",))
-        props = {"org.freedesktop.Secret.Item.Label": ("s", f"Henge probe {args[0]}"),
+        props = {"org.freedesktop.Secret.Item.Label": ("s", f"Tuxedo probe {args[0]}"),
                  "org.freedesktop.Secret.Item.Attributes": ("a{ss}", {ATTR: args[0]})}
         (item, prompt) = call(conn, SS, "CreateItem", "a{sv}(oayays)b", (props, (session, iv, sealed, "text/plain"), True),
                               path=coll, iface="org.freedesktop.Secret.Collection")

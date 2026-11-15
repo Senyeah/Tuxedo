@@ -6,7 +6,7 @@
 """A8: the desktop image with and without `tuxvm --gpu-accel` (make test-linux-accel).
 
 Boots a clone of debian-desktop.img twice by direct kernel boot, back to back: first with the virgl renderer behind the
-virtio GPU (henge-session picks gles2), then without it (pixman, llvmpipe). Both sets of numbers come from the same run at
+virtio GPU (tux-session picks gles2), then without it (pixman, llvmpipe). Both sets of numbers come from the same run at
 the same host load, so no saved score decides the result. Each boot checks, over the serial console: the session
 log names the expected renderer, eglinfo names virgl and OpenGL ES >= 3.0 (accelerated boot), dmesg has no virtio_gpu or
 DRM error, the --screenshot PNG shows the idle desktop before and after the load, and the guest powers off with status 0.
@@ -199,12 +199,12 @@ def boot(args, accel, d, tmp):
 
 def measure(p, args, accel, tag, shot, res):
     pid, cpu = p.pid, res["cpu"]
-    out, _ = sh(p, "cat /run/user/1000/henge-session.log")
+    out, _ = sh(p, "cat /run/user/1000/tux-session.log")
     m = re.search(r"renderer=(\w+)", out)
     want = "gles2" if accel else "pixman"
     if not m or m.group(1) != want:
         raise Fail(f"[{tag}] session log says {m.group(1) if m else 'nothing'}, expected renderer={want}; log: {out.strip()}")
-    print(f"ok   [{tag}] henge-session: renderer={want}")
+    print(f"ok   [{tag}] tux-session: renderer={want}")
     out, _ = sh(p, "eglinfo -B -p gbm 2>/dev/null | grep -E 'OpenGL ES profile (renderer|version)'")
     rend = re.search(r"ES profile renderer: (.*)", out)
     ver = re.search(r"OpenGL ES (\d+)\.(\d+)", out)

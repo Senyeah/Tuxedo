@@ -1,4 +1,4 @@
-/* /.henge/secrets through the share server on a Unix socket, as henge-secrets in a Linux guest uses it,
+/* /.tux/secrets through the share server on a Unix socket, as tux-secrets in a Linux guest uses it,
    with the folder store that tuxvm uses. */
 #include "secrets.h"
 #include "share.h"
@@ -65,13 +65,13 @@ static int put(const char *id, const char *meta64, const void *secret, size_t n)
     body[m] = '\n';
     memcpy(body + m + 1, secret, n);
     char target[256];
-    snprintf(target, sizeof target, "/.henge/secrets/items/%s", id);
+    snprintf(target, sizeof target, "/.tux/secrets/items/%s", id);
     return request("PUT", target, body, m + 1 + n);
 }
 
 static int get(const char *id) {
     char target[256];
-    snprintf(target, sizeof target, "/.henge/secrets/items/%s", id);
+    snprintf(target, sizeof target, "/.tux/secrets/items/%s", id);
     return req("GET", target, NULL);
 }
 
@@ -83,7 +83,7 @@ static void *lock_later(void *arg) {
 }
 
 int main(void) {
-    char dir[] = "/tmp/henge-secrets-XXXXXX";
+    char dir[] = "/tmp/tux-secrets-XXXXXX";
     if (!mkdtemp(dir)) return 1;
     char store_dir[128], share_path[64];
     snprintf(share_path, sizeof share_path, "%s/s", dir);
@@ -102,15 +102,15 @@ int main(void) {
         hv_secrets_file_store(early_dir, &early);
         hv_secrets_set_store(&early);
         hv_secrets_set_scope("machine-a");
-        check("the wallet's socket: state", req("GET", "/.henge/secrets/state", NULL), 200);
-        check("the wallet's socket: no clipboard", req("PUT", "/.henge/clipboard", "x"), 404);
+        check("the wallet's socket: state", req("GET", "/.tux/secrets/state", NULL), 200);
+        check("the wallet's socket: no clipboard", req("PUT", "/.tux/clipboard", "x"), 404);
         check("the wallet's socket: no folder", req("GET", "/", NULL), 404);
-        check("the wallet's socket: no other /.henge/", req("GET", "/.henge/status", NULL), 404);
+        check("the wallet's socket: no other /.tux/", req("GET", "/.tux/status", NULL), 404);
         snprintf(sock_path, sizeof sock_path, "%s", share_path);
-        check("port 80: no wallet state", req("GET", "/.henge/secrets/state", NULL), 404);
-        check("port 80: no wallet items", req("GET", "/.henge/secrets/items", NULL), 404);
+        check("port 80: no wallet state", req("GET", "/.tux/secrets/state", NULL), 404);
+        check("port 80: no wallet items", req("GET", "/.tux/secrets/items", NULL), 404);
         check("port 80: no wallet write", put("login.0", "", "x", 1), 404);
-        check("port 80: the clipboard", req("PUT", "/.henge/clipboard", "x"), 204);
+        check("port 80: the clipboard", req("PUT", "/.tux/clipboard", "x"), 204);
         free(hv_share_take_clipboard());
         hv_share_secrets_socket(share_path, sock_path, sizeof sock_path);
         hv_secrets_set_store(NULL);
@@ -118,30 +118,30 @@ int main(void) {
         hv_secrets_set_locked(1);
     }
 
-    check("no store: no endpoint", req("GET", "/.henge/secrets/state", NULL), 404);
+    check("no store: no endpoint", req("GET", "/.tux/secrets/state", NULL), 404);
     HvSecretStore store;
     check("the folder store", hv_secrets_file_store(store_dir, &store), 0);
     hv_secrets_set_store(&store);
-    check("no machine: no endpoint", req("GET", "/.henge/secrets/items", NULL), 404);
+    check("no machine: no endpoint", req("GET", "/.tux/secrets/items", NULL), 404);
     check("a bad machine id", hv_secrets_set_scope("../other"), -1);
-    check("a bad machine id: no endpoint", req("GET", "/.henge/secrets/state", NULL), 404);
+    check("a bad machine id: no endpoint", req("GET", "/.tux/secrets/state", NULL), 404);
     check("machine a", hv_secrets_set_scope("machine-a"), 0);
 
     /* Locked at the start: metadata only. */
     check("starts locked", hv_secrets_locked(), 1);
-    check("state: status", req("GET", "/.henge/secrets/state", NULL), 200);
+    check("state: status", req("GET", "/.tux/secrets/state", NULL), 200);
     check("state: locked", !strcmp(resp_body, "locked\n"), 1);
-    check("locked: list works", req("GET", "/.henge/secrets/items", NULL), 200);
+    check("locked: list works", req("GET", "/.tux/secrets/items", NULL), 200);
     check("locked: list is empty", (long)resp_len, 0);
     check("locked: no write", put("login.1", "e30=", "pw", 2), 423);
     check("locked: no read", get("login.1"), 423);
-    check("locked: no delete", req("DELETE", "/.henge/secrets/items/login.1", NULL), 423);
+    check("locked: no delete", req("DELETE", "/.tux/secrets/items/login.1", NULL), 423);
     char none[256];
     snprintf(none, sizeof none, "%s/machine-a/login.1", store_dir);
     check("locked: nothing on disk", access(none, F_OK), -1);
 
     hv_secrets_set_locked(0);
-    check("unlocked state", req("GET", "/.henge/secrets/state", NULL), 200);
+    check("unlocked state", req("GET", "/.tux/secrets/state", NULL), 200);
     check("unlocked state: text", !strcmp(resp_body, "unlocked\n"), 1);
 
     /* A secret with a NUL, newlines and every byte value round-trips. */
@@ -156,14 +156,14 @@ int main(void) {
     check("an empty secret", put("login.2", "", "", 0), 201);
     check("an empty secret: read", get("login.2"), 200);
     check("an empty secret: length", (long)resp_len, 0);
-    check("list", req("GET", "/.henge/secrets/items", NULL), 200);
+    check("list", req("GET", "/.tux/secrets/items", NULL), 200);
     check("list: metadata, not the secret",
           strstr(resp_body, "login.1 eyJsYWJlbCI6IkEifQ==\n") != NULL && strstr(resp_body, "login.2 \n") != NULL, 1);
 
     /* Locked with items: the list gives every id and its metadata, and no secret. */
     check("a marked secret", put("login.m", "eyJsYWJlbCI6Ik0ifQ==", "SECRET-MARKER-42", 16), 201);
     hv_secrets_set_locked(1);
-    check("locked list with items", req("GET", "/.henge/secrets/items", NULL), 200);
+    check("locked list with items", req("GET", "/.tux/secrets/items", NULL), 200);
     check("locked list: ids and metadata",
           strstr(resp_body, "login.1 eyJsYWJlbCI6IkEifQ==\n") && strstr(resp_body, "login.2 \n") && strstr(resp_body, "login.m eyJsYWJlbCI6Ik0ifQ==\n"), 1);
     check("locked list: three lines", (long)(strchr(resp_body, '\n') && strchr(strchr(strchr(resp_body, '\n') + 1, '\n') + 1, '\n')
@@ -173,7 +173,7 @@ int main(void) {
     check("locked: the marked secret stays", get("login.m"), 423);
     check("locked: no secret in the answer", strstr(resp_body, "SECRET") == NULL, 1);
     hv_secrets_set_locked(0);
-    check("the marked secret: delete", req("DELETE", "/.henge/secrets/items/login.m", NULL), 204);
+    check("the marked secret: delete", req("DELETE", "/.tux/secrets/items/login.m", NULL), 204);
 
     char path[256];
     struct stat st;
@@ -183,7 +183,7 @@ int main(void) {
 
     /* Each machine sees only its own items. */
     check("machine b", hv_secrets_set_scope("machine-b"), 0);
-    check("machine b: list", req("GET", "/.henge/secrets/items", NULL), 200);
+    check("machine b: list", req("GET", "/.tux/secrets/items", NULL), 200);
     check("machine b: sees nothing of a", (long)resp_len, 0);
     check("machine b: cannot read a's item", get("login.1"), 404);
     check("machine b: its own item", put("login.1", "", "b", 1), 201);
@@ -195,7 +195,7 @@ int main(void) {
     static const char *const bad_ids[] = {"..", ".hidden", "a%2Fb", "a b", "%00", "a/b"};
     for (size_t k = 0; k < sizeof bad_ids / sizeof *bad_ids; k++) {
         char target[128];
-        snprintf(target, sizeof target, "/.henge/secrets/items/%s", bad_ids[k]);
+        snprintf(target, sizeof target, "/.tux/secrets/items/%s", bad_ids[k]);
         int status = req("GET", target, NULL);
         check("a bad id is refused", status == 400 || status == 404, 1);
     }
@@ -205,7 +205,7 @@ int main(void) {
     check("an id over 64 characters", put(long_id, "", "x", 1), 400);
     long_id[64] = 0;
     check("an id of 64 characters", put(long_id, "", "x", 1), 201);
-    check("no newline after the metadata", req("PUT", "/.henge/secrets/items/login.3", "e30="), 400);
+    check("no newline after the metadata", req("PUT", "/.tux/secrets/items/login.3", "e30="), 400);
     check("metadata that is not base64", put("login.3", "e30", "x", 1), 400);
     check("metadata with a bad character", put("login.3", "e3*=", "x", 1), 400);
     check("padding in the middle", put("login.3", "e3==e30=", "x", 1), 400);
@@ -217,14 +217,14 @@ int main(void) {
     meta64[(HV_SECRET_META_MAX + 3) / 3 * 4 + 4] = 0;
     check("metadata over 16 KB", put("login.4", meta64, "x", 1), 413);
     check("the refused items are not there", get("login.4"), 404);
-    check("POST is not served", req("POST", "/.henge/secrets/items/login.1", ""), 405);
-    check("PUT on the list", req("PUT", "/.henge/secrets/items", ""), 405);
-    check("PUT on the state", req("PUT", "/.henge/secrets/state", ""), 405);
-    check("an unknown path", req("GET", "/.henge/secrets/other", NULL), 404);
+    check("POST is not served", req("POST", "/.tux/secrets/items/login.1", ""), 405);
+    check("PUT on the list", req("PUT", "/.tux/secrets/items", ""), 405);
+    check("PUT on the state", req("PUT", "/.tux/secrets/state", ""), 405);
+    check("an unknown path", req("GET", "/.tux/secrets/other", NULL), 404);
 
     /* Delete. */
-    check("delete", req("DELETE", "/.henge/secrets/items/login.2", NULL), 204);
-    check("delete again", req("DELETE", "/.henge/secrets/items/login.2", NULL), 404);
+    check("delete", req("DELETE", "/.tux/secrets/items/login.2", NULL), 204);
+    check("delete again", req("DELETE", "/.tux/secrets/items/login.2", NULL), 404);
     check("deleted: read", get("login.2"), 404);
 
     /* At most HV_SECRET_ITEMS_MAX items for each machine; a replace is still allowed when full. */
@@ -254,17 +254,17 @@ int main(void) {
         strcpy(sa.sun_path, sock_path);
         int fd = socket(AF_UNIX, SOCK_STREAM, 0);
         connect(fd, (struct sockaddr *)&sa, sizeof sa);
-        const char *q = "GET /.henge/secrets/state HTTP/1.1\r\nConnection: close\r\n\r\n";
+        const char *q = "GET /.tux/secrets/state HTTP/1.1\r\nConnection: close\r\n\r\n";
         write(fd, q, strlen(q));
         char r[1024] = {0};
         size_t have = 0;
         ssize_t got;
         while (have < sizeof r - 1 && (got = read(fd, r + have, sizeof r - 1 - have)) > 0) have += (size_t)got;
         close(fd);
-        const char *h = strstr(r, "X-Henge-Seq: ");
-        since = h ? strtoul(h + 13, NULL, 10) : 0;
+        const char *h = strstr(r, "X-Tux-Seq: ");
+        since = h ? strtoul(h + strlen("X-Tux-Seq: "), NULL, 10) : 0;
     }
-    snprintf(target, sizeof target, "/.henge/secrets/state?since=%lu", since);
+    snprintf(target, sizeof target, "/.tux/secrets/state?since=%lu", since);
     check("long poll: status", req("GET", target, NULL), 200);
     gettimeofday(&b, NULL);
     long ms = (b.tv_sec - a.tv_sec) * 1000 + (b.tv_usec - a.tv_usec) / 1000;
@@ -274,7 +274,7 @@ int main(void) {
     check("locked again: no read", get("login.1"), 423);
 
     check("no machine", hv_secrets_set_scope(NULL), 0);
-    check("no machine: no endpoint", req("GET", "/.henge/secrets/items", NULL), 404);
+    check("no machine: no endpoint", req("GET", "/.tux/secrets/items", NULL), 404);
 
     unlink(sock_path);
     unlink(share_path);

@@ -1,4 +1,4 @@
-/* /.henge/keyboard through the share server on a Unix socket, as henge-keyboard in a Linux desktop uses it:
+/* /.tux/keyboard through the share server on a Unix socket, as tux-keyboard in a Linux desktop uses it:
    PUT is the guest's request for the device's keyboard, GET the device keyboard's height. */
 #include "share.h"
 
@@ -46,15 +46,15 @@ static int request(const char *method, const char *target, const char *body) {
     return status;
 }
 
-/* The body and X-Tuxedo-Seq of the last response. */
+/* The body and X-Tux-Seq of the last response. */
 static const char *body(void) {
     const char *b = strstr(resp, "\r\n\r\n");
     return b ? b + 4 : "";
 }
 
 static long resp_seq(void) {
-    const char *h = strstr(resp, "X-Henge-Seq: ");
-    return h ? atol(h + 13) : -1;
+    const char *h = strstr(resp, "X-Tux-Seq: ");
+    return h ? atol(h + strlen("X-Tux-Seq: ")) : -1;
 }
 
 static void *later_height(void *arg) {
@@ -71,26 +71,26 @@ static double since_ms(struct timespec t0) {
 }
 
 static void test_height(void) {
-    check("height: GET status", request("GET", "/.henge/keyboard", ""), 200);
+    check("height: GET status", request("GET", "/.tux/keyboard", ""), 200);
     check("height: down at the start", !strcmp(body(), "height 0.000\n"), 1);
     check("height: no change yet", resp_seq(), 0);
 
     hv_share_set_keyboard_height(0.4);
-    check("height 0.4: status", request("GET", "/.henge/keyboard", ""), 200);
+    check("height 0.4: status", request("GET", "/.tux/keyboard", ""), 200);
     check("height 0.4: body", !strcmp(body(), "height 0.400\n"), 1);
     check("height 0.4: one change", resp_seq(), 1);
     hv_share_set_keyboard_height(0.4004); /* the same thousandth */
-    request("GET", "/.henge/keyboard", "");
+    request("GET", "/.tux/keyboard", "");
     check("height: the same value is no change", resp_seq(), 1);
 
     hv_share_set_keyboard_height(1.5);
-    request("GET", "/.henge/keyboard", "");
+    request("GET", "/.tux/keyboard", "");
     check("height: above 1 is 1", !strcmp(body(), "height 1.000\n"), 1);
     hv_share_set_keyboard_height(-2);
-    request("GET", "/.henge/keyboard", "");
+    request("GET", "/.tux/keyboard", "");
     check("height: below 0 is 0", !strcmp(body(), "height 0.000\n"), 1);
     hv_share_set_keyboard_height(0.0 / 0.0);
-    request("GET", "/.henge/keyboard", "");
+    request("GET", "/.tux/keyboard", "");
     check("height: not a number is 0", !strcmp(body(), "height 0.000\n"), 1);
     long seq = resp_seq();
     check("height: three changes", seq, 3);
@@ -101,7 +101,7 @@ static void test_height(void) {
     pthread_t t;
     pthread_create(&t, NULL, later_height, NULL);
     char target[64];
-    snprintf(target, sizeof target, "/.henge/keyboard?since=%ld", seq);
+    snprintf(target, sizeof target, "/.tux/keyboard?since=%ld", seq);
     check("height: wait: status", request("GET", target, ""), 200);
     double ms = since_ms(t0);
     pthread_join(t, NULL);
@@ -111,7 +111,7 @@ static void test_height(void) {
 
     /* since is not the count (the app started again): at once */
     clock_gettime(CLOCK_MONOTONIC, &t0);
-    check("height: other since: status", request("GET", "/.henge/keyboard?since=999", ""), 200);
+    check("height: other since: status", request("GET", "/.tux/keyboard?since=999", ""), 200);
     check("height: other since: at once", since_ms(t0) < 1000, 1);
     check("height: other since: count", resp_seq(), seq + 1);
 
@@ -120,13 +120,13 @@ static void test_height(void) {
     hv_share_keyboard_wanted(&before);
     hv_share_set_keyboard_height(0);
     check("height: no request from the guest", (hv_share_keyboard_wanted(&after), (long)(after - before)), 0);
-    request("PUT", "/.henge/keyboard", "hide");
-    request("GET", "/.henge/keyboard", "");
+    request("PUT", "/.tux/keyboard", "hide");
+    request("GET", "/.tux/keyboard", "");
     check("height: a request does not change it", resp_seq(), seq + 2);
 }
 
 int main(void) {
-    char dir[] = "/tmp/henge-kbd-XXXXXX";
+    char dir[] = "/tmp/tux-kbd-XXXXXX";
     if (!mkdtemp(dir)) return 1;
     snprintf(sock_path, sizeof sock_path, "%s/s", dir);
     check("the share server starts", hv_share_start(dir, sock_path), 0);
@@ -134,28 +134,28 @@ int main(void) {
     unsigned long seq = 99, first;
     check("nothing asked yet: hide", hv_share_keyboard_wanted(&first), 0);
 
-    check("PUT show: status", request("PUT", "/.henge/keyboard", "show"), 204);
+    check("PUT show: status", request("PUT", "/.tux/keyboard", "show"), 204);
     check("PUT show: wanted", hv_share_keyboard_wanted(&seq), 1);
     check("PUT show: a new request", (long)(seq - first), 1);
 
-    check("PUT show again: status", request("PUT", "/.henge/keyboard", "show"), 204);
+    check("PUT show again: status", request("PUT", "/.tux/keyboard", "show"), 204);
     check("PUT show again: wanted", hv_share_keyboard_wanted(&seq), 1);
     check("PUT show again: a new request", (long)(seq - first), 2);
 
-    check("PUT hide: status", request("PUT", "/.henge/keyboard", "hide"), 204);
+    check("PUT hide: status", request("PUT", "/.tux/keyboard", "hide"), 204);
     check("PUT hide: wanted", hv_share_keyboard_wanted(&seq), 0);
     check("PUT hide: a new request", (long)(seq - first), 3);
 
     check("no sequence wanted", hv_share_keyboard_wanted(NULL), 0);
 
-    request("PUT", "/.henge/keyboard", "show");
+    request("PUT", "/.tux/keyboard", "show");
     static const char *const bad[] = {"", "sho", "shown", "SHOW", "show\n", "1"};
-    for (size_t k = 0; k < sizeof bad / sizeof *bad; k++) check("a bad body: status", request("PUT", "/.henge/keyboard", bad[k]), 400);
+    for (size_t k = 0; k < sizeof bad / sizeof *bad; k++) check("a bad body: status", request("PUT", "/.tux/keyboard", bad[k]), 400);
     check("a bad body changes nothing: wanted", hv_share_keyboard_wanted(&seq), 1);
     check("a bad body changes nothing: request", (long)(seq - first), 4);
 
     test_height();
-    check("the clipboard still answers", request("PUT", "/.henge/clipboard", "text"), 204);
+    check("the clipboard still answers", request("PUT", "/.tux/clipboard", "text"), 204);
     char *clip = hv_share_take_clipboard();
     check("the clipboard is not the keyboard", clip && !strcmp(clip, "text"), 1);
     free(clip);

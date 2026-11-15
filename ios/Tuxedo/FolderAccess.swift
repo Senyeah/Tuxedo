@@ -305,13 +305,13 @@ final class FolderSession: ObservableObject {
                 if self?.slots[id] != slot { return }
             }
             tux_vm_folder_ask(Int32(slot), 0)
-            await self?.answered(id, what: what, ok: false, text: "Linux did not answer. The machine needs henge-guest 1.8.0 or later (sudo apt install henge-guest).")
+            await self?.answered(id, what: what, ok: false, text: "Linux did not answer. The machine needs tux-guest (sudo apt install tux-guest).")
         }
     }
 
     private func answered(_ id: UUID, what: Int, ok: Bool, text: String) async {
         guard ok else {
-            asks[id] = .failed(text.replacingOccurrences(of: "henge-files: ", with: ""))
+            asks[id] = .failed(text.replacingOccurrences(of: "tux-files: ", with: ""))
             return
         }
         guard what == 1 else {

@@ -17,7 +17,7 @@ static HvFdt *sample(void) {
     hv_fdt_begin(f, "");
     hv_fdt_prop_u32(f, "#address-cells", 2);
     hv_fdt_prop_u32(f, "#size-cells", 2);
-    const char *compat[] = { "linux,dummy-virt", "henge,test" };
+    const char *compat[] = { "linux,dummy-virt", "tux,test" };
     hv_fdt_prop_strs(f, "compatible", compat, 2);
     hv_fdt_prop_str(f, "model", "abc");                    /* 4 bytes with the NUL: no padding */
     hv_fdt_begin(f, "chosen");
@@ -379,7 +379,7 @@ int main(void) {
         char cmd[512];
         snprintf(cmd, sizeof cmd, "dtc -I dtb -O dts %s 2>&1", in);
         CHECK(run(cmd, &out) == 0);
-        CHECK(strstr(out, "compatible = \"linux,dummy-virt\", \"henge,test\";"));
+        CHECK(strstr(out, "compatible = \"linux,dummy-virt\", \"tux,test\";"));
         CHECK(strstr(out, "model = \"abc\";"));
         CHECK(strstr(out, "bootargs = \"console=ttyAMA0 x\";"));
         CHECK(strstr(out, "memory@40000000 {"));

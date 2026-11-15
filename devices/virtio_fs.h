@@ -6,7 +6,7 @@
 
 #include <pthread.h>
 
-/* virtio-fs (device type 26) with the tag henge-files: the folders from the Files app (host/fs_server.c).
+/* virtio-fs (device type 26) with the tag tux-files: the folders from the Files app (host/fs_server.c).
    Queue 0 is high priority (FORGET), handled on the CPU thread at notify; it does no I/O. Queue 1 has the
    requests, which run on worker threads, as virtio-blk's do: a read waits on the host's file system, and a
    provider's file may wait on the network. The board's tick publishes the completions. */

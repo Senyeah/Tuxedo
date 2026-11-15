@@ -3,7 +3,7 @@
 
 #include <stddef.h>
 
-/* A Linux guest's wallet (henge-secrets) keeps its items in a store on the host, through /.henge/secrets on
+/* A Linux guest's wallet (tux-secrets) keeps its items in a store on the host, through /.tux/secrets on
    the share server (secrets.c). The host chooses the scope (the machine's id): the guest cannot name another
    machine's items. An item is an id, its metadata (labels, attributes: readable while locked) and its secret
    (only while unlocked). The store on iOS is the Keychain (KeychainStore.swift); tuxvm uses a folder. */
@@ -40,7 +40,7 @@ int hv_secrets_valid_id(const char *id);
 /* A folder of files, one per item (dir/scope/id, mode 0600): tuxvm and the tests. */
 int hv_secrets_file_store(const char *dir, HvSecretStore *out);
 
-/* The HTTP side, for share.c. path is what follows "/.henge/secrets" ("", "/state", "/items", "/items/ID"). */
+/* The HTTP side, for share.c. path is what follows "/.tux/secrets" ("", "/state", "/items", "/items/ID"). */
 typedef struct HvSecretsReply {
     int status;
     char *body; /* malloc'd, or NULL */

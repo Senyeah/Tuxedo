@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Runs in the container (keyboard-panel-check.sh), inside dbus-run-session: henge-keyboard as KWin's input method.
+"""Runs in the container (keyboard-panel-check.sh), inside dbus-run-session: tux-keyboard as KWin's input method.
 
 Installs the package's files and the image's kwinrc as the image has them, starts kwin_wayland --virtual
 (1280x800) and a stand-in for the host, and checks with a maximized test window:
@@ -59,21 +59,21 @@ def active():
 
 def install():
     """The files where the package and the image put them."""
-    for src, dst in (("henge-guest/usr/lib/henge/henge-keyboard", "/usr/lib/henge/henge-keyboard"),
-                     ("henge-guest/usr/lib/henge/kwin-keyboard.js", "/usr/lib/henge/kwin-keyboard.js"),
-                     ("henge-guest/usr/share/applications/henge-keyboard.desktop", "/usr/share/applications/henge-keyboard.desktop"),
-                     ("henge-guest/etc/xdg/plasma-workspace/env/henge-keyboard.sh", "/etc/xdg/plasma-workspace/env/henge-keyboard.sh"),
+    for src, dst in (("tux-guest/usr/lib/tux/tux-keyboard", "/usr/lib/tux/tux-keyboard"),
+                     ("tux-guest/usr/lib/tux/kwin-keyboard.js", "/usr/lib/tux/kwin-keyboard.js"),
+                     ("tux-guest/usr/share/applications/tux-keyboard.desktop", "/usr/share/applications/tux-keyboard.desktop"),
+                     ("tux-guest/etc/xdg/plasma-workspace/env/tux-keyboard.sh", "/etc/xdg/plasma-workspace/env/tux-keyboard.sh"),
                      ("rootfs-desktop/etc/xdg/kwinrc", "/etc/xdg/kwinrc")):
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         shutil.copy(os.path.join(TOOLS, src), dst)
-    os.chmod("/usr/lib/henge/henge-keyboard", 0o755)
+    os.chmod("/usr/lib/tux/tux-keyboard", 0o755)
 
 
 def start_kwin(show_always):
-    env = dict(os.environ, XDG_RUNTIME_DIR=RT, HENGE_HOST=f"127.0.0.1:{PORT}", XDG_CONFIG_DIRS="/etc/xdg")
+    env = dict(os.environ, XDG_RUNTIME_DIR=RT, TUX_HOST=f"127.0.0.1:{PORT}", XDG_CONFIG_DIRS="/etc/xdg")
     env.pop("KWIN_IM_SHOW_ALWAYS", None)
     if show_always:  # as startplasma does: source the env script
-        out = subprocess.run(["sh", "-c", ". /etc/xdg/plasma-workspace/env/henge-keyboard.sh; echo \"$KWIN_IM_SHOW_ALWAYS\""],
+        out = subprocess.run(["sh", "-c", ". /etc/xdg/plasma-workspace/env/tux-keyboard.sh; echo \"$KWIN_IM_SHOW_ALWAYS\""],
                              capture_output=True, text=True).stdout.strip()
         if out != "1":
             raise Fail(f"the env script gives KWIN_IM_SHOW_ALWAYS={out!r}")
@@ -83,8 +83,8 @@ def start_kwin(show_always):
     p = subprocess.Popen(["kwin_wayland", "--virtual", "--width", str(W), "--height", str(H), "--no-lockscreen",
                           "--socket", "wayland-0", "--xwayland"], env=env, stdout=open(KWINLOG, "w"), stderr=subprocess.STDOUT)
     wait("KWin did not start", lambda: os.path.exists(f"{RT}/wayland-0") and active().startswith("b "), 30)
-    wait("KWin did not start henge-keyboard as its input method",
-         lambda: subprocess.run(["pgrep", "-f", "/usr/lib/henge/henge-keyboard"], capture_output=True).returncode == 0
+    wait("KWin did not start tux-keyboard as its input method",
+         lambda: subprocess.run(["pgrep", "-f", "/usr/lib/tux/tux-keyboard"], capture_output=True).returncode == 0
          and lines(HOSTLOG)[:1] == ["hide"], 20)
     return p, env
 
@@ -140,7 +140,7 @@ def main():
     kwin = None
     try:
         kwin, env = start_kwin(True)
-        print("ok: KWin starts henge-keyboard from kwinrc's InputMethod; its first request is hide", flush=True)
+        print("ok: KWin starts tux-keyboard from kwinrc's InputMethod; its first request is hide", flush=True)
 
         # A text field
         win = start_window(env, "--text")
@@ -218,7 +218,7 @@ def main():
         set_height(0.4)
         x11_is(env, H - 320, "the keyboard covers 0.4")
         def false_area(bottom):
-            subprocess.run(["busctl", "--user", "call", "org.freedesktop.DBus", "/Henge", "dev.henge.Keyboard", "area",
+            subprocess.run(["busctl", "--user", "call", "org.freedesktop.DBus", "/Tux", "nz.jackgreenhill.tuxedo.Keyboard", "area",
                             "ii", "0", str(bottom)], capture_output=True)
 
         false_area(99999)  # more than the screen: not used
@@ -278,7 +278,7 @@ def main():
 
         # The helper that the desktop's autostart runs waits: there must be one sender only
         before = lines(HOSTLOG)
-        second = subprocess.Popen(["/usr/lib/henge/henge-keyboard"], env=dict(env, WAYLAND_DISPLAY="wayland-0"),
+        second = subprocess.Popen(["/usr/lib/tux/tux-keyboard"], env=dict(env, WAYLAND_DISPLAY="wayland-0"),
                                   stderr=open("/tmp/second.log", "w"))
         time.sleep(3)
         if second.poll() is not None or lines(HOSTLOG) != before or "waits" not in open("/tmp/second.log").read():
@@ -287,7 +287,7 @@ def main():
         print("ok: a second helper waits and sends nothing", flush=True)
 
         # The input method stops (the person chose another one): the second helper takes over on the bus
-        pids = subprocess.run(["pgrep", "-f", "/usr/lib/henge/henge-keyboard"], capture_output=True, text=True).stdout.split()
+        pids = subprocess.run(["pgrep", "-f", "/usr/lib/tux/tux-keyboard"], capture_output=True, text=True).stdout.split()
         for pid in pids:
             if int(pid) != second.pid:
                 os.kill(int(pid), 15)

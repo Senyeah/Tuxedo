@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import smoke  # noqa: E402
 from smoke import Fail, login, sh  # noqa: E402
 
-PAGE = "henge forward check"
+PAGE = "tux forward check"
 
 
 def free_port():

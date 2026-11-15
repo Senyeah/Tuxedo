@@ -1,0 +1,9 @@
+[Unit]
+Description=Tuxedo shared folder (on first use)
+
+[Automount]
+Where=/home/henge/Tux
+TimeoutIdleSec=0
+
+[Install]
+WantedBy=multi-user.target

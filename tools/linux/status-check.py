@@ -7,14 +7,14 @@
 
 Boots a clone of the desktop image with --share, HV_INPUT_FILE (battery, brightness, volume and tz lines),
 HV_STATUS_LOG (the guest's requests on stderr) and HV_SND_CAPTURE. It checks that:
-  1. i2c-ocores, sbs-battery, lp855x_bl and gpio-charger load from the tree with no probe error, henge-status
+  1. i2c-ocores, sbs-battery, lp855x_bl and gpio-charger load from the tree with no probe error, tux-status
      runs, and nothing in the guest sets the device's volume or brightness at boot or when WirePlumber starts;
   2. no battery is present before a battery line; then sysfs and UPower follow level, state and mains;
   3. the helper writes the backlight for a brightness line, and a guest change comes back as one request;
   4. ALSA's Master is the device's volume both ways, mute plays silence, and PipeWire follows (wpctl);
   5. after a 60 s pause the helper puts the clock right within 3 s, and the RTC stays the host's time;
   6. a tz line sets the guest's time zone, and a bad name is refused.
-The image needs henge-guest 1.3.1 (henge-status); the check installs upower and brightnessctl in the clone.
+The image needs tux-guest 1.3.1 (tux-status); the check installs upower and brightnessctl in the clone.
 The shared image never changes: the guest writes to a clone. Exit 1 on a failed check.
 """
 import argparse
@@ -33,7 +33,7 @@ from smoke import Fail, login, sh  # noqa: E402
 
 BAT = "/sys/class/power_supply/sbs-0-000b"
 AC = "/sys/class/power_supply/ac-power"
-BL = "/sys/class/backlight/henge-backlight"
+BL = "/sys/class/backlight/tux-backlight"
 UPBAT = "/org/freedesktop/UPower/devices/battery_sbs_0_000b"
 PW = "env XDG_RUNTIME_DIR=/run/user/1000"
 
@@ -130,21 +130,21 @@ def run(p, host, args, cap):
     if bad:
         raise Fail(f"driver messages: {bad}")
     print("ok: i2c-ocores, sbs-battery, lp855x_bl and gpio-charger loaded from the tree, no probe error", flush=True)
-    need("systemctl is-enabled henge-status; systemctl is-active henge-status", lambda o: o.split() == ["enabled", "active"],
-         "henge-status runs")
+    need("systemctl is-enabled tux-status; systemctl is-active tux-status", lambda o: o.split() == ["enabled", "active"],
+         "tux-status runs")
     until(lambda: value(f"{PW} systemctl --user is-active wireplumber") == "active", 120, "WirePlumber starts")
     time.sleep(5)
     if host.requests("volume") or host.requests("brightness"):
         raise Fail(f"the guest set the device at boot: volume {host.requests('volume')}, brightness {host.requests('brightness')}")
-    print("ok: henge-status is active; no volume or brightness request at boot or from WirePlumber", flush=True)
+    print("ok: tux-status is active; no volume or brightness request at boot or from WirePlumber", flush=True)
 
     found, _ = sh(p, "command -v upower brightnessctl", 20)
     if len([l for l in found.splitlines() if l.startswith("/")]) < 2:
         need("sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive "
              "apt-get -y -qq install upower brightnessctl >/var/tmp/apt.log 2>&1; tail -2 /var/tmp/apt.log",
              what="install upower and brightnessctl", limit=900)
-    need("systemctl show upower -p Environment", lambda o: "UPOWER_CONF_FILE_NAME=/etc/henge/UPower.conf" in o,
-         "upower reads Henge's settings")
+    need("systemctl show upower -p Environment", lambda o: "UPOWER_CONF_FILE_NAME=/etc/tux/UPower.conf" in o,
+         "upower reads Tuxedo's settings")
     need("upower -d | grep critical-action", lambda o: re.search(r"critical-action:\s+Ignore", o), "UPower's critical action is Ignore")
 
     # 2. Battery
@@ -243,7 +243,7 @@ def run(p, host, args, cap):
     print("ok: wpctl follows the device (0.70, 0.55); set-volume 0.6 is one request; a WirePlumber start keeps 0.20", flush=True)
 
     # 5. Clock and RTC across a pause
-    need("sudo journalctl -b -u henge-status --no-pager | tail -3")
+    need("sudo journalctl -b -u tux-status --no-pager | tail -3")
     p.send("\x01s")
     until(lambda: "tuxvm: paused" in host.log(), 10, "tuxvm pauses")
     time.sleep(args.pause)
@@ -258,9 +258,9 @@ def run(p, host, args, cap):
     _, took = until(lambda: abs(offset()) < 0.5, 3 + 3, "the clock is right after the pause", step=0.2)
     print(f"ok: after a {args.pause} s pause the guest clock is within 0.5 s of the host's {time.time() - t_resume:.1f} s "
           f"after the resume", flush=True)
-    need("sudo journalctl -b -u henge-status --no-pager | grep 'clock stepped' | tail -1",
+    need("sudo journalctl -b -u tux-status --no-pager | grep 'clock stepped' | tail -1",
          lambda o: re.search(r"clock stepped by \+(\d+)", o) and int(re.search(r"\+(\d+)", o).group(1)) >= args.pause - 5,
-         "henge-status stepped the clock")
+         "tux-status stepped the clock")
     rtc = float(value("cat /sys/class/rtc/rtc0/since_epoch"))
     if abs(rtc - time.time()) > 2:
         raise Fail(f"the RTC is {rtc - time.time():+.0f} s off")
@@ -275,7 +275,7 @@ def run(p, host, args, cap):
     until(lambda: value("timedatectl show -p Timezone --value") == "Pacific/Auckland", 2, "tz Pacific/Auckland")
     host.line("tz ../../etc/passwd")
     until(lambda: "../../etc/passwd: not a time zone name" in host.log(), 3, "tuxvm refuses a bad name")
-    need("python3 -c 'import urllib.request as u; print(u.urlopen(\"http://10.0.2.4/.henge/status\", timeout=5).read().decode())'",
+    need("python3 -c 'import urllib.request as u; print(u.urlopen(\"http://10.0.2.4/.tux/status\", timeout=5).read().decode())'",
          lambda o: "tz Pacific/Auckland" in o and "passwd" not in o, "the endpoint keeps the last good zone")
     host.line("tz Asia/Tokyo")
     until(lambda: value("timedatectl show -p Timezone --value") == "Asia/Tokyo", 2, "tz Asia/Tokyo")

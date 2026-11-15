@@ -139,7 +139,7 @@ static void *read_ui(void *unused) {
 }
 int main(void) {
     alarm(60);
-    char dir[] = "/tmp/henge-lifecycle-XXXXXX", rom[256], disk[256], ram[256], error[256];
+    char dir[] = "/tmp/tux-lifecycle-XXXXXX", rom[256], disk[256], ram[256], error[256];
     if (!mkdtemp(dir) || hv_jit_region_open(&jit, 8 << 20)) return 1;
     snprintf(rom, sizeof rom, "%s/rom", dir);
     snprintf(disk, sizeof disk, "%s/disk", dir);

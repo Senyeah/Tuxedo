@@ -153,7 +153,7 @@ static int run_board(const char *name, const char *rom, const char *disk, int *t
 
 int main(void) {
     alarm(60);
-    char dir[] = "/tmp/henge-console-XXXXXX", rom[256], disk[256];
+    char dir[] = "/tmp/tux-console-XXXXXX", rom[256], disk[256];
     if (!mkdtemp(dir)) return 1;
     snprintf(rom, sizeof rom, "%s/rom", dir);
     snprintf(disk, sizeof disk, "%s/disk", dir);

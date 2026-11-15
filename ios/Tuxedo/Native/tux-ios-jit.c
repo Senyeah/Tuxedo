@@ -590,7 +590,7 @@ TUX_EXPORT bool tux_ios_jit_prewarm_self(size_t bytes)
     return true;
 }
 
-/* The held region, for the native runtime (translation-layer/henge-tl-load.c looks this up by name). */
+/* The held region, for the native runtime (translation-layer/tux-tl-load.c looks this up by name). */
 TUX_EXPORT TuxDualMapping *tux_ios_jit_get_mapping(void)
 {
     return tux_prewarmed.rw_addr ? &tux_prewarmed : NULL;

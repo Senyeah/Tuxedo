@@ -350,7 +350,7 @@ static int transcode(Conn *c, const Stream *in, const HvVcEncOpen *o, uint32_t d
         call(c, HV_VC_DEC_CLOSE, &m, sizeof m, NULL, 0);
         return st;
     }
-    /* frames come out in decode order: sort by pts, as henge-xcode does */
+    /* frames come out in decode order: sort by pts, as tux-xcode does */
     uint32_t held[NFRAMES];
     int64_t held_pts[NFRAMES];
     int nheld = 0, sent = 0;
@@ -1298,7 +1298,7 @@ static void test_dma(void) {
 
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
-    /* a host for henge-xcode --unix PATH, with no guest; the budgets make the host's limits easy to reach */
+    /* a host for tux-xcode --unix PATH, with no guest; the budgets make the host's limits easy to reach */
     if (argc >= 3 && argc <= 6 && !strcmp(argv[1], "--serve")) {
         hv_vcodec_set_budgets(argc > 3 ? strtoull(argv[3], NULL, 0) : 0, argc > 4 ? strtoull(argv[4], NULL, 0) : 0,
                               argc > 5 ? strtoull(argv[5], NULL, 0) : 0);

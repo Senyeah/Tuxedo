@@ -13,7 +13,7 @@
 #include <unistd.h>
 
 /* The host status (host/status.c): coalescing, echoes, the battery rate, time zone names, and
-   GET /.henge/status through the share server on a Unix socket, as the guest's helper reaches it. */
+   GET /.tux/status through the share server on a Unix socket, as the guest's helper reaches it. */
 static int checks, failures;
 static void check(const char *what, long long got, long long want) {
     checks++;
@@ -261,16 +261,16 @@ static void *later_folder(void *dir) {
 }
 
 static void test_endpoint(void) {
-    char dir[] = "/tmp/henge-status-XXXXXX";
+    char dir[] = "/tmp/tux-status-XXXXXX";
     if (!mkdtemp(dir)) return;
     snprintf(sock_path, sizeof sock_path, "%s/s.sock", dir);
     check("endpoint: the share server starts", hv_share_start(dir, sock_path), 0);
     hv_status_reset(NULL);
     char resp[4096];
-    http_get("/.henge/status?since=0", resp, sizeof resp);
+    http_get("/.tux/status?since=0", resp, sizeof resp);
     check("endpoint: 200", strncmp(resp, "HTTP/1.1 200", 12) == 0, 1);
     check("endpoint: no cache", strstr(resp, "Cache-Control: no-store\r\n") != NULL, 1);
-    check("endpoint: its seq", strstr(resp, "X-Henge-Seq: 1\r\n") != NULL, 1);
+    check("endpoint: its seq", strstr(resp, "X-Tux-Seq: 1\r\n") != NULL, 1);
     check("endpoint: the time", strstr(resp, "\r\n\r\ntime ") != NULL, 1);
     check("endpoint: no unknown lines", strstr(resp, "tz ") == NULL && strstr(resp, "brightness ") == NULL, 1);
     struct timespec now;
@@ -280,30 +280,30 @@ static void test_endpoint(void) {
     hv_status_set_brightness(0.25);
     hv_status_set_timezone("Pacific/Auckland");
     hv_status_set_timezone("../../etc/passwd");
-    http_get("/.henge/status", resp, sizeof resp);
+    http_get("/.tux/status", resp, sizeof resp);
     check("endpoint: the zone", strstr(resp, "\ntz Pacific/Auckland\n") != NULL, 1);
     check("endpoint: the brightness", strstr(resp, "\nbrightness 0.250\n") != NULL, 1);
     check("endpoint: no refused name", strstr(resp, "passwd") == NULL, 1);
-    check("endpoint: seq 3", strstr(resp, "X-Henge-Seq: 3\r\n") != NULL, 1);
+    check("endpoint: seq 3", strstr(resp, "X-Tux-Seq: 3\r\n") != NULL, 1);
     pthread_t th;
     pthread_create(&th, NULL, later_tz, NULL);
     struct timespec t0;
     clock_gettime(CLOCK_MONOTONIC, &t0);
-    http_get("/.henge/status?since=3", resp, sizeof resp);
+    http_get("/.tux/status?since=3", resp, sizeof resp);
     check("endpoint: a long poll answers on news", strstr(resp, "\ntz Asia/Tokyo\n") != NULL, 1);
     check("endpoint: soon after it", since_ms(t0) > 150 && since_ms(t0) < 2000, 1);
-    check("endpoint: with the new seq", strstr(resp, "X-Henge-Seq: 4\r\n") != NULL, 1);
+    check("endpoint: with the new seq", strstr(resp, "X-Tux-Seq: 4\r\n") != NULL, 1);
     pthread_join(th, NULL);
     /* The Files folders' table and its long poll (fs_server.h). */
     hv_fs_folders_clear();
-    http_get("/.henge/folders", resp, sizeof resp);
+    http_get("/.tux/folders", resp, sizeof resp);
     check("folders: 200", strncmp(resp, "HTTP/1.1 200", 12) == 0, 1);
     check("folders: JSON", strstr(resp, "Content-Type: application/json\r\n") != NULL, 1);
     check("folders: none", strstr(resp, "\"folders\":[]") != NULL, 1);
-    const char *sq = strstr(resp, "X-Henge-Seq: ");
-    unsigned long fseq = sq ? strtoul(sq + 13, NULL, 10) : 0;
+    const char *sq = strstr(resp, "X-Tux-Seq: ");
+    unsigned long fseq = sq ? strtoul(sq + strlen("X-Tux-Seq: "), NULL, 10) : 0;
     char q[64];
-    snprintf(q, sizeof q, "/.henge/folders?since=%lu", fseq);
+    snprintf(q, sizeof q, "/.tux/folders?since=%lu", fseq);
     pthread_create(&th, NULL, later_folder, dir);
     clock_gettime(CLOCK_MONOTONIC, &t0);
     http_get(q, resp, sizeof resp);
@@ -311,12 +311,12 @@ static void test_endpoint(void) {
     check("folders: soon after it", since_ms(t0) > 150 && since_ms(t0) < 2000, 1);
     pthread_join(th, NULL);
     long ask = hv_fs_folder_ask(0, HV_FS_ASK_EXPORT);
-    http_get("/.henge/folders", resp, sizeof resp);
+    http_get("/.tux/folders", resp, sizeof resp);
     check("folders: the app's ask", strstr(resp, "\"do\":\"export\"") != NULL, 1);
-    snprintf(q, sizeof q, "/.henge/folders/done?index=0&ask=%ld&ok=1", ask + 1);
+    snprintf(q, sizeof q, "/.tux/folders/done?index=0&ask=%ld&ok=1", ask + 1);
     http_req("POST", q, "x", resp, sizeof resp);
     check("folders/done: another ask is 409", strncmp(resp, "HTTP/1.1 409", 12) == 0, 1);
-    snprintf(q, sizeof q, "/.henge/folders/done?index=0&ask=%ld&ok=1", ask);
+    snprintf(q, sizeof q, "/.tux/folders/done?index=0&ask=%ld&ok=1", ask);
     http_req("POST", q, "Exports/docs-1\n2 files", resp, sizeof resp);
     check("folders/done: 200", strncmp(resp, "HTTP/1.1 200", 12) == 0, 1);
     int ok = 0;
@@ -324,10 +324,10 @@ static void test_endpoint(void) {
     check("folders/done: answered", hv_fs_folder_answered(0, ask, &ok, &text) * 10 + ok, 11);
     check("folders/done: the text", text && !strcmp(text, "Exports/docs-1\n2 files"), 1);
     free(text);
-    http_req("GET", "/.henge/folders/done", "", resp, sizeof resp);
+    http_req("GET", "/.tux/folders/done", "", resp, sizeof resp);
     check("folders/done: only POST", strncmp(resp, "HTTP/1.1 404", 12) == 0, 1);
     hv_fs_folders_clear();
-    http_get("/.henge/nothing", resp, sizeof resp);
+    http_get("/.tux/nothing", resp, sizeof resp);
     check("endpoint: other names are 404", strncmp(resp, "HTTP/1.1 404", 12) == 0, 1);
     unlink(sock_path);
     rmdir(dir);

@@ -1,4 +1,4 @@
-/* The hvcodec DMA device (devices/virtio_hvcodec.c) on the virt board, driven as the henge_codec module drives it,
+/* The hvcodec DMA device (devices/virtio_hvcodec.c) on the virt board, driven as the tux_codec module drives it,
    with a test backend in place of host/vcodec.m: enumeration and config, contexts, direct and indirect chains,
    chains far past HV_VIRTQ_MAX_SEGS, data both ways, a reply larger than its buffer (REST), contexts that do not wait
    for each other, a reset, and the requests a guest must not be able to hurt the host with. */
@@ -120,7 +120,7 @@ static int be_message(void *opaque, void *ctx, HvHvcodecIo *io) {
 
 static const HvHvcodecOps be_ops = {be_open, be_close, be_message};
 
-/* ---- a small driver, as henge_codec does it ---- */
+/* ---- a small driver, as tux_codec does it ---- */
 
 #define RING (VIRT_MEM + 0x100000)
 #define HDR (VIRT_MEM + 0x200000)

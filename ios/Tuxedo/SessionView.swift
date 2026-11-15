@@ -625,7 +625,7 @@ struct SessionView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { showRevealHint = false }
     }
 
-    /// A Linux desktop says when the focused program wants text (henge-keyboard): the keyboard comes and goes with it.
+    /// A Linux desktop says when the focused program wants text (tux-keyboard): the keyboard comes and goes with it.
     private func followGuestKeyboard() async {
         KeyboardFrame.start() // before the console can hide the probe
         var seq: UInt = 0

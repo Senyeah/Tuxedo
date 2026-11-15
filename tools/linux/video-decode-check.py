@@ -40,7 +40,7 @@ MARK = "TUX_RC_"
 SHELL = r"henge@henge:[^\n]*\$ "
 WAYLAND = "export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0"
 PACKAGES = ["mesa-va-drivers", "vainfo", "ffmpeg", "mpv"]
-# Debian's ffmpeg has VA-API; henge-ffmpeg, first in PATH when installed, does not (it decodes with -hwaccel henge).
+# Debian's ffmpeg has VA-API; tux-ffmpeg, first in PATH when installed, does not (it decodes with -hwaccel tux).
 FFMPEG = "/usr/bin/ffmpeg"
 RENDER = "/dev/dri/renderD128"
 # VREND_VIDEO_CPU_COPY=1 in the environment: tuxvm copies the planes on the CPU (the spike's path), to measure against

@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 /* The FUSE messages a Linux guest's virtio-fs driver sends, as the kernel lays them out (include/uapi/linux/fuse.h,
-   protocol 7.38). Henge's own definitions: only what fs_server.c uses. Little-endian, as both sides are. */
+   protocol 7.38). Tuxedo's own definitions: only what fs_server.c uses. Little-endian, as both sides are. */
 
 #define FUSE_KERNEL_VERSION 7
 #define FUSE_KERNEL_MINOR_VERSION 38

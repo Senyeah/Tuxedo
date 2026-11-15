@@ -1,8 +1,8 @@
 import CoreGraphics
 import Foundation
 
-/// The on-screen keyboard follows a Linux desktop: henge-keyboard in the guest says when the focused program
-/// wants text (host/share.c, /.henge/keyboard). Pure policy, no UIKit.
+/// The on-screen keyboard follows a Linux desktop: tux-keyboard in the guest says when the focused program
+/// wants text (host/share.c, /.tux/keyboard). Pure policy, no UIKit.
 struct KeyboardFollow {
     static let storageKey = "tux.linux.keyboardFollows"
 
@@ -53,8 +53,8 @@ struct KeyboardFrameMemory {
     mutating func didHide() { frame = .null }
 }
 
-/// How much of a Linux guest's picture the keyboard covers. In Plasma, henge-keyboard is KWin's input method and
-/// makes its panel that high, so KWin keeps the active window above the keyboard (host/share.c, GET /.henge/keyboard).
+/// How much of a Linux guest's picture the keyboard covers. In Plasma, tux-keyboard is KWin's input method and
+/// makes its panel that high, so KWin keeps the active window above the keyboard (host/share.c, GET /.tux/keyboard).
 enum KeyboardPanel {
     /// The part of the picture's height under the keyboard, 0...1. Both rectangles are in the same coordinates.
     /// A keyboard that does not reach the picture's bottom edge (a floating one) covers nothing a window can leave.

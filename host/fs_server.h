@@ -10,15 +10,15 @@
    devices/virtio_fs.c carries the messages.
 
    The guest sees one root that the server makes. It has one directory for each folder, by name, and a read-only
-   file .henge-folders with each folder's id, name, mode, state and gen as JSON (gen changes when another folder
+   file .tux-folders with each folder's id, name, mode, state and gen as JSON (gen changes when another folder
    is picked for the index, so the guest remounts an overlay on it). The guest's helper mounts each folder at
-   /media/henge/<name>. Every path below a folder opens below that folder's descriptor (safe_path.h), and the
+   /media/tux/<name>. Every path below a folder opens below that folder's descriptor (safe_path.h), and the
    Read-only and Copy-on-write modes refuse every change here, not only in the guest. Everything has uid and gid
    1000 (the guest's user henge). */
 
 #define HV_FS_MAX_FOLDERS 8
 #define HV_FS_NAME_MAX 64 /* bytes of UTF-8 */
-#define HV_FS_TAG "henge-files"
+#define HV_FS_TAG "tux-files"
 
 enum { HV_FS_RO = 0, HV_FS_COW = 1, HV_FS_RW = 2 }; /* the host serves COW read-only; the guest's overlay does the rest */
 
@@ -48,11 +48,11 @@ void hv_fs_set_hook(HvFsHook hook, void *user);
    nothing in it is open, because the overlay keeps its own "no such file" for names it looked up. */
 int hv_fs_folder_touch(int index);
 /* The app asks the guest's helper to export or discard a Copy-on-write folder's changes; NONE takes an ask back.
-   .henge-folders carries the ask until the helper answers it (POST /.henge/folders/done). Returns the ask's
+   .tux-folders carries the ask until the helper answers it (POST /.tux/folders/done). Returns the ask's
    number (> 0), 0 for NONE, or -1 with errno. */
 enum { HV_FS_ASK_NONE = 0, HV_FS_ASK_EXPORT = 1, HV_FS_ASK_DISCARD = 2 };
 long hv_fs_folder_ask(int index, int what);
-/* The helper's answer: ok, and text (an export's folder below ~/Tuxedo and what it has, or why not). -1 (ESTALE)
+/* The helper's answer: ok, and text (an export's folder below ~/Tux and what it has, or why not). -1 (ESTALE)
    when ask is not the folder's open ask. */
 int hv_fs_folder_answer(int index, long ask, int ok, const char *text);
 /* 1 when ask has its answer (*text malloc'd, may be NULL), 0 while it waits, -1 when it is gone (taken back, a
@@ -61,7 +61,7 @@ int hv_fs_folder_answered(int index, long ask, int *ok, char **text);
 /* "ro", "cow" or "rw"; -1 for anything else. */
 int hv_fs_mode_parse(const char *s);
 const char *hv_fs_mode_name(int mode);
-/* .henge-folders: malloc'd JSON. *seq (may be NULL) is the news count it belongs to. */
+/* .tux-folders: malloc'd JSON. *seq (may be NULL) is the news count it belongs to. */
 char *hv_fs_folders_json(unsigned long *seq);
 /* Waits up to ms for news (a folder added, removed, renamed, a new mode, offline or online) after since; a since
    that is not the count (a new process) returns at once. Returns the count. */

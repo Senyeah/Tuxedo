@@ -3,7 +3,7 @@
 # requires-python = ">=3.9"
 # dependencies = ["pexpect"]
 # ///
-"""P10 check: the Linux virtio_balloon driver binds to Henge's balloon and inflating returns host memory.
+"""P10 check: the Linux virtio_balloon driver binds to Tuxedo's balloon and inflating returns host memory.
 
 Boots a clone of the image on the virt board with HV_BALLOON=0 and drives the target through HV_INPUT_FILE
 ("balloon MB", "balloonstat"). It checks that:

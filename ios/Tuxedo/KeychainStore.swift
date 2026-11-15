@@ -1,7 +1,7 @@
 import Foundation
 import Security
 
-/// A Linux machine's wallet in the iOS Keychain: the store behind host/secrets.c, so items that henge-secrets
+/// A Linux machine's wallet in the iOS Keychain: the store behind host/secrets.c, so items that tux-secrets
 /// keeps in the guest (Secret Service and KWallet) are Keychain items of this app.
 ///
 /// - One Keychain service per machine (WalletScope); the account is the guest's item id. kSecAttrGeneric holds the

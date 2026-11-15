@@ -49,7 +49,7 @@ def ro(d):
         "chmod": lambda: os.chmod(j("f.txt"), 0o600),
         "utime": lambda: os.utime(j("f.txt"), (1, 1)),
         "mkfifo": lambda: os.mkfifo(j("fifo")),
-        "setxattr": lambda: os.setxattr(j("f.txt"), "user.henge", b"1"),
+        "setxattr": lambda: os.setxattr(j("f.txt"), "user.tux", b"1"),
     }
     out(**{k: err(v) for k, v in tests.items()})
 
@@ -129,13 +129,13 @@ def do_mmap(path):
         f.truncate(65536)
         m = mmap.mmap(f.fileno(), 65536)
         for i in range(16):
-            m[i * 4096:i * 4096 + 8] = b"henge%03d" % i
+            m[i * 4096:i * 4096 + 6] = b"tux%03d" % i
         m.flush()
         m.close()
     out(mmap="ok")
 
 
-PROG = '#include <stdio.h>\nint main(void) { volatile int n = %d; printf("henge %%d\\n", n * 3); return 0; }\n'
+PROG = '#include <stdio.h>\nint main(void) { volatile int n = %d; printf("tux %%d\\n", n * 3); return 0; }\n'
 
 
 def build(d):

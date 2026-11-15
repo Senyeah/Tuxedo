@@ -53,7 +53,7 @@
 extern "C" {
 #endif
 
-/* See henge-display.h for why this is necessary. */
+/* See tux-display.h for why this is necessary. */
 #define TUX_EXPORT __attribute__((visibility("default")))
 
 typedef struct TuxDualMapping {

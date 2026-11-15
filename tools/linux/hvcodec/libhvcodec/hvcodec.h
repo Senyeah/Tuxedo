@@ -5,8 +5,8 @@
    each holds the connection from its request to its reply. So a caller that waits on the host (ENC_PACKET with
    HV_VC_PACKET_WAIT) must use a short timeout: every other thread on the connection waits behind it.
 
-   The channel: "/dev/hvcodec" (any path in /dev: the henge_codec module, vcodec_dev.h), "unix:PATH", "HOST:PORT" or
-   "HOST" (port 8470). NULL or "" takes $HENGE_VCODEC, then /dev/hvcodec if it opens, then 10.0.2.4:8470, the address
+   The channel: "/dev/hvcodec" (any path in /dev: the tux_codec module, vcodec_dev.h), "unix:PATH", "HOST:PORT" or
+   "HOST" (port 8470). NULL or "" takes $TUX_VCODEC, then /dev/hvcodec if it opens, then 10.0.2.4:8470, the address
    that libslirp gives the host service. On /dev/hvcodec raw frames cross with no copy in the guest; on TCP they are
    packed into messages, which is slow for 4K. */
 #ifndef TUX_HVCODEC_H

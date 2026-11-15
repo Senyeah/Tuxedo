@@ -1,2 +1,0 @@
-# /dev/hvcodec, the Henge video codec channel (henge_codec): for the video group, as the GPU's nodes.
-KERNEL=="hvcodec", SUBSYSTEM=="misc", GROUP="video", MODE="0660"

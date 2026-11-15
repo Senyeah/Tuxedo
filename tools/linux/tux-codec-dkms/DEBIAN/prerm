@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+NAME=tux-codec
+VER=@VERSION@
+case "$1" in
+remove|upgrade|deconfigure)
+    modprobe -r tux_codec 2>/dev/null || true
+    dkms remove -m "$NAME" -v "$VER" --all 2>/dev/null || true
+    ;;
+esac
+exit 0

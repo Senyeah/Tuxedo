@@ -3,7 +3,7 @@
 # requires-python = ">=3.9"
 # dependencies = ["pexpect", "numpy"]
 # ///
-"""P8 check: the Linux snd_virtio driver binds to Henge's virtio-snd and the guest's tones reach the host.
+"""P8 check: the Linux snd_virtio driver binds to Tuxedo's virtio-snd and the guest's tones reach the host.
 
 Boots a clone of the image on the virt board with HV_SND_CAPTURE, which makes the host audio backend write
 every byte it plays to a file (silence included, while the stream runs). It checks that:

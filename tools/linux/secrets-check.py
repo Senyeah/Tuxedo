@@ -3,17 +3,17 @@
 # requires-python = ">=3.9"
 # dependencies = ["pexpect"]
 # ///
-"""Check: henge-secrets keeps the guest's wallet in the host's store (host/secrets.c), scoped to the machine.
+"""Check: tux-secrets keeps the guest's wallet in the host's store (host/secrets.c), scoped to the machine.
 
 Default: boots a clone of the desktop image on tuxvm with --share, --secrets DIR and --machine-id, and drives
 the device's lock with HV_INPUT_FILE ("secrets lock|unlock", in place of the app's Face ID check). In the guest,
 secrets-probe.py stores, reads, lists and deletes through secret-tool, a Diffie-Hellman session and the KWallet
 API; each item must land in DIR/MACHINE/ (mode 0600), and not show while locked; the same item shows through
 both APIs; a prompt completes when the device unlocks; no secret is in the journal or tuxvm's log. A second
-boot with another machine id must not see the first machine's items. The image needs henge-guest 1.6.1.
+boot with another machine id must not see the first machine's items. The image needs tux-guest 1.6.1.
 
 --container: the same probe in a Debian trixie container (Docker) against secrets-mock-host.py, with kwallet6
-installed: kwallet-query (libkf6wallet) through henge-secrets, a second kwalletd6 that must leave the names
+installed: kwallet-query (libkf6wallet) through tux-secrets, a second kwalletd6 that must leave the names
 alone, and the fallback to kwalletd6 when the device has no wallet. No Plasma session is started.
 Exit 1 on a failed check.
 """
@@ -33,7 +33,7 @@ PROBE = os.path.join(HERE, "secrets-probe.py")
 
 # Names the check stores, made distinct so that a log check can look for each of them.
 TAG = secrets.token_hex(3)
-ATTR = "henge-probe-attr"  # secrets-probe.py's attribute
+ATTR = "tux-probe-attr"  # secrets-probe.py's attribute
 A, B, C = (f"attr-{x}-{TAG}" for x in "abc")
 K1, M1, QKEY, FIRST = f"kw-key-{TAG}", f"kw-map-{TAG}", f"q-key-{TAG}", f"first-{TAG}"
 
@@ -41,7 +41,7 @@ K1, M1, QKEY, FIRST = f"kw-key-{TAG}", f"kw-map-{TAG}", f"q-key-{TAG}", f"first-
 def stored_words(value):
     """Every secret, label and attribute that the check and secrets-probe.py store."""
     secrets_ = [value, "dh-" + value, "kw-" + value, "q-" + value, "other-" + value, FIRST, "v-w-one", "v-w-two", "v-x/y", "sig-value"]
-    labels = [f"Henge probe {x}" for x in (A, B, C)] + ["Henge probe"]
+    labels = [f"Tuxedo probe {x}" for x in (A, B, C)] + ["Tuxedo probe"]
     attrs = [ATTR, A, B, C, K1, M1, QKEY, "Passwords", "Maps", "Wild", "SigFolder", "sig-key", "w-one", "w-two", "x/y", "w-map",
              "sam", "https://example.test/", "ünïcode", "Import", "imp-pw-key", "imp-p2", "imp-map", "imp-bin",
              f"imp-pw-{TAG}", f"imp-p2-{TAG}", f"imp-site-{TAG}", f"pass-{TAG}"]
@@ -60,8 +60,8 @@ class Fail(Exception):
 
 def inner():
     import urllib.request
-    env = dict(os.environ, HENGE_SECRETS_HOST="127.0.0.1", HENGE_SECRETS_PORT="8099", LANG="C.UTF-8", QT_QPA_PLATFORM="offscreen")
-    daemon_bin = "/t/henge-guest/usr/lib/henge/henge-secrets"
+    env = dict(os.environ, TUX_SECRETS_HOST="127.0.0.1", TUX_SECRETS_PORT="8099", LANG="C.UTF-8", QT_QPA_PLATFORM="offscreen")
+    daemon_bin = "/t/tux-guest/usr/lib/tux/tux-secrets"
     procs = []
 
     def control(word):
@@ -97,7 +97,7 @@ def inner():
         names = {n: owner(n) for n in ("org.freedesktop.secrets", "org.kde.kwalletd6", "org.kde.kwalletd5")}
         if set(names.values()) != {"python3"}:
             raise Fail(f"names: {names}")
-        print("ok: henge-secrets owns org.freedesktop.secrets, org.kde.kwalletd6 and org.kde.kwalletd5", flush=True)
+        print("ok: tux-secrets owns org.freedesktop.secrets, org.kde.kwalletd6 and org.kde.kwalletd5", flush=True)
 
         control("unlock")
         value = "pw-" + secrets.token_hex(8)
@@ -135,7 +135,7 @@ def inner():
         r4 = kwq("-f", "Maps", "-r", M1)
         if QKEY not in r3.stdout.decode() or K1 not in r3.stdout.decode() or '"sam"' not in r4.stdout.decode():
             raise Fail(f"kwallet-query -l, or a map: {r3.stdout.decode()[-300:]} {r4.stdout.decode()[-300:]}")
-        print("ok: kwallet-query (libkf6wallet 6.13) reads, replaces, lists and reads a map through henge-secrets", flush=True)
+        print("ok: kwallet-query (libkf6wallet 6.13) reads, replaces, lists and reads a map through tux-secrets", flush=True)
 
         # A second kwalletd6 (pam_kwallet_init, activation) leaves the names alone
         r = subprocess.run(["timeout", "20", "kwalletd6"], capture_output=True, env=env)
@@ -182,8 +182,8 @@ def inner():
             p.terminate()
     time.sleep(1)
 
-    # The device has no wallet: henge-secrets, started by D-Bus, runs kwalletd6 in its place
-    r = subprocess.Popen(["python3", daemon_bin, "--activated"], env=dict(env, HENGE_SECRETS_PORT="8098"), stderr=subprocess.PIPE, text=True)
+    # The device has no wallet: tux-secrets, started by D-Bus, runs kwalletd6 in its place
+    r = subprocess.Popen(["python3", daemon_bin, "--activated"], env=dict(env, TUX_SECRETS_PORT="8098"), stderr=subprocess.PIPE, text=True)
     for _ in range(150):
         if owner("org.kde.kwalletd6") == "kwalletd6":
             break
@@ -257,7 +257,7 @@ def import_check(env, daemon_bin, dump):
     import base64
     make_kwallet(env, f"pass-{TAG}")
     print("ok: a kwalletd6 wallet with 2 passwords, a map and binary data", flush=True)
-    command = "/t/henge-guest/usr/bin/henge-secrets"  # the package's command, not the daemon's path
+    command = "/t/tux-guest/usr/bin/tux-secrets"  # the package's command, not the daemon's path
     run = lambda pw, *a: subprocess.run([command, "--import", "--password-stdin", *a], input=pw + "\n",  # noqa: E731
                                         capture_output=True, text=True, env=env, timeout=120)
     r = run("wrong")
@@ -287,9 +287,9 @@ def import_check(env, daemon_bin, dump):
 
 
 def firewall():
-    """henge-secrets-firewall: only root and henge reach 10.0.2.4:81, and the rule comes back after anything that
+    """tux-secrets-firewall: only root and henge reach 10.0.2.4:81, and the rule comes back after anything that
     flushes nftables (nftables.service's start, reload and stop, nft flush ruleset). Stopping the follower keeps it."""
-    script = "/t/henge-guest/usr/lib/henge/henge-secrets-firewall"
+    script = "/t/tux-guest/usr/lib/tux/tux-secrets-firewall"
     sh = lambda cmd: subprocess.run(cmd, shell=True, capture_output=True, text=True)  # noqa: E731
     import socketserver
     import threading
@@ -325,8 +325,8 @@ def firewall():
         guarded("after start")
         for what, cmd in (("nft flush ruleset", "nft flush ruleset"),
                           ("nftables.service's start and reload (nft -f /etc/nftables.conf)", "nft -f /etc/nftables.conf"),
-                          ("a flush of its own table", "nft flush table inet henge_secrets"),
-                          ("a delete of its own table", "nft delete table inet henge_secrets")):
+                          ("a flush of its own table", "nft flush table inet tux_secrets"),
+                          ("a delete of its own table", "nft delete table inet tux_secrets")):
             sh(cmd)
             time.sleep(0.3)
             guarded(f"after {what}")
@@ -348,13 +348,13 @@ def firewall():
 
 
 def package():
-    """henge-guest's scripts: the diversions, and the wallet's unit enabled on install and on a reinstall after a
+    """tux-guest's scripts: the diversions, and the wallet's unit enabled on install and on a reinstall after a
     remove, but an admin's disable kept over an upgrade."""
     import shutil
-    shutil.copytree("/t/henge-guest", "/tmp/pkg", dirs_exist_ok=True, symlinks=True)
+    shutil.copytree("/t/tux-guest", "/tmp/pkg", dirs_exist_ok=True, symlinks=True)
     subprocess.run("find /tmp/pkg -type d -exec chmod 0755 {} + && find /tmp/pkg -type f -exec chmod 0644 {} + && "
-                   "chmod 0755 /tmp/pkg/usr/lib/henge/* /tmp/pkg/DEBIAN/preinst /tmp/pkg/DEBIAN/postinst /tmp/pkg/DEBIAN/prerm /tmp/pkg/DEBIAN/postrm && "
-                   "dpkg-deb --root-owner-group --build /tmp/pkg /tmp/henge-guest.deb >/dev/null", shell=True, check=True)
+                   "chmod 0755 /tmp/pkg/usr/lib/tux/* /tmp/pkg/DEBIAN/preinst /tmp/pkg/DEBIAN/postinst /tmp/pkg/DEBIAN/prerm /tmp/pkg/DEBIAN/postrm && "
+                   "dpkg-deb --root-owner-group --build /tmp/pkg /tmp/tux-guest.deb >/dev/null", shell=True, check=True)
 
     def dpkg(*a):
         r = subprocess.run(["dpkg", *a], capture_output=True, text=True)
@@ -362,32 +362,32 @@ def package():
             raise Fail(f"dpkg {' '.join(a)}: {r.stderr[-500:]}")
 
     def enabled():
-        return subprocess.run(["systemctl", "--global", "is-enabled", "henge-secrets.service"], capture_output=True, text=True).stdout.strip()
+        return subprocess.run(["systemctl", "--global", "is-enabled", "tux-secrets.service"], capture_output=True, text=True).stdout.strip()
 
     def diverted():
-        return subprocess.run(["dpkg-divert", "--list", "*henge*"], capture_output=True, text=True).stdout.count("by henge-guest")
+        return subprocess.run(["dpkg-divert", "--list", "*tux*"], capture_output=True, text=True).stdout.count("by tux-guest")
 
-    dpkg("-i", "/tmp/henge-guest.deb")
-    if enabled() != "enabled" or diverted() != 3 or "kwalletd6" not in open("/usr/share/dbus-1/services/org.kde.kwalletd6.service.henge").read():
+    dpkg("-i", "/tmp/tux-guest.deb")
+    if enabled() != "enabled" or diverted() != 3 or "kwalletd6" not in open("/usr/share/dbus-1/services/org.kde.kwalletd6.service.tux").read():
         raise Fail(f"install: unit {enabled()}, {diverted()} diversions")
     # The README's command, as the user types it in Konsole: on henge's PATH, and it reaches the import
-    as_henge = ["setpriv", "--reuid=henge", "--regid=henge", "--clear-groups", "--reset-env", "sh", "-lc"]
-    where = subprocess.run(as_henge + ["command -v henge-secrets"], capture_output=True, text=True).stdout.strip()
-    r = subprocess.run(as_henge + ["henge-secrets --import --wallet no-such-wallet"], capture_output=True, text=True)
-    if where != "/usr/bin/henge-secrets" or r.returncode == 0 or "no wallet" not in r.stderr:
-        raise Fail(f"henge-secrets for henge: {where!r}, import {r.returncode} {r.stderr[-200:]!r}")
-    print("ok: package: henge-secrets is on henge's PATH and reaches the import", flush=True)
-    dpkg("-r", "henge-guest")
+    as_tux = ["setpriv", "--reuid=henge", "--regid=henge", "--clear-groups", "--reset-env", "sh", "-lc"]
+    where = subprocess.run(as_tux + ["command -v tux-secrets"], capture_output=True, text=True).stdout.strip()
+    r = subprocess.run(as_tux + ["tux-secrets --import --wallet no-such-wallet"], capture_output=True, text=True)
+    if where != "/usr/bin/tux-secrets" or r.returncode == 0 or "no wallet" not in r.stderr:
+        raise Fail(f"tux-secrets for henge: {where!r}, import {r.returncode} {r.stderr[-200:]!r}")
+    print("ok: package: tux-secrets is on henge's PATH and reaches the import", flush=True)
+    dpkg("-r", "tux-guest")
     if enabled() == "enabled" or diverted() != 0 or "kwalletd6" not in open("/usr/share/dbus-1/services/org.kde.kwalletd6.service").read():
         raise Fail(f"remove: unit {enabled()}, {diverted()} diversions")
-    dpkg("-i", "/tmp/henge-guest.deb")
+    dpkg("-i", "/tmp/tux-guest.deb")
     if enabled() != "enabled":
         raise Fail(f"reinstall after a remove: the unit is {enabled()}")
-    subprocess.run(["systemctl", "--global", "disable", "henge-secrets.service"], capture_output=True)
-    dpkg("-i", "/tmp/henge-guest.deb")
+    subprocess.run(["systemctl", "--global", "disable", "tux-secrets.service"], capture_output=True)
+    dpkg("-i", "/tmp/tux-guest.deb")
     if enabled() != "disabled":
         raise Fail(f"upgrade after an admin's disable: the unit is {enabled()}")
-    dpkg("--purge", "henge-guest")
+    dpkg("--purge", "tux-guest")
     if diverted() != 0:
         raise Fail("purge left diversions")
     print("ok: package: diversions, the unit enabled on install and on a reinstall, an admin's disable kept", flush=True)
@@ -398,10 +398,10 @@ def container(args):
                   "python3-jeepney python3-cryptography libsecret-tools dbus dbus-bin systemd kwallet6 "
                   "davfs2 cloud-guest-utils gdisk e2fsprogs tzdata nftables iproute2 && rm -rf /var/lib/apt/lists/*\n")
     env = dict(os.environ, PATH="/opt/homebrew/bin:" + os.environ.get("PATH", ""))
-    r = subprocess.run(["docker", "build", "-q", "-t", "henge-secrets-test", "-"], input=dockerfile.encode(), capture_output=True, env=env)
+    r = subprocess.run(["docker", "build", "-q", "-t", "tux-secrets-test", "-"], input=dockerfile.encode(), capture_output=True, env=env)
     if r.returncode:
         raise Fail("docker build: " + r.stderr.decode()[-800:])
-    r = subprocess.run(["docker", "run", "--rm", "--cap-add", "NET_ADMIN", "-v", f"{HERE}:/t:ro", "henge-secrets-test",
+    r = subprocess.run(["docker", "run", "--rm", "--cap-add", "NET_ADMIN", "-v", f"{HERE}:/t:ro", "tux-secrets-test",
                         "dbus-run-session", "--", "python3", "/t/secrets-check.py", "--inner"], env=env)
     if r.returncode:
         raise Fail("in the container")
@@ -457,7 +457,7 @@ def boot(args, image, store, machine, steps):
             out, rc = sh(p, cmd, limit)
             if rc != 0:
                 raise Fail(f"{what or cmd}: status {rc}: {out.strip()[-1500:]!r}\njournal:\n" +
-                           sh(p, "journalctl --user -u henge-secrets --no-pager | tail -n 20", 20)[0])
+                           sh(p, "journalctl --user -u tux-secrets --no-pager | tail -n 20", 20)[0])
             return out.strip()
 
         def probe(*a, stdin=None, limit=200):
@@ -466,13 +466,13 @@ def boot(args, image, store, machine, steps):
             print("ok:", out.splitlines()[-1], flush=True)
 
         end = time.monotonic() + 120
-        while sh(p, "systemctl --user is-active henge-secrets", 20)[0].strip() != "active":
+        while sh(p, "systemctl --user is-active tux-secrets", 20)[0].strip() != "active":
             if time.monotonic() > end:
-                raise Fail("henge-secrets is not active 120 s after login")
+                raise Fail("tux-secrets is not active 120 s after login")
             time.sleep(2)
-        need("journalctl --user -u henge-secrets --no-pager | grep -q 'serving org.freedesktop.secrets org.kde.kwalletd6 org.kde.kwalletd5'",
+        need("journalctl --user -u tux-secrets --no-pager | grep -q 'serving org.freedesktop.secrets org.kde.kwalletd6 org.kde.kwalletd5'",
              "the names")
-        print("ok: henge-secrets is active and owns the Secret Service and KWallet names", flush=True)
+        print("ok: tux-secrets is active and owns the Secret Service and KWallet names", flush=True)
         import base64
         data = base64.b64encode(open(PROBE, "rb").read()).decode()
         need(": > /tmp/probe.b64")
@@ -480,11 +480,11 @@ def boot(args, image, store, machine, steps):
             need(f"printf %s '{data[i:i + 600]}' >> /tmp/probe.b64")
         need("base64 -d /tmp/probe.b64 > /tmp/probe.py")
         # The README's command for henge, from a login shell as in Konsole
-        where = need("bash -lc 'command -v henge-secrets'", "henge-secrets on henge's PATH").splitlines()[-1]
-        out, rc = sh(p, "bash -lc 'henge-secrets --import --wallet no-such-wallet' 2>&1", 60)
-        if where != "/usr/bin/henge-secrets" or rc == 0 or "no wallet" not in out:
-            raise Fail(f"henge-secrets for henge: {where!r}, import {rc} {out.strip()[-200:]!r}")
-        print("ok: henge-secrets is on henge's PATH and reaches the import", flush=True)
+        where = need("bash -lc 'command -v tux-secrets'", "tux-secrets on henge's PATH").splitlines()[-1]
+        out, rc = sh(p, "bash -lc 'tux-secrets --import --wallet no-such-wallet' 2>&1", 60)
+        if where != "/usr/bin/tux-secrets" or rc == 0 or "no wallet" not in out:
+            raise Fail(f"tux-secrets for henge: {where!r}, import {rc} {out.strip()[-200:]!r}")
+        print("ok: tux-secrets is on henge's PATH and reaches the import", flush=True)
         steps(host, need, probe, err)
         p.sendline("sudo poweroff")
         p.expect(pexpect.EOF, timeout=120)
@@ -541,8 +541,8 @@ def vm(args):
 
             # Only the session user (and root) reach the wallet's port; port 80 has no wallet
             get = ("python3 -c \"import http.client as h, sys; c=h.HTTPConnection('10.0.2.4', {port}, timeout=5); "
-                   "c.request('GET','/.henge/secrets/state'); print('status', c.getresponse().status)\" 2>&1 | tail -n 1")
-            need("systemctl is-active henge-secrets-firewall", "the firewall unit")
+                   "c.request('GET','/.tux/secrets/state'); print('status', c.getresponse().status)\" 2>&1 | tail -n 1")
+            need("systemctl is-active tux-secrets-firewall", "the firewall unit")
             mine = need(get.format(port=81))
             other = need("sudo -u nobody " + get.format(port=81))
             root = need("sudo " + get.format(port=81))
@@ -553,7 +553,7 @@ def vm(args):
 
             # The rule comes back after whatever flushes nftables, and a restart of its own unit leaves no gap
             for what in ("systemctl restart nftables", "systemctl reload nftables", "systemctl stop nftables",
-                         "nft flush ruleset", "systemctl restart henge-secrets-firewall"):
+                         "nft flush ruleset", "systemctl restart tux-secrets-firewall"):
                 need(f"sudo {what}", what)
                 end = time.monotonic() + 10
                 while True:
@@ -563,7 +563,7 @@ def vm(args):
                     if time.monotonic() > end:
                         raise Fail(f"after {what}: nobody {other!r}, henge {mine!r}")
                     time.sleep(0.5)
-                need("systemctl is-active henge-secrets-firewall", f"the firewall unit after {what}")
+                need("systemctl is-active tux-secrets-firewall", f"the firewall unit after {what}")
                 print(f"ok: after {what}, nobody is refused and henge reaches the port", flush=True)
 
             host.line("secrets lock")
@@ -578,7 +578,7 @@ def vm(args):
             print("ok: locked: the item shows as locked, GetSecret(s) give nothing", flush=True)
             probe("kw-locked")
             iid = next(k for k, v in files(store, "check-a").items() if v[0].get("attributes") == {ATTR: A})
-            code = need(f"python3 -c \"import http.client as h; c=h.HTTPConnection('10.0.2.4', 81); c.request('GET','/.henge/secrets/items/{iid}'); print(c.getresponse().status)\"")
+            code = need(f"python3 -c \"import http.client as h; c=h.HTTPConnection('10.0.2.4', 81); c.request('GET','/.tux/secrets/items/{iid}'); print(c.getresponse().status)\"")
             if code.splitlines()[-1] != "423":
                 raise Fail(f"the host gave {code} for a read while locked")
             print("ok: the host answers 423 to a read while locked", flush=True)

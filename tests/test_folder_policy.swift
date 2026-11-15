@@ -32,7 +32,7 @@ struct FolderPolicyTests {
         check("a plain name stays", n("Projects", []) == "Projects")
         check("a slash", n("a/b", []) == "a-b")
         check("leading dots", n("..hidden", []) == "hidden")
-        check("the host's own file", n(".henge-folders", []) == "henge-folders")
+        check("the host's own file", n(".tux-folders", []) == "tux-folders")
         check("control characters", n("a\u{0}b\nc\u{7f}", []) == "abc")
         check("spaces at the ends", n("  Docs  ", []) == "Docs")
         check("nothing left", n("...", []) == "Folder" && n("", []) == "Folder" && n("/", []) == "-")
@@ -158,7 +158,7 @@ struct FolderPolicyTests {
             check("export: all there", FolderPolicy.exportArrived(all, expected: want))
             check("export: a file still coming", !FolderPolicy.exportArrived(Array(all.prefix(2)), expected: want))
             check("export: a file not all there", !FolderPolicy.exportArrived([("a.txt", 50), ("deletions.txt", 6), (".bashrc", 14)], expected: want))
-            check("export: an upload in its temporary file", !FolderPolicy.exportArrived([("a.txt", 100), ("deletions.txt", 6), (".henge-put-a1", 14)], expected: want))
+            check("export: an upload in its temporary file", !FolderPolicy.exportArrived([("a.txt", 100), ("deletions.txt", 6), (".tux-put-a1", 14)], expected: want))
         }
         check("trash: Recently Deleted", FolderPolicy.isTrash(path: "/private/var/mobile/Library/Mobile Documents/.Trash/Projects")
               && FolderPolicy.isTrash(path: "/x/File Provider Storage/.Trash/Music"))

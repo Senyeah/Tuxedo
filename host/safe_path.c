@@ -39,7 +39,7 @@ static void probe(void) {
     char tmp[PATH_MAX], dir[PATH_MAX];
     size_t n = confstr(_CS_DARWIN_USER_TEMP_DIR, tmp, sizeof tmp);
     if (n == 0 || n > sizeof tmp) snprintf(tmp, sizeof tmp, "%s/", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");
-    if (snprintf(dir, sizeof dir, "%s%shenge-beneath-XXXXXX", tmp, tmp[strlen(tmp) - 1] == '/' ? "" : "/") >= (int)sizeof dir) return;
+    if (snprintf(dir, sizeof dir, "%s%stux-beneath-XXXXXX", tmp, tmp[strlen(tmp) - 1] == '/' ? "" : "/") >= (int)sizeof dir) return;
     if (!mkdtemp(dir)) return;
     int fd = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     char up[NAME_MAX + 4];

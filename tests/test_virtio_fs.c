@@ -104,7 +104,7 @@ static void test_config(void) {
     const uint8_t *c = dev->vio.pci.config;
     check("PCI vendor and device", c[0] | c[1] << 8 | c[2] << 16 | (long long)c[3] << 24, 0x105a1af4);
     check("PCI class: mass storage, other", dev->vio.pci.config[0x0b] << 8 | dev->vio.pci.config[0x0a], 0x0180);
-    check("tag", !strcmp((char *)dev->vio.config, "henge-files"), 1);
+    check("tag", !strcmp((char *)dev->vio.config, "tux-files"), 1);
     uint32_t nq;
     memcpy(&nq, dev->vio.config + 36, 4);
     check("one request queue", nq, 1);
@@ -424,7 +424,7 @@ static void test_stop_stuck(uint64_t big) {
 }
 
 int main(void) {
-    snprintf(base, sizeof base, "/tmp/henge-vfs-XXXXXX");
+    snprintf(base, sizeof base, "/tmp/tux-vfs-XXXXXX");
     if (!mkdtemp(base)) return 1;
     char p[PATH_MAX];
     snprintf(p, sizeof p, "%s/a", base);

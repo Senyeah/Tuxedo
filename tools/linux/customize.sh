@@ -12,14 +12,14 @@ printf '%s\n' virtio_pci virtio_blk virtio_net virtio_rng ext4 >> /etc/initramfs
 
 useradd --create-home --shell /bin/bash --groups sudo,audio,video henge
 passwd -d henge
-install -d -o henge -g henge /home/henge/Henge
+install -d -o henge -g henge /home/henge/Tux
 
-# henge-guest enables its own units; fail the build if it did not
-dpkg-query -W -f='${Status}' henge-guest | grep -q 'install ok installed'
-systemctl is-enabled henge-firstboot.service henge-grow.service home-henge-Henge.automount henge-status.service
+# tux-guest enables its own units; fail the build if it did not
+dpkg-query -W -f='${Status}' tux-guest | grep -q 'install ok installed'
+systemctl is-enabled tux-firstboot.service tux-grow.service home-henge-Tux.automount tux-status.service
 systemctl enable systemd-networkd.service systemd-resolved.service systemd-timesyncd.service fstrim.timer
 # The device owns the volume and the screen brightness: a saved guest level must not set them at boot
-systemctl mask alsa-restore.service alsa-state.service 'systemd-backlight@backlight:henge-backlight.service'
+systemctl mask alsa-restore.service alsa-state.service 'systemd-backlight@backlight:tux-backlight.service'
 ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 mkdir -p /etc/systemd/system/getty.target.wants
 ln -sf /usr/lib/systemd/system/serial-getty@.service /etc/systemd/system/getty.target.wants/serial-getty@ttyAMA0.service

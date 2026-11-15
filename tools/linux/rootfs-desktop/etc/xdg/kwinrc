@@ -1,4 +1,4 @@
-# KWin starts henge-keyboard as its input method: it keeps the active window above the device keyboard.
+# KWin starts tux-keyboard as its input method: it keeps the active window above the device keyboard.
 # A user value in ~/.config/kwinrc (System Settings, Virtual Keyboard) replaces this.
 [Wayland]
-InputMethod[$e]=/usr/share/applications/henge-keyboard.desktop
+InputMethod[$e]=/usr/share/applications/tux-keyboard.desktop

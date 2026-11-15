@@ -1,0 +1,11 @@
+[Unit]
+Description=Tuxedo device status: clock, time zone and screen brightness from the device
+After=network.target
+
+[Service]
+ExecStart=/usr/lib/tux/tux-status
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

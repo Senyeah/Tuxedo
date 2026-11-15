@@ -1,6 +1,6 @@
 #!/usr/bin/python3
-"""A stand-in for host/share.c's /.henge/keyboard, for keyboard-panel-check.sh: host.py PORT LOG.
-PUT /.henge/keyboard: the body goes to LOG. GET /.henge/keyboard[?since=N]: "height F", held up to 25 s.
+"""A stand-in for host/share.c's /.tux/keyboard, for keyboard-panel-check.sh: host.py PORT LOG.
+PUT /.tux/keyboard: the body goes to LOG. GET /.tux/keyboard[?since=N]: "height F", held up to 25 s.
 PUT /height sets F, as the app does."""
 import http.server
 import sys
@@ -18,7 +18,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Length", str(len(body)))
         if seq is not None:
-            self.send_header("X-Henge-Seq", str(seq))
+            self.send_header("X-Tux-Seq", str(seq))
         try:
             self.end_headers()
             self.wfile.write(body)
@@ -32,7 +32,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             with cond:
                 height, seq = float(body), seq + 1
                 cond.notify_all()
-        elif self.path == "/.henge/keyboard":
+        elif self.path == "/.tux/keyboard":
             with open(sys.argv[2], "a") as f:
                 f.write(body + "\n")
         else:
@@ -41,7 +41,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         url = urllib.parse.urlparse(self.path)
-        if url.path != "/.henge/keyboard":
+        if url.path != "/.tux/keyboard":
             return self.answer(404)
         since = urllib.parse.parse_qs(url.query).get("since")
         with cond:

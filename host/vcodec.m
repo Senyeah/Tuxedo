@@ -935,7 +935,7 @@ static int do_frame_download(Ctx *c, const HvVcHeader *req, const uint8_t *p) {
 /* The frame and the plane layout of a DMA transfer, checked against the frame and the data's length. */
 static Frame *dma_layout(Ctx *c, const HvVcHeader *req, const uint8_t *p, uint64_t data_len, HvVcPlanesDma *d, int *err) {
     *err = 0;
-    if (!c->io) return *err = fail(c, req, HV_VC_E_NOSUP, "DMA transfers need /dev/hvcodec (the henge_codec module)"), NULL;
+    if (!c->io) return *err = fail(c, req, HV_VC_E_NOSUP, "DMA transfers need /dev/hvcodec (the tux_codec module)"), NULL;
     if (req->len != sizeof *d) return *err = fail(c, req, HV_VC_E_INVAL, "the DMA transfer has the wrong length"), NULL;
     memcpy(d, p, sizeof *d);
     Frame *f = frame_get(c, d->handle);
