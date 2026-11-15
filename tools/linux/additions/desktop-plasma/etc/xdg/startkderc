@@ -1,0 +1,4 @@
+# KWin as a systemd user unit is outside the tty1 session, so logind and polkit refuse it the seat.
+# The classic start keeps KWin a child of startplasma, in the session.
+[General]
+systemdBoot=false

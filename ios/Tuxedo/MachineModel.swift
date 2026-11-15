@@ -128,6 +128,8 @@ struct AdditionsCaps: Codable, Hashable {
     var network = false
     /// "labwc", "plasma", "xfce" or "none".
     var desktop = "none"
+    /// Every desktop that is installed (`desktop` is the one that starts).
+    var desktops: [String] = []
     var ssh: AdditionsSSH?
     var apps: [String: Bool] = [:]
     var hostname = ""
@@ -138,7 +140,7 @@ struct AdditionsCaps: Codable, Hashable {
     var kernel = ""
 
     enum CodingKeys: String, CodingKey {
-        case installed, legacy, account, root, network, desktop, ssh, apps, hostname, image, ips, kernel
+        case installed, legacy, account, root, network, desktop, desktops, ssh, apps, hostname, image, ips, kernel
         case diskFreeMB = "disk_free_mb"
     }
 
@@ -153,6 +155,7 @@ struct AdditionsCaps: Codable, Hashable {
         root = c.lenient(Bool.self, .root) ?? false
         network = c.lenient(Bool.self, .network) ?? false
         desktop = c.lenient(String.self, .desktop) ?? "none"
+        desktops = c.lenient([String].self, .desktops) ?? (desktop == "none" ? [] : [desktop])
         ssh = c.lenient(AdditionsSSH.self, .ssh)
         apps = c.lenient([String: Bool].self, .apps) ?? [:]
         hostname = c.lenient(String.self, .hostname) ?? ""

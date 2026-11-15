@@ -65,8 +65,10 @@ struct RootView: View {
         .background(WindowStyle(style: running != nil ? .dark : appearance.style))
         .sheet(isPresented: $jit.showSetup) { JITSetupFlow() }
         .onReceive(NotificationCenter.default.publisher(for: Autopilot.additionsDemo)) { note in
-            let step = (note.object as? String).flatMap(AdditionsStep.init(rawValue:))
-            demoAdditions = TuxAdditions.demo
+            let arg = note.object as? String
+            let switching = arg == "switch"
+            let step = switching ? AdditionsStep.desktop : arg.flatMap(AdditionsStep.init(rawValue:))
+            demoAdditions = TuxAdditions.demo(switching: switching)
             demo = AdditionsWizardRequest(step: step, intro: step == .account)
         }
         .fullScreenCover(item: $demo) { request in

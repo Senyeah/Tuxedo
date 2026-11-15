@@ -284,6 +284,7 @@ enum AdditionsText {
 
     static let noNetwork = "No network. Connect the machine to a network first."
     static let installed = "Installed"
+    static let current = "In use"
     static let needsNetwork = "Needs network"
 
     static let passwordMismatch = "The two passwords are not the same."
@@ -310,6 +311,8 @@ enum AdditionsText {
     static let connectBootstrap = "The guest does not answer. It may not have tux-guest. Run this command in the guest. It uses sudo when you are not root."
     static let typeCommands = "Type the commands"
     static let copyCommands = "Copy"
+    static let restartToggle = "The new desktop starts after the restart. Turn this off to restart the machine yourself later."
+    static let restartingNote = "The machine restarts in a moment to start the new desktop."
     static let restartNote = "Restart the machine to use the new desktop and settings."
     static let reviewNote = "Pressing Start sends these choices to the machine. Keep Tuxedo open while it works."
     static let introPoints = [
@@ -321,7 +324,8 @@ enum AdditionsText {
     static let desktopPoints = [
         "The console is small and fast. It has no windows.",
         "A desktop adds windows, a panel and a menu. It takes more disk and more memory.",
-        "The sizes are the download. The machine needs about the same amount of free disk.",
+        "The sizes are the download. The machine needs more free disk than that.",
+        "The machine restarts to start a new desktop. You can switch desktops again later.",
     ]
     static let sshPoints = [
         "SSH lets you sign in from another computer. It is off until you turn it on.",

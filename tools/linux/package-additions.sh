@@ -1,7 +1,7 @@
 #!/bin/sh
 # The Tuxedo Additions media, built on the Mac (docs/guest-additions-design.md, section 4):
 #   $TUX_LINUX_OUT/additions/tux-additions/   install, agent, tux_additions_caps.py, actions.json, versions.json,
-#     install-order.txt, README.txt, desktop-labwc/, SHA256SUMS, SHA256SUMS.gpg, tux-archive.gpg, source/SOURCES.txt,
+#     install-order.txt, README.txt, desktop-labwc/, desktop-plasma/, SHA256SUMS, SHA256SUMS.gpg, tux-archive.gpg, source/SOURCES.txt,
 #     apt/ (a signed apt repository: main = the four Tuxedo debs, deps = the Debian debs a minbase guest with systemd lacks, plus
 #     openssh-server and what it needs, from the pinned snapshot; no Valid-Until in Release)
 # The debs come from where the other scripts put them: tux-ffmpeg (build-ffmpeg-pkg.sh), tux-va, tux-codec-dkms, and a
@@ -33,7 +33,7 @@ if [ "${1:-}" = --inner ]; then
 
     # the files of the agent and the session files
     cp "$A/install" "$A/agent" "$A/actions.json" "$A/tux_additions_caps.py" "$T/"
-    (cd "$A" && find desktop-labwc -type f ! -name .DS_Store | LC_ALL=C sort | while read -r f; do
+    (cd "$A" && find desktop-labwc desktop-plasma -type f ! -name .DS_Store | LC_ALL=C sort | while read -r f; do
         mkdir -p "$T/$(dirname "$f")" && cp "$f" "$T/$f"; done)
 
     # main: the four Tuxedo debs and nothing else

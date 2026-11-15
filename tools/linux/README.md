@@ -472,6 +472,7 @@ The files in the media:
 | `versions.json` | The versions in this build, the Debian snapshot and the install order of the Debian packages. |
 | `install-order.txt` | The order for `dpkg`, for when `apt` does not work. |
 | `desktop-labwc/` | The session files of the Tuxedo desktop, copied from `rootfs-desktop`, and `files.json` as their map. |
+| `desktop-plasma/` | The Plasma settings files, copied from `rootfs-desktop`, and `files.json` as their map. |
 | `apt/` | A signed apt repository: `main` (the four Tuxedo packages) and `deps` (the Debian packages). `Release` has no `Valid-Until`. |
 | `SHA256SUMS`, `SHA256SUMS.gpg`, `tux-archive.gpg` | The sums of every other file, the signature, and the public key (the same bytes as in `tux-guest`). |
 | `README.txt`, `source/SOURCES.txt` | The commands, the licences and the source offer (see `docs/licensing.md`). |

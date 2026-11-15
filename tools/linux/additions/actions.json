@@ -15,14 +15,24 @@
     {
       "id": "plasma",
       "title": "KDE Plasma",
-      "packages": ["kde-plasma-desktop", "sddm"],
-      "size_mb": 348
+      "packages": [
+        "plasma-desktop", "plasma-workspace", "kwin-wayland", "konsole", "systemsettings", "powerdevil", "plasma-pa", "plasma-nm",
+        "libpam-systemd", "xkb-data", "fonts-dejavu-core", "libgl1-mesa-dri", "libegl1", "libgles2", "pipewire", "pipewire-bin",
+        "pipewire-alsa", "pipewire-pulse", "wireplumber", "python3", "python3-cryptography", "libsecret-tools", "wl-clipboard", "xclip", "dbus-user-session"
+      ],
+      "size_mb": 420,
+      "files": ["desktop-labwc", "desktop-plasma"]
     },
     {
       "id": "xfce",
       "title": "Xfce",
-      "packages": ["xfce4", "lightdm"],
-      "size_mb": 50
+      "packages": [
+        "xfce4", "xfce4-terminal", "xserver-xorg-core", "xserver-xorg-input-libinput", "xinit", "dbus-x11",
+        "libpam-systemd", "xkb-data", "fonts-dejavu-core", "libgl1-mesa-dri", "libegl1", "libgles2", "pipewire", "pipewire-bin",
+        "pipewire-alsa", "pipewire-pulse", "wireplumber", "python3", "python3-cryptography", "libsecret-tools", "wl-clipboard", "xclip", "dbus-user-session"
+      ],
+      "size_mb": 95,
+      "files": ["desktop-labwc"]
     }
   ],
   "apps": [

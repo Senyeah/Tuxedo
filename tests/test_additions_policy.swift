@@ -227,6 +227,10 @@ struct AdditionsPolicyTests {
         ]
         let job = AdditionsJob(id: "j-8f3a", steps: steps)
         let text = job.json()!
+        check("no reboot_after unless it is set", !text.contains("reboot_after"))
+        var restart = job
+        restart.rebootAfter = true
+        check("reboot_after true when set", json(restart.json()!)["reboot_after"] as? Bool == true)
         let expected: [String: Any] = ["id": "j-8f3a", "steps": [
             ["action": "additions.install"],
             ["action": "user.setup", "name": "tux", "password": secret, "sudo": true, "autologin": true, "lock_root": true],
@@ -270,7 +274,7 @@ struct AdditionsPolicyTests {
         check("job ids", id.hasPrefix("j-") && id.count == 10 && id != AdditionsJob.newID())
         check("the account's name and index", job.accountName == "tux" && job.accountStepIndex == 1
               && AdditionsJob(id: "x", steps: [.systemUpdate]).accountName == nil)
-        check("step titles", steps[3].title(catalogue) == "Install Tuxedo desktop (labwc)" && steps[4].title(catalogue) == "Install Firefox and git"
+        check("step titles", steps[3].title(catalogue) == "Set up Tuxedo desktop (labwc)" && steps[4].title(catalogue) == "Install Firefox and git"
               && AdditionsJob.Step.appsInstall(ids: ["a", "b", "c"]).title(nil) == "Install 3 applications")
     }
 
@@ -517,9 +521,27 @@ struct AdditionsPolicyTests {
         m = model { $0.installed = ["tux-guest": "1.11.0"] }
         check("missing packages: install", m.additionsAction == .install && m.flow.contains(.additions))
         check("older packages: update", model().additionsAction == .update)
-        m = model { $0.desktop = "xfce" }
-        check("a desktop is there: step skipped", !m.flow.contains(.desktop))
-        check("desktop installed is marked", m.desktopChoices.first { $0.id == "xfce" }?.disabledReason == AdditionsText.installed)
+        m = model { $0.desktop = "xfce"; $0.desktops = ["xfce"] }
+        check("a desktop is there: the step stays, to switch", m.flow.contains(.desktop))
+        check("the desktop in use is marked and cannot be picked", m.desktopChoices.first { $0.id == "xfce" }?.disabledReason == AdditionsText.current
+              && m.desktopChoices.first { $0.id == "xfce" }?.marks == [AdditionsText.current])
+        check("keep names the desktop", m.desktopChoices.first?.title == "Keep Xfce")
+        m = model { $0.desktop = "labwc"; $0.desktops = ["labwc", "plasma"]; $0.network = false }
+        let plasma = m.desktopChoices.first { $0.id == "plasma" }
+        check("an installed desktop is a pick with no download, also with no network", plasma?.disabledReason == nil && plasma?.sizeMB == 0
+              && plasma?.marks == [AdditionsText.installed])
+        m.chooseDesktop("plasma")
+        check("it is chosen with no network", m.desktop == "plasma" && m.jobSteps().map(\.action).contains("desktop.install"))
+        m.update(report: report { $0.caps.desktop = "labwc"; $0.caps.desktops = ["labwc", "plasma"]; $0.caps.network = false })
+        check("a report with no network keeps an installed pick", m.desktop == "plasma")
+        check("the desktop in the job asks for a restart", m.needsRestart && m.restartsAfter && m.job()?.rebootAfter == true)
+        m.restartAfter = false
+        check("the switch turns the restart off", m.needsRestart && !m.restartsAfter && m.job()?.rebootAfter == false)
+        check("no desktop in the job: no restart", { let n = model(); return !n.needsRestart && !n.restartsAfter && n.job()?.rebootAfter == false }())
+        check("an installed desktop in the review", m.reviewLines.contains { $0.title == "Use KDE Plasma" })
+        m = model { $0.desktop = "labwc"; $0.desktops = ["labwc"] }
+        check("a report with no desktops list takes the desktop", { var c = AdditionsCaps(); c.desktop = "labwc"
+            let d = try? JSONDecoder().decode(AdditionsCaps.self, from: Data(#"{"desktop":"labwc"}"#.utf8)); _ = c; return d?.desktops == ["labwc"] }())
         check("no versions: no additions step", AdditionsWizardModel(caps: report().caps, versions: nil, catalogue: catalogue).flow.contains(.additions) == false)
         check("no catalogue: no desktop or apps step", { let w = AdditionsWizardModel(caps: report().caps, versions: versionSet, catalogue: nil)
             return !w.flow.contains(.desktop) && !w.flow.contains(.applications) && w.flow.contains(.ssh) }())
@@ -681,7 +703,7 @@ struct AdditionsPolicyTests {
         m.toggleApp("vlc")
         m.systemUpdate = true
         let lines = m.reviewLines
-        check("review lines", lines.map(\.title) == ["Install Tuxedo Additions", "Account tux", "Install KDE Plasma", "Install Firefox and VLC", "Update the system"])
+        check("review lines", lines.map(\.title) == ["Install Tuxedo Additions", "Account tux", "Set up KDE Plasma", "Install Firefox and VLC", "Update the system"])
         check("review of applications: no repeat of the title",
               lines[3].detail == "About 140 MB to download." && !lines[3].title.contains(lines[3].detail))
         m.toggleApp("chromium")

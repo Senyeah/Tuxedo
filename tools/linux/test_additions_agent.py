@@ -41,7 +41,7 @@ agent = load_agent(ADD / "agent")
 PASSWORD = "S3cret-pass-ZZ9"
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDKh0pVEWfXvQmMUzfJ1dG1Ny0KkdlC7uZ3a5r2oV8Ox me@phone"
 EVENT_TYPES = {"report", "ack", "step", "log", "done", "bad-media"}
-CAPS_KEYS = {"installed", "legacy", "account", "root", "network", "desktop", "ssh", "apps", "hostname", "disk_free_mb",
+CAPS_KEYS = {"installed", "legacy", "account", "root", "network", "desktop", "desktops", "ssh", "apps", "hostname", "disk_free_mb",
              "image", "ips", "kernel"}
 ACCOUNT_KEYS = {"name", "uid", "exists", "password_set", "configured", "sudo", "autologin"}
 SSH_KEYS = {"installed", "enabled", "port", "password_auth"}
@@ -317,6 +317,8 @@ class Case(unittest.TestCase):
         self.host.close()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    job_extra = {}
+
     def make_root(self, tux_user=False):
         r = self.root
         for d in ("etc/apt", "etc/ssh/sshd_config.d", "etc/sudoers.d", "var/lib/tux", "home", "run/tux"):
@@ -351,7 +353,7 @@ class Case(unittest.TestCase):
             except BaseException as e:  # noqa: BLE001
                 result["exc"] = e
 
-        self.host.set_job({"id": jid, "steps": steps})
+        self.host.set_job(dict({"id": jid, "steps": steps}, **self.job_extra))
         t = threading.Thread(target=go, daemon=True)
         t.start()
         self.host.wait_for(lambda: self.host.of("done"))
@@ -1681,14 +1683,101 @@ class Desktop(Case):
         self.assertIn("account", m.lower())
         self.assertEqual(self.runner.called("apt-get"), [])
 
-    def test_plasma_is_packages_only(self):
+    def test_plasma_installs_packages_settings_and_the_session_choice(self):
         self.make_root(tux_user=True)
+        self.marker(True)
         self.run_job([{"action": "desktop.install", "id": "plasma"}])
+        self.assertEqual(self.final()[0][0], "ok", self.final())
         pk = self.runner.called("apt-get", "install")[0].argv
-        self.assertIn("kde-plasma-desktop", pk)
-        self.assertEqual(self.runner.called("usermod"), [])
-        self.assertFalse((self.root / "usr/local/bin/tux-session").exists())
+        for p in ("plasma-desktop", "kwin-wayland", "powerdevil", "pipewire-pulse"):
+            self.assertIn(p, pk)
+        self.assertFalse({"sddm", "lightdm", "kde-plasma-desktop"} & set(pk))
+        self.assertEqual(self.read("etc/tux/session"), "plasma\n")
+        for rel in ("usr/local/bin/tux-session", "etc/xdg/kwinrc", "etc/xdg/powerdevilrc", "etc/xdg/startkderc",
+                    "etc/xdg/autostart/tux-plasma.desktop", "etc/polkit-1/rules.d/50-tux-backlight.rules"):
+            self.assertTrue((self.root / rel).is_file(), rel)
+        rule = self.read("etc/polkit-1/rules.d/50-tux-backlight.rules")
+        self.assertIn('subject.user == "tux"', rule)
+        self.assertNotIn("@USER@", rule)
+        self.assertIn("--autologin tux ", self.read(self.AUTO))
+        self.assertEqual(self.host.of("report")[-1]["caps"]["desktop"], "plasma")
         self.assertTrue(self.host.of("done")[0]["reboot"])
+
+    def test_xfce_installs_xorg_and_names_the_session(self):
+        self.make_root(tux_user=True)
+        self.marker(True)
+        self.run_job([{"action": "desktop.install", "id": "xfce"}])
+        self.assertEqual(self.final()[0][0], "ok", self.final())
+        pk = self.runner.called("apt-get", "install")[0].argv
+        for p in ("xfce4", "xserver-xorg-core", "xinit", "dbus-x11"):
+            self.assertIn(p, pk)
+        self.assertFalse({"sddm", "lightdm"} & set(pk))
+        self.assertEqual(self.read("etc/tux/session"), "xfce\n")
+        self.assertFalse((self.root / "etc/xdg/kwinrc").exists())  # Plasma settings only for Plasma
+
+    def test_an_installed_desktop_is_only_made_the_default(self):
+        self.make_root(tux_user=True)
+        self.marker(True)
+        self.net = False
+        d = next(x for x in json.loads((ADD / "actions.json").read_text())["desktops"] if x["id"] == "plasma")
+        self.runner.packages.update({p: "1" for p in d["packages"]})
+        self.run_job([{"action": "desktop.install", "id": "plasma"}])
+        self.assertEqual(self.final()[0][0], "ok", self.final())
+        self.assertEqual(self.runner.called("apt-get"), [])
+        self.assertEqual(self.read("etc/tux/session"), "plasma\n")
+        self.assertTrue(self.host.of("done")[0]["reboot"])
+
+    def test_switching_to_labwc_overwrites_the_session_choice(self):
+        self.make_root(tux_user=True)
+        self.marker(True)
+        (self.root / "etc/tux").mkdir(parents=True)
+        (self.root / "etc/tux/session").write_text("plasma\n")
+        self.net = False
+        d = next(x for x in json.loads((ADD / "actions.json").read_text())["desktops"] if x["id"] == "labwc")
+        self.runner.packages.update({p: "1" for p in d["packages"]})
+        self.run_job([{"action": "desktop.install", "id": "labwc"}])
+        self.assertEqual(self.final()[0][0], "ok", self.final())
+        self.assertEqual(self.read("etc/tux/session"), "labwc\n")
+
+    def test_no_autologin_removes_an_old_tty1_drop_in_when_the_desktop_changes(self):
+        self.make_root(tux_user=True)
+        self.marker(False)
+        p = self.root / self.AUTO
+        p.parent.mkdir(parents=True)
+        p.write_text("[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin tux --noclear %I $TERM\n")
+        self.run_job([{"action": "desktop.install", "id": "xfce"}])
+        self.assertEqual(self.final()[0][0], "ok", self.final())
+        self.assertFalse(p.exists())
+
+    def test_a_desktop_needs_an_account(self):
+        self.run_job([{"action": "desktop.install", "id": "plasma"}])
+        self.assertEqual(self.final()[0][0], "failed")
+        self.assertEqual(self.runner.called("apt-get", "install"), [])
+
+    def test_reboot_after_runs_systemctl_reboot_after_done(self):
+        self.make_root(tux_user=True)
+        self.job_extra = {"reboot_after": True}
+        self.run_job([{"action": "hostname.set", "name": "later"}])
+        self.assertEqual([c.argv for c in self.runner.called("systemctl", "reboot")], [["systemctl", "reboot"]])
+        self.assertTrue(self.host.of("done")[0]["ok"])
+
+    def test_reboot_after_does_not_run_when_the_job_failed_or_is_not_set(self):
+        self.make_root(tux_user=True)
+        self.run_job([{"action": "hostname.set", "name": "later"}])
+        self.assertEqual(self.runner.called("systemctl", "reboot"), [])
+        self.setUp_again()
+        self.job_extra = {"reboot_after": True}
+        self.run_job([{"action": "hostname.set", "name": "Bad Name!"}])
+        self.assertFalse(self.host.of("done")[0]["ok"])
+        self.assertEqual(self.runner.called("systemctl", "reboot"), [])
+
+    def test_reboot_after_must_be_a_true_boolean(self):
+        self.make_root(tux_user=True)
+        for v in ("yes", 1, "true", None):
+            self.setUp_again()
+            self.job_extra = {"reboot_after": v}
+            self.run_job([{"action": "hostname.set", "name": "later"}])
+            self.assertEqual(self.runner.called("systemctl", "reboot"), [], repr(v))
 
     def test_apt_failure_fails_the_step(self):
         self.make_root(tux_user=True)

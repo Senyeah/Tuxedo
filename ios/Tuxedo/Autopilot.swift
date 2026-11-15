@@ -28,7 +28,8 @@ import UIKit
 ///   log TEXT           a marker in tux.log
 ///   details [forwards] open the session's Details (and its Port Forwards page), for a screenshot
 ///   additions-demo [STEP]  the Tuxedo Additions wizard over the machine list, with a sample guest and no machine
-///                      (STEP: account opens it as the account prompt does), for a screenshot
+///                      (STEP: account opens it as the account prompt does; "switch" opens the Desktop step of a guest
+///                      that has labwc and Plasma installed), for a screenshot
 ///   stop               stop the machine
 ///   exit               quit Tuxedo
 /// Each command is written to tux.log as it runs, so the log has the timeline.
@@ -216,8 +217,13 @@ enum Autopilot {
 
 extension TuxAdditions {
     /// The sample guest of additions-demo: the example of docs/guest-additions-design.md, 5.4, and a small catalogue.
-    static var demo: TuxAdditions {
-        let report = """
+    static func demo(switching: Bool = false) -> TuxAdditions {
+        let report = switching ? """
+        {"n":1,"agent":"1.11.0","protocol":1,"caps":{"installed":{"tux-guest":"1.11.0","tux-va":"1.0.1","tux-ffmpeg":"9.0.2-tux10"},
+         "legacy":false,"account":{"name":"sam","uid":1000,"exists":true,"password_set":true,"configured":true,"sudo":true,"autologin":"user"},
+         "root":true,"network":true,"desktop":"labwc","desktops":["labwc","plasma"],"ssh":{"installed":false,"enabled":false,"port":22,"password_auth":true},
+         "apps":{"git":true},"hostname":"debian","disk_free_mb":9800,"image":"desktop","ips":["10.0.2.15"],"kernel":"6.12.x-arm64-16k"}}
+        """ : """
         {"n":1,"agent":"1.11.0","protocol":1,"caps":{"installed":{"tux-guest":"1.10.2","tux-va":"1.0.1","tux-ffmpeg":"9.0.2-tux2"},
          "legacy":false,"account":{"name":"tux","uid":1000,"exists":true,"password_set":false,"configured":false,"sudo":true,"autologin":"root"},
          "root":true,"network":true,"desktop":"none","ssh":{"installed":false,"enabled":false,"port":22,"password_auth":true},

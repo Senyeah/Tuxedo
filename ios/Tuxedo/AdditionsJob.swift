@@ -62,7 +62,7 @@ struct AdditionsJob: CustomStringConvertible, CustomDebugStringConvertible, Cust
             case .additionsInstall: return "Install Tuxedo Additions"
             case .userSetup: return "Set up the account"
             case .hostnameSet: return "Set the machine name"
-            case .desktopInstall(let id): return "Install \(catalogue?.desktop(id)?.title ?? id)"
+            case .desktopInstall(let id): return "Set up \(catalogue?.desktop(id)?.title ?? id)"
             case .appsInstall(let ids):
                 let names = ids.map { catalogue?.app($0)?.title ?? $0 }
                 return ids.count <= 2 ? "Install " + names.joined(separator: " and ") : "Install \(ids.count) applications"
@@ -74,6 +74,8 @@ struct AdditionsJob: CustomStringConvertible, CustomDebugStringConvertible, Cust
 
     var id: String
     var steps: [Step]
+    /// The guest restarts when the job ends well (a new desktop needs it).
+    var rebootAfter = false
 
     static let maxBytes = 16 * 1024
 
@@ -85,7 +87,8 @@ struct AdditionsJob: CustomStringConvertible, CustomDebugStringConvertible, Cust
     /// wipes the returned array, and these two are the only copies of the bytes that Swift lets the app reach.
     func jsonBytes() -> [UInt8]? {
         guard !steps.isEmpty else { return nil }
-        let object: [String: Any] = ["id": id, "steps": steps.map(\.object)]
+        var object: [String: Any] = ["id": id, "steps": steps.map(\.object)]
+        if rebootAfter { object["reboot_after"] = true }
         guard var data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]) else { return nil }
         defer { data.resetBytes(in: 0..<data.count) }
         guard data.count <= Self.maxBytes else { return nil }

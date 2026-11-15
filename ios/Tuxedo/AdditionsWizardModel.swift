@@ -56,8 +56,10 @@ struct AdditionsWizardModel {
     var hostName = ""
     var installAdditions = false
     var systemUpdate = false
-    /// nil: keep the console.
+    /// nil: keep what the machine starts now (the console, or its desktop).
     var desktop: String?
+    /// The machine restarts when the job ends, so a new desktop starts.
+    var restartAfter = true
     var apps: Set<String> = []
     var sshEnabled = false
     var sshPortText = "22"
@@ -118,7 +120,7 @@ struct AdditionsWizardModel {
     private mutating func enforceCaps() {
         guard let caps else { return }
         if !caps.network {
-            desktop = nil
+            if let d = desktop, !caps.desktops.contains(d) { desktop = nil }
             apps = []
             systemUpdate = false
         }
@@ -153,11 +155,11 @@ struct AdditionsWizardModel {
     }
 
     var showsAdditionsStep: Bool { additionsAction != .none }
-    var showsDesktopStep: Bool { (caps?.desktop ?? "none") == "none" && !(catalogue?.desktops.isEmpty ?? true) }
+    var showsDesktopStep: Bool { !(catalogue?.desktops.isEmpty ?? true) }
     var showsApplicationsStep: Bool { !(catalogue?.apps.isEmpty ?? true) }
 
     /// The steps before the job runs, in order. Connect shows only until there is a report; Tuxedo Additions only when
-    /// the guest has less than the app's set; Desktop only when the guest has no desktop and the media offers one.
+    /// the guest has less than the app's set; Desktop whenever the media offers one (a guest with a desktop can switch).
     var flow: [AdditionsStep] {
         var list: [AdditionsStep] = []
         if caps == nil { list.append(.connect) }
@@ -245,17 +247,39 @@ struct AdditionsWizardModel {
         var disabledReason: String?
         /// Short marks on the tile: "Installed", "Needs network".
         var marks: [String]
+        /// A line for the tile; nil: the view writes its own.
+        var detail: String? = nil
     }
 
     static let keepConsoleID = "console"
 
+    /// The desktop the guest starts now ("none": the console).
+    var currentDesktop: String { caps?.desktop ?? "none" }
+
+    func desktopInstalled(_ id: String) -> Bool { caps?.desktops.contains(id) ?? false }
+
     var desktopChoices: [Choice] {
-        var list = [Choice(id: Self.keepConsoleID, title: "Keep console", sizeMB: 0, selected: desktop == nil, disabledReason: nil, marks: [])]
+        let keep = currentDesktop == "none" ? "Keep console" : "Keep \(catalogue?.desktop(currentDesktop)?.title ?? currentDesktop)"
+        var list = [Choice(id: Self.keepConsoleID, title: keep, sizeMB: 0, selected: desktop == nil, disabledReason: nil, marks: [],
+                           detail: currentDesktop == "none" ? "No desktop. Use the console." : "No change.")]
         for d in catalogue?.desktops ?? [] {
-            let installed = caps?.desktop == d.id
-            list.append(Choice(id: d.id, title: d.title, sizeMB: d.sizeMB, selected: desktop == d.id,
-                               disabledReason: installed ? AdditionsText.installed : (network ? nil : AdditionsText.noNetwork),
-                               marks: installed ? [AdditionsText.installed] : (network ? [] : [AdditionsText.needsNetwork])))
+            let current = currentDesktop == d.id
+            let installed = desktopInstalled(d.id)
+            var reason: String?
+            var marks: [String] = []
+            var detail: String?
+            if current {
+                reason = AdditionsText.current
+                marks = [AdditionsText.current]
+            } else if installed {
+                marks = [AdditionsText.installed]
+                detail = "Installed. Use it from the next start."
+            } else if !network {
+                reason = AdditionsText.noNetwork
+                marks = [AdditionsText.needsNetwork]
+            }
+            list.append(Choice(id: d.id, title: d.title, sizeMB: installed ? 0 : d.sizeMB, selected: desktop == d.id,
+                               disabledReason: reason, marks: marks, detail: detail))
         }
         return list
     }
@@ -341,7 +365,7 @@ struct AdditionsWizardModel {
                                     lockRoot: lockRoot))
         }
         if !hostName.isEmpty && hostName != caps?.hostname { steps.append(.hostnameSet(name: hostName)) }
-        if let d = desktop, network { steps.append(.desktopInstall(id: d)) }
+        if let d = desktop, network || desktopInstalled(d) { steps.append(.desktopInstall(id: d)) }
         let ids = chosenApps.map(\.id)
         if !ids.isEmpty && network { steps.append(.appsInstall(ids: ids)) }
         if sshEnabled || caps?.ssh?.enabled == true {
@@ -355,8 +379,12 @@ struct AdditionsWizardModel {
     /// nil while a step has a problem or there is nothing to do.
     func job(id: String = AdditionsJob.newID()) -> AdditionsJob? {
         guard blocker == nil, problems(for: .review).isEmpty else { return nil }
-        return AdditionsJob(id: id, steps: jobSteps())
+        return AdditionsJob(id: id, steps: jobSteps(), rebootAfter: restartsAfter)
     }
+
+    /// A desktop is in the job, so the machine has to restart before it starts it.
+    var needsRestart: Bool { jobSteps().contains { if case .desktopInstall = $0 { return true } else { return false } } }
+    var restartsAfter: Bool { needsRestart && restartAfter }
 
     // MARK: Review
 
@@ -381,6 +409,7 @@ struct AdditionsWizardModel {
                 return ReviewLine(title: s.title(catalogue), detail: name)
             case .desktopInstall(let id):
                 let d = catalogue?.desktop(id)
+                if desktopInstalled(id) { return ReviewLine(title: "Use \(d?.title ?? id)", detail: "It is installed. The machine starts it after a restart.") }
                 return ReviewLine(title: s.title(catalogue), detail: d.map { "About \(AdditionsCatalogue.sizeText($0.sizeMB)) to download." } ?? "")
             case .appsInstall(let ids):
                 // The title names one or two applications: the detail then gives the size, not the same names again.
@@ -403,7 +432,7 @@ struct AdditionsWizardModel {
     /// The download the catalogue names: the desktop and the applications.
     var estimateMB: Int {
         guard network else { return 0 }
-        let d = desktop.flatMap { catalogue?.desktop($0)?.sizeMB } ?? 0
+        let d = desktop.flatMap { desktopInstalled($0) ? 0 : catalogue?.desktop($0)?.sizeMB } ?? 0
         return d + chosenApps.reduce(0) { $0 + $1.sizeMB }
     }
 

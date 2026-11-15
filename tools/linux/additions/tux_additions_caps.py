@@ -354,12 +354,17 @@ def account_caps(root):
     }
 
 
+def desktops_of(pk):
+    return [d for d, p in DESKTOP_PACKAGES if p in pk]
+
+
 def desktop_of(pk, root="/"):
-    have = [d for d, p in DESKTOP_PACKAGES if p in pk]
+    """The desktop the machine starts: the one /etc/tux/session names when it is installed, else the first."""
+    have = desktops_of(pk)
     if not have:
         return "none"
     session = (read_text(root, "/etc/tux/session") or "").strip()
-    return "plasma" if "plasma" in have and session == "plasma" else have[0]
+    return session if session in have else have[0]
 
 
 def build_caps(runner=None, root="/", catalogue=None, connect=tcp_connect):
@@ -386,6 +391,7 @@ def build_caps(runner=None, root="/", catalogue=None, connect=tcp_connect):
         "root": os.geteuid() == 0,
         "network": have_network(root, connect),
         "desktop": desktop,
+        "desktops": desktops_of(pk),
         "ssh": ssh_caps(runner, root, pk),
         "apps": apps,
         "hostname": host,

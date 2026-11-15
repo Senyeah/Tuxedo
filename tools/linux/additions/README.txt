@@ -21,6 +21,7 @@ Files
   versions.json      the versions in this build.
   install-order.txt  the order for dpkg when apt does not work.
   desktop-labwc/     the session files of the Tuxedo desktop (labwc), with files.json as their map.
+  desktop-plasma/    the Plasma settings files (kwinrc, powerdevilrc, ...), with files.json as their map.
   apt/               a signed apt repository: main (the Tuxedo packages) and deps (the Debian packages that a
                      minimal trixie guest lacks, with openssh-server).
   SHA256SUMS, SHA256SUMS.gpg, tux-archive.gpg

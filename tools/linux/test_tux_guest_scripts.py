@@ -509,7 +509,7 @@ class Report(unittest.TestCase):
         self.assertEqual(path, "/.tux/additions")
         self.assertEqual(ev["t"], "report")
         self.assertEqual((ev["protocol"], type(ev["n"]), type(ev["agent"])), (1, int, str))
-        self.assertEqual(sorted(ev["caps"]), sorted(["installed", "legacy", "account", "root", "network", "desktop", "ssh",
+        self.assertEqual(sorted(ev["caps"]), sorted(["installed", "legacy", "account", "root", "network", "desktop", "desktops", "ssh",
                                                      "apps", "hostname", "disk_free_mb", "image", "ips", "kernel"]))
         self.assertEqual(sorted(ev["caps"]["installed"]), ["tux-codec-dkms", "tux-ffmpeg", "tux-guest", "tux-va"])
 

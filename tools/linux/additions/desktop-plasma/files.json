@@ -1,0 +1,10 @@
+[
+  {"src": "etc/xdg/kwinrc", "dst": "/etc/xdg/kwinrc", "mode": "0644"},
+  {"src": "etc/xdg/kwinoutputconfig.json", "dst": "/etc/xdg/kwinoutputconfig.json", "mode": "0644"},
+  {"src": "etc/xdg/powerdevilrc", "dst": "/etc/xdg/powerdevilrc", "mode": "0644"},
+  {"src": "etc/xdg/kscreenlockerrc", "dst": "/etc/xdg/kscreenlockerrc", "mode": "0644"},
+  {"src": "etc/xdg/startkderc", "dst": "/etc/xdg/startkderc", "mode": "0644"},
+  {"src": "etc/xdg/autostart/tux-keyboard.desktop", "dst": "/etc/xdg/autostart/tux-keyboard.desktop", "mode": "0644"},
+  {"src": "etc/xdg/autostart/tux-plasma.desktop", "dst": "/etc/xdg/autostart/tux-plasma.desktop", "mode": "0644"},
+  {"src": "etc/polkit-1/rules.d/50-tux-backlight.rules", "dst": "/etc/polkit-1/rules.d/50-tux-backlight.rules", "mode": "0644", "subst": true}
+]

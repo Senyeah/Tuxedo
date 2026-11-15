@@ -1,0 +1,6 @@
+// Plasma's services run outside the tty1 session, so polkit can see them as not local and refuse the backlight.
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.kde.powerdevil.backlighthelper.") == 0 && subject.user == "@USER@") {
+        return polkit.Result.YES;
+    }
+});

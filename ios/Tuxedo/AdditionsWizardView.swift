@@ -394,7 +394,7 @@ struct AdditionsWizardView: View {
         VStack(alignment: .leading, spacing: 16) {
             LazyVGrid(columns: tileColumns, spacing: AdditionsLayout.gap) {
                 ForEach(model.desktopChoices) { c in
-                    ChoiceTile(title: c.title, detail: c.sizeMB > 0 ? "About \(AdditionsCatalogue.sizeText(c.sizeMB))" : "No desktop. Use the console.",
+                    ChoiceTile(title: c.title, detail: c.detail ?? (c.sizeMB > 0 ? "About \(AdditionsCatalogue.sizeText(c.sizeMB))" : ""),
                                marks: c.marks, selected: c.selected, reason: c.disabledReason) { model.chooseDesktop(c.id) }
                 }
             }
@@ -520,6 +520,9 @@ struct AdditionsWizardView: View {
                 if model.reviewLines.isEmpty { Text("There is nothing to do yet.").foregroundStyle(Desk.dim) }
             }
             if let estimate = model.estimateText { note(estimate) }
+            if model.needsRestart {
+                card { toggle("Restart when finished", AdditionsText.restartToggle, $model.restartAfter) }
+            }
             problemsAndWarnings(for: .review)
             if !additions.hasMedia {
                 card { warn(AdditionsText.notInThisApp, bad: true) }
@@ -609,7 +612,7 @@ struct AdditionsWizardView: View {
                 }
                 .accessibilityElement(children: .combine)
                 if !ok, let failed = failureMessage { Text(failed).font(.body) }
-                if result?.reboot == true { warn(AdditionsText.restartNote, bad: false) }
+                if result?.reboot == true { warn(model.restartsAfter ? AdditionsText.restartingNote : AdditionsText.restartNote, bad: false) }
             }
             if let info = result?.info {
                 if !info.ips.isEmpty { listCard("Addresses", info.ips) }

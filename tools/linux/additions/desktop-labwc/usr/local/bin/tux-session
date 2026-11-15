@@ -1,10 +1,16 @@
 #!/bin/sh
-# Start labwc, or Plasma when /etc/tux/session says plasma.
+# Start labwc, or Plasma or Xfce when /etc/tux/session says plasma or xfce.
 # /etc/tux/renderer forces labwc's renderer; else gles2 with virgl, else pixman.
 export LANG=C.UTF-8
 rt=${XDG_RUNTIME_DIR:-/tmp}
 echo "login $(cut -d' ' -f1 /proc/uptime)" > "$rt/tux-times"
-if [ "$(head -n 1 /etc/tux/session 2>/dev/null)" = plasma ] && command -v startplasma-wayland >/dev/null; then
+session=$(head -n 1 /etc/tux/session 2>/dev/null)
+if [ "$session" = xfce ] && command -v startxfce4 >/dev/null && command -v startx >/dev/null; then
+    echo "session=xfce" | tee "$rt/tux-session.log"
+    startx /usr/bin/startxfce4
+    exit
+fi
+if [ "$session" = plasma ] && command -v startplasma-wayland >/dev/null; then
     echo "session=plasma" | tee "$rt/tux-session.log"
     # KWin attaches a backlight to an internal output only (not Virtual-1): powerdevil keeps it if it cannot hand it over
     export QT_WAYLAND_DISABLED_INTERFACES="${QT_WAYLAND_DISABLED_INTERFACES:+$QT_WAYLAND_DISABLED_INTERFACES,}kde_external_brightness_v1"

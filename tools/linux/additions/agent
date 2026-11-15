@@ -118,7 +118,10 @@ def validate_catalogue(cat):
             pk = it.get("packages")
             if not isinstance(pk, list) or not pk or not all(isinstance(p, str) and PKG_RE.match(p) for p in pk):
                 raise CatalogueError("bad packages for %s" % it["id"])
-            if "files" in it and not (isinstance(it["files"], str) and re.fullmatch(r"[a-z0-9-]+", it["files"])):
+            fl = it.get("files")
+            if "files" in it and not (isinstance(fl, str) and re.fullmatch(r"[a-z0-9-]+", fl)
+                                      or isinstance(fl, list) and fl and all(
+                                          isinstance(x, str) and re.fullmatch(r"[a-z0-9-]+", x) for x in fl)):
                 raise CatalogueError("bad files for %s" % it["id"])
     ssh = cat.get("ssh")
     if not (isinstance(ssh, dict) and all(isinstance(ssh.get(k), int) for k in ("port_min", "port_max", "default_port"))
@@ -346,6 +349,14 @@ def authorized_keys_add(text, key):
 
 def substitute(text, user):
     return text.replace("@USER@", user)
+
+
+def load_file_maps(tree, dirs, autologin=False):
+    """load_file_map for one folder name or a list of them, in order."""
+    out = []
+    for d in [dirs] if isinstance(dirs, str) else dirs:
+        out += load_file_map(tree, d, autologin)
+    return out
 
 
 def load_file_map(tree, dirname, autologin=False):
@@ -604,6 +615,7 @@ class Agent:
         self.updated = False
         self.after_done = []
         self.reboot = False
+        self.reboot_after = False
 
     def _tree_version(self):
         try:
@@ -875,30 +887,39 @@ class Agent:
         self.updated = True
 
     def step_desktop_install(self, c):
-        self.need_network()
         d = _find(self.cat, "desktops", c["id"])
-        user = None
-        if d.get("files"):
-            user, rec = self.account()
-            if rec is None:
-                raise StepError("No account yet. Set up the account first")
-            # the tty1 sign-in as the account only when the account step chose it
-            autologin = caps_mod.account_caps(self.root)["autologin"] == "user"
-            file_map = load_file_map(self.tree, d["files"], autologin)
-        self.apt_update()
-        if self.apt(apt_install_argv(d["packages"])).rc != 0:
-            raise StepError("apt-get install failed")
-        if d.get("files"):
-            self.install_session(file_map, user)
+        have = caps_mod.installed_packages(self.runner)
+        present = all(p in have for p in d["packages"])
+        if not present:
+            self.need_network()
+        user, rec = self.account()
+        if rec is None:
+            raise StepError("No account yet. Set up the account first")
+        # the tty1 sign-in as the account only when the account step chose it
+        autologin = caps_mod.account_caps(self.root)["autologin"] == "user"
+        file_map = load_file_maps(self.tree, d["files"], autologin) if d.get("files") else []
+        if present:
+            self.sink.add("%s is installed already\n" % d["title"])
+        else:
+            self.apt_update()
+            if self.apt(apt_install_argv(d["packages"])).rc != 0:
+                raise StepError("apt-get install failed")
+            # a display manager would start next to the tty1 session
+            for dm in ("sddm", "lightdm", "gdm3"):
+                self.run(["systemctl", "disable", dm + ".service"], quiet=True)
+        self.install_session(file_map, user, d["id"], autologin)
         self.reboot = True
-        return "%s is installed. Restart the machine" % d["title"]
+        return "%s is the desktop. Restart the machine" % d["title"]
 
-    def install_session(self, file_map, user):
+    def install_session(self, file_map, user, desktop, autologin):
         for src, dst, mode, subst in file_map:
             with open(src, encoding="utf-8") as f:
                 text = f.read()
             self.fs.write(dst, substitute(text, user) if subst else text, mode)
         self.fs.mkdir("/etc/tux")
+        self.fs.write("/etc/tux/session", desktop + "\n", 0o644)
+        if not autologin:
+            self._follow_tty1(user, False)  # the drop-in of an image's own desktop goes: tty1 asks for a login
         groups = self.group()
         extra = [g for g in ("video", "render", "input", "dialout", "audio") if g in groups]
         if extra and self.run(["usermod", "-aG", ",".join(extra), user]).rc != 0:
@@ -1053,6 +1074,7 @@ class Agent:
         self.updated = False
         self.after_done = []
         self.reboot = False
+        self.reboot_after = isinstance(raw, dict) and raw.get("reboot_after") is True
         jid = raw.get("id") if isinstance(raw, dict) else None
         self.job_id = jid if isinstance(jid, str) and JOB_ID_RE.match(jid) else ""
         try:
@@ -1120,6 +1142,8 @@ class Agent:
             log("agent: no report after the job: %s" % e)
             info = {"ips": [], "ssh_fingerprints": [], "user": None}
         self.post({"t": "done", "job": self.job_id, "ok": ok, "reboot": bool(self.reboot), "info": info})
+        if ok and self.reboot_after:
+            self.after_done.append(["systemctl", "reboot"])
         for argv in self.after_done:
             self.runner.run(argv, timeout=60)
         self.after_done = []

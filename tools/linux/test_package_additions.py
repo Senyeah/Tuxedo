@@ -32,7 +32,7 @@ KEYRING = HERE / "tux-guest/usr/share/keyrings/tux-archive.gpg"
 DEPS_MAX_BYTES = 25_000_000
 SIGNED = {"InRelease", "Release.gpg", "SHA256SUMS", "SHA256SUMS.gpg"}
 TOP = {"install", "agent", "tux_additions_caps.py", "actions.json", "versions.json", "install-order.txt", "README.txt",
-       "desktop-labwc", "SHA256SUMS", "SHA256SUMS.gpg", "tux-archive.gpg", "apt", "source"}
+       "desktop-labwc", "desktop-plasma", "SHA256SUMS", "SHA256SUMS.gpg", "tux-archive.gpg", "apt", "source"}
 REQUIRED_APPS = ["firefox", "chromium", "libreoffice", "thunderbird", "vlc", "mpv", "gimp", "inkscape", "kate", "git",
                  "build-essential", "python3-pip", "htop", "curl", "tmux", "neovim"]
 GROUPS = {"web", "office", "media", "graphics", "develop", "tools"}
@@ -388,6 +388,21 @@ class Media(unittest.TestCase):
         for need in ("usr/local/bin/tux-session", "usr/local/bin/tux-display", "etc/xdg/labwc/autostart",
                      "etc/profile.d/tux-desktop.sh", "etc/systemd/system/getty@tty1.service.d/autologin.conf"):
             self.assertIn(need, mapped)
+
+    def test_plasma_files_are_copies_of_the_desktop_image(self):
+        base = self.tree / "desktop-plasma"
+        entries = json.loads((base / "files.json").read_text())
+        mapped = set()
+        for e in entries:
+            src = base / e["src"]
+            self.assertTrue(src.is_file(), e["src"])
+            mapped.add(e["src"])
+            want = (HERE / "rootfs-desktop" / e["src"]).read_bytes()
+            if e.get("subst"):
+                want = want.replace(b'subject.user == "tux"', b'subject.user == "@USER@"')
+            self.assertEqual(src.read_bytes(), want, "%s differs from rootfs-desktop" % e["src"])
+        on_disk = {f[len("desktop-plasma/"):] for f in files_of(self.tree) if f.startswith("desktop-plasma/")} - {"files.json"}
+        self.assertEqual(on_disk, mapped)
 
     def test_catalogue_names_exist_in_trixie(self):
         if ARGS.offline:
