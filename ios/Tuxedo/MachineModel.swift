@@ -53,6 +53,10 @@ struct VirtualMachine: Identifiable, Codable, Hashable {
     var guestUser: String?
     var user: String { guestUser ?? Self.legacyGuestUser }
     static let legacyGuestUser = "henge" // legacy name
+    /// Linux: what the guest's Tuxedo Additions agent last reported (AdditionsReport). Missing: unknown.
+    var additionsReport: AdditionsReport?
+    /// Linux: the person chose Not now on the account prompt (docs/guest-additions-design.md, section 8). Missing: no.
+    var additionsPromptDismissed: Bool?
 
     var directory: URL { MachinePaths.directory(for: id) }
     var disk: URL { directory.appendingPathComponent("disk.img") }
@@ -84,6 +88,146 @@ struct SharedFolder: Codable, Hashable, Identifiable {
     /// keeps the changes on the machine's disk.
     enum Mode: String, Codable, CaseIterable {
         case readWrite, copyOnWrite, readOnly
+    }
+}
+
+/// What the guest's Tuxedo Additions agent reports (docs/guest-additions-design.md, 5.3 and 5.4). A guest of another
+/// version can leave out any member: each one has a default, and a value of the wrong type counts as missing.
+struct AdditionsReport: Codable, Hashable {
+    var n: Int?
+    var agent: String?
+    var protocolVersion: Int?
+    var caps = AdditionsCaps()
+
+    enum CodingKeys: String, CodingKey { case n, agent, caps, protocolVersion = "protocol" }
+
+    init(n: Int? = nil, agent: String? = nil, protocolVersion: Int? = nil, caps: AdditionsCaps = AdditionsCaps()) {
+        self.n = n
+        self.agent = agent
+        self.protocolVersion = protocolVersion
+        self.caps = caps
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        n = c.lenient(Int.self, .n)
+        agent = c.lenient(String.self, .agent)
+        protocolVersion = c.lenient(Int.self, .protocolVersion)
+        caps = c.lenient(AdditionsCaps.self, .caps) ?? AdditionsCaps()
+    }
+}
+
+/// What the guest has (the `caps` of a report).
+struct AdditionsCaps: Codable, Hashable {
+    /// Package name to version; a package that is not installed is not in it.
+    var installed: [String: String] = [:]
+    var legacy = false
+    /// nil: the report has no account object (a guest that cannot say).
+    var account: AdditionsAccount?
+    var root = false
+    var network = false
+    /// "labwc", "plasma", "xfce" or "none".
+    var desktop = "none"
+    var ssh: AdditionsSSH?
+    var apps: [String: Bool] = [:]
+    var hostname = ""
+    var diskFreeMB: Int?
+    /// "desktop" or "console".
+    var image = "console"
+    var ips: [String] = []
+    var kernel = ""
+
+    enum CodingKeys: String, CodingKey {
+        case installed, legacy, account, root, network, desktop, ssh, apps, hostname, image, ips, kernel
+        case diskFreeMB = "disk_free_mb"
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let versions = c.lenient([String: String?].self, .installed) ?? [:]
+        installed = versions.compactMapValues { $0 }
+        legacy = c.lenient(Bool.self, .legacy) ?? false
+        account = c.lenient(AdditionsAccount.self, .account)
+        root = c.lenient(Bool.self, .root) ?? false
+        network = c.lenient(Bool.self, .network) ?? false
+        desktop = c.lenient(String.self, .desktop) ?? "none"
+        ssh = c.lenient(AdditionsSSH.self, .ssh)
+        apps = c.lenient([String: Bool].self, .apps) ?? [:]
+        hostname = c.lenient(String.self, .hostname) ?? ""
+        diskFreeMB = c.lenient(Int.self, .diskFreeMB)
+        image = c.lenient(String.self, .image) ?? "console"
+        ips = c.lenient([String].self, .ips) ?? []
+        kernel = c.lenient(String.self, .kernel) ?? ""
+    }
+}
+
+struct AdditionsAccount: Codable, Hashable {
+    var name: String?
+    var uid: Int?
+    var exists = false
+    var passwordSet = false
+    /// nil: the guest did not say. Only a false starts the account prompt.
+    var configured: Bool?
+    var sudo = false
+    /// Who the console signs in as with no password: "root", "user" or "none".
+    var autologin = "none"
+
+    enum CodingKeys: String, CodingKey {
+        case name, uid, exists, configured, sudo, autologin
+        case passwordSet = "password_set"
+    }
+
+    init(name: String? = nil, uid: Int? = nil, exists: Bool = false, passwordSet: Bool = false, configured: Bool? = nil,
+         sudo: Bool = false, autologin: String = "none") {
+        self.name = name
+        self.uid = uid
+        self.exists = exists
+        self.passwordSet = passwordSet
+        self.configured = configured
+        self.sudo = sudo
+        self.autologin = autologin
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = c.lenient(String.self, .name)
+        uid = c.lenient(Int.self, .uid)
+        exists = c.lenient(Bool.self, .exists) ?? false
+        passwordSet = c.lenient(Bool.self, .passwordSet) ?? false
+        configured = c.lenient(Bool.self, .configured)
+        sudo = c.lenient(Bool.self, .sudo) ?? false
+        autologin = c.lenient(String.self, .autologin) ?? "none"
+    }
+}
+
+struct AdditionsSSH: Codable, Hashable {
+    var installed = false
+    var enabled = false
+    var port = 22
+    var passwordAuth = true
+
+    enum CodingKeys: String, CodingKey {
+        case installed, enabled, port
+        case passwordAuth = "password_auth"
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        installed = c.lenient(Bool.self, .installed) ?? false
+        enabled = c.lenient(Bool.self, .enabled) ?? false
+        port = c.lenient(Int.self, .port) ?? 22
+        passwordAuth = c.lenient(Bool.self, .passwordAuth) ?? true
+    }
+}
+
+private extension KeyedDecodingContainer {
+    /// nil for a missing key, a null, or a value of the wrong type.
+    func lenient<T: Decodable>(_ type: T.Type, _ key: Key) -> T? {
+        (try? decodeIfPresent(type, forKey: key)) ?? nil
     }
 }
 

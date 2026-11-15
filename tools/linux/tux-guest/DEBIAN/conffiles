@@ -1,3 +1,4 @@
 /etc/tux/davfs2.conf
 /etc/tux/UPower.conf
 /etc/xdg/plasma-workspace/env/tux-keyboard.sh
+/etc/apt/apt.conf.d/50tux-additions

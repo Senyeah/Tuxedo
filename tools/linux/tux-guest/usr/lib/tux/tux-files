@@ -9,6 +9,9 @@ Copy-on-write folders itself, so a remount here cannot get past it.
 News (a folder added, removed, renamed, a new mode, offline or online, a changed original) comes from a long GET
 of /.tux/folders on the share server; without the share the table is read every 2 s. The app's Export Changes
 and Discard Changes come as an "ask" in the table; the answer goes to POST /.tux/folders/done.
+The entry with "kind":"additions" is the Tuxedo Additions media (docs/guest-additions-design.md): a Read-only folder
+like the others. Each new "n" on it, once it is mounted, starts tux-additions-agent@<n> and stops the older ones. The last
+n is kept in the state file, so a restart of this helper does not run the same n again.
 
   tux-files list               the folders, and Copy-on-write layers with no folder (with their keys)
   tux-files export NAME [DEST] the changes of a Copy-on-write folder, to ~/Tux/Exports by default
@@ -42,6 +45,10 @@ TABLE = ROOT + "/.tux-folders"
 GUEST_UID = 1000
 OVERLAY = "redirect_dir=off,index=off,metacopy=off,xino=off"  # the kernel's defaults, and they allow changes to the original while unmounted
 PLACES_URL = "file://" + MEDIA
+ADDITIONS_KEY = "additions_n"  # in the state file beside the folders, so a folder cannot have this name
+PENDING_KEY = "additions_pending"  # the n that waits for a running job to end
+AGENT_UNIT = "tux-additions-agent@"
+BUSY = "/run/tux/additions-busy"  # the agent writes its pid and job id here while a job runs
 
 
 def log(*a):
@@ -83,19 +90,56 @@ def read_table():
         return None
 
 
-def load_state():
+def read_state_file():
     try:
         with open(STATE) as f:
-            return json.load(f)
+            st = json.load(f)
     except (OSError, ValueError):
         return {}
+    return st if isinstance(st, dict) else {}
+
+
+def load_state():
+    """The mounted folders by name."""
+    st = read_state_file()
+    st.pop(ADDITIONS_KEY, None)
+    st.pop(PENDING_KEY, None)
+    return st
+
+
+def additions_n():
+    """The n of the Additions media whose agent was started, or None."""
+    n = read_state_file().get(ADDITIONS_KEY)
+    return n if type(n) is int else None
+
+
+def additions_pending():
+    """The n of a media that waits for the agent's job to end, or None."""
+    n = read_state_file().get(PENDING_KEY)
+    return n if type(n) is int else None
+
+
+def write_state(st, n, pending=...):
+    """pending: the waiting n, None for none; left out, the one in the file stays."""
+    out = dict(st)
+    if n is not None:
+        out[ADDITIONS_KEY] = n
+    if pending is ...:
+        pending = additions_pending()
+    if pending is not None:
+        out[PENDING_KEY] = pending
+    tmp = STATE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(out, f)
+    os.replace(tmp, STATE)
 
 
 def save_state(st):
-    tmp = STATE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(st, f)
-    os.replace(tmp, STATE)
+    write_state(st, additions_n())
+
+
+def save_additions_n(n, pending=...):
+    write_state(load_state(), n, pending)
 
 
 class Locked:
@@ -202,7 +246,8 @@ def reconcile(table):
     mount), so the caller comes back soon."""
     st, now = load_state(), mounts()
     want = {f["name"]: f for f in table.get("folders", [])
-            if f["name"] and "/" not in f["name"] and not f["name"].startswith(".")}  # the host checks this too
+            if f["name"] and "/" not in f["name"] and not f["name"].startswith(".")  # the host checks this too
+            and f["name"] != ADDITIONS_KEY}
     pending = False
     for name in list(st):
         f = want.get(name)
@@ -297,21 +342,108 @@ def do_asks(table):
         answer(f, ok, text)
 
 
+def agent_units(*args):
+    """systemctl for the agent units. True when it worked."""
+    try:
+        rc, err = sh("systemctl", *args)
+    except OSError as e:
+        rc, err = 1, str(e)
+    if rc != 0:
+        log(f"systemctl {' '.join(args)}: {err}")
+    return rc == 0
+
+
+def job_running():
+    """True when the app has a job that the agent has not taken, False when not, None when the app cannot be reached."""
+    c = http.client.HTTPConnection(HOST, 80, timeout=5)
+    try:
+        c.request("GET", "/.tux/additions")
+        r = c.getresponse()
+        body = r.read()
+        return bool(json.loads(body).get("job")) if r.status == 200 else None
+    except (OSError, http.client.HTTPException, ValueError, AttributeError):
+        return None
+    finally:
+        c.close()
+
+
+def agent_busy():
+    """True when /run/tux/additions-busy names a live agent (it holds the file while a job runs)."""
+    try:
+        with open(BUSY) as f:
+            pid = json.load(f).get("pid")
+    except (OSError, ValueError, AttributeError):
+        return False
+    if type(pid) is not int or pid < 2:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        pass  # EPERM: it lives
+    try:  # where there is a /proc, the pid must still be an agent: a pid can be used again
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            return b"agent" in f.read()
+    except OSError:
+        return True
+
+
+def do_additions(table):
+    """Starts the Additions agent for each new n of the media, once it is mounted. While a job runs, the agent is
+    left alone and the new n waits. When the media goes, stops the agent unless a job runs (the agent also ends itself
+    then). True when a new n waits."""
+    entry = next((f for f in table.get("folders", []) if f.get("kind") == "additions"), None)
+    with Locked():
+        have, pend, st = additions_n(), additions_pending(), load_state()
+    if entry is None:
+        if pend is not None:
+            with Locked():
+                save_additions_n(have, None)
+        if have is not None and not agent_busy() and job_running() is False:
+            agent_units("stop", AGENT_UNIT + "*")
+            with Locked():
+                save_additions_n(None, None)
+            log("additions: media gone, agent stopped")
+        return False
+    n = entry.get("n")
+    if type(n) is not int or n < 1 or entry["name"] not in st:
+        return False
+    if n == have:
+        if pend is not None:
+            with Locked():
+                save_additions_n(have, None)
+        return False
+    if agent_busy():
+        if pend != n:
+            with Locked():
+                save_additions_n(have, n)
+            log(f"additions: a job runs; media {n} waits")
+        return True
+    with Locked():
+        save_additions_n(n, None)  # first: a restart of this helper must not run n again
+    agent_units("stop", AGENT_UNIT + "*")
+    agent_units("start", "--no-block", f"{AGENT_UNIT}{n}.service")
+    log(f"additions: agent {n} started")
+    return False
+
+
 def run():
     signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))  # the mounts stay: a restart takes them over
     if ROOT not in mounts():
         log(f"{ROOT} is not mounted: no folders")
         return
     os.makedirs(MEDIA, exist_ok=True)
-    seq, share_back, pending = None, 0, False
+    seq, share_back, pending, waiting = None, 0, False, False
     while True:
         table = read_table()
         if table is not None:
             with Locked():  # each time, so a change made by a command (remount, reset) is taken up too
                 pending = reconcile(table)
             do_asks(table)
+            waiting = do_additions(table)
         if time.monotonic() >= share_back:
-            got = poll(seq, 10 if pending else 130)
+            got = poll(seq, 10 if pending or waiting else 130)  # a waiting n is tried again when the job ends
             if got is not None:
                 seq = got
                 continue

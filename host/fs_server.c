@@ -1,7 +1,8 @@
 /* The file server for folders from the Files app (fs_server.h).
 
-   Node ids: 1 is the root the server makes, 2 is .tux-folders, 3 to 10 are the folders' own roots (fixed, so a
-   folder picked again keeps its place in the guest), and the rest are entries below them. An entry's node keeps
+   Node ids: 1 is the root the server makes, 2 is .tux-folders, 3 to 11 are the folders' own roots (fixed, so a
+   folder picked again keeps its place in the guest), and the rest are entries below them. The ninth root is the
+   reserved Tuxedo Additions media (HV_FS_ADDITIONS). An entry's node keeps
    the host's device and inode and its path below the folder, never a descriptor: a path is opened below the
    folder's descriptor at each use, and an object that is no longer the node's inode is ESTALE, so the guest looks
    it up again. One node for each host inode, so hard links are one inode in the guest too.
@@ -32,6 +33,7 @@
 #define ID_FILE 2
 #define ID_FOLDER0 3
 #define ID_NODE0 16
+#define SLOTS (HV_FS_MAX_FOLDERS + 1) /* the user folders, then the reserved additions entry */
 #define GUEST_UID 1000
 #define GUEST_GID 1000
 #define MAX_NODES (1u << 18) /* a directory rename walks them all */
@@ -51,6 +53,7 @@ typedef struct Folder {
     dev_t dev;
     ino_t ino;
     char id[HV_FS_NAME_MAX + 1], name[HV_FS_NAME_MAX + 1];
+    int addn;           /* the additions entry: the n .tux-folders carries */
     long ask, answered; /* the open ask (0: none) and the last one answered */
     int ask_what, answer_ok;
     char answer[ANSWER_MAX];
@@ -58,7 +61,7 @@ typedef struct Folder {
 
 static pthread_mutex_t fmu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t fcond = PTHREAD_COND_INITIALIZER;
-static Folder folders[HV_FS_MAX_FOLDERS];
+static Folder folders[SLOTS];
 static unsigned long news;
 static uint32_t gens;
 static long asks;
@@ -96,9 +99,12 @@ int hv_fs_mode_parse(const char *s) {
 
 const char *hv_fs_mode_name(int mode) { return mode == HV_FS_RO ? "ro" : mode == HV_FS_COW ? "cow" : "rw"; }
 
-int hv_fs_folder_set(int index, const char *id, const char *name, const char *path, int mode) {
-    if (index < 0 || index >= HV_FS_MAX_FOLDERS || !folder_name_ok(name) || (id && !folder_name_ok(id)) || !path ||
-        mode < HV_FS_RO || mode > HV_FS_RW) {
+/* add_n < 0: leave n as it is (only the additions entry has one). */
+static int folder_set(int index, const char *id, const char *name, const char *path, int mode, int add_n) {
+    int reserved = index == HV_FS_ADDITIONS;
+    if (index < 0 || index >= SLOTS || !folder_name_ok(name) || (id && !folder_name_ok(id)) || !path || mode < HV_FS_RO ||
+        mode > HV_FS_RW || (!reserved && !strcmp(name, HV_FS_ADDITIONS_NAME)) ||
+        (reserved && (strcmp(name, HV_FS_ADDITIONS_NAME) || (id && strcmp(id, name)) || mode != HV_FS_RO))) {
         errno = EINVAL;
         return -1;
     }
@@ -114,7 +120,7 @@ int hv_fs_folder_set(int index, const char *id, const char *name, const char *pa
     long cs = fpathconf(fd, _PC_CASE_SENSITIVE);
     pthread_mutex_lock(&fmu);
     if (!started) started = time(NULL);
-    for (int i = 0; i < HV_FS_MAX_FOLDERS; i++) {
+    for (int i = 0; i < SLOTS; i++) {
         if (i != index && folders[i].used && !strcmp(folders[i].name, name)) {
             pthread_mutex_unlock(&fmu);
             close(fd);
@@ -137,6 +143,7 @@ int hv_fs_folder_set(int index, const char *id, const char *name, const char *pa
     f->used = 1;
     f->mode = mode;
     f->case_sensitive = cs != 0; /* -1 (unknown): say sensitive, as Linux expects */
+    if (reserved && add_n >= 0) f->addn = add_n;
     snprintf(f->name, sizeof f->name, "%s", name);
     snprintf(f->id, sizeof f->id, "%s", id ? id : name);
     changed_locked();
@@ -145,8 +152,36 @@ int hv_fs_folder_set(int index, const char *id, const char *name, const char *pa
     return 0;
 }
 
+int hv_fs_folder_set(int index, const char *id, const char *name, const char *path, int mode) {
+    if (index == HV_FS_ADDITIONS) { /* only additions.c sets it, through hv_fs_additions_insert */
+        errno = EINVAL;
+        return -1;
+    }
+    return folder_set(index, id, name, path, mode, -1);
+}
+
+int hv_fs_additions_insert(const char *path, int n) {
+    if (n < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    return folder_set(HV_FS_ADDITIONS, HV_FS_ADDITIONS_NAME, HV_FS_ADDITIONS_NAME, path, HV_FS_RO, n);
+}
+
+int hv_fs_additions_nudge(int n) {
+    pthread_mutex_lock(&fmu);
+    int rc = folders[HV_FS_ADDITIONS].used && n >= 0 ? 0 : -1;
+    if (!rc) {
+        folders[HV_FS_ADDITIONS].addn = n;
+        changed_locked();
+    }
+    pthread_mutex_unlock(&fmu);
+    if (rc) errno = ENODEV;
+    return rc;
+}
+
 int hv_fs_folder_clear(int index) {
-    if (index < 0 || index >= HV_FS_MAX_FOLDERS) {
+    if (index < 0 || index >= SLOTS) {
         errno = EINVAL;
         return -1;
     }
@@ -272,6 +307,16 @@ int hv_fs_folder_answered(int index, long ask, int *ok, char **text) {
     return rc;
 }
 
+/* The user folders and the additions entry, for the guest's lookups. */
+static int folder_find_any(const char *name) {
+    int found = -1;
+    pthread_mutex_lock(&fmu);
+    for (int i = 0; i < SLOTS && found < 0; i++)
+        if (folders[i].used && name && !strcmp(folders[i].name, name)) found = i;
+    pthread_mutex_unlock(&fmu);
+    return found;
+}
+
 int hv_fs_folder_find(const char *name) {
     int found = -1;
     pthread_mutex_lock(&fmu);
@@ -302,14 +347,14 @@ static void json_str(char *out, size_t cap, size_t *n, const char *s) {
 }
 
 char *hv_fs_folders_json(unsigned long *seq) {
-    enum { CAP = 20480 }; /* 8 folders with an id and a name of 64 bytes, each byte escaped at most 6 times over */
+    enum { CAP = 20480 }; /* 9 entries with an id and a name of 64 bytes, each byte escaped at most 6 times over */
     char *out = malloc(CAP);
     if (!out) return NULL;
     size_t n = 0;
     pthread_mutex_lock(&fmu);
     n += (size_t)snprintf(out, CAP, "{\"seq\":%lu,\"folders\":[", news);
     int first = 1;
-    for (int i = 0; i < HV_FS_MAX_FOLDERS; i++) {
+    for (int i = 0; i < SLOTS; i++) {
         const Folder *f = &folders[i];
         if (!f->used) continue;
         if (n < CAP) n += (size_t)snprintf(out + n, CAP - n, "%s{\"index\":%d,\"id\":", first ? "" : ",", i);
@@ -320,6 +365,7 @@ char *hv_fs_folders_json(unsigned long *seq) {
             n += (size_t)snprintf(out + n, CAP - n, ",\"mode\":\"%s\",\"state\":\"%s\",\"case\":\"%s\",\"gen\":%u,\"orig\":%u",
                                   hv_fs_mode_name(f->mode), f->online ? "ready" : "unavailable",
                                   f->case_sensitive ? "sensitive" : "insensitive", f->gen, f->orig);
+        if (n < CAP && i == HV_FS_ADDITIONS) n += (size_t)snprintf(out + n, CAP - n, ",\"kind\":\"additions\",\"n\":%d", f->addn);
         if (n < CAP && f->ask)
             n += (size_t)snprintf(out + n, CAP - n, ",\"ask\":{\"n\":%ld,\"do\":\"%s\"}", f->ask,
                                   f->ask_what == HV_FS_ASK_EXPORT ? "export" : "discard");
@@ -784,7 +830,7 @@ static int ctx_get(HvFs *fs, uint64_t id, Ctx *c) {
     c->rootfd = -1;
     if (id == FUSE_ROOT_ID) return c->kind = K_ROOT, 0;
     if (id == ID_FILE) return c->kind = K_FILE, 0;
-    if (id >= ID_FOLDER0 && id < ID_FOLDER0 + HV_FS_MAX_FOLDERS) {
+    if (id >= ID_FOLDER0 && id < ID_FOLDER0 + SLOTS) {
         c->kind = K_FOLDER;
         return folder_take(c, (int)(id - ID_FOLDER0), 0, 1);
     }
@@ -1048,7 +1094,7 @@ static size_t op_lookup(Req *r, Ctx *c) {
             synthetic_attr(&e.attr, ID_FILE, S_IFREG | 0444, file_len(), 1);
             return reply(r->o, 0, &e, sizeof e);
         }
-        int i = hv_fs_folder_find(name);
+        int i = folder_find_any(name);
         if (i < 0) return reply_err(r->o, LX_ENOENT);
         Ctx f = {.rootfd = -1};
         if ((err = folder_take(&f, i, 0, 1))) return reply_err(r->o, err == LX_ESTALE ? LX_ENOENT : err);
@@ -1525,7 +1571,7 @@ static size_t op_statfs(Req *r, Ctx *c) {
     struct statfs s;
     int fd = inside(c) && c->online ? c->rootfd : -1;
     Ctx any = {.rootfd = -1};
-    for (int i = 0; fd < 0 && !inside(c) && i < HV_FS_MAX_FOLDERS; i++)
+    for (int i = 0; fd < 0 && !inside(c) && i < SLOTS; i++)
         if (!folder_take(&any, i, 0, 1) && any.online) fd = any.rootfd;
         else ctx_done(&any);
     FuseStatfsOut o = {.bsize = 4096, .frsize = 4096, .namelen = 255};
@@ -1612,7 +1658,7 @@ static size_t root_listing(Req *r, uint64_t from, uint32_t size, int plus) {
     if (!buf) return reply_err(r->o, LX_ENOMEM);
     size_t used = 0;
     /* 0 ".", 1 "..", 2 .tux-folders, then the folders by index */
-    for (uint64_t i = from; i < 3 + HV_FS_MAX_FOLDERS; i++) {
+    for (uint64_t i = from; i < 3 + SLOTS; i++) {
         Ctx f = {.rootfd = -1};
         const char *name = i == 0 ? "." : i == 1 ? ".." : FOLDERS_FILE;
         FuseEntryOut e = {0};

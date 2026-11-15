@@ -1,10 +1,10 @@
 Package: tux-guest
-Version: 1.10.2
+Version: 1.11.0
 Architecture: all
 Maintainer: Tuxedo <tux@localhost>
 Section: admin
 Priority: optional
-Depends: systemd, util-linux, cloud-guest-utils, gdisk, e2fsprogs, davfs2, python3, tzdata, python3-jeepney, nftables
+Depends: systemd, util-linux, cloud-guest-utils, gdisk, e2fsprogs, davfs2, python3, tzdata, python3-jeepney, nftables, gpgv
 Recommends: wl-clipboard, xclip, python3-cryptography, tux-va
 Description: Tuxedo guest tools
  Grows the root partition and file system to the disk on every boot,
@@ -15,4 +15,5 @@ Description: Tuxedo guest tools
  in Plasma, keeps the wallet (Secret Service and
  KWallet) in the device's Keychain, mounts the folders from the
  device's Files app at /media/tux, and adds the Tuxedo apt
- repository, off until it is turned on.
+ repository, off until it is turned on. Runs the Tuxedo Additions agent from the media in
+ the device's app, and signs in at the console as root until an account is set up.

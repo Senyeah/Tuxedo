@@ -54,8 +54,7 @@ class Vm:
             env["HV_RAM_NO_LEDGER"] = "1"
         cmd = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', self.err, a.tuxvm, "--firmware", a.firmware, "--ram", str(a.ram), "--cpus", str(a.cpus), "--disk", self.disk]
         self.p = p = pexpect.spawn(cmd[0], cmd[1:], encoding="utf-8", timeout=60, env=env)
-        p.expect(r"\(automatic login\)", timeout=120)
-        p.expect(gu.shell(), timeout=30)
+        gu.login(p, 120, 30, wide=False)
         p.sendline(f"set +m; stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1; echo {MARK}$((6 * 7))")
         p.expect(MARK + r"42\r*\n", timeout=30)
         self.need("systemctl is-system-running --wait", lambda o: o == "running", "system state", 120)

@@ -155,8 +155,7 @@ class Vm:
         env = dict(os.environ, HV_INPUT_FILE=self.input)
         self.p = p = pexpect.spawn(cmd[0], cmd[1:], encoding="utf-8", timeout=60, env=env, maxread=65536)
         p.logfile_read = open(self.disk + ".console", "a")  # for a failure: the guest's side
-        p.expect(r"\(automatic login\)", timeout=300)
-        p.expect(gu.shell(), timeout=60)
+        gu.login(p, 300, 60, wide=False)
         p.sendline(f"set +m +H; stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1; echo {MARK}$((6 * 7))")
         p.expect(MARK + r"42\r*\n", timeout=30)
         self.need("systemctl is-system-running --wait", lambda o: o == "running", "system state", 180)

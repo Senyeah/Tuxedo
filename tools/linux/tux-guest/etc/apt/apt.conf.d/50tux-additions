@@ -1,0 +1,2 @@
+// Tells the app what the guest has after each dpkg run, on a device with the Tuxedo link. It never fails apt.
+DPkg::Post-Invoke { "if [ -d /run/systemd/system ] && ls -A /sys/fs/virtiofs 2>/dev/null | grep -q . && [ -x /usr/lib/tux/tux-additions-report ]; then /usr/lib/tux/tux-additions-report >/dev/null 2>&1 || true; fi"; };

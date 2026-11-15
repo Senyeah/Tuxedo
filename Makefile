@@ -29,7 +29,7 @@ DEV = $(B)/vgpu_metal.o $(B)/gicv3.o $(B)/timer.o $(B)/pl011.o $(B)/pl031.o $(B)
       $(B)/virtio.o $(B)/virtio_blk.o $(B)/virtio_net.o $(B)/virtio_rng.o $(B)/virtio_input.o $(B)/virtio_gpu.o $(B)/virtio_snd.o $(B)/virtio_balloon.o $(B)/virtio_hvcodec.o $(B)/xhci.o $(B)/pl061.o $(B)/fdt.o $(B)/guest_ram.o $(B)/virt.o $(B)/virt_fdt.o $(B)/ocores_i2c.o $(B)/devstatus.o \
       $(B)/virtio_fs.o $(B)/fs_server.o $(B)/safe_path.o $(GFX_OBJ)
 ENGINE = $(CORE) $(HOST)
-VM = $(B)/vm.o $(B)/linux_boot.o $(B)/status.o
+VM = $(B)/vm.o $(B)/linux_boot.o $(B)/status.o $(B)/additions.o
 # hvcodec, the guest's video codecs (host/vcodec.m, tuxvm --vcodec), on VideoToolbox.
 VT_FRAMEWORKS = -framework Foundation -framework VideoToolbox -framework CoreMedia -framework CoreVideo -framework CoreFoundation -framework IOSurface
 VT_OBJ = $(B)/vt_decode.o $(B)/vt_caps.o
@@ -38,7 +38,7 @@ METAL_LIBS = -framework Foundation -framework QuartzCore -framework Metal -frame
 
 TESTS = $(B)/test_classify $(B)/test_jit_region $(B)/test_operands $(B)/test_jit $(B)/test_mem $(B)/test_share_keyboard \
         $(B)/test_mmu $(B)/test_exc $(B)/test_devices $(B)/test_virtio_hvcodec $(B)/test_shutdown $(B)/test_pause $(B)/test_big_lock $(B)/test_machine_rebuild $(B)/test_fdt $(B)/test_console $(B)/test_virt $(B)/test_cli \
-        $(B)/test_status $(B)/test_secrets $(B)/test_share_paths $(B)/test_fs_server $(B)/test_virtio_fs $(B)/test_vgpu_metal $(B)/test_vcodec $(B)/test_net_forward $(if $(GFX),$(B)/test_vgpu_virgl)
+        $(B)/test_status $(B)/test_secrets $(B)/test_share_paths $(B)/test_fs_server $(B)/test_additions $(B)/test_additions_share $(B)/test_additions_vm $(B)/test_virtio_fs $(B)/test_vgpu_metal $(B)/test_vcodec $(B)/test_net_forward $(if $(GFX),$(B)/test_vgpu_virgl)
 
 all: $(TESTS) $(B)/tuxvm $(B)/tuxvm-ref $(B)/hvsparse
 
@@ -115,7 +115,7 @@ $(B)/test_machine_rebuild: tests/test_machine_rebuild.c $(ENGINE)
 $(B)/test_fdt: tests/test_fdt.c $(B)/fdt.o
 	$(CC) $(CFLAGS) $^ -o $@
 
-$(B)/test_status: tests/test_status.c $(B)/status.o $(B)/share.o $(B)/safe_path.o $(B)/fs_server.o $(B)/secrets.o
+$(B)/test_status: tests/test_status.c $(B)/status.o $(B)/share.o $(B)/additions.o $(B)/safe_path.o $(B)/fs_server.o $(B)/secrets.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 # The forward table against fake interface lists and a fake libslirp.
@@ -139,11 +139,11 @@ $(B)/test_virt: tests/test_virt.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(NET_
 	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -o $@
 
 # PUT /.tux/keyboard: what tux-keyboard in a Linux desktop asks of the device.
-$(B)/test_share_keyboard: tests/test_share_keyboard.c $(B)/share.o $(B)/safe_path.o $(B)/fs_server.o $(B)/secrets.o $(B)/status.o
+$(B)/test_share_keyboard: tests/test_share_keyboard.c $(B)/share.o $(B)/additions.o $(B)/safe_path.o $(B)/fs_server.o $(B)/secrets.o $(B)/status.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 # The folder's paths: no link or ".." leaves it (host/safe_path.c), through the server and directly.
-$(B)/test_share_paths: tests/test_share_paths.c $(B)/share.o $(B)/safe_path.o $(B)/fs_server.o $(B)/secrets.o $(B)/status.o
+$(B)/test_share_paths: tests/test_share_paths.c $(B)/share.o $(B)/additions.o $(B)/safe_path.o $(B)/fs_server.o $(B)/secrets.o $(B)/status.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 # The Files folder server through FUSE requests: confinement, modes, case and Unicode, folders that move or go.
@@ -154,8 +154,20 @@ $(B)/test_fs_server: tests/test_fs_server.c $(B)/fs_server.o $(B)/safe_path.o
 $(B)/test_virtio_fs: tests/test_virtio_fs.c $(B)/virtio_fs.o $(B)/virtio.o $(B)/pcie.o $(B)/gicv3.o $(B)/timer.o $(B)/fs_server.o $(B)/safe_path.o $(ENGINE)
 	$(CC) $(CFLAGS) $^ -o $@
 
-$(B)/test_secrets: tests/test_secrets.c $(B)/share.o $(B)/safe_path.o $(B)/fs_server.o $(B)/secrets.o $(B)/status.o
+$(B)/test_secrets: tests/test_secrets.c $(B)/share.o $(B)/additions.o $(B)/safe_path.o $(B)/fs_server.o $(B)/secrets.o $(B)/status.o
 	$(CC) $(CFLAGS) $^ -o $@
+
+# Tuxedo Additions, engine side: the JSON check, the event ring, the job wipe, the reserved folder entry and its Read-only
+# media through FUSE; the agent's link (GET and POST /.tux/additions); the virtio-fs device with no folders (fs_always).
+$(B)/test_additions: tests/test_additions.c $(B)/additions.o $(B)/fs_server.o $(B)/safe_path.o
+	$(CC) $(CFLAGS) $^ -o $@
+$(B)/test_additions_share: tests/test_additions_share.c $(B)/share.o $(B)/additions.o $(B)/safe_path.o $(B)/fs_server.o $(B)/secrets.o $(B)/status.o
+	$(CC) $(CFLAGS) $^ -o $@
+$(B)/test_additions_vm: tests/test_additions_vm.c $(ENGINE) $(DEV) $(VM) $(B)/audio_mac.o $(NET_OBJ) $(B)/dns_proxy.o
+	$(CC) $(CFLAGS) $^ $(SLIRP_LIBS) $(METAL_LIBS) -framework AudioToolbox -o $@
+test-additions-engine: $(B)/test_additions $(B)/test_additions_share $(B)/test_additions_vm
+	@ulimit -s 65520; for t in $^; do echo "== $$t"; $$t || exit 1; done
+.PHONY: test-additions-engine
 
 # Tuxedo's virt device tree against QEMU's (needs qemu-system-aarch64, dtc and uv).
 test-linux-dtb: $(B)/tuxvm
@@ -292,6 +304,16 @@ linux-va-pkg:
 	TUX_LINUX_OUT=$(LINUX_OUT) tools/linux/build-va-pkg.sh
 .PHONY: linux-va-pkg
 
+# Tuxedo Additions: the media the app inserts (docs/guest-additions-design.md). It needs the three debs above and the
+# signing key in ~/.tux-apt-key. ADDITIONS_ARGS="--tree DIR --offline --rebuild" for the builder test.
+linux-additions:
+	TUX_LINUX_OUT=$(LINUX_OUT) tools/linux/package-additions.sh
+test-additions-builder:
+	TUX_LINUX_OUT=$(LINUX_OUT) uv run tools/linux/test_package_additions.py $(ADDITIONS_ARGS)
+test-additions-agent:
+	uv run tools/linux/test_additions_agent.py
+.PHONY: linux-additions test-additions-builder test-additions-agent
+
 # P6: the shared folder (~/Tux, davfs2) against --share. SHARE_ARGS="--image FILE" for an image that has davfs2.
 test-linux-share: $(B)/tuxvm
 	uv run tools/linux/share-check.py $(SHARE_ARGS)
@@ -313,6 +335,20 @@ test-linux-files: $(B)/tuxvm
 test-linux-files-posix: $(B)/tuxvm
 	uv run tools/linux/files-check.py --pjdfstest $(FILES_ARGS)
 .PHONY: test-linux-files-posix
+
+# tux-guest 1.11.0, Tuxedo Additions, no guest: tux-files starts the agent by media n; the launcher, the console login and
+# the report scripts. The launcher tests need gpg and gpgv (they skip with a message without).
+test-tux-files-additions:
+	uv run tools/linux/test_tux_files_additions.py
+test-tux-guest-scripts:
+	uv run tools/linux/test_tux_guest_scripts.py
+.PHONY: test-tux-files-additions test-tux-guest-scripts
+
+# Tuxedo Additions end to end in a guest (clones of the tux-guest 1.10.x console image): the bootstrap, autorun, the agent's jobs,
+# bad media, Read-only, eject and cancel. Needs `make linux-additions` first. ADDITIONS_CHECK_ARGS="--only cd --boot1-disk FILE".
+test-linux-additions: $(B)/tuxvm
+	uv run tools/linux/additions-check.py $(ADDITIONS_CHECK_ARGS)
+.PHONY: test-linux-additions
 
 # P7: the clipboard helper in the desktop image against the host's clipboard. CLIP_ARGS="--image FILE" for an image that has tux-guest 1.2.
 test-linux-clipboard: $(B)/tuxvm
@@ -411,7 +447,7 @@ IOS_DEPS ?= $(if $(wildcard ios/deps/include/slirp/libslirp.h),$(CURDIR)/ios/dep
 IOS_CFLAGS = -std=c11 -Wall -Wextra -O2 -g -Icore -Ihost -Idevices -I$(IOS_DEPS)/include/slirp $(if $(GFX),-DHV_GFX=1)
 IB = build/ios
 IOS_GFX_DIR ?= $(GFX_ROOT)/ios
-IOS_SRC = $(wildcard core/*.c) host/prof_ios.c host/jit_region.c host/disk.c host/vm.c host/linux_boot.c host/status.c $(IOS_NET) host/net_forward.c host/dns_proxy.c host/share.c host/safe_path.c host/fs_server.c host/secrets.c host/audio_mac.c host/hvsparse.c \
+IOS_SRC = $(wildcard core/*.c) host/prof_ios.c host/jit_region.c host/disk.c host/vm.c host/linux_boot.c host/status.c $(IOS_NET) host/net_forward.c host/dns_proxy.c host/share.c host/additions.c host/safe_path.c host/fs_server.c host/secrets.c host/audio_mac.c host/hvsparse.c \
           $(wildcard devices/*.c)
 # hvcodec, for a machine's Video encode setting. The app links VideoToolbox for it (ios/project.yml).
 IOS_VCODEC_OBJ = $(IB)/host/vcodec.o $(IB)/host/vt_decode.o $(IB)/host/vt_caps.o
@@ -664,6 +700,14 @@ $(B)/test_folder_policy: ios/Tuxedo/MachineModel.swift ios/Tuxedo/FolderPolicy.s
 test-folder-policy: $(B)/test_folder_policy
 	$(B)/test_folder_policy
 .PHONY: test-folder-policy
+
+# Tuxedo Additions in the app: version order, checks on input, events, job JSON, the wizard's rules, the reserved folder name.
+$(B)/test_additions_policy: ios/Tuxedo/MachineModel.swift ios/Tuxedo/FolderPolicy.swift ios/Tuxedo/AdditionsPolicy.swift ios/Tuxedo/AdditionsEvents.swift ios/Tuxedo/AdditionsJob.swift ios/Tuxedo/AdditionsCatalogue.swift ios/Tuxedo/AdditionsWizardModel.swift tests/test_additions_policy.swift | $(B)
+	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
+
+test-additions-policy: $(B)/test_additions_policy
+	$(B)/test_additions_policy
+.PHONY: test-additions-policy
 
 test-linux-catalogue: $(B)/test_linux_catalogue
 	$(B)/test_linux_catalogue

@@ -1,0 +1,10 @@
+[
+  {"src": "usr/local/bin/tux-session", "dst": "/usr/local/bin/tux-session", "mode": "0755"},
+  {"src": "usr/local/bin/tux-display", "dst": "/usr/local/bin/tux-display", "mode": "0755"},
+  {"src": "etc/xdg/labwc/autostart", "dst": "/etc/xdg/labwc/autostart", "mode": "0755"},
+  {"src": "etc/xdg/labwc/rc.xml", "dst": "/etc/xdg/labwc/rc.xml", "mode": "0644"},
+  {"src": "etc/profile.d/tux-desktop.sh", "dst": "/etc/profile.d/tux-desktop.sh", "mode": "0644"},
+  {"src": "etc/systemd/system/getty@tty1.service.d/autologin.conf", "dst": "/etc/systemd/system/getty@tty1.service.d/autologin.conf", "mode": "0644", "subst": true, "when": "autologin"},
+  {"src": "etc/wireplumber/wireplumber.conf.d/50-tux.conf", "dst": "/etc/wireplumber/wireplumber.conf.d/50-tux.conf", "mode": "0644"},
+  {"src": "usr/share/wireplumber/scripts/tux/keep-device-volume.lua", "dst": "/usr/share/wireplumber/scripts/tux/keep-device-volume.lua", "mode": "0644"}
+]

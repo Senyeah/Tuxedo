@@ -9,11 +9,12 @@ Every script runs inside the builder container, so no cross compiler is needed.
 - `Dockerfile`: the builder image (`debian:trixie` with the build tools).
 - `build-uboot.sh`, `build-image.sh`, `customize.sh`, `rootfs/`: see Order.
 - `customize-desktop.sh`, `rootfs-desktop/`: extra files for the desktop image (`build-image.sh --desktop`).
-- `tux-guest/` (G9): the source of the `tux-guest` Debian package. It holds the grow and first-boot scripts (`/usr/lib/tux/`) and units (`/usr/lib/systemd/system/tux-*.service`, G8), and enables them in `postinst`. `build-guest-pkg.sh` builds the `.deb` on its own; `build-image.sh` builds it too and installs it in both images. P6 adds the shared-folder mount (`home-tux-Tux.mount` and `.automount`, `/etc/tux/davfs2.conf`); P7 adds the clipboard helper (`tux-clipboard` and a user unit). DS5 adds `tux-status` and its unit, and UPower's settings. 1.6.0 adds the wallet, `tux-secrets` (see Wallet); 1.6.1 puts the command on the PATH. 1.7.0 adds the folders from Files (`tux-files`, see Folders from Files); 1.8.0 takes the app's Export Changes and Discard Changes, and remounts a Copy-on-write folder when its original changes. 1.9.0 adds the Tuxedo apt repository's key (`/usr/share/keyrings/tux-archive.gpg`) and its source (`/etc/apt/sources.list.d/tux.sources`), which is off (see ffmpeg with the device's codecs); 1.9.1 makes that source the admin's file, not a conffile; 1.10.0 joins 1.8.0 and 1.9.1; 1.10.1 is the first with the `tux-*` names; 1.10.2 mounts the shared folder for the user `tux` and gives the wallet firewall that default. `grow-check.py` tests the grow units, `share-check.py` the shared folder and `clipboard-check.py` the clipboard.
+- `tux-guest/` (G9): the source of the `tux-guest` Debian package. It holds the grow and first-boot scripts (`/usr/lib/tux/`) and units (`/usr/lib/systemd/system/tux-*.service`, G8), and enables them in `postinst`. `build-guest-pkg.sh` builds the `.deb` on its own; `build-image.sh` builds it too and installs it in both images. P6 adds the shared-folder mount (`home-tux-Tux.mount` and `.automount`, `/etc/tux/davfs2.conf`); P7 adds the clipboard helper (`tux-clipboard` and a user unit). DS5 adds `tux-status` and its unit, and UPower's settings. 1.6.0 adds the wallet, `tux-secrets` (see Wallet); 1.6.1 puts the command on the PATH. 1.7.0 adds the folders from Files (`tux-files`, see Folders from Files); 1.8.0 takes the app's Export Changes and Discard Changes, and remounts a Copy-on-write folder when its original changes. 1.9.0 adds the Tuxedo apt repository's key (`/usr/share/keyrings/tux-archive.gpg`) and its source (`/etc/apt/sources.list.d/tux.sources`), which is off (see ffmpeg with the device's codecs); 1.9.1 makes that source the admin's file, not a conffile; 1.10.0 joins 1.8.0 and 1.9.1; 1.10.1 is the first with the `tux-*` names; 1.10.2 mounts the shared folder for the user `tux` and gives the wallet firewall that default; 1.11.0 adds Tuxedo Additions (the launcher, the console login, the report script; see Tuxedo Additions). `grow-check.py` tests the grow units, `share-check.py` the shared folder and `clipboard-check.py` the clipboard.
 - `build-ffmpeg.sh` (VE2): the guest's `ffmpeg` with the Tuxedo codecs. It applies `hvcodec/ffmpeg-tux.patch` to the FFmpeg release in `versions.env`, builds `libhvcodec` (`hvcodec/libhvcodec/`) and `tux-codec-info`, and writes `ffmpeg/bin/` and `ffmpeg/ffmpeg.manifest` in the artefact directory. It runs in an arm64 `debian:trixie` container with packages from the pinned snapshot (about 3 min). `make test-linux-ffmpeg` checks the result in a clone of the desktop image. See `docs/guest-video-encode-plan.md`.
 - `build-ffmpeg-pkg.sh` (VE3): the `tux-ffmpeg` package from that build, with `tux-ffmpeg/` (its `postinst`, `prerm` and `copyright`) and the man page `hvcodec/ffmpeg-tux.7.md`. Output: `ffmpeg/tux-ffmpeg_<release>-tux<N>_arm64.deb`. `make linux-ffmpeg-pkg`. `build-image.sh` installs this package (the version in `versions.env`) and `man-db` in both images, so build it first.
 - `publish-apt.sh` (VE3): the signed apt repository in `build/linux/apt` and the source offer in `build/linux/source`. Nothing leaves the Mac unless you give it `--rsync`. `make linux-apt`. `tux-archive.asc` is the repository's public key.
 - `build-va-pkg.sh`: the `tux-va` package from `tux-va/`, the VA-API driver that goes in front of Mesa's virgl driver so Firefox keeps VA-API decode (see Video decode). Output: `va/tux-va_<version>_arm64.deb`. `make linux-va-pkg`. Both images have the package, `publish-apt.sh` adds it to the repository, and `tux-guest` recommends it.
+- `package-additions.sh` and `additions/` (Tuxedo Additions): the media that the app inserts as a CD. `make linux-additions`. See Tuxedo Additions.
 - `snapshot-apt.sh`: sourced by the container scripts above, so they install packages from the snapshot in `versions.env`.
 - `run.sh`: runs a command in the builder image. `build/linux/` is mounted at `/out`, the repo's `tools/linux/` at `/tools` (read only), and a named volume at `/work` for source trees.
 
@@ -60,7 +61,7 @@ cp -c build/linux/debian-console.img /tmp/tux-debian.img
 build/tuxvm --firmware build/linux/u-boot.bin --disk /tmp/tux-debian.img --ram 2048 --cpus 2
 ```
 
-Debian autologs in as `tux`. `Ctrl-A p` presses the power key, and `Ctrl-A x` stops the machine. For the desktop image add `--window`, and `--gpu-accel` for 3D after `tools/gfx` (below).
+An image built before `tux-guest` 1.11.0 signs in as `tux` by itself. With 1.11.0, a machine with no account marker signs in as root (see Tuxedo Additions). `Ctrl-A p` presses the power key, and `Ctrl-A x` stops the machine. For the desktop image add `--window`, and `--gpu-accel` for 3D after `tools/gfx` (below).
 
 Then, as needed:
 
@@ -357,7 +358,7 @@ Mesa's VA-API driver for virgl offers NV12, YV12 and I420 surfaces for each 8-bi
 - The package diverts Mesa's link to `mesa_virtio_gpu_drv_video.so` with `dpkg-divert`, so an update of `mesa-va-drivers` goes to that name, and `apt remove tux-va` puts Mesa's link back. It does not depend on `mesa-va-drivers`: without it, the driver finds nothing to load and libva reports no driver, as before.
 - `LIBVA_DRIVER_NAME=mesa_virtio_gpu` uses Mesa's driver with no filter, for a test.
 - With `/usr/bin/ffmpeg -hwaccel vaapi` and no `-hwaccel_output_format`, the frames now come back as `nv12`, not `yuv420p`. The pixels are the same. Add `-vf format=yuv420p` or `-pix_fmt yuv420p` where the output must be planar.
-- An existing machine gets it with `tux-guest` 1.10.2 from the Tuxedo repository (it is in `Recommends`), or with `sudo apt install tux-va`.
+- An existing machine gets it with `tux-guest` 1.11.0 (it is in `Recommends`), from the Tuxedo repository or the Tuxedo Additions media, or with `sudo apt install tux-va`.
 
 `build-va-pkg.sh` (`make linux-va-pkg`, needs Docker) builds the driver with `-Werror`, runs it against a stand-in for Mesa's driver (`tux-va/test`: a decode config, a decode config with no NV12, a video processing config), then installs the package over `mesa-va-drivers` in the container, reinstalls `mesa-va-drivers`, and removes the package; Mesa's link must move, stay moved, and come back.
 
@@ -439,6 +440,106 @@ make test-linux-codec-dma  # codec-dma-check.py: a clone booted through U-Boot w
 
 `codec-dma-check.py` installs the package with `apt`, checks `/dev/hvcodec`, measures 4K NV12 and P010 transfers on it and on TCP with `hvcodec/hvxfer.c`, runs the main command and a `hwdownload`, software filter, `hwupload` chain on both channels (each output checked on the Mac), unloads the module for the fallback, opens a ninth context, kills a process during transfers, and with `--kernel-update` installs the newest 16 KB kernel, powers off, boots again and uses the device on the new kernel. The image's sources are the pinned snapshot, which has no newer kernel, so the check then adds the same snapshot's `trixie-security`.
 
+## Tuxedo Additions
+
+Tuxedo Additions is the app's "Insert Tuxedo Additions CD". The design is `docs/guest-additions-design.md`. It is the contract, and it wins over `docs/guest-additions-plan.md` where the two differ. Nothing here has run on an iPhone (`docs/iphone-checklist.md`, part 5b).
+
+What the media is:
+
+- A folder, not a disc. The app carries it as `Tuxedo.app/TuxAdditions/` and gives it to the guest as one more folder of the `tux-files` device, read only, named `tux-additions`. The guest sees it at `/media/tux/tux-additions`.
+- It has the four Tuxedo packages (`tux-guest`, `tux-va`, `tux-ffmpeg`, `tux-codec-dkms`), the Debian packages that a minimal trixie guest lacks (and `openssh-server`), an installer (`install`), an agent (`agent`) and a catalogue of what the agent may do (`actions.json`). The guest installs from it with no network.
+- `tux-guest` 1.11.0 or later in the guest starts the agent by itself when the app inserts the media. It first checks `SHA256SUMS.gpg` with the key that `tux-guest` installed (`/usr/share/keyrings/tux-archive.gpg`). A guest with no `tux-guest` cannot do this: the app shows a command to type.
+
+Build it (`make linux-additions` needs Docker, `gpg`, and the signing key in `~/.tux-apt-key` or `TUX_APT_GNUPGHOME`):
+
+```sh
+make linux-ffmpeg-pkg linux-va-pkg linux-codec-dkms      # the three debs it takes from build/linux
+make linux-additions                                      # build/linux/additions/tux-additions/, about 39 MB
+```
+
+`package-additions.sh` builds `tux-guest` itself (`build-guest-pkg.sh`). It stops if a deb is missing or if the key in `tux-guest` is not the key in the keyring. It downloads the Debian packages from the snapshot in `versions.env` into `build/linux/additions/cache`, so a second build needs no network for them. The media is the same on every build, apart from the signatures, because `SOURCE_DATE_EPOCH` is the time of the last commit. After the build, a container with no network installs from the media into a minimal root and checks the result. Nothing leaves the Mac. The app build copies the folder (`ios/project.yml`, Copy Tuxedo Additions). With no media it only warns.
+
+`tux-additions-report` in `tux-guest` is a byte copy of `additions/tux_additions_caps.py`. A builder test checks it. After you change the script, copy it again to `tux-guest/usr/lib/tux/tux-additions-report` and build the media again.
+
+The files in the media:
+
+| File | What it is |
+| --- | --- |
+| `install` | The bootstrap (POSIX `sh`). It runs `sudo` on itself when it is not root. It installs `tux-guest`, `tux-va` and `tux-ffmpeg`. Exit codes: 0 done, 1 failed, 2 wrong system, 3 old `henge-*` packages, 4 the media check failed. |
+| `agent` | The agent (Python 3, standard library only). It runs as root and runs only what `actions.json` names. |
+| `tux_additions_caps.py` | What the agent tells the app about the guest (the `caps` of a report). |
+| `actions.json` | The catalogue: protocol, desktops, applications and their groups, packages and sizes, and the limits for SSH. The app reads its bundled copy for labels and sizes. |
+| `versions.json` | The versions in this build, the Debian snapshot and the install order of the Debian packages. |
+| `install-order.txt` | The order for `dpkg`, for when `apt` does not work. |
+| `desktop-labwc/` | The session files of the Tuxedo desktop, copied from `rootfs-desktop`, and `files.json` as their map. |
+| `apt/` | A signed apt repository: `main` (the four Tuxedo packages) and `deps` (the Debian packages). `Release` has no `Valid-Until`. |
+| `SHA256SUMS`, `SHA256SUMS.gpg`, `tux-archive.gpg` | The sums of every other file, the signature, and the public key (the same bytes as in `tux-guest`). |
+| `README.txt`, `source/SOURCES.txt` | The commands, the licences and the source offer (see `docs/licensing.md`). |
+
+The media holds no private key, no password and no path of the Mac that built it. The builder test checks this.
+
+### Tests and make targets
+
+| Target | What it checks | Needs |
+| --- | --- | --- |
+| `make test-additions-engine` | The engine: the reserved folder entry, the JSON check, the event ring, the job wipe, the link (`GET` and `POST /.tux/additions`, with the 400 and 413 answers) and the virtio-fs device with no folders. | Nothing beyond `make` |
+| `make test-additions-builder` | The built media: the tree, the sums, the signatures against the key in `tux-guest`, the catalogue against the packages, the size limit, the secrets check, and that `tux-guest` has the same report script. `ADDITIONS_ARGS="--tree DIR --offline --rebuild --other DIR"` chooses the tree, skips the check against the Debian index (it needs `snapshot.debian.org`), builds a second time and compares, or compares with another tree. | The media (`make linux-additions`) |
+| `make test-additions-agent` | The agent against a fake root and a fake host, with every program replaced by a recorder: validation, order, failure and skip, cancel, and no password in a log. | Nothing, no Docker or network |
+| `make test-tux-files-additions` | The part of `tux-files` that starts the agent by media number. | Nothing |
+| `make test-tux-guest-scripts` | The launcher (a bad signature gives exit 4 and a `bad-media` event), the console login for each marker, the report script, and `tux-status`. The launcher tests skip with a message when `gpg` or `gpgv` is missing. | `gpg` and `gpgv` for the launcher |
+| `make test-additions-policy` | The app's logic: version order, input checks, events, job JSON and the wizard's rules (`ios/Tuxedo/Additions*.swift`). | Xcode |
+| `uv run tools/linux/additions-check.py` | The whole flow in a guest (below). | A built `tuxvm`, a console image, the media |
+
+### additions-check.py
+
+It boots a clone of the console image and runs the flow from the design (section 10): the bootstrap on a guest with `tux-guest` removed and no network; autorun after an `additions` insert; the agent's report; a job with `user.setup`, `ssh.configure` and `additions.install`; `apt-get -s` for one desktop and one application; one small real `apps.install` when the guest has network; eject; bad media (one byte changed) gives `bad-media`; and writes to the media fail. A fresh guest must give a root shell on the serial console with no login. After `user.setup` the marker must exist, root must be locked and the console must follow `autologin`.
+
+Run it from the root of a checkout, after `make` and `make linux-additions`:
+
+```sh
+make && make linux-additions
+uv run tools/linux/additions-check.py
+```
+
+`additions-check.py --help` lists its options. It was not in the tree when this section was written (15/11/2026), so nothing here says it passed. A clone of a 1.10.2 console image from `build/linux` is the right start for the bootstrap case, because that guest has no `tux-additions-launch`.
+
+### How the app inserts it
+
+- `hv_additions_insert(dir)` (`host/additions.h`) puts the folder in the reserved slot of the `tux-files` table (`HV_FS_ADDITIONS`, after the 8 user folders) and adds one to its number `n`. The slot is never saved, and it does not count as one of the user's folders.
+- Every Linux machine of the app has the virtio-fs device (`fs_always`), so insert and eject need no restart. `tuxvm` has the device only with `--folder`, `--fs-device` or `--additions`.
+- `tux-files` in the guest sees the new `n`, mounts the folder read only, and starts `tux-additions-agent@<n>`. The launcher checks the signature, copies the tree to `/var/lib/tux/additions/`, and runs the agent. The agent posts a report to `http://10.0.2.4/.tux/additions` and then waits for the job that the wizard sets (`hv_additions_job_set`). The password is only in that job, in memory, on both sides.
+- Eject (`hv_additions_eject`) removes the folder. The agent stops when no job runs.
+
+### The root console and the account marker
+
+- With `tux-guest` 1.11.0, the serial console (`ttyAMA0`, the console that the app shows) and `tty1` of a guest with no desktop run `/usr/lib/tux/tux-console-login` (vendor drop-ins for `serial-getty@ttyAMA0` and `getty@tty1`). With no `/var/lib/tux/account.json`, it signs in as root with no password. The app takes this as the sign that the machine is new, and opens the wizard at the Account step.
+- A guest with a desktop keeps its own `tty1` sign-in for the desktop user.
+- The Account step (`user.setup`) writes the marker (`{"configured":true,"name":...,"autologin":...,"sudo":...}`, no password). From then on the wrapper reads the marker at each start: `autologin` true signs in as the account, and false shows a login prompt. The root sign-in ends in both cases. By default the step also locks root (`passwd -l root`).
+- An image built before 1.11.0 signs in as `tux` through an auto-login setting in its own `/etc`, and `tux` has an empty password. Installing 1.11.0 on such a machine gives it no marker, so its console becomes a root auto-login until the Account step runs. The 1.11.0 `postinst` writes a marker, with a login prompt as the console, only when the uid-1000 user already has a password.
+- To see the state in a guest: `cat /var/lib/tux/account.json`, `cat /var/lib/tux/additions.json` (the last report) and `systemctl status 'tux-additions-agent@*'`.
+
+### Build a media by hand and look at it
+
+```sh
+M=build/linux/additions/tux-additions
+cat $M/versions.json                                  # versions, snapshot, install order
+cat $M/README.txt $M/source/SOURCES.txt               # licences and source offer
+(cd $M && shasum -a 256 -c --quiet SHA256SUMS) && gpgv --keyring $M/tux-archive.gpg $M/SHA256SUMS.gpg $M/SHA256SUMS
+less $M/apt/dists/trixie/main/binary-arm64/Packages   # the four Tuxedo packages
+python3 -m json.tool $M/actions.json | less           # what the agent may install
+```
+
+To run the media on the Mac tool, give it a clone of the console image and the share server (the link needs it):
+
+```sh
+cp -c build/linux/debian-console.img /tmp/tux-add.img
+mkdir -p /tmp/tux-share
+build/tuxvm --firmware build/linux/u-boot.bin --disk /tmp/tux-add.img --ram 2048 --cpus 2 \
+  --share /tmp/tux-share --additions $M
+```
+
+`--additions DIR` inserts the media at boot. Lines in `HV_INPUT_FILE` drive it later: `additions DIR`, `additions -` (eject), `additions-nudge`, `additions-job FILE` and `additions-cancel`. Each event from the guest prints on stderr as `additions-event: <json>`. A job file is the JSON of section 5.5 of the design. `tuxvm` has no wizard, so this is the way to run a job by hand.
+
 ## Checks on the Mac
 
 - `dtb-compare.py` (T2, `make test-linux-dtb`) compares Tuxedo's device tree with QEMU's.
@@ -462,7 +563,7 @@ make test-linux-codec-dma  # codec-dma-check.py: a clone booted through U-Boot w
 
 The desktop image is variant A of G6: labwc on Wayland and one foot terminal. It runs with pixman, or with gles2 when the GPU is virgl.
 
-- Autologin on tty1 runs `/usr/local/bin/tux-session` from `/etc/profile.d/tux-desktop.sh`. The serial console stays a plain shell. If labwc stops, tty1 keeps a shell.
+- Autologin on tty1 runs `/usr/local/bin/tux-session` from `/etc/profile.d/tux-desktop.sh`. The serial console stays a plain shell (since `tux-guest` 1.11.0 it signs in as root until the account is set up; see Tuxedo Additions). If labwc stops, tty1 keeps a shell.
 - The renderer is chosen at every session start: `gles2` if `/dev/dri/renderD128` exists and `eglinfo -B` names virgl, else `pixman`. To force one, write `gles2` or `pixman` into `/etc/tux/renderer`. The choice is printed on tty1 and written to `$XDG_RUNTIME_DIR/tux-session.log` as `renderer=...`.
 - labwc runs `/etc/xdg/labwc/autostart`. It starts foot and, if `/etc/tux/bench.sh` is executable, runs it once in the background with `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR` and `WLR_RENDERER` set. Its output goes to `$XDG_RUNTIME_DIR/tux-bench.log`. The user `tux` is in the `dialout` group, so the script can also write to `/dev/ttyAMA0`.
 - `$XDG_RUNTIME_DIR/tux-times` (`/run/user/1000/tux-times`) holds the guest uptime in seconds at login, when labwc is up and when the terminal's shell starts.

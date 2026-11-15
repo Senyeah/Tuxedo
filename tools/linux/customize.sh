@@ -21,6 +21,7 @@ systemctl enable systemd-networkd.service systemd-resolved.service systemd-times
 # The device owns the volume and the screen brightness: a saved guest level must not set them at boot
 systemctl mask alsa-restore.service alsa-state.service 'systemd-backlight@backlight:tux-backlight.service'
 ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+# The console login (serial and tty1) is tux-guest's tux-console-login drop-in; this image has none of its own
 mkdir -p /etc/systemd/system/getty.target.wants
 ln -sf /usr/lib/systemd/system/serial-getty@.service /etc/systemd/system/getty.target.wants/serial-getty@ttyAMA0.service
 

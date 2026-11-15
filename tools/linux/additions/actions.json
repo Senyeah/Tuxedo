@@ -1,0 +1,54 @@
+{
+  "protocol": 1,
+  "desktops": [
+    {
+      "id": "labwc",
+      "title": "Tuxedo desktop (labwc)",
+      "packages": [
+        "labwc", "foot", "fonts-dejavu-core", "libpam-systemd", "xkb-data", "mesa-utils", "mesa-utils-bin",
+        "glmark2-es2-wayland", "libgl1-mesa-dri", "libgles2", "libegl1", "wlr-randr", "wl-clipboard", "xclip",
+        "python3", "pipewire", "pipewire-bin", "pipewire-alsa", "wireplumber", "python3-cryptography", "libsecret-tools"
+      ],
+      "size_mb": 84,
+      "files": "desktop-labwc"
+    },
+    {
+      "id": "plasma",
+      "title": "KDE Plasma",
+      "packages": ["kde-plasma-desktop", "sddm"],
+      "size_mb": 348
+    },
+    {
+      "id": "xfce",
+      "title": "Xfce",
+      "packages": ["xfce4", "lightdm"],
+      "size_mb": 50
+    }
+  ],
+  "apps": [
+    {"id": "firefox", "title": "Firefox", "group": "web", "packages": ["firefox-esr"], "size_mb": 90},
+    {"id": "chromium", "title": "Chromium", "group": "web", "packages": ["chromium"], "size_mb": 179},
+    {"id": "thunderbird", "title": "Thunderbird", "group": "web", "packages": ["thunderbird"], "size_mb": 133},
+    {"id": "libreoffice", "title": "LibreOffice", "group": "office", "packages": ["libreoffice-writer", "libreoffice-calc", "libreoffice-impress", "libreoffice-gtk3"], "size_mb": 149},
+    {"id": "evince", "title": "Document viewer", "group": "office", "packages": ["evince"], "size_mb": 76},
+    {"id": "vlc", "title": "VLC", "group": "media", "packages": ["vlc"], "size_mb": 121},
+    {"id": "mpv", "title": "mpv", "group": "media", "packages": ["mpv"], "size_mb": 120},
+    {"id": "gimp", "title": "GIMP", "group": "graphics", "packages": ["gimp"], "size_mb": 95},
+    {"id": "inkscape", "title": "Inkscape", "group": "graphics", "packages": ["inkscape"], "size_mb": 75},
+    {"id": "kate", "title": "Kate", "group": "develop", "packages": ["kate"], "size_mb": 164},
+    {"id": "git", "title": "Git", "group": "develop", "packages": ["git"], "size_mb": 22},
+    {"id": "build-essential", "title": "Build tools (gcc, make)", "group": "develop", "packages": ["build-essential"], "size_mb": 73},
+    {"id": "python3-pip", "title": "Python pip and venv", "group": "develop", "packages": ["python3-pip", "python3-venv"], "size_mb": 5},
+    {"id": "neovim", "title": "Neovim", "group": "develop", "packages": ["neovim"], "size_mb": 8},
+    {"id": "vim", "title": "Vim", "group": "develop", "packages": ["vim"], "size_mb": 10},
+    {"id": "htop", "title": "htop", "group": "tools", "packages": ["htop"], "size_mb": 1},
+    {"id": "curl", "title": "curl", "group": "tools", "packages": ["curl"], "size_mb": 4},
+    {"id": "wget", "title": "wget", "group": "tools", "packages": ["wget"], "size_mb": 3},
+    {"id": "tmux", "title": "tmux", "group": "tools", "packages": ["tmux"], "size_mb": 1},
+    {"id": "jq", "title": "jq", "group": "tools", "packages": ["jq"], "size_mb": 1},
+    {"id": "rsync", "title": "rsync", "group": "tools", "packages": ["rsync"], "size_mb": 1},
+    {"id": "ripgrep", "title": "ripgrep", "group": "tools", "packages": ["ripgrep"], "size_mb": 2},
+    {"id": "unzip", "title": "zip and unzip", "group": "tools", "packages": ["zip", "unzip"], "size_mb": 1}
+  ],
+  "ssh": {"port_min": 1, "port_max": 65535, "default_port": 22}
+}

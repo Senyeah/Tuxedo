@@ -1,0 +1,37 @@
+#!/bin/sh
+# Chooses the console login and runs agetty (docs/guest-additions-design.md, section 6). $1 is the tty.
+# No marker: root signs in. Marker with "autologin": true: the account. Any other marker: a login prompt.
+# The options are those of Debian's serial-getty@.service and getty@.service, but with no -o: agetty adds the -f of an
+# autologin to login's arguments only when -o is not given (with -o, login asks root for a password).
+# TUX_ACCOUNT_MARKER, TUX_LOGIN_ROOT and TUX_AGETTY are for tests.
+set -eu
+
+tty=${1:?usage: tux-console-login TTY}
+marker=${TUX_ACCOUNT_MARKER:-/var/lib/tux/account.json}
+agetty=${TUX_AGETTY:-/sbin/agetty}
+
+case $tty in
+    tty[0-9]*) set -- --noreset --noclear ;;
+    *) set -- --noreset --noclear --keep-baud 115200,57600,38400,9600 ;;
+esac
+
+user=
+if [ -e "$marker" ]; then
+    if grep -Eq '"autologin"[[:space:]]*:[[:space:]]*true' "$marker"; then
+        name=$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([a-z_][a-z0-9_-]*\)".*/\1/p' "$marker" | head -n 1)
+        if [ -n "$name" ] && [ "${#name}" -le 32 ] && getent passwd "$name" >/dev/null 2>&1; then
+            user=$name
+        fi
+    fi
+else
+    user=root
+    if [ "$tty" = tty1 ]; then
+        # A desktop has its own tty1 login (the image's getty@tty1 drop-in); this runs only when that is missing
+        for f in /usr/bin/labwc /usr/bin/plasmashell /usr/bin/xfce4-session; do
+            if [ -e "${TUX_LOGIN_ROOT:-}$f" ]; then user=; fi
+        done
+    fi
+fi
+
+if [ -n "$user" ]; then set -- "$@" --autologin "$user"; fi
+exec "$agetty" "$@" "$tty" ${TERM:+"$TERM"}

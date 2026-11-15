@@ -6,9 +6,11 @@ enum FolderPolicy {
     /// The owner's decision 4; the engine's table has as many (HV_FS_MAX_FOLDERS).
     static let maxFolders = 8
     static let maxNameBytes = 64
+    /// The host's own entry for the Tuxedo Additions media (HV_ADDITIONS_NAME): no user folder can have it.
+    static let reservedName = "tux-additions"
 
     /// A name the guest can use as /media/tux/<name>: one path part, no leading dot (.tux-folders is the host's),
-    /// no control characters, at most 64 bytes of UTF-8, and none that another folder has ("Name 2").
+    /// no control characters, at most 64 bytes of UTF-8, and none that another folder has or the reserved one ("Name 2").
     static func safeName(_ raw: String, taken: [String]) -> String {
         var name = String(String.UnicodeScalarView(raw.unicodeScalars.filter { $0.value >= 0x20 && $0.value != 0x7f }))
             .replacingOccurrences(of: "/", with: "-")
@@ -17,11 +19,12 @@ enum FolderPolicy {
         name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if name.isEmpty { name = "Folder" }
         let base = fit(name, bytes: maxNameBytes)
-        guard taken.contains(base) else { return base }
+        func used(_ candidate: String) -> Bool { candidate == reservedName || taken.contains(candidate) }
+        guard used(base) else { return base }
         for n in 2... {
             let suffix = " \(n)"
             let candidate = fit(name, bytes: maxNameBytes - suffix.utf8.count) + suffix
-            if !taken.contains(candidate) { return candidate }
+            if !used(candidate) { return candidate }
         }
         return base
     }

@@ -281,6 +281,9 @@ def login(p, append, limit=DISK_LIMITS["login"]):
         expect(p, "Kernel command line: " + re.escape(append) + r"\r*\n", left(), "boot")
     expect(p, r"\(automatic login\)", left(), "autologin")
     expect(p, gu.shell(), left(), "autologin")
+    if gu.at_root(p):  # tux-guest 1.11.0 and no account marker: a root console
+        p.sendline(gu.su_command())
+        expect(p, gu.user_shell(), left(), "su to the guest user")
     # Quiet the console first: kernel lines in the middle of output break the parsing. The marker
     # is printed after that, and its echo has no "42" (sudo drops typed-ahead lines).
     p.sendline(f"stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1; echo {MARK}$((6 * 7))")

@@ -92,8 +92,7 @@ def wait_stderr(errfile, pattern, limit):
 
 
 def desktop_up(p, label):
-    p.expect(r"\(automatic login\)", timeout=300)
-    p.expect(gu.shell_wide(), timeout=60)
+    gu.login(p, 300, 60)
     sh(p, "stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1")
     time.sleep(10)  # labwc settles
     out, _ = sh(p, f"{WAYLAND}; eglinfo 2>/dev/null | grep -m1 'OpenGL ES profile renderer'")

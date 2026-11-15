@@ -1,0 +1,136 @@
+#!/bin/sh
+# Tuxedo Additions bootstrap. Installs tux-guest, tux-va and tux-ffmpeg from the signed repository on this media.
+# Run it in a root shell: sh install. It starts sudo on itself when it is not root. It asks nothing.
+# Exit codes: 0 done (or nothing to do), 1 install failed, 2 wrong system, 3 old henge-* packages, 4 media check failed.
+set -eu
+umask 022
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+STATE=/var/lib/tux-additions
+INSTALLED_KEY=/usr/share/keyrings/tux-archive.gpg
+PKGS="tux-guest tux-va tux-ffmpeg"
+
+say() { printf '%s\n' "$*"; }
+die() { code=$1; shift; printf 'install: %s\n' "$*" >&2; exit "$code"; }
+
+case "${1:-}" in
+    "") ;;
+    *) die 2 "usage: sh install (it takes no arguments)" ;;
+esac
+
+if [ "$(id -u)" != 0 ]; then
+    command -v sudo >/dev/null 2>&1 || die 2 "this needs root. Log in as root, or install sudo"
+    exec sudo -- sh "$HERE/$(basename "$0")"
+fi
+
+[ -r /etc/os-release ] || die 2 "this is not Debian: there is no /etc/os-release"
+os=$(. /etc/os-release && echo "${ID:-}/${VERSION_CODENAME:-}")
+[ "$os" = debian/trixie ] || die 2 "this needs Debian trixie, and this is ${os}"
+[ "$(dpkg --print-architecture 2>/dev/null || true)" = arm64 ] || die 2 "this needs an arm64 system"
+
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP" "$STATE"' EXIT
+
+# The media may change, or go, while this runs, and it is not trusted yet. So copy it first, check the copy, and use
+# only the copy: what is checked is what apt and dpkg install.
+rm -rf "$STATE"
+mkdir -p "$STATE/lists/partial"
+mkdir "$STATE/media"
+cp -R "$HERE/." "$STATE/media/" || die 1 "the media could not be copied"
+chmod -R u=rwX,go=rX "$STATE"
+M=$STATE/media
+cd "$M"
+# only plain files and folders: a link, a pipe or a device is refused
+[ -z "$(find . ! -type f ! -type d | head -n 1)" ] || die 4 "the media has a file that is not a plain file"
+
+# The key the guest has already is the trust anchor. A guest with no tux-guest trusts the key on the media once.
+if [ -r "$INSTALLED_KEY" ]; then
+    KEY=$INSTALLED_KEY
+else
+    KEY=$M/tux-archive.gpg
+    say "This machine has no Tuxedo key yet. It will trust the key on this media."
+fi
+command -v sha256sum >/dev/null 2>&1 || die 1 "sha256sum is missing"
+# trixie's apt uses sqv, so a plain guest has sqv and no gpgv until tux-guest is installed
+if command -v gpgv >/dev/null 2>&1; then
+    gpgv --homedir "$TMP" --keyring "$KEY" SHA256SUMS.gpg SHA256SUMS >/dev/null 2>&1 || bad_sig=1
+elif command -v sqv >/dev/null 2>&1; then
+    sqv --keyring "$KEY" SHA256SUMS.gpg SHA256SUMS >/dev/null 2>&1 || bad_sig=1
+else
+    die 1 "neither gpgv nor sqv is here (apt install sqv)"
+fi
+[ -z "${bad_sig:-}" ] || die 4 "the signature of SHA256SUMS is not valid"
+sha256sum -c --strict --quiet SHA256SUMS >/dev/null 2>&1 || die 4 "a file on the media does not match SHA256SUMS"
+# a file that SHA256SUMS does not name must not be here
+find . -type f ! -name SHA256SUMS ! -name SHA256SUMS.gpg | sed 's|^\./||' | LC_ALL=C sort > "$TMP/found"
+sed 's/^[0-9a-f]*  //' SHA256SUMS | LC_ALL=C sort > "$TMP/named"
+cmp -s "$TMP/found" "$TMP/named" || die 4 "the media has a file that SHA256SUMS does not name"
+say "The media is good."
+
+if dpkg-query -W -f='${db:Status-Abbrev} ${Package}\n' 'henge-*' 2>/dev/null | grep -q '^ii'; then
+    die 3 "This machine has the old Henge guest packages. Tuxedo cannot update them. Re-create the machine from a Tuxedo image."
+fi
+if ! awk -F: '$3 == 1000 { found = 1 } END { exit !found }' /etc/passwd; then
+    say "There is no account with uid 1000 yet. The Tuxedo app can set one up."
+fi
+
+# version of an installed package ("" when it is not installed)
+have() { dpkg-query -W -f='${Status}\t${Version}' "$1" 2>/dev/null | awk -F'\t' '$1 == "install ok installed" { print $2 }'; }
+# version of the package on the media
+media() { f=$(find "$M/apt/pool/main" -name "$1_*.deb" | LC_ALL=C sort | tail -n 1); if [ -n "$f" ]; then dpkg-deb -f "$f" Version; fi; }
+
+for p in $PKGS; do echo "$p $(have "$p")" >> "$TMP/before"; done
+
+cp "$KEY" "$STATE/tux-archive.gpg"
+echo "deb [signed-by=$STATE/tux-archive.gpg] file:$M/apt trixie main deps" > "$STATE/sources.list"
+
+aptl() {
+    DEBIAN_FRONTEND=noninteractive apt-get -q -o Dir::Etc::sourcelist="$STATE/sources.list" -o Dir::Etc::sourceparts=- \
+        -o Dir::State::lists="$STATE/lists" -o APT::Get::List-Cleanup=0 -o APT::Color=0 -o Dpkg::Use-Pty=0 \
+        -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$@"
+}
+
+if command -v apt-get >/dev/null 2>&1 && aptl update && aptl install -y --no-install-recommends $PKGS; then
+    :
+else
+    say "apt could not do it. Trying dpkg."
+    command -v dpkg >/dev/null 2>&1 || die 1 "neither apt-get nor dpkg works"
+    set --
+    while read -r rel; do
+        deb=$M/apt/$rel
+        have_v=$(have "$(dpkg-deb -f "$deb" Package)")
+        if [ -n "$have_v" ] && dpkg --compare-versions "$have_v" ge "$(dpkg-deb -f "$deb" Version)"; then
+            continue
+        fi
+        set -- "$@" "$deb"
+    done < "$M/install-order.txt"
+    if [ $# -gt 0 ]; then
+        DEBIAN_FRONTEND=noninteractive dpkg --force-confdef --force-confold -i "$@" || die 1 "dpkg could not install the packages"
+    fi
+fi
+
+# tux-codec-dkms builds a kernel module: only when the tools and the headers are here
+if command -v dkms >/dev/null 2>&1 && command -v gcc >/dev/null 2>&1 && command -v make >/dev/null 2>&1 &&
+    [ -d "/lib/modules/$(uname -r)/build" ]; then
+    aptl install -y --no-install-recommends tux-codec-dkms || say "Warning: tux-codec-dkms was not installed."
+else
+    say "Skipped tux-codec-dkms: it needs dkms, gcc, make and the kernel headers (apt install linux-headers-arm64-16k dkms, with a network). /dev/hvcodec is for --vcodec-dma only; video works without it."
+fi
+
+# apt never downgrades: say so when the guest has a newer version
+for p in $PKGS; do
+    now=$(have "$p")
+    [ -n "$now" ] || die 1 "$p is not installed"
+    new=$(media "$p")
+    was=$(awk -v p="$p" '$1 == p { print $2 }' "$TMP/before")
+    if [ "$now" = "$was" ] && [ "$now" = "$new" ]; then
+        say "$p $now: nothing to do"
+    elif [ -n "$new" ] && dpkg --compare-versions "$now" gt "$new"; then
+        say "$p $now: kept, it is newer than the $new on the media"
+    elif [ "$now" = "$was" ]; then
+        say "$p $now: unchanged"
+    else
+        say "$p ${was:-none} -> $now"
+    fi
+done
+say "Done. The Tuxedo app will take over once tux-files starts."

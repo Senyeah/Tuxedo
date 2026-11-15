@@ -265,8 +265,7 @@ def boot(args, disk, share, err_log):
             "--cpus", str(args.cpus), "--display", "1280x800", "--share", share, "--vcodec"]
     print(f"--   booting {os.path.basename(disk)} (host load average {os.getloadavg()[0]:.1f})")
     p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 250))
-    p.expect(r"\(automatic login\)", timeout=300)
-    p.expect(gu.shell_wide(), timeout=60)
+    gu.login(p, 300, 60)
     sh(p, "stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1")
     sh(p, "systemctl is-system-running --wait", 180)
     return p

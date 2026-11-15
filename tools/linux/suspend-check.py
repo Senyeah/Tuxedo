@@ -131,8 +131,7 @@ def main():
         subprocess.run(["/bin/cp", "-c", args.image, disk], check=True)
         argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', disk + ".stderr", args.tuxvm, "--firmware", args.firmware, "--ram", "2048", "--cpus", str(args.cpus), "--disk", disk]
         p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200))
-        p.expect(r"\(automatic login\)", timeout=180)
-        p.expect(gu.shell(), timeout=60)
+        gu.login(p, 180, 60, wide=False)
         p.sendline(f"stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1; echo {MARK}$((6 * 7))")
         p.expect(MARK + r"42\r*\n", timeout=60)
         need(p, "systemctl is-system-running --wait", lambda o: o in ("running", "degraded"), "system state", 180)

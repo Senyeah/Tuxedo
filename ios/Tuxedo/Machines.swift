@@ -225,13 +225,17 @@ final class Machines: ObservableObject {
         save()
     }
 
-    /// Every field but the folders and forwards: settings and the session change those with updateFolders and
-    /// updateForwards, so an older copy of the record cannot put back a stale bookmark or forward.
+    /// Every field but the folders, forwards, guest user and Additions fields: settings and the session change those
+    /// with updateFolders, updateForwards and updateAdditions, so an older copy of the record cannot put back a
+    /// stale bookmark, forward, user name or report.
     func update(_ machine: VirtualMachine) {
         guard let i = all.firstIndex(where: { $0.id == machine.id }) else { return }
         var machine = machine
         machine.folders = all[i].folders
         machine.forwards = all[i].forwards
+        machine.guestUser = all[i].guestUser
+        machine.additionsReport = all[i].additionsReport
+        machine.additionsPromptDismissed = all[i].additionsPromptDismissed
         all[i] = machine
         save()
     }
@@ -249,6 +253,17 @@ final class Machines: ObservableObject {
         var list = all[i].forwards ?? []
         change(&list)
         all[i].forwards = list.isEmpty ? nil : list
+        save()
+    }
+
+    /// The Additions report, the dismissed prompt and the guest's user name: the session's Additions model writes them.
+    func updateAdditions(of id: UUID, _ change: (inout VirtualMachine) -> Void) {
+        guard let i = all.firstIndex(where: { $0.id == id }) else { return }
+        let before = all[i]
+        var machine = before
+        change(&machine)
+        guard machine != before else { return }
+        all[i] = machine
         save()
     }
 

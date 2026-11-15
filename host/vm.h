@@ -32,6 +32,7 @@ typedef struct HvVmConfig {
        Changes while it runs go to hv_fs_folder_set and the others in fs_server.h. */
     const HvVmFolder *folders;
     int nfolders;
+    int fs_always; /* virt: the virtio-fs device exists with no folders too (Tuxedo Additions inserts its media later) */
     /* JIT memory the host already has (iOS: granted by a debugger), or NULL to map it here. */
     void *jit_rx, *jit_rw;
     size_t jit_bytes;         /* 0: 768 MB */

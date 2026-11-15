@@ -32,6 +32,23 @@ case "$1" in
             [ ! -e "$SRC" ] && [ ! -L "$SRC" ]; then
             install -m 0644 /usr/share/tux/tux.sources "$SRC"
         fi
+        # The console signs in as root until the account is set up (tux-console-login). A machine whose uid-1000 user
+        # has a password is set up already: the marker keeps its console at a login prompt.
+        if [ "$1" = configure ] && { [ -z "$2" ] || dpkg --compare-versions "$2" lt 1.11.0; } &&
+            [ ! -e /var/lib/tux/account.json ]; then
+            acct=$(getent passwd 1000 | cut -d: -f1) || acct=
+            hash=$(getent shadow "$acct" 2>/dev/null | cut -d: -f2) || hash=
+            case $acct in *[!a-z0-9_-]*) acct= ;; esac
+            case $hash in ''|'!'*|'*'*) acct= ;; esac
+            if [ -n "$acct" ]; then
+                sudo=false
+                if id -nG "$acct" | tr ' ' '\n' | grep -qx sudo; then sudo=true; fi
+                mkdir -p /var/lib/tux
+                printf '{"configured": true, "name": "%s", "autologin": false, "sudo": %s}\n' "$acct" "$sudo" \
+                    > /var/lib/tux/account.json.tmp
+                mv /var/lib/tux/account.json.tmp /var/lib/tux/account.json
+            fi
+        fi
         if [ -d /run/systemd/system ]; then
             systemctl --system daemon-reload >/dev/null || true
             # No gap: a stop keeps the rule, and the start replaces it in one transaction

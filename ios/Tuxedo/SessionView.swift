@@ -21,6 +21,9 @@ struct SessionView: View {
     @ObservedObject private var machines = Machines.shared
     @ObservedObject private var folders = FolderSession.shared
     @State private var folderNotice: String?
+    @StateObject private var additions = TuxAdditions()
+    @State private var wizard: AdditionsWizardRequest?
+    @State private var pendingWizard: AdditionsWizardRequest? // waits for Details to close: one sheet at a time
     @StateObject private var display = DisplayRouter()
     @State private var error: String?
     @State private var gate: SessionGate // Face ID before a Linux machine runs or comes back
@@ -286,7 +289,18 @@ struct SessionView: View {
         .persistentSystemOverlays(.hidden)
         // With the guest on a monitor the phone is a pad: a pointer at its top must not open the system's panels
         .defersSystemGestures(on: display.isExternal || touchActive ? .all : [])
-        .sheet(isPresented: $showDetails) { details }
+        .sheet(isPresented: $showDetails, onDismiss: {
+            if let request = pendingWizard { wizard = request; pendingWizard = nil }
+        }) { details }
+        .fullScreenCover(item: $wizard) { request in
+            AdditionsWizardView(additions: additions, request: request,
+                                typeCommand: { text in Sharing.paste(text + "\r", console: true) }, // the serial console is always there
+                                close: { wizard = nil })
+        }
+        .onChange(of: additions.promptRequest) { _, request in
+            guard let request else { return }
+            openWizard(request)
+        }
         .onReceive(NotificationCenter.default.publisher(for: Autopilot.details)) { note in
             detailsPath = (note.object as? String) == "forwards" ? ["forwards"] : []
             showDetails = true
@@ -340,6 +354,9 @@ struct SessionView: View {
         .onChange(of: showDetails) { showing in
             if showing { HardwareKeys.releaseAll(); StickyKeys.shared.releaseAll() }
         }
+        .onChange(of: wizard) { _, request in
+            if request != nil { HardwareKeys.releaseAll(); StickyKeys.shared.releaseAll() }
+        }
         .onChange(of: confirmStop) { showing in
             if showing { HardwareKeys.releaseAll(); StickyKeys.shared.releaseAll() }
         }
@@ -366,6 +383,7 @@ struct SessionView: View {
             KeychainStore.shared.setUnlocked(false)
             FolderSession.shared.end()
             ForwardSession.shared.end()
+            additions.stop()
         }
         .modifier(ExternalDisplayModifier(presentation: MachinePresentation(display: display, aspect: layoutAspect)))
         .task(id: bootAttempt) { await run() }
@@ -375,7 +393,7 @@ struct SessionView: View {
     }
 
     /// When there is something of the app's to point at, iPadOS gets its own pointer back.
-    private var pointerNeeded: Bool { state == 2 || showDetails || confirmStop || error != nil || shutdownAsked != nil }
+    private var pointerNeeded: Bool { state == 2 || showDetails || wizard != nil || confirmStop || error != nil || shutdownAsked != nil }
 
     // MARK: Layout
 
@@ -973,6 +991,7 @@ struct SessionView: View {
                     Text("Add, pick again, change the mode, or export and discard a Copy-on-write folder's changes. Changes apply at once.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
+                additionsSection
                 Section("Log") {
                     VStack(alignment: .leading, spacing: 1) {
                         ForEach(Array(log.suffix(30).enumerated()), id: \.offset) { _, line in
@@ -984,6 +1003,55 @@ struct SessionView: View {
             .navigationTitle("Details")
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: String.self) { _ in ForwardsPage(machine: machine.id) }
+        }
+    }
+
+    /// Tuxedo Additions: the state rows and the button. Never for a machine from before Tuxedo.
+    @ViewBuilder private var additionsSection: some View {
+        let report = additions.state.report ?? current.additionsReport
+        let live = additions.state.report != nil
+        let legacy = report?.caps.legacy == true || current.guestUser == nil
+        Section(AdditionsText.sectionTitle) {
+            if legacy {
+                Text(AdditionsText.legacyGuest).font(.footnote).foregroundStyle(.secondary)
+            } else {
+                LabeledContent("In this app", value: additions.versions?.packages["tux-guest"] ?? (additions.hasMedia ? "Unknown" : "No media"))
+                LabeledContent("In the guest", value: AdditionsPolicy.guestVersion(report?.caps) ?? (report == nil ? AdditionsText.noReport : AdditionsText.notInstalled))
+                LabeledContent("CD", value: additions.inserted ? "Inserted" : "Out")
+                if report != nil && !live {
+                    Text("This is the last report from an earlier session.").font(.footnote).foregroundStyle(.secondary)
+                }
+                if AdditionsPolicy.updateAvailable(live ? report?.caps : nil, versions: additions.versions) {
+                    Label(AdditionsText.updateBanner, systemImage: "arrow.down.circle").font(.footnote).foregroundStyle(Desk.warn)
+                }
+                if !additions.hasMedia {
+                    Text(AdditionsText.notInThisApp).font(.footnote).foregroundStyle(Desk.bad)
+                } else if let problem = additions.lastError ?? additions.state.badMedia {
+                    Text(problem).font(.footnote).foregroundStyle(Desk.bad)
+                }
+                Button {
+                    if additions.insert() { openWizard(AdditionsWizardRequest()) } // insert does nothing when the CD is in
+                } label: {
+                    Text(additions.inserted ? AdditionsText.open : AdditionsText.insert)
+                }
+                .disabled(state != 1 || !additions.running || !additions.hasMedia)
+                .accessibilityLabel(additions.inserted ? "Open Tuxedo Additions" : "Insert the Tuxedo Additions CD")
+                if additions.inserted && !additions.state.running {
+                    Button(AdditionsText.eject) { additions.eject() }
+                        .accessibilityLabel("Eject the Tuxedo Additions CD")
+                }
+                Text(AdditionsText.detailsNote).font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Opens the wizard now, or when Details has closed.
+    private func openWizard(_ request: AdditionsWizardRequest) {
+        if showDetails {
+            pendingWizard = request
+            showDetails = false
+        } else {
+            wizard = request
         }
     }
 
@@ -1078,6 +1146,7 @@ struct SessionView: View {
             return
         }
         started = Date()
+        additions.begin(current) // after the boot: the engine made a new, empty log of events
         var used = Machines.shared.all.first { $0.id == machine.id } ?? machine // keeps lastExternalScreen
         used.lastUsed = started
         Machines.shared.update(used)
@@ -1110,6 +1179,8 @@ struct SessionView: View {
             if state == 2 {
                 typing = false
                 showDetails = false
+                wizard = nil
+                additions.stop()
                 confirmStop = false
                 zoomFollowing?.cancel()
                 StickyKeys.shared.releaseAll()

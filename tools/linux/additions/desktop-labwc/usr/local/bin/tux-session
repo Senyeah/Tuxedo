@@ -1,0 +1,27 @@
+#!/bin/sh
+# Start labwc, or Plasma when /etc/tux/session says plasma.
+# /etc/tux/renderer forces labwc's renderer; else gles2 with virgl, else pixman.
+export LANG=C.UTF-8
+rt=${XDG_RUNTIME_DIR:-/tmp}
+echo "login $(cut -d' ' -f1 /proc/uptime)" > "$rt/tux-times"
+if [ "$(head -n 1 /etc/tux/session 2>/dev/null)" = plasma ] && command -v startplasma-wayland >/dev/null; then
+    echo "session=plasma" | tee "$rt/tux-session.log"
+    # KWin attaches a backlight to an internal output only (not Virtual-1): powerdevil keeps it if it cannot hand it over
+    export QT_WAYLAND_DISABLED_INTERFACES="${QT_WAYLAND_DISABLED_INTERFACES:+$QT_WAYLAND_DISABLED_INTERFACES,}kde_external_brightness_v1"
+    startplasma-wayland
+    exit
+fi
+renderer=
+if [ -r /etc/tux/renderer ]; then
+    renderer=$(head -n 1 /etc/tux/renderer | tr -d ' \t\r')
+fi
+if [ -z "$renderer" ]; then
+    renderer=pixman
+    # llvmpipe on gles2 is slower than pixman, so gles2 needs virgl
+    if [ -e /dev/dri/renderD128 ] && timeout 10 eglinfo -B 2>/dev/null | grep -qi virgl; then
+        renderer=gles2
+    fi
+fi
+export WLR_RENDERER=$renderer
+echo "renderer=$renderer" | tee "$rt/tux-session.log"
+labwc

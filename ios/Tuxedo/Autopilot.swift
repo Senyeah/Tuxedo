@@ -27,6 +27,8 @@ import UIKit
 ///   snap [NAME]        the guest's screen (1920x1080) into Documents/NAME.jpg (snap.jpg)
 ///   log TEXT           a marker in tux.log
 ///   details [forwards] open the session's Details (and its Port Forwards page), for a screenshot
+///   additions-demo [STEP]  the Tuxedo Additions wizard over the machine list, with a sample guest and no machine
+///                      (STEP: account opens it as the account prompt does), for a screenshot
 ///   stop               stop the machine
 ///   exit               quit Tuxedo
 /// Each command is written to tux.log as it runs, so the log has the timeline.
@@ -34,6 +36,7 @@ import UIKit
 /// (SessionGate). The wallet stays locked unless TUX_AUTOPILOT_WALLET=unlocked is in the launch environment too.
 enum Autopilot {
     static let details = Notification.Name("tux.autopilot.details")
+    static let additionsDemo = Notification.Name("tux.autopilot.additions-demo")
     private static let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
 
     /// Launched for testing: by environment, or by a one-time file (used up here).
@@ -197,6 +200,8 @@ enum Autopilot {
             TuxLog.log("autopilot", String(format: "at %.3f", Date().timeIntervalSince1970))
         case "details":
             NotificationCenter.default.post(name: Autopilot.details, object: arg)
+        case "additions-demo":
+            NotificationCenter.default.post(name: Autopilot.additionsDemo, object: arg)
         case "stop":
             tux_vm_stop()
         case "exit":
@@ -206,5 +211,28 @@ enum Autopilot {
         default:
             TuxLog.log("autopilot", "unknown command")
         }
+    }
+}
+
+extension TuxAdditions {
+    /// The sample guest of additions-demo: the example of docs/guest-additions-design.md, 5.4, and a small catalogue.
+    static var demo: TuxAdditions {
+        let report = """
+        {"n":1,"agent":"1.11.0","protocol":1,"caps":{"installed":{"tux-guest":"1.10.2","tux-va":"1.0.1","tux-ffmpeg":"9.0.2-tux2"},
+         "legacy":false,"account":{"name":"tux","uid":1000,"exists":true,"password_set":false,"configured":false,"sudo":true,"autologin":"root"},
+         "root":true,"network":true,"desktop":"none","ssh":{"installed":false,"enabled":false,"port":22,"password_auth":true},
+         "apps":{"git":true},"hostname":"debian","disk_free_mb":1800,"image":"console","ips":["10.0.2.15"],"kernel":"6.12.x-arm64-16k"}}
+        """
+        let actions = """
+        {"protocol":1,"desktops":[{"id":"labwc","title":"Tuxedo desktop (labwc)","size_mb":150},{"id":"plasma","title":"KDE Plasma","size_mb":1500},
+         {"id":"xfce","title":"Xfce","size_mb":600}],
+         "apps":[{"id":"firefox","title":"Firefox","group":"web","size_mb":80},{"id":"chromium","title":"Chromium","group":"web","size_mb":100},
+         {"id":"libreoffice","title":"LibreOffice","group":"office","size_mb":400},{"id":"vlc","title":"VLC","group":"media","size_mb":60},
+         {"id":"git","title":"git","group":"develop","size_mb":20},{"id":"htop","title":"htop","group":"tools","size_mb":2}],
+         "ssh":{"port_min":1,"port_max":65535,"default_port":22}}
+        """
+        let versions = #"{"additions":"1.11.0+5","packages":{"tux-guest":"1.11.0","tux-va":"1.0.1","tux-ffmpeg":"9.0.2-tux10"}}"#
+        return TuxAdditions(demo: (try? JSONDecoder().decode(AdditionsReport.self, from: Data(report.utf8))) ?? AdditionsReport(),
+                            versions: AdditionsVersions.decode(Data(versions.utf8)), catalogue: AdditionsCatalogue.decode(Data(actions.utf8)))
     }
 }

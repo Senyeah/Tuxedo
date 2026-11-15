@@ -22,10 +22,24 @@
 
 enum { HV_FS_RO = 0, HV_FS_COW = 1, HV_FS_RW = 2 }; /* the host serves COW read-only; the guest's overlay does the rest */
 
+/* The Tuxedo Additions media (host/additions.h) has the table's extra entry, so the table has one more than the user
+   folders. It is Read-only and named HV_FS_ADDITIONS_NAME. Only hv_fs_additions_insert sets it: hv_fs_folder_set
+   refuses the index, and refuses that name at any other index (EINVAL). The user-folder calls below do not see it: hv_fs_folder_count
+   does not count it, hv_fs_folder_find does not find it, hv_fs_folders_clear does not clear it, and online, kind,
+   touch and the asks refuse it. hv_fs_folder_clear(HV_FS_ADDITIONS) removes it. The guest sees it in the root and in
+   .tux-folders, with "kind":"additions" and "n":N. */
+#define HV_FS_ADDITIONS HV_FS_MAX_FOLDERS
+#define HV_FS_ADDITIONS_NAME "tux-additions"
+/* For additions.c only: sets the reserved entry (Read-only, HV_FS_ADDITIONS_NAME) and the n that .tux-folders
+   carries, in one step. -1 with errno (what the open of path gave) leaves the entry as it was. */
+int hv_fs_additions_insert(const char *path, int n);
+/* A new n with the entry in place (the guest starts its agent again). -1 (ENODEV) when it is not. */
+int hv_fs_additions_nudge(int n);
+
 /* The table of folders, any thread. It is kept for later machines. index is 0 to HV_FS_MAX_FOLDERS - 1; id is the
    app's stable id for the guest's changes (the name if NULL). Set again with the same folder changes the name, id
-   or mode in place; a different folder makes the old one's nodes stale. 0, or -1 with errno (EINVAL: a bad index,
-   name or mode, or a name another index has; else what the open of path gave). */
+   or mode in place; a different folder makes the old one's nodes stale. 0, or -1 with errno (EINVAL: a bad index (HV_FS_ADDITIONS is
+   one), name or mode, or a name another index has; else what the open of path gave). */
 int hv_fs_folder_set(int index, const char *id, const char *name, const char *path, int mode);
 int hv_fs_folder_clear(int index);
 /* Offline: every operation inside the folder gives EIO, as a dropped network share does; online again works at

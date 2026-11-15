@@ -8,9 +8,11 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 
 HOST = "10.0.2.4"
+REPORT = "/usr/lib/tux/tux-additions-report"
 BACKLIGHT = "/sys/class/backlight/tux-backlight"
 ZONES = "/usr/share/zoneinfo"
 STEP = 0.5  # seconds off before the clock is stepped
@@ -96,7 +98,22 @@ def follow_brightness(value):
             f.write(str(want))
 
 
+def send_report():
+    """Tells the app what the guest has, once the app answers: the network can be late at boot."""
+    for _ in range(24):
+        try:
+            status = get("/.tux/additions", 5)[0]
+            if status == 200:
+                subprocess.run([REPORT], timeout=60)
+            if status in (200, 404):  # 404: a device that has no Additions
+                return
+        except (OSError, http.client.HTTPException, subprocess.SubprocessError):
+            pass
+        time.sleep(5)
+
+
 def main():
+    threading.Thread(target=send_report, daemon=True).start()  # the clock does not wait for it
     seq = 0
     while True:
         try:

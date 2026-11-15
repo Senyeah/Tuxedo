@@ -1,0 +1,18 @@
+[Unit]
+Description=Tuxedo Additions agent %i
+# tux-files starts this by hand for each new media n. It is never enabled.
+ConditionPathIsMountPoint=/media/tux/tux-additions
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/lib/tux/tux-additions-launch %i
+KillMode=control-group
+Restart=no
+TimeoutStopSec=20
+SyslogIdentifier=tux-additions
+Environment=PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 DEBIAN_FRONTEND=noninteractive
+# No ProtectSystem and no NoNewPrivileges: apt, dpkg, useradd and sshd -t write the system and use setuid tools
+PrivateTmp=yes
+LockPersonality=yes
+RestrictRealtime=yes

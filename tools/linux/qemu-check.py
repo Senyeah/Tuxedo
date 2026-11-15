@@ -13,7 +13,7 @@ import guest_user as gu
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.environ.get("TUX_LINUX_OUT") or os.path.join(os.path.dirname(subprocess.run(
     ["git", "-C", HERE, "rev-parse", "--path-format=absolute", "--git-common-dir"], capture_output=True, text=True, check=True).stdout.strip()), "build", "linux")
-PROMPT = r"\$ $"
+PROMPT = r"[$#] $"  # tux@host:~$ or root@host:~# (tux-guest 1.11.0, no account marker)
 MARK = "TUX_DONE_"
 # No userspace knob gives the VA size: the modules segment in /proc/kcore starts at PAGE_END = -(1 << (VA - 1))
 GUEST_VA = (
@@ -89,6 +89,7 @@ def main():
     if i == 1:
         child.sendline(gu.user())
         child.expect(PROMPT)
+    gu.to_user(child, timeout=60)
     child.sendline("bind 'set enable-bracketed-paste off'; stty -echo")
     child.expect(PROMPT)
 

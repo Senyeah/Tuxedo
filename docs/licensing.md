@@ -19,16 +19,17 @@ go on the App Store.
 | SwiftTerm 1.99.1 (the Linux console) | MIT | `ios/Tuxedo/Resources/legal/LICENSE-SwiftTerm-MIT.txt` |
 | U-Boot `v2026.10` (Linux guest firmware, not in the app) | GPL-2.0, most files also under later versions | the Linux image catalogue; see below |
 | Debian packages in the Linux images, and their kernel | each package's own licence | the Linux image catalogue; see below |
-| FFmpeg 9.0.2 with the Tuxedo patch, in the `tux-ffmpeg` package for Linux guests (not in the app) | GPL-2.0-or-later as built; FFmpeg's own code is LGPL-2.1-or-later with GPL parts | the Tuxedo apt repository; see below |
+| FFmpeg 9.0.2 with the Tuxedo patch, in the `tux-ffmpeg` package: in the Linux images, in the Tuxedo apt repository, and in the Tuxedo Additions media inside the app | GPL-2.0-or-later as built; FFmpeg's own code is LGPL-2.1-or-later with GPL parts | the Tuxedo apt repository and `ios/Tuxedo/Resources/legal/LICENSES-TuxedoAdditions.txt`; see below |
+| Tuxedo Additions media in the app (`Tuxedo.app/TuxAdditions/`): the four Tuxedo packages, the agent, and about 70 Debian packages | Tuxedo files GPL-2.0-or-later; `tux-ffmpeg` as in the row above; each Debian package has its own licence | `ios/Tuxedo/Resources/legal/LICENSES-TuxedoAdditions.txt`, `README.txt` and `source/SOURCES.txt` on the media; see below |
 | `libhvcodec`, `tux-codec-info`, and the files that the FFmpeg patch adds | LGPL-2.1-or-later | `tools/linux/hvcodec/` |
 | libslirp, pcre2 | BSD | Prebuilt from Husk |
 | glib, libintl | LGPL-2.1-or-later | Prebuilt from Husk |
 
-The licence files in `ios/Tuxedo/Resources/legal/` are in the root of `Tuxedo.app`. The app has no screen that shows them yet.
+The licence files in `ios/Tuxedo/Resources/legal/` are in the root of `Tuxedo.app`. The app has no screen that shows them yet. When it gets one, it must list `LICENSES-TuxedoAdditions.txt` too, because that file holds the source offer for the media (see Tuxedo Additions below).
 
 ## Linux guests
 
-A Linux machine needs two things that are not in the repository or in the app: a U-Boot binary and a Debian disk image. `tools/linux` builds both ([README](../tools/linux/README.md)). The app downloads them from a catalogue, or imports them from a folder. Whoever hosts them hands out GPL binaries, so that person must also hand out, or offer, the source. The repository holds no U-Boot or Debian source and applies no patch to either. FFmpeg is different: the repository has a patch to it, and the source offer is part of the apt repository (see FFmpeg below).
+A Linux machine needs two things that are not in the repository or in the app: a U-Boot binary and a Debian disk image. The app does carry one set of Linux packages, the Tuxedo Additions media (see below). `tools/linux` builds both ([README](../tools/linux/README.md)). The app downloads them from a catalogue, or imports them from a folder. Whoever hosts them hands out GPL binaries, so that person must also hand out, or offer, the source. The repository holds no U-Boot or Debian source and applies no patch to either. FFmpeg is different: the repository has a patch to it, and the source offer is part of the apt repository (see FFmpeg below).
 
 ### ANGLE, libepoxy and virglrenderer
 
@@ -81,7 +82,7 @@ The binary package `linux-image-6.12.107+deb13-arm64-16k` does not resolve by it
 
 ### FFmpeg (tux-ffmpeg)
 
-`tux-ffmpeg` is an `ffmpeg` for the Linux guest with the device's codecs (`docs/guest-video-encode-plan.md`). It is not in the app or in the images yet. `tools/linux/build-ffmpeg.sh` builds it, `build-ffmpeg-pkg.sh` packages it, and `publish-apt.sh` puts it in the Tuxedo apt repository with its source.
+`tux-ffmpeg` is an `ffmpeg` for the Linux guest with the device's codecs (`docs/guest-video-encode-plan.md`). Both Linux images install it, and the app carries it in the Tuxedo Additions media (see below). `tools/linux/build-ffmpeg.sh` builds it, `build-ffmpeg-pkg.sh` packages it, and `publish-apt.sh` puts it in the Tuxedo apt repository with its source.
 
 | Item | Value |
 | --- | --- |
@@ -93,11 +94,34 @@ The binary package `linux-image-6.12.107+deb13-arm64-16k` does not resolve by it
 | Build record | `build/linux/ffmpeg/ffmpeg.manifest`: the release, the hashes of the tarball, the patch, `libhvcodec` and each binary, the configure line, and the version of each Debian build and run-time package. The package has a copy at `/usr/share/doc/tux-ffmpeg/ffmpeg.manifest`. Two builds from the same inputs gave the same binaries and the same `.deb` on 14/11/2026. |
 | In the package | `/usr/share/doc/tux-ffmpeg/copyright` (machine-readable, with the source URL) and FFmpeg's `LICENSE.md`. The GPL and LGPL texts are Debian's `/usr/share/common-licenses/`. |
 
-The source offer. Whoever hosts the `.deb` hands out a GPL binary, so that person must also hand out the source. `publish-apt.sh` writes `build/linux/source/ffmpeg-<release>-tux<N>/` next to the repository, and the server gets it at `https://walkies.site/tux-linux-catalogue/source/ffmpeg-9.0.2-tux1/`, the URL in the package's `copyright` file. It holds the unmodified tarball, the patch, `build-ffmpeg.sh`, `ffmpeg.manifest`, `tux-ffmpeg-src.tar.xz` (the Tuxedo files of the build: `libhvcodec`, `tux-codec-info.c`, `vcodec_proto.h`, the man page, the package scripts, `versions.env` and the repository's `LICENSE`), `README.txt` with the build steps, and `SHA256SUMS`. The script does not publish a `tux-ffmpeg` whose source directory is missing or has another manifest, and it does not let a source directory change under the same version. A later change only to a file of the offer that does not change the binaries, such as `LICENSE`, keeps the published directory as it was. Keep each source directory on the server for as long as its `.deb` is in the pool. Whether this offer is enough in law is for the host to decide; it gives the complete source of the binary from the same place.
+The source offer. Whoever hosts the `.deb` hands out a GPL binary, so that person must also hand out the source. `publish-apt.sh` writes `build/linux/source/ffmpeg-<release>-tux<N>/` next to the repository, and the server gets it at `https://walkies.site/tux-linux-catalogue/source/ffmpeg-9.0.2-tux2/` (the directory name follows the package version), the URL in the package's `copyright` file. It holds the unmodified tarball, the patch, `build-ffmpeg.sh`, `ffmpeg.manifest`, `tux-ffmpeg-src.tar.xz` (the Tuxedo files of the build: `libhvcodec`, `tux-codec-info.c`, `vcodec_proto.h`, the man page, the package scripts, `versions.env` and the repository's `LICENSE`), `README.txt` with the build steps, and `SHA256SUMS`. The script does not publish a `tux-ffmpeg` whose source directory is missing or has another manifest, and it does not let a source directory change under the same version. A later change only to a file of the offer that does not change the binaries, such as `LICENSE`, keeps the published directory as it was. Keep each source directory on the server for as long as its `.deb` is in the pool. Whether this offer is enough in law is for the host to decide; it gives the complete source of the binary from the same place.
 
 `tux-ffmpeg` does not change Debian's `ffmpeg` package or its files. The two can be installed together.
 
 The H.264 and HEVC patent position for a person who distributes this package is not verified. This is not legal advice. The codecs run in the device's hardware, which Apple sells with its licences.
+
+### Tuxedo Additions (the media in the app)
+
+The app carries the media of "Insert Tuxedo Additions CD" in its bundle, as `Tuxedo.app/TuxAdditions/` (a copy of `build/linux/additions/tux-additions/`, made by `tools/linux/package-additions.sh`; the design is `docs/guest-additions-design.md`). Before this, the app held no GPL or LGPL binary for Linux guests. Now every copy of the app hands out some. So the app's distributor must also offer the source.
+
+| What is on the media | Licence | Source |
+| --- | --- | --- |
+| The agent, `install`, `tux-guest`, `tux-va`, `tux-codec-dkms`, the labwc session files | GPL-2.0-or-later (the repository's `LICENSE`) | This repository, and inside each package (scripts and C source) |
+| `tux-ffmpeg` | GPL-2.0-or-later as built (FFmpeg is LGPL-2.1-or-later with GPL parts; `libhvcodec` is LGPL-2.1-or-later) | `https://walkies.site/tux-linux-catalogue/source/ffmpeg-9.0.2-tux2/`, the same offer as in FFmpeg above |
+| The Debian packages in `apt/pool/deps` (x264, x265, dav1d, Opus, LAME, GnuTLS, `openssh-server`, Python 3 and others that a minimal Debian guest lacks) | Each package's own licence; the text is in `/usr/share/doc/<package>/copyright` once it is installed | `snapshot.debian.org`, the snapshot in `versions.env`; `source/SOURCES.txt` names the folder of each package |
+
+Where the offer is:
+
+- On the media: `README.txt` (the licences and the written offer) and `source/SOURCES.txt` (the place of each package's source). The builder test (`tools/linux/test_package_additions.py`) checks that `SOURCES.txt` names every Debian package, that `README.txt` has no placeholder left, and that no private key or host path is on the media.
+- In the app: `ios/Tuxedo/Resources/legal/LICENSES-TuxedoAdditions.txt`, with the same FFmpeg source URL as `README.txt`. The app has no legal screen yet (see above), so that file is in the bundle and nowhere else. A screen must show it when there is one.
+- The text is a written offer for at least three years, and it names the distributor as the contact. Whether this is enough in law is for the distributor to decide, as for FFmpeg above.
+
+What the distributor must keep:
+
+- The FFmpeg source directory on the server must stay for as long as an app build that has that `tux-ffmpeg` is in use. A new `tux-ffmpeg` revision (`FFMPEG_TUX_REV`) changes the URL in both text files, so change `LICENSES-TuxedoAdditions.txt` with it. The media's `README.txt` takes the URL from the build, but the app's file does not.
+- The snapshot of Debian packages (`DEBIAN_SNAPSHOT`) must stay on `snapshot.debian.org`, or the distributor must hold a copy of the sources.
+
+The media holds no `contrib` or `non-free` package. The key on the media is the repository's public key (`tux-archive.gpg`, the same bytes as in `tux-guest`). The H.264 and HEVC position for `tux-ffmpeg` is the same as above and is not verified.
 
 The apt repository's public key is in the repository (`tools/linux/tux-archive.asc` and `tux-guest/usr/share/keyrings/tux-archive.gpg`). The private key is only on the owner's Mac.
 

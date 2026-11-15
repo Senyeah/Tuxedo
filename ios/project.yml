@@ -159,6 +159,31 @@ targets:
             codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" --timestamp=none "$DST"
           fi
         basedOnDependencyAnalysis: false
+      - name: Copy Tuxedo Additions
+        # The media the guest's agent installs from (tools/linux/package-additions.sh): Tuxedo.app/TuxAdditions. It is
+        # built apart, so a build without it still works, and the app then says it has no media. Set
+        # TUX_REQUIRE_ADDITIONS=1 to make a missing media an error. The media is where the Makefile writes it:
+        # $TUX_LINUX_OUT, else build/linux of the main checkout (a worktree has its own build/, but not this media).
+        script: |
+          set -e
+          if [ -n "$TUX_LINUX_OUT" ]; then
+            OUT="$TUX_LINUX_OUT"
+          else
+            COMMON=$(git -C "$SRCROOT/.." rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+            if [ -n "$COMMON" ]; then OUT="$(dirname "$COMMON")/build/linux"; else OUT="$SRCROOT/../build/linux"; fi
+          fi
+          SRC="$OUT/additions/tux-additions"
+          DST="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/TuxAdditions"
+          rm -rf "$DST"
+          if [ -d "$SRC" ]; then
+            ditto "$SRC" "$DST"
+          elif [ -n "$TUX_REQUIRE_ADDITIONS" ]; then
+            echo "error: no Tuxedo Additions media in $SRC (build it with tools/linux/package-additions.sh)"
+            exit 1
+          else
+            echo "warning: no Tuxedo Additions media in $SRC: this build has none (build it with tools/linux/package-additions.sh)"
+          fi
+        basedOnDependencyAnalysis: false
 
   # Built-in StikJIT's debugger (Husk docs/06-built-in-jit.md): a process cannot
   # debug itself, so StikJIT runs here and attaches to the app. iOS 26 and later.
@@ -271,4 +296,30 @@ targets:
           set -e
           cd "$SRCROOT/.."
           make ios-sim-lib ${TUX_GFX:+GFX=1} ${TUX_SIM_NET:+SIM_NET_ROOT=$TUX_SIM_NET_ROOT}
+        basedOnDependencyAnalysis: false
+    postBuildScripts:
+      - name: Copy Tuxedo Additions
+        # The media the guest's agent installs from (tools/linux/package-additions.sh): Tuxedo.app/TuxAdditions. It is
+        # built apart, so a build without it still works, and the app then says it has no media. Set
+        # TUX_REQUIRE_ADDITIONS=1 to make a missing media an error. The media is where the Makefile writes it:
+        # $TUX_LINUX_OUT, else build/linux of the main checkout (a worktree has its own build/, but not this media).
+        script: |
+          set -e
+          if [ -n "$TUX_LINUX_OUT" ]; then
+            OUT="$TUX_LINUX_OUT"
+          else
+            COMMON=$(git -C "$SRCROOT/.." rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+            if [ -n "$COMMON" ]; then OUT="$(dirname "$COMMON")/build/linux"; else OUT="$SRCROOT/../build/linux"; fi
+          fi
+          SRC="$OUT/additions/tux-additions"
+          DST="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/TuxAdditions"
+          rm -rf "$DST"
+          if [ -d "$SRC" ]; then
+            ditto "$SRC" "$DST"
+          elif [ -n "$TUX_REQUIRE_ADDITIONS" ]; then
+            echo "error: no Tuxedo Additions media in $SRC (build it with tools/linux/package-additions.sh)"
+            exit 1
+          else
+            echo "warning: no Tuxedo Additions media in $SRC: this build has none (build it with tools/linux/package-additions.sh)"
+          fi
         basedOnDependencyAnalysis: false

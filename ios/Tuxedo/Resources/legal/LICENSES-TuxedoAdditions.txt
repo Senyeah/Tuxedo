@@ -1,0 +1,25 @@
+Tuxedo Additions: the media in this app, and its licences.
+
+The app holds a folder, TuxAdditions, that "Insert Tuxedo Additions CD" gives to a Linux machine. It holds
+Debian packages and Tuxedo packages. Some of them are under the GPL and the LGPL.
+
+What is in it
+  Tuxedo files (the agent, the install script, tux-guest, tux-va, tux-codec-dkms, the labwc session files):
+    GPL-2.0-or-later. The licence text is the LICENSE file of Tuxedo, and /usr/share/common-licenses/GPL-2 on Debian.
+  tux-ffmpeg: FFmpeg 9.0.2 with the Tuxedo patch. It is built with --enable-gpl, libx264 and libx265, so the
+    binaries are GPL-2.0-or-later. FFmpeg's own code is LGPL-2.1-or-later, with some GPL parts.
+    libhvcodec and the files that the patch adds are LGPL-2.1-or-later.
+  Debian packages (x264, x265, dav1d, Opus, LAME, GnuTLS, OpenSSH and the others that a minimal Debian lacks):
+    each one has its own licence. Its text is in /usr/share/doc/<package>/copyright after the package is installed.
+
+Source offer
+  The source of tux-ffmpeg (the FFmpeg tarball, the Tuxedo patch, the build script and the hashes) is at:
+    https://walkies.site/tux-linux-catalogue/source/ffmpeg-9.0.2-tux2/
+  The source of the Debian packages is at snapshot.debian.org. TuxAdditions/source/SOURCES.txt gives the exact place
+  for each package. TuxAdditions/README.txt has the same offer.
+  The source of the other Tuxedo packages is in the Tuxedo repository, and inside each package.
+  This is also a written offer. Whoever has these binaries from this app can ask the distributor of the app for
+  the complete source of each GPL or LGPL part, for at least three years, for no more than the cost of the copy.
+  If the URL above does not work, ask the distributor.
+
+More: docs/licensing.md in the Tuxedo repository.

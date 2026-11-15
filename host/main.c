@@ -1,4 +1,5 @@
 #include "share.h"
+#include "additions.h"
 #include "secrets.h"
 #include "net_slirp.h"
 #include "vcodec.h"
@@ -393,11 +394,66 @@ static void folder_line(const char *line) {
     fprintf(stderr, "tuxvm: input: %s: want folder add|remove|offline|online|touch|export|discard\n", line);
 }
 
+/* Tuxedo Additions (additions.h): --additions DIR inserts the media at boot (and again after a guest restart, which
+   is a new machine), and the input file's additions lines drive it. Each guest event prints on stderr. */
+static const char *additions_boot_dir;
+
+static void additions_event(unsigned long k, const char *json, size_t len, void *user) {
+    (void)k, (void)user;
+    fprintf(stderr, "additions-event: %.*s\n", (int)len, json);
+}
+
+static void additions_job_file(const char *path) {
+    static char buf[HV_ADDITIONS_JOB_MAX + 2];
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "tuxvm: additions: job %s: %s\n", path, strerror(errno));
+        return;
+    }
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = 0;
+    if (hv_additions_job_set(buf) == 0) fprintf(stderr, "tuxvm: additions: job set (%zu bytes)\n", n);
+    else if (errno == EINVAL) fprintf(stderr, "tuxvm: additions: job refused: want one JSON object with an \"id\" of 1 to 64 characters of A-Za-z0-9_-\n");
+    else fprintf(stderr, "tuxvm: additions: job refused: %s\n", strerror(errno));
+    hv_additions_wipe(buf, sizeof buf);
+}
+
+/* additions DIR, additions - (eject), additions-nudge, additions-job FILE, additions-cancel. */
+static void additions_line(const char *line) {
+    char verb[24] = "";
+    sscanf(line, "%23s", verb);
+    const char *arg = strchr(line, ' ');
+    arg = arg ? arg + 1 : "";
+    if (!hv_vm_virt() || !hv_vm_virt()->fs)
+        fprintf(stderr, "tuxvm: additions: this machine has no virtio-fs device (boot with --fs-device)\n");
+    if (!strcmp(verb, "additions") && !strcmp(arg, "-")) {
+        hv_additions_eject();
+        fprintf(stderr, "tuxvm: additions: ejected\n");
+    } else if (!strcmp(verb, "additions") && *arg) {
+        int n = hv_additions_insert(arg);
+        if (n > 0) fprintf(stderr, "tuxvm: additions: inserted, n %d\n", n);
+        else fprintf(stderr, "tuxvm: additions: %s: %s\n", arg, strerror(errno));
+    } else if (!strcmp(verb, "additions-nudge")) {
+        int n = hv_additions_nudge();
+        if (n > 0) fprintf(stderr, "tuxvm: additions: nudged, n %d\n", n);
+        else fprintf(stderr, "tuxvm: additions: no media in\n");
+    } else if (!strcmp(verb, "additions-job") && *arg) {
+        additions_job_file(arg);
+    } else if (!strcmp(verb, "additions-cancel")) {
+        hv_additions_job_cancel();
+        fprintf(stderr, "tuxvm: additions: cancel sent\n");
+    } else {
+        fprintf(stderr, "tuxvm: input: %s: want additions DIR|-, additions-nudge, additions-job FILE, additions-cancel\n", line);
+    }
+}
+
 /* HV_INPUT_FILE lines for the virt board: rel DX DY, rclick, msleep MS, tpframe (ends a touch batch), mode WxH [SCALE] (live display mode).
    Device status: battery LEVEL unplugged|charging|full|unknown, brightness F, volume F, tz NAME, and status (prints it). HV_STATUS_LOG=1 logs the guest's requests.
    Touchscreen: ts SLOT PHASE X Y, tsframe, tscancel, tsmode 0|1.
    Files folders: folder add NAME PATH ro|cow|rw, folder remove NAME, folder offline NAME, folder online NAME, folders;
    folder touch NAME (the original changed), folder export NAME and folder discard NAME (asks to the guest's helper).
+   Tuxedo Additions: additions DIR, additions - (eject), additions-nudge, additions-job FILE, additions-cancel; each guest event prints as "additions-event: JSON".
    --screenshot still writes the --display size, so read the size from the guest after a mode line. */
 static int virt_input(const char *line) {
     int a, b;
@@ -432,6 +488,8 @@ static int virt_input(const char *line) {
         if (hv_vm_set_timezone(line + 3) != 0) fprintf(stderr, "tuxvm: input: %s: not a time zone name\n", line);
     } else if (!strncmp(line, "folder ", 7) || !strcmp(line, "folders")) {
         folder_line(line);
+    } else if (!strncmp(line, "additions", 9)) {
+        additions_line(line);
     } else if (!strcmp(line, "status")) {
         HvStatusView v;
         hv_status_get(&v);
@@ -843,6 +901,7 @@ static void *rebuild_thread(void *unused) {
         finish("cannot rebuild the machine", EXIT_FAULT);
     }
     hv_vm_console_set_output(console_out, NULL); /* hv_vm_destroy cleared it */
+    if (additions_boot_dir) hv_additions_insert(additions_boot_dir);
     apply_machine_opts();
     if (quit_req || interrupted) finish(quit_req ? "quit" : "interrupted", 0); /* a stop while no machine ran */
     if (hv_vm_start(1, virt_exit) != 0) finish("cannot start the machine", EXIT_FAULT);
@@ -929,7 +988,7 @@ static void *cpu_thread(void *unused) {
 }
 
 static void usage(void) {
-    fprintf(stderr, "usage: tuxvm (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N] [--display WxH] [--gpu-accel [--gpu-video]] [--vcodec | --vcodec-dma] [--screenshot PNG] [--window [--touch]] [--folder NAME=DIR[:ro|cow|rw]]... [--forward HOSTPORT:GUESTPORT]... [--forward-addr IPV4|local]\n"
+    fprintf(stderr, "usage: tuxvm (--firmware FILE | --kernel FILE [--initrd FILE] [--append STRING]) [--disk FILE] [--no-reboot] [--dump-dtb FILE] [--ram MB] [--cpus N] [--log N] [--display WxH] [--gpu-accel [--gpu-video]] [--vcodec | --vcodec-dma] [--screenshot PNG] [--window [--touch]] [--folder NAME=DIR[:ro|cow|rw]]... [--fs-device] [--additions DIR] [--forward HOSTPORT:GUESTPORT]... [--forward-addr IPV4|local]\n"
                     "       (Ctrl-A x quits, Ctrl-A p and SIGTERM press the power key, Ctrl-A s pauses and resumes, Ctrl-A b is the app's background, SIGTSTP pauses and stops until SIGCONT; exit status 0 shutdown, 3 restart with --no-reboot, 4 panic or engine error)\n");
     exit(2);
 }
@@ -940,7 +999,7 @@ int main(int argc, char **argv) {
     const char *firmware = NULL, *kernel = NULL, *initrd = NULL, *append = NULL, *dump_dtb = NULL;
     const char *share_folder = NULL;
     const char *secrets_dir = NULL, *machine_id = "tuxvm";
-    int log = 1, trace = 0, no_chain = 0, gpu_accel = 0, gpu_video = 0, vcodec = 0; /* vcodec 2: and the device */
+    int log = 1, trace = 0, no_chain = 0, gpu_accel = 0, gpu_video = 0, vcodec = 0, fs_device = 0; /* vcodec 2: and the device */
     const char *screenshot = NULL;
     uint64_t watch = 0, watch_pa = 0;
     int stats = 0, profile = 0, window = 0;
@@ -990,6 +1049,10 @@ int main(int argc, char **argv) {
             vcodec = 2;
             continue;
         }
+        if (!strcmp(argv[i], "--fs-device")) { /* the virtio-fs device with no folders, as the app has it for Tuxedo Additions */
+            fs_device = 1;
+            continue;
+        }
         if (i + 1 >= argc) usage();
         if (!strcmp(argv[i], "--firmware")) firmware = argv[++i];
         else if (!strcmp(argv[i], "--kernel")) kernel = argv[++i];
@@ -1003,6 +1066,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--folder")) { /* NAME=DIR[:ro|cow|rw], as a folder from the Files app (rw if no mode) */
             if (folder_arg(argv[++i]) != 0) usage();
         }
+        else if (!strcmp(argv[i], "--additions")) additions_boot_dir = argv[++i]; /* DIR: the media, inserted at boot; it needs the device, so it sets --fs-device */
         else if (!strcmp(argv[i], "--forward")) { /* HOSTPORT:GUESTPORT, TCP into the guest (HV_NET_FWD adds one more) */
             if (nforwards == HV_FWD_MAX_RULES || hv_fwd_parse(argv[++i], &forwards[nforwards]) != 0) {
                 fprintf(stderr, "tuxvm: --forward %s: want HOSTPORT:GUESTPORT, at most %d\n", argv[i], HV_FWD_MAX_RULES);
@@ -1057,7 +1121,7 @@ int main(int argc, char **argv) {
                      .kernel = dump_dtb ? NULL : kernel, .initrd = dump_dtb ? NULL : initrd, .cmdline = dump_dtb ? NULL : append,
                      .ram_mb = ram_mb, .ncpus = ncpus, .log = log, .no_net = dump_dtb || getenv("HV_NO_NET") != NULL,
                      .no_sound = dump_dtb != NULL, .accel = gpu_accel,
-                     .video = gpu_video, .folders = folder_list, .nfolders = nfolders,
+                     .video = gpu_video, .folders = folder_list, .nfolders = nfolders, .fs_always = fs_device || additions_boot_dir != NULL,
                      .codec_ops = vcodec == 2 && !dump_dtb ? hv_vcodec_device_ops() : NULL};
     if (getenv("HV_JIT_MB")) vc.jit_bytes = (size_t)atoi(getenv("HV_JIT_MB")) << 20; /* debugging: a small region flushes often */
     hv_prof_register = hv_prof_register_thread;
@@ -1107,6 +1171,11 @@ int main(int argc, char **argv) {
         return ok ? 0 : 1;
     }
     boot_cfg = vc;
+    hv_additions_set_hook(additions_event, NULL);
+    if (additions_boot_dir && hv_additions_insert(additions_boot_dir) < 0) {
+        fprintf(stderr, "tuxvm: --additions %s: %s\n", additions_boot_dir, strerror(errno));
+        return 1;
+    }
     boot_opts.trace = trace, boot_opts.watch = watch, boot_opts.watch_pa = watch_pa;
     boot_opts.stats = stats, boot_opts.profile = profile;
     boot_opts.chain_ok = !no_chain && brk == ~0ull; /* breakpoints need every block to come back */

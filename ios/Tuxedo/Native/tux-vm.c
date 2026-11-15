@@ -216,6 +216,7 @@ int tux_vm_boot_linux(const char *firmware, const char *disk, uint64_t ram_mb, i
     }
     HvVmConfig c = {.rom = firmware, .disk = disk, .ram_mb = ram_mb, .ncpus = cpus, .log = 1, .accel = accel,
                     .video = accel && video, .folders = folders, .nfolders = nfolders,
+                    .fs_always = 1, /* the media of Tuxedo Additions goes in later: no restart then */
                     .codec_ops = encode ? hv_vcodec_device_ops() : NULL,
                     .jit_rx = jit->rx_addr, .jit_rw = jit->rw_addr, .jit_bytes = jit->size};
     hv_net_set_vcodec_socket(encode ? vcodec_socket() : NULL); /* 10.0.2.4:8470 */

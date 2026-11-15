@@ -142,8 +142,7 @@ def main():
         p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200),
                           env=dict(os.environ, HV_INPUT_FILE=infile))
         try:
-            p.expect(r"\(automatic login\)", timeout=150)
-            p.expect(gu.shell_wide(), timeout=60)
+            gu.login(p, 150, 60)
             sh(p, "stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1")
             time.sleep(4)  # labwc and logind settle
             run(p, args, infile)

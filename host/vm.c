@@ -24,6 +24,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "additions.h"
 #include "audio_mac.h"
 #include "dispatch.h"
 #include "net_slirp.h"
@@ -361,7 +362,8 @@ static void set_folders(const HvVmConfig *c) {
 static int create_virt(const HvVmConfig *c, uint64_t ram_size, char *err, size_t errlen) {
     static const uint8_t mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56}; /* QEMU's default */
     set_folders(c);
-    if (hv_virt_create(&virt, &m, cpus, ncpus, ram_size, c->disk ? &disk : NULL, mac, c->nfolders > 0) != 0)
+    hv_additions_reset(); /* a new machine has no media, job or events */
+    if (hv_virt_create(&virt, &m, cpus, ncpus, ram_size, c->disk ? &disk : NULL, mac, c->nfolders > 0 || c->fs_always) != 0)
         return fail(err, errlen, "Cannot build the machine (not enough memory for the guest's RAM?).");
     /* Before the tree: it holds the backlight's level at boot. */
     HvStatusView st;

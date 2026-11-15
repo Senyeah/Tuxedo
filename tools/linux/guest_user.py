@@ -3,6 +3,10 @@
 build-image.sh writes guest_user= and guest_host= into the image's .manifest. An image from before Tuxedo has a
 manifest without them, and its user is the legacy name. TUX_GUEST_USER (and TUX_GUEST_HOST) override the manifest,
 for a disk with no manifest next to it (a --save-image clone).
+
+The serial console signs in as the guest user on images with tux-guest before 1.11.0, and as root on a machine with
+no /var/lib/tux/account.json under 1.11.0. shell() matches either prompt. login() and to_user() move a root shell to
+the guest user with su, so a check runs as the user it was written for on both.
 """
 import os
 import re
@@ -60,17 +64,53 @@ def home():
     return f"/home/{user()}"
 
 
+def _any(user_path, root_path):
+    return rf"(?:{user()}@{host()}:{user_path}\$ |root@{host()}:{root_path}# )"
+
+
 def shell():
-    """The login prompt, for pexpect (not anchored: a kernel line can follow it in the same read)."""
-    return rf"{user()}@{host()}:\S*\$ "
+    """The login prompt of the guest user or of root, for pexpect (not anchored: a kernel line can follow it)."""
+    return _any(r"\S*", r"\S*")
 
 
 def shell_wide():
     """The same, where the path part may hold spaces."""
+    return _any(r"[^\n]*", r"[^\n]*")
+
+
+def user_shell():
+    """Only the guest user's prompt (after su)."""
     return rf"{user()}@{host()}:[^\n]*\$ "
 
 
 def prompt_prefix():
     """What re.sub removes from the start of a captured command's output."""
-    return rf"^{user()}@{host()}:[^\n$]*\$ "
+    return rf"^(?:{user()}|root)@{host()}:[^\n$#]*[$#] "
 
+
+def _text(x):
+    return x.decode(errors="replace") if isinstance(x, bytes) else (x or "")
+
+
+def at_root(p):
+    """True when the prompt pexpect matched last is root's."""
+    tail = (_text(p.before) + _text(p.after))[-300:]
+    return user() != "root" and re.search(rf"root@{re.escape(host())}:[^\n]*# $", tail) is not None
+
+
+def su_command():
+    return f"su - {user()}"
+
+
+def to_user(p, timeout=60):
+    """Call at a prompt that shell() matched. A root shell becomes the guest user's, so checks run as before."""
+    if at_root(p):
+        p.sendline(su_command())
+        p.expect(user_shell(), timeout=timeout)
+
+
+def login(p, boot_timeout, prompt_timeout=60, wide=True):
+    """Waits for the console auto-login and leaves the guest user's shell at the prompt."""
+    p.expect(r"\(automatic login\)", timeout=boot_timeout)
+    p.expect(shell_wide() if wide else shell(), timeout=prompt_timeout)
+    to_user(p, prompt_timeout)

@@ -1,0 +1,255 @@
+#!/usr/bin/python3
+"""Starts the Tuxedo Additions agent from the media (docs/guest-additions-design.md, section 6).
+
+tux-files starts tux-additions-agent@<n>.service, and that runs `tux-additions-launch <n>` as root. The media is a
+folder from the device, so the key that is already installed (/usr/share/keyrings/tux-archive.gpg) is the only trust
+anchor. This copies the tree first and checks the copy, so the agent runs the same bytes that were checked:
+
+  1. the media has only plain files and directories, and SHA256SUMS.gpg is a good signature of SHA256SUMS
+  2. the tree is copied to /var/lib/tux/additions/<n>.new
+  3. the copy gets the same checks, has exactly the files in SHA256SUMS (and the two signature files), and passes
+     `sha256sum -c --strict`
+  4. the signed versions.json of the copy is not older than the one of `current` (no rollback to a media with a
+     known fault; TUX_ADDITIONS_ALLOW_OLDER=1 allows it)
+  5. the copy is renamed to <n>, `current` points at it, older trees go, and `current/agent run --n <n>` takes over
+
+Exit 4 and a bad-media event to the app when the media is refused (it failed a check). Exit 5 and a launch-error
+event when the guest could not do the work (a full disk, a missing program): the media may be good.
+The TUX_ADDITIONS_* variables are for tests.
+"""
+import http.client
+import json
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+
+MEDIA = os.environ.get("TUX_ADDITIONS_MEDIA", "/media/tux/tux-additions")
+STATE = os.environ.get("TUX_ADDITIONS_STATE", "/var/lib/tux/additions")
+KEY = os.environ.get("TUX_ADDITIONS_KEY", "/usr/share/keyrings/tux-archive.gpg")
+HOST = os.environ.get("TUX_ADDITIONS_HOST", "10.0.2.4")
+PORT = int(os.environ.get("TUX_ADDITIONS_PORT", "80"))
+ALLOW_OLDER = os.environ.get("TUX_ADDITIONS_ALLOW_OLDER") == "1"
+SIGNED = ("SHA256SUMS", "SHA256SUMS.gpg")
+LINE = re.compile(r"[0-9a-f]{64}  ([^\x00-\x1f]+)")
+EXIT_BAD_MEDIA = 4
+EXIT_LAUNCH_ERROR = 5
+
+
+class Refused(Exception):
+    pass
+
+
+def log(*a):
+    print("tux-additions-launch:", *a, file=sys.stderr, flush=True)
+
+
+def post_event(kind, n, why):
+    c = http.client.HTTPConnection(HOST, PORT, timeout=3)
+    try:
+        c.request("POST", "/.tux/additions", body=json.dumps({"t": kind, "n": n, "why": why[:200]}).encode(),
+                  headers={"Content-Type": "application/json"})
+        c.getresponse().read()
+    except (OSError, http.client.HTTPException) as e:
+        log(f"the app did not get the {kind} event: {e}")
+    finally:
+        c.close()
+
+
+def _order(c):
+    """dpkg's weight of one character in a run of non-digits."""
+    if c == "~":
+        return -1
+    if c.isalpha():
+        return ord(c)
+    return ord(c) + 256 if c else 0
+
+
+def _revcmp(a, b):
+    i = j = 0
+    while i < len(a) or j < len(b):
+        while (i < len(a) and not a[i].isdigit()) or (j < len(b) and not b[j].isdigit()):
+            ac, bc = _order(a[i] if i < len(a) else ""), _order(b[j] if j < len(b) else "")
+            if ac != bc:
+                return ac - bc
+            i, j = i + 1, j + 1
+        while i < len(a) and a[i] == "0":
+            i += 1
+        while j < len(b) and b[j] == "0":
+            j += 1
+        diff = 0
+        while i < len(a) and j < len(b) and a[i].isdigit() and b[j].isdigit():
+            diff = diff or ord(a[i]) - ord(b[j])
+            i, j = i + 1, j + 1
+        if i < len(a) and a[i].isdigit():
+            return 1
+        if j < len(b) and b[j].isdigit():
+            return -1
+        if diff:
+            return diff
+    return 0
+
+
+def compare_versions(a, b):
+    """Negative, 0 or positive: the order of two Debian version strings (as dpkg --compare-versions)."""
+    def split(v):
+        epoch, _, rest = v.partition(":") if ":" in v else ("0", "", v)
+        up, _, rev = rest.rpartition("-") if "-" in rest else (rest, "", "")
+        return int(epoch) if epoch.isdigit() else 0, up, rev
+    (ea, ua, ra), (eb, ub, rb) = split(a), split(b)
+    return (ea > eb) - (ea < eb) or _revcmp(ua, ub) or _revcmp(ra, rb)
+
+
+def media_version(tree):
+    """The additions version in versions.json of tree, or None when there is none."""
+    try:
+        with open(os.path.join(tree, "versions.json"), encoding="utf-8") as f:
+            v = json.load(f).get("additions")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return v if isinstance(v, str) and re.fullmatch(r"[0-9A-Za-z.+~:-]{1,64}", v) else None
+
+
+def check_not_older(tree):
+    """A signed media of an older release is still signed: no rollback to one, once a media has run here."""
+    have = media_version(os.path.join(STATE, "current"))
+    if have is None or ALLOW_OLDER:
+        return
+    new = media_version(tree)
+    if new is None:
+        raise Refused(f"the media has no version, and {have} is installed")
+    if compare_versions(new, have) < 0:
+        raise Refused(f"the media {new} is older than {have}, which is installed")
+
+
+def tools(cmd, cwd, timeout):
+    r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    return r.returncode, (r.stderr or r.stdout).strip()
+
+
+def scan(tree):
+    """The relative names of the plain files. A link or any other kind of file refuses the media."""
+    found = set()
+    for top, dirs, files in os.walk(tree):
+        for name in dirs + files:
+            path = os.path.join(top, name)
+            mode = os.lstat(path).st_mode
+            if stat.S_ISREG(mode):
+                found.add(os.path.relpath(path, tree))
+            elif not stat.S_ISDIR(mode):
+                raise Refused(f"not a plain file: {os.path.relpath(path, tree)}")
+    return found
+
+
+def sign_check(tree):
+    for name in SIGNED:
+        if not os.path.isfile(os.path.join(tree, name)):
+            raise Refused(f"no {name}")
+    home = tempfile.mkdtemp(prefix="tux-gpgv-")  # an empty home: no key but ours
+    try:
+        rc, err = tools(["gpgv", "--homedir", home, "--keyring", KEY, "SHA256SUMS.gpg", "SHA256SUMS"], tree, 30)
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+    if rc != 0:
+        raise Refused("bad signature: " + err.replace("\n", " "))
+
+
+def listed(tree):
+    """The names in SHA256SUMS. Each line is a hash, two spaces and a path that stays in the tree."""
+    names = set()
+    with open(os.path.join(tree, "SHA256SUMS"), encoding="utf-8", errors="replace") as f:
+        for line in f.read().split("\n"):
+            if not line:
+                continue
+            m = LINE.fullmatch(line)
+            path = os.path.normpath(m.group(1)) if m else ""
+            if not m or os.path.isabs(path) or path == ".." or path.startswith("../"):
+                raise Refused("a line of SHA256SUMS is not valid")
+            names.add(path)
+    return names
+
+
+def full_check(tree):
+    """The checks of step 3: signature, the file set, and the sums."""
+    have = scan(tree)
+    sign_check(tree)
+    want = listed(tree)
+    extra = sorted(have - want - set(SIGNED))
+    if extra:
+        raise Refused("a file that SHA256SUMS does not list: " + extra[0])
+    rc, err = tools(["sha256sum", "-c", "--strict", "SHA256SUMS"], tree, 1200)
+    if rc != 0:
+        bad = [line for line in err.splitlines() if "OK" not in line]
+        raise Refused("sums do not match: " + (bad[0] if bad else err)[:120])
+    if "agent" not in have:
+        raise Refused("no agent")
+
+
+def copy_file(src, dst, *, follow_symlinks=True):
+    shutil.copyfile(src, dst)
+    os.chmod(dst, 0o755 if os.stat(src).st_mode & stat.S_IXUSR else 0o644)  # root owns it; nobody else writes
+    return dst
+
+
+def copy_tree(src, dst):
+    shutil.copytree(src, dst, symlinks=True, copy_function=copy_file)
+    os.chmod(dst, 0o755)
+    for top, dirs, _ in os.walk(dst):
+        for d in dirs:
+            os.chmod(os.path.join(top, d), 0o755)
+
+
+def install(n):
+    os.makedirs(STATE, mode=0o755, exist_ok=True)
+    new, final = os.path.join(STATE, n + ".new"), os.path.join(STATE, n)
+    shutil.rmtree(new, ignore_errors=True)
+    try:
+        copy_tree(MEDIA, new)
+        full_check(new)
+        check_not_older(new)
+        shutil.rmtree(final, ignore_errors=True)
+        os.rename(new, final)
+    except BaseException:
+        shutil.rmtree(new, ignore_errors=True)
+        raise
+    link = os.path.join(STATE, "current.new")
+    if os.path.lexists(link):
+        os.remove(link)
+    os.symlink(n, link)
+    os.replace(link, os.path.join(STATE, "current"))  # the swap is one step
+    for name in os.listdir(STATE):
+        if re.fullmatch(r"[0-9]+(\.new)?", name) and name != n:
+            shutil.rmtree(os.path.join(STATE, name), ignore_errors=True)
+
+
+def main():
+    a = sys.argv[1:]
+    if len(a) != 1 or not re.fullmatch(r"[1-9][0-9]{0,8}", a[0]):
+        sys.exit("usage: tux-additions-launch N")
+    n = a[0]
+    try:
+        if os.path.realpath(MEDIA) != MEDIA:
+            raise Refused("the media path is a link")
+        if MEDIA == "/media/tux/tux-additions" and not os.path.ismount(MEDIA):
+            raise Refused("the media is not mounted")
+        scan(MEDIA)
+        sign_check(MEDIA)  # early: no copy of media that is not signed
+        install(n)
+    except Refused as e:
+        kind, code, why = "bad-media", EXIT_BAD_MEDIA, str(e)
+    except (OSError, shutil.Error, subprocess.SubprocessError) as e:
+        kind, code, why = "launch-error", EXIT_LAUNCH_ERROR, f"the guest could not use the media: {e}"
+    else:
+        current = os.path.join(STATE, "current")
+        os.chdir(current)
+        os.execv(sys.executable, [sys.executable, os.path.join(current, "agent"), "run", "--n", n])
+    log(why)
+    post_event(kind, int(n), why)
+    sys.exit(code)
+
+
+if __name__ == "__main__":
+    main()

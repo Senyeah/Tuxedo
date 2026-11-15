@@ -1,0 +1,35 @@
+#!/bin/sh
+# Follows the host display size and scale (R5): wlr-randr under labwc, kscreen-doctor under Plasma.
+# labwc ignores a mode change on a connected output.
+out=Virtual-1
+last=
+
+want() {
+    python3 -c 'import urllib.request;print(urllib.request.urlopen("http://10.0.2.4/.tux/display",timeout=2).read().decode().strip())' 2>/dev/null && return
+    # No share: the connector's first mode, with the size-only scale rule
+    m=$(head -n 1 /sys/class/drm/card0-$out/modes 2>/dev/null) || return 1
+    w=${m%x*}
+    h=${m#*x}
+    h=${h%%[!0-9]*}
+    [ -n "$w" ] && [ -n "$h" ] || return 1
+    s=1
+    if [ "$w" -gt 1440 ] || [ "$h" -gt 1440 ]; then s=2; fi
+    echo "$w $h $s"
+}
+
+apply() {
+    cur=$(want) || return 0
+    [ "$cur" = "$last" ] && return 0
+    set -- $cur
+    if [ "$XDG_CURRENT_DESKTOP" = KDE ]; then
+        # 6.3 has no addCustomMode, and its exit code is 0 for an unknown mode: check the current one
+        kscreen-doctor "output.$out.mode.$1x$2@60" "output.$out.scale.$3" >/dev/null 2>&1
+        kscreen-doctor -o 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep -q "$1x$2@[0-9]*\*" || return 0
+    else
+        wlr-randr --output $out --custom-mode "$1x$2" --scale "$3" || return 0
+    fi
+    last=$cur
+}
+
+apply
+udevadm monitor --udev --subsystem-match=drm | while read -r _; do apply; done

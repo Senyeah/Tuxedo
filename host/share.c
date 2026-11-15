@@ -9,9 +9,12 @@
    It also serves the Linux display follower: GET /.tux/display is "W H SCALE"; tux-status:
    GET /.tux/status is the device's time, time zone and brightness; and tux-files: GET /.tux/folders is the
    Files folders' table (fs_server.h), and POST /.tux/folders/done answers the app's export or discard.
+   The Tuxedo Additions agent (additions.h): GET /.tux/additions[?since=S] is a long poll for the media, the job, the
+   taken id and a cancel, and POST /.tux/additions takes one event (a JSON object with a string "t", 64 KB at most).
 
    Locks are accepted but not enforced: a WebDAV client may write only to a server that offers them, and there is one client. */
 #include "share.h"
+#include "additions.h"
 #include "fs_server.h"
 #include "safe_path.h"
 #include "secrets.h"
@@ -764,6 +767,40 @@ static int folders_done(Conn *c, Request *r) {
     return rc == 0 ? respond_empty(c, r, 200, "OK") : respond_empty(c, r, 409, "Conflict");
 }
 
+/* The agent's long poll (additions.h): ?since=N waits up to 120 s for news after N; with no since the answer comes at
+   once. The body may hold the job and its password, so it is wiped after it is sent. */
+static int additions_get(Conn *c, Request *r) {
+    if (body_discard(c, r) != 0) return -1;
+    const char *q = strstr(r->query, "since=");
+    if (q) hv_additions_wait(strtoul(q + 6, NULL, 10), 120 * 1000);
+    unsigned long seq = 0;
+    char *body = hv_additions_guest_json(&seq), headers[128];
+    if (!body) return respond_empty(c, r, 500, "Internal Server Error");
+    snprintf(headers, sizeof headers, "Content-Type: application/json\r\nCache-Control: no-store\r\nX-Tux-Seq: %lu\r\n", seq);
+    size_t len = strlen(body);
+    int rc = respond(c, r, 200, "OK", headers, body, len);
+    hv_additions_wipe(body, len);
+    free(body);
+    return rc;
+}
+
+/* One event from the agent. 400: not a JSON object with a string "t"; 413: over 64 KB. */
+static int additions_post(Conn *c, Request *r) {
+    if (r->length > HV_ADDITIONS_EVENT_MAX) {
+        if (body_discard(c, r) != 0) return -1;
+        return respond_empty(c, r, 413, "Payload Too Large");
+    }
+    size_t len = 0;
+    char *text = body_small(c, r, &len); /* a chunked body has no length yet */
+    if (!text) return -1;
+    int rc = hv_additions_post(text, len), e = errno;
+    free(text);
+    if (rc != 0) return e == E2BIG ? respond_empty(c, r, 413, "Payload Too Large") : respond_empty(c, r, 400, "Bad Request");
+    char body[48];
+    int n = snprintf(body, sizeof body, "{\"seq\":%lu}", hv_additions_seq());
+    return respond(c, r, 200, "OK", "Content-Type: application/json\r\nCache-Control: no-store\r\n", body, (size_t)n);
+}
+
 /* A Linux guest's wallet (secrets.c). */
 static int secrets_route(Conn *c, Request *r, const char *path) {
     char *body = NULL;
@@ -799,6 +836,8 @@ static int serve_tux(Conn *c, Request *r) {
     if (!strcmp(what, "status") && !strcmp(r->method, "GET")) return status_get(c, r);
     if (!strcmp(what, "folders") && !strcmp(r->method, "GET")) return folders_get(c, r);
     if (!strcmp(what, "folders/done") && !strcmp(r->method, "POST")) return folders_done(c, r);
+    if (!strcmp(what, "additions") && !strcmp(r->method, "GET")) return additions_get(c, r);
+    if (!strcmp(what, "additions") && !strcmp(r->method, "POST")) return additions_post(c, r);
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "GET")) return clipboard_get(c, r);
     if (!strcmp(what, "clipboard") && !strcmp(r->method, "PUT")) return clipboard_put(c, r);
     if (!strcmp(what, "keyboard") && !strcmp(r->method, "PUT")) return keyboard_put(c, r);

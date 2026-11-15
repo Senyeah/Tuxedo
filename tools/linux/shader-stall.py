@@ -134,8 +134,7 @@ def boot_process(args, d, tmp, cache, n):
     p.logfile_read = logf
     res = {"start 1": {}, "start 2": {}, "after restart": {}}
     try:
-        p.expect(r"\(automatic login\)", timeout=300)
-        p.expect(gu.shell_wide(), timeout=60)
+        gu.login(p, 300, 60)
         sh(p, "stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1")
         put_text(p, GAP, "/tmp/gap.py")
         settle(p, 10)
@@ -144,8 +143,7 @@ def boot_process(args, d, tmp, cache, n):
         for scene in args.scenes:
             res["start 2"][scene] = start_ms(p, scene, args.duration, False)
         p.sendline("sudo reboot")
-        p.expect(r"\(automatic login\)", timeout=300)
-        p.expect(gu.shell_wide(), timeout=60)
+        gu.login(p, 300, 60)
         settle(p, 10)
         for scene in args.scenes:
             res["after restart"][scene] = start_ms(p, scene, args.duration, False)

@@ -51,8 +51,7 @@ def sh(p, cmd, limit=30):
 
 def boot(args, disk, scale):
     p = pexpect.spawn(argv(args, disk)[0], argv(args, disk)[1:], encoding="utf-8", timeout=60 * scale)
-    p.expect(r"\(automatic login\)", timeout=120 * scale)
-    p.expect(gu.shell(), timeout=30 * scale)
+    gu.login(p, 120 * scale, 30 * scale, wide=False)
     p.sendline(f"stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1; echo {MARK}$((6 * 7))")
     p.expect(MARK + r"42\r*\n", timeout=30)
     # The grow unit can still run when the autologin shell appears

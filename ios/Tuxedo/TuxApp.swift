@@ -38,6 +38,8 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var running: VirtualMachine?
     @State private var tab = Tab.machines
+    @State private var demo: AdditionsWizardRequest? // testing only: Autopilot additions-demo
+    @State private var demoAdditions: TuxAdditions?
     @AppStorage(DeskAppearance.key) private var appearance = DeskAppearance.system
 
     var body: some View {
@@ -62,6 +64,16 @@ struct RootView: View {
         }
         .background(WindowStyle(style: running != nil ? .dark : appearance.style))
         .sheet(isPresented: $jit.showSetup) { JITSetupFlow() }
+        .onReceive(NotificationCenter.default.publisher(for: Autopilot.additionsDemo)) { note in
+            let step = (note.object as? String).flatMap(AdditionsStep.init(rawValue:))
+            demoAdditions = TuxAdditions.demo
+            demo = AdditionsWizardRequest(step: step, intro: step == .account)
+        }
+        .fullScreenCover(item: $demo) { request in
+            if let demoAdditions {
+                AdditionsWizardView(additions: demoAdditions, request: request, typeCommand: { _ in }, close: { demo = nil })
+            }
+        }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             machines.collectImports()

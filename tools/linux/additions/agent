@@ -1,0 +1,1137 @@
+#!/usr/bin/python3
+"""Tuxedo Additions agent. The launcher of tux-guest starts it as root: agent run --n N
+It reports what the guest has, long-polls the host link for a job, runs the steps of the job in order, and posts
+step, log and done events. It runs only the ids of actions.json, with checked values and argument lists
+(never a shell). Python 3 standard library only. Contract: docs/guest-additions-design.md 5 and 6."""
+import atexit
+import base64
+import errno
+import hashlib
+import json
+import os
+import re
+import secrets
+import shutil
+import signal
+import stat
+import struct
+import sys
+import time
+from collections import namedtuple
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import tux_additions_caps as caps_mod  # noqa: E402
+
+SUPPORTED_PROTOCOLS = (1,)
+IDLE_SECONDS = 60 * 60
+POLL_TIMEOUT = 135  # the host holds a long poll for 120 s
+LOG_CHUNK = 4000  # bytes; the host takes 4 KB
+MSG_MAX = 200
+MAX_STEPS = 32
+RUN = "/var/lib/tux"
+TREE = "/var/lib/tux/additions/current"
+KEYRING = "/usr/share/keyrings/tux-archive.gpg"
+SSH_CONF = "/etc/ssh/sshd_config.d/10-tux.conf"
+BUSY = "/run/tux/additions-busy"  # tux-files leaves the agent alone while this names a live pid
+POLICY_RC = "/usr/sbin/policy-rc.d"
+POLICY_TEXT = "#!/bin/sh\nexit 101\n"  # 101: no service starts while a package is installed
+LOGIN_SHELLS_OFF = ("nologin", "false")
+FILE_MAX = 1 << 20
+APT_TIMEOUT = 3 * 3600
+STOCK_SUDOERS = "tux ALL=(ALL) NOPASSWD:ALL\n"  # /etc/sudoers.d/tux in the stock images
+
+NAME_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}\Z")
+HOST_RE = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\Z")
+JOB_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
+PKG_RE = re.compile(r"[a-z0-9][a-z0-9+.-]{0,99}\Z")
+ID_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}\Z")
+KEY_TYPES = ("ssh-ed25519", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521", "ssh-rsa",
+             "sk-ssh-ed25519@openssh.com")
+KEY_MAX = 4096
+PASSWORD_MAX = 128
+SCRUB_MIN = 4  # a shorter secret would damage every log line it matches
+DST_PREFIXES = ("/etc/", "/usr/local/bin/", "/usr/share/")
+APT_OPTS = ["-y", "-o", "Dpkg::Use-Pty=0", "-o", "APT::Color=0", "-o", "Dpkg::Options::=--force-confdef",
+            "-o", "Dpkg::Options::=--force-confold"]
+NETWORK_ACTIONS = ("desktop.install", "apps.install", "system.update")
+
+Planned = namedtuple("Planned", "i action clean error")
+
+
+class StepError(Exception):
+    """A step ends failed. The text is the one-line message of the event."""
+
+
+class Cancelled(Exception):
+    pass
+
+
+class JobError(Exception):
+    pass
+
+
+class CatalogueError(Exception):
+    pass
+
+
+def log(*a):
+    print(*a, file=sys.stderr, flush=True)
+
+
+# ---- pure parts: validation, planning, command and text construction ----
+
+def one_line(text, limit=MSG_MAX):
+    s = " ".join(str(text).split())
+    return s if len(s) <= limit else s[: limit - 3] + "..."
+
+
+def split_utf8(text, limit):
+    """Chunks of at most limit bytes (UTF-8), cut at character boundaries."""
+    data = text.encode("utf-8")
+    out = []
+    while data:
+        cut = min(limit, len(data))
+        while cut < len(data) and cut > 0 and (data[cut] & 0xC0) == 0x80:
+            cut -= 1
+        out.append(data[:cut].decode("utf-8", "replace"))
+        data = data[cut:]
+    return out
+
+
+def validate_catalogue(cat):
+    """Raises CatalogueError when actions.json is not what the agent can use."""
+    if not isinstance(cat, dict):
+        raise CatalogueError("actions.json is not an object")
+    if cat.get("protocol") not in SUPPORTED_PROTOCOLS:
+        raise CatalogueError("unknown protocol %r" % (cat.get("protocol"),))
+    seen = set()
+    for kind in ("desktops", "apps"):
+        items = cat.get(kind)
+        if not isinstance(items, list) or not items:
+            raise CatalogueError("%s is missing" % kind)
+        for it in items:
+            if not isinstance(it, dict) or not isinstance(it.get("id"), str) or not ID_RE.match(it["id"]):
+                raise CatalogueError("bad id in %s" % kind)
+            if (kind, it["id"]) in seen:
+                raise CatalogueError("%s id %s is twice" % (kind, it["id"]))
+            seen.add((kind, it["id"]))
+            pk = it.get("packages")
+            if not isinstance(pk, list) or not pk or not all(isinstance(p, str) and PKG_RE.match(p) for p in pk):
+                raise CatalogueError("bad packages for %s" % it["id"])
+            if "files" in it and not (isinstance(it["files"], str) and re.fullmatch(r"[a-z0-9-]+", it["files"])):
+                raise CatalogueError("bad files for %s" % it["id"])
+    ssh = cat.get("ssh")
+    if not (isinstance(ssh, dict) and all(isinstance(ssh.get(k), int) for k in ("port_min", "port_max", "default_port"))
+            and 1 <= ssh["port_min"] <= ssh["default_port"] <= ssh["port_max"] <= 65535):
+        raise CatalogueError("bad ssh limits")
+    return cat
+
+
+def check_name(name):
+    if not isinstance(name, str) or not NAME_RE.match(name):
+        raise StepError("The user name is not valid")
+    return name
+
+
+def check_hostname(name):
+    if not isinstance(name, str) or not HOST_RE.match(name):
+        raise StepError("The host name is not valid")
+    return name
+
+
+def check_port(port, lo=1, hi=65535):
+    if isinstance(port, bool) or not isinstance(port, int) or not lo <= port <= hi:
+        raise StepError("The port must be a number from %d to %d" % (lo, hi))
+    return port
+
+
+def check_password(pw):
+    if not isinstance(pw, str) or len(pw) > PASSWORD_MAX or any(ord(c) < 32 or ord(c) == 127 for c in pw):
+        raise StepError("The password is not valid")
+    return pw
+
+
+def check_key(key):
+    """(type, base64 body, comment) of one public key line. Raises StepError."""
+    bad = StepError("The SSH key is not valid")
+    if not isinstance(key, str) or not key or len(key) > KEY_MAX or any(ord(c) < 32 or ord(c) > 126 for c in key):
+        raise bad
+    parts = key.split(" ", 2)
+    if len(parts) < 2 or parts[0] not in KEY_TYPES or not re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", parts[1]):
+        raise bad
+    try:
+        blob = base64.b64decode(parts[1], validate=True)
+    except ValueError:
+        raise bad
+    fields, at = [], 0
+    while at < len(blob):  # the blob is length-prefixed strings that use every byte
+        if at + 4 > len(blob):
+            raise bad
+        n = struct.unpack(">I", blob[at:at + 4])[0]
+        if at + 4 + n > len(blob):
+            raise bad
+        fields.append(blob[at + 4:at + 4 + n])
+        at += 4 + n
+    count = {"ssh-ed25519": 2, "sk-ssh-ed25519@openssh.com": 3, "ssh-rsa": 3}.get(parts[0], 3)
+    if len(fields) != count or fields[0] != parts[0].encode() or (parts[0] == "ssh-ed25519" and len(fields[1]) != 32):
+        raise bad
+    return parts[0], parts[1], (parts[2].strip() if len(parts) > 2 else "")
+
+
+def _flag(step, key, default):
+    v = step.get(key, default)
+    if not isinstance(v, bool):
+        raise StepError("%s must be true or false" % key)
+    return v
+
+
+def _only(step, allowed):
+    for k in step:
+        if k != "action" and k not in allowed:
+            raise StepError("Unexpected field: %s" % one_line(repr(k), 40))
+
+
+def _find(cat, kind, ident):
+    for it in cat[kind]:
+        if it["id"] == ident:
+            return it
+    raise StepError("Unknown id: %s" % one_line(str(ident), 40))
+
+
+def validate_step(step, cat):
+    """The clean copy of a step. Raises StepError with the message for the app."""
+    if not isinstance(step, dict):
+        raise StepError("The step is not an object")
+    action = step.get("action")
+    if action == "additions.install" or action == "system.update":
+        _only(step, ())
+        return {"action": action}
+    if action == "user.setup":
+        _only(step, ("name", "password", "sudo", "autologin", "lock_root"))
+        c = {"action": action, "sudo": _flag(step, "sudo", True), "autologin": _flag(step, "autologin", True),
+             "lock_root": _flag(step, "lock_root", True), "name": None, "password": None}
+        if step.get("name") is not None:
+            c["name"] = check_name(step["name"])
+        if step.get("password") not in (None, ""):
+            c["password"] = check_password(step["password"])
+        return c
+    if action == "hostname.set":
+        _only(step, ("name",))
+        return {"action": action, "name": check_hostname(step.get("name"))}
+    if action == "desktop.install":
+        _only(step, ("id",))
+        ident = step.get("id")
+        if not isinstance(ident, str):
+            raise StepError("The desktop id is missing")
+        return {"action": action, "id": _find(cat, "desktops", ident)["id"]}
+    if action == "apps.install":
+        _only(step, ("ids",))
+        ids = step.get("ids")
+        if not isinstance(ids, list) or not ids or len(ids) > 100 or not all(isinstance(i, str) for i in ids):
+            raise StepError("ids must be a list of application ids")
+        clean = []
+        for i in ids:
+            _find(cat, "apps", i)
+            if i not in clean:
+                clean.append(i)
+        return {"action": action, "ids": clean}
+    if action == "ssh.configure":
+        _only(step, ("enabled", "port", "password_auth", "root_login", "authorized_key"))
+        if "enabled" not in step:
+            raise StepError("enabled is missing")
+        lim = cat["ssh"]
+        c = {"action": action, "enabled": _flag(step, "enabled", False),
+             "port": check_port(step.get("port", lim["default_port"]), lim["port_min"], lim["port_max"]),
+             "password_auth": _flag(step, "password_auth", True), "root_login": _flag(step, "root_login", False),
+             "authorized_key": None}
+        if step.get("authorized_key") not in (None, ""):
+            t, b, comment = check_key(step["authorized_key"])
+            c["authorized_key"] = " ".join(x for x in (t, b, comment) if x)
+        return c
+    raise StepError("Unknown action: %s" % one_line(str(action), 40))
+
+
+def parse_job(raw):
+    """(job id, list of raw steps). Raises JobError."""
+    if not isinstance(raw, dict):
+        raise JobError("The job is not an object")
+    jid = raw.get("id")
+    if not isinstance(jid, str) or not JOB_ID_RE.match(jid):
+        raise JobError("The job id is not valid")
+    steps = raw.get("steps")
+    if not isinstance(steps, list) or not steps:
+        raise JobError("The job has no steps")
+    if len(steps) > MAX_STEPS:
+        raise JobError("The job has too many steps")
+    return jid, steps
+
+
+def plan_job(raw_steps, cat):
+    """Each step is checked now. A bad step is run later as a failed step, so the steps before it still run."""
+    out = []
+    for i, s in enumerate(raw_steps):
+        try:
+            out.append(Planned(i, s.get("action") if isinstance(s, dict) else None, validate_step(s, cat), None))
+        except StepError as e:
+            out.append(Planned(i, s.get("action") if isinstance(s, dict) else None, None, str(e)))
+    return out
+
+
+def secrets_of(raw_steps):
+    return [s["password"] for s in raw_steps
+            if isinstance(s, dict) and isinstance(s.get("password"), str) and len(s["password"]) >= SCRUB_MIN]
+
+
+def scrub(text, secrets):
+    for s in secrets:
+        text = text.replace(s, "***")
+    return text
+
+
+def apt_install_argv(packages):
+    return ["apt-get", "install", "--no-install-recommends"] + APT_OPTS + list(packages)
+
+
+def useradd_argv(name, groups, uid_free):
+    argv = ["useradd", "--create-home", "--shell", "/bin/bash"]
+    if uid_free:
+        argv += ["--uid", "1000"]
+    if groups:
+        argv += ["--groups", ",".join(groups)]
+    return argv + [name]
+
+
+def account_marker(name, autologin, sudo):
+    return {"configured": True, "name": name, "autologin": autologin, "sudo": sudo}
+
+
+def sshd_conf(port, password_auth, root_login):
+    yn = lambda b: "yes" if b else "no"  # noqa: E731
+    return ("# Written by Tuxedo Additions\n"
+            "Port %d\nPasswordAuthentication %s\nKbdInteractiveAuthentication %s\nPermitRootLogin %s\n"
+            % (port, yn(password_auth), yn(password_auth), yn(root_login)))
+
+
+def fix_hosts(text, old, new):
+    """/etc/hosts for a new host name: the old name goes from the loopback lines and the new one takes its place."""
+    lines = text.splitlines()
+    found = False
+    for i, line in enumerate(lines):
+        body = line.split("#", 1)[0].split()
+        if len(body) >= 2 and body[0] in ("127.0.1.1", "127.0.0.1", "::1"):
+            if old and old in body[1:]:
+                body = [new if t == old else t for t in body]
+                lines[i] = "\t".join(body[:1]) + "\t" + " ".join(body[1:])
+                found = True
+            elif body[0] == "127.0.1.1":
+                lines[i] = "127.0.1.1\t" + new
+                found = True
+    if not found:
+        lines.append("127.0.1.1\t" + new)
+    return "\n".join(lines) + "\n"
+
+
+def authorized_keys_add(text, key):
+    """(new text, added). A key that is in the file already (same type and body) is not added again."""
+    t, b = key.split(" ", 2)[:2]
+    for line in (text or "").splitlines():
+        p = line.split()
+        if len(p) >= 2 and p[0] == t and p[1] == b:
+            return text, False
+    base = text or ""
+    if base and not base.endswith("\n"):
+        base += "\n"
+    return base + key + "\n", True
+
+
+def substitute(text, user):
+    return text.replace("@USER@", user)
+
+
+def load_file_map(tree, dirname, autologin=False):
+    """The install map of a desktop's session files: list of (source path, destination, mode, subst).
+    An entry with "when": "autologin" is in the list only when autologin is true."""
+    base = os.path.realpath(os.path.join(tree, dirname))
+    try:
+        with open(os.path.join(base, "files.json"), encoding="utf-8") as f:
+            entries = json.load(f)
+    except (OSError, ValueError) as e:
+        raise StepError("The file map of %s is not readable" % dirname) from e
+    out = []
+    if not isinstance(entries, list):
+        raise StepError("The file map is not a list")
+    for e in entries:
+        ok = isinstance(e, dict) and isinstance(e.get("src"), str) and isinstance(e.get("dst"), str) \
+            and isinstance(e.get("mode"), str) and re.fullmatch(r"0[0-7]{3}", e["mode"]) \
+            and isinstance(e.get("subst", False), bool) and e.get("when") in (None, "autologin")
+        if ok and e.get("when") == "autologin" and not autologin:
+            continue
+        if ok:
+            src = os.path.realpath(os.path.join(base, e["src"]))
+            dst = e["dst"]
+            ok = src.startswith(base + os.sep) and os.path.isfile(src) and dst.startswith(DST_PREFIXES) \
+                and ".." not in dst.split("/") and "//" not in dst
+        if not ok:
+            raise StepError("The file map has a bad entry")
+        out.append((src, e["dst"], int(e["mode"], 8), bool(e.get("subst", False))))
+    return out
+
+
+def load_catalogue(tree):
+    with open(os.path.join(tree, "actions.json"), encoding="utf-8") as f:
+        return validate_catalogue(json.load(f))
+
+
+# ---- the file system, under a root (the root is "/" in the guest) ----
+
+class FS:
+    """Files under a root ("/" in the guest). The account owns its home, so a path goes one name at a time: each
+    open is relative to the fd of the folder before it and has O_NOFOLLOW. A link on the way, a name that is not a
+    folder, or a folder of another owner fails the step. A file is written under a random name and renamed."""
+
+    def __init__(self, root="/"):
+        self.root = root
+        self.trusted = {0, os.geteuid()}  # owners that a folder on the way may have; a test can change it
+
+    def p(self, path):
+        return caps_mod.host_path(self.root, path)
+
+    def read(self, path):
+        return caps_mod.read_text(self.root, path)
+
+    def exists(self, path):
+        return os.path.exists(self.p(path))
+
+    @staticmethod
+    def _parts(path):
+        parts = [x for x in path.split("/") if x]
+        if any(x in (".", "..") for x in parts):
+            raise StepError("The path is not valid")
+        return parts
+
+    def _owned(self, st, name, owner):
+        if st.st_uid not in self.trusted and st.st_uid != owner:
+            raise StepError("%s is not owned by root or the account" % one_line(name, 60))
+
+    def open_dir(self, path, create=False, mode=None, uid=None, gid=None, owner=None):
+        """fd of a folder. create: False, "last" (only the last name may be new) or True (all). mode and uid set the
+        last folder, as mkdir does. owner is a uid that may own the folders on the way, as root may. The caller
+        closes the fd."""
+        parts = self._parts(path)
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        fd = os.open(self.root or "/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        try:
+            for i, name in enumerate(parts):
+                make = create is True or (create == "last" and i == len(parts) - 1)
+                try:
+                    nfd = os.open(name, flags, dir_fd=fd)
+                except FileNotFoundError:
+                    if not make:
+                        raise
+                    os.mkdir(name, 0o755, dir_fd=fd)
+                    nfd = os.open(name, flags, dir_fd=fd)
+                except OSError as e:
+                    if e.errno in (errno.ELOOP, errno.ENOTDIR):
+                        raise StepError("%s is a link or not a folder" % one_line(name, 60)) from e
+                    raise
+                os.close(fd)
+                fd = nfd
+                self._owned(os.fstat(fd), name, owner)
+            if mode is not None:
+                os.fchmod(fd, mode)
+            self._fchown(fd, uid, gid)
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
+
+    def mkdir(self, path, mode=0o755, uid=None, gid=None):
+        os.close(self.open_dir(path, create=True, mode=mode, uid=uid, gid=gid, owner=uid))
+
+    def _fchown(self, fd, uid, gid):
+        if uid is None:
+            return
+        try:
+            os.fchown(fd, uid, -1 if gid is None else gid)
+        except PermissionError:
+            if self.root in ("", "/"):
+                raise
+
+    def put(self, dfd, name, data, mode=0o644, uid=None, gid=None):
+        """A file in the folder dfd: a new file with a random name, then a rename over name. A link at name is
+        replaced, never followed."""
+        tmp = ".%s.%s.tux-new" % (name[:40], secrets.token_hex(8))
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=dfd)
+        try:
+            try:
+                view = memoryview(data)
+                while view:
+                    view = view[os.write(fd, view):]
+                os.fchmod(fd, mode)
+                self._fchown(fd, uid, gid)
+            finally:
+                os.close(fd)
+            os.rename(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=dfd)
+            except OSError:
+                pass
+            raise
+
+    def write(self, path, text, mode=0o644, uid=None, gid=None):
+        parts = self._parts(path)
+        if not parts:
+            raise StepError("The path is not valid")
+        dfd = self.open_dir("/".join(parts[:-1]), create=True, owner=uid)
+        try:
+            self.put(dfd, parts[-1], text.encode("utf-8"), mode, uid, gid)
+        finally:
+            os.close(dfd)
+
+    def plain(self, dfd, name, owner):
+        """(fd, stat) of a plain file in dfd, or None when it is not there. A link, a pipe, a file of another owner or
+        with a second name (a hard link) fails the step."""
+        try:
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dfd)
+        except FileNotFoundError:
+            return None
+        except OSError as e:
+            if e.errno == errno.ELOOP:
+                raise StepError("%s is a link" % one_line(name, 60)) from e
+            raise
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or st.st_size > FILE_MAX:
+                raise StepError("%s is not a plain file" % one_line(name, 60))
+            self._owned(st, name, owner)
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd, st
+
+    def rename(self, src, dst):
+        sp, dp = self._parts(src), self._parts(dst)
+        sfd = self.open_dir("/".join(sp[:-1]))
+        try:
+            dfd = self.open_dir("/".join(dp[:-1]))
+            try:
+                os.rename(sp[-1], dp[-1], src_dir_fd=sfd, dst_dir_fd=dfd)
+            finally:
+                os.close(dfd)
+        finally:
+            os.close(sfd)
+
+    def unlink(self, path):
+        parts = self._parts(path)
+        dfd = self.open_dir("/".join(parts[:-1]))
+        try:
+            os.unlink(parts[-1], dir_fd=dfd)
+        finally:
+            os.close(dfd)
+
+
+# ---- the host link ----
+
+class HttpLink:
+    def get(self, since=None, timeout=POLL_TIMEOUT):
+        import http.client
+        host, port = caps_mod.link_endpoint()
+        c = http.client.HTTPConnection(host, port, timeout=timeout)
+        try:
+            c.request("GET", caps_mod.PATH + ("?since=%d" % since if since is not None else ""))
+            r = c.getresponse()
+            body = r.read()
+            if r.status != 200:
+                raise OSError("host answered %d" % r.status)
+            state = json.loads(body)
+            if not isinstance(state, dict):
+                raise OSError("host sent no object")
+            seq = r.getheader("X-Tux-Seq")
+            return state, int(seq) if seq and seq.isdigit() else None
+        except ValueError as e:
+            raise OSError("host sent bad JSON") from e
+        finally:
+            c.close()
+
+    def post(self, event):
+        return caps_mod.post_event(event)
+
+
+class LogSink:
+    """Collects output and sends it as log events of 4 KB at most."""
+
+    def __init__(self, emit, secrets, chunk=LOG_CHUNK, interval=1.0, clock=time.monotonic):
+        self.emit, self.secrets, self.chunk, self.interval, self.clock = emit, secrets, chunk, interval, clock
+        self.buf = ""
+        self.last = clock()
+
+    def add(self, text):
+        self.buf += scrub(text, self.secrets)
+        if len(self.buf.encode("utf-8")) >= self.chunk or self.clock() - self.last >= self.interval:
+            self.flush()
+
+    def flush(self):
+        if self.buf:
+            for part in split_utf8(self.buf, self.chunk):
+                self.emit(part)
+            self.buf = ""
+        self.last = self.clock()
+
+
+# ---- the agent ----
+
+class Agent:
+    def __init__(self, n, runner=None, tree=None, root="/", link=None, catalogue=None, sleep=time.sleep,
+                 clock=time.monotonic, connect=caps_mod.tcp_connect, min_poll=1.0, idle=IDLE_SECONDS,
+                 version=None):
+        self.n = n
+        self.runner = runner or caps_mod.Runner()
+        self.tree = tree or os.path.dirname(os.path.abspath(__file__))
+        self.fs = FS(root)
+        self.root = root
+        self.link = link or HttpLink()
+        self.cat = catalogue or load_catalogue(self.tree)
+        self.sleep, self.clock, self.connect = sleep, clock, connect
+        self.min_poll, self.idle = min_poll, idle
+        self.version = version or self._tree_version()
+        self.last_job = None
+        self.busy = False
+        self.stopping = False
+        self.job_id = ""
+        self.sink = None
+        self.secrets = []
+        self.updated = False
+        self.after_done = []
+        self.reboot = False
+
+    def _tree_version(self):
+        try:
+            with open(os.path.join(self.tree, "versions.json"), encoding="utf-8") as f:
+                v = json.load(f).get("additions")
+            return v if isinstance(v, str) and v else "0"
+        except (OSError, ValueError, AttributeError):
+            return "0"
+
+    # events
+    def post(self, event):
+        for k in ("msg", "text"):
+            if isinstance(event.get(k), str):
+                event[k] = scrub(event[k], self.secrets)
+        for attempt in range(3):
+            try:
+                return self.link.post(event)
+            except OSError as e:
+                if attempt < 2:
+                    self.sleep(0.5 * (attempt + 1))
+                else:
+                    log("agent: event not sent: %s" % e)
+            except (ValueError, RuntimeError) as e:
+                log("agent: event not sent: %s" % e)
+                return None
+        return None
+
+    def caps(self):
+        return caps_mod.build_caps(self.runner, self.root, self.cat, self.connect)
+
+    def report(self):
+        c = self.caps()
+        ev = caps_mod.report_event(self.n, self.version, c)
+        try:
+            caps_mod.save_last_report(ev, self.root)
+        except OSError as e:
+            log("agent: report not saved: %s" % e)
+        self.post(ev)
+        return c
+
+    def step_event(self, i, status, msg=""):
+        self.post({"t": "step", "job": self.job_id, "i": i, "status": status, "msg": one_line(msg)})
+
+    # running programs for a step: the output goes to the log
+    def run(self, argv, input=None, timeout=None, env=None, quiet=False):
+        if self.sink is not None and not quiet:
+            self.sink.add("$ %s\n" % " ".join(argv))
+        r = self.runner.run(argv, input=input, timeout=timeout, env=env,
+                            on_output=None if (quiet or self.sink is None) else self.sink.add)
+        if self.sink is not None:
+            self.sink.flush()
+        return r
+
+    def apt(self, argv):
+        self.check_cancel()
+        return self.run(argv, timeout=APT_TIMEOUT, env={"DEBIAN_FRONTEND": "noninteractive"})
+
+    def check_cancel(self):
+        if self.stopping:
+            raise Cancelled()
+        try:
+            state, _ = self.link.get(None, timeout=10)
+        except OSError:
+            return
+        if self.job_id and state.get("cancel_job") == self.job_id:  # a bare cancel is another job's
+            raise Cancelled()
+
+    def busy_start(self):
+        try:
+            self.fs.write(BUSY, json.dumps({"pid": os.getpid(), "job": self.job_id}) + "\n")
+        except (OSError, StepError) as e:
+            log("agent: busy file not written: %s" % e)
+
+    def busy_end(self):
+        try:
+            if json.loads(self.fs.read(BUSY) or "{}").get("pid") == os.getpid():
+                self.fs.unlink(BUSY)
+        except (OSError, ValueError, AttributeError, StepError):
+            pass
+
+    # accounts
+    def passwd(self):
+        return caps_mod.parse_passwd(self.fs.read("/etc/passwd"))
+
+    def group(self):
+        return caps_mod.parse_group(self.fs.read("/etc/group"))
+
+    def account(self):
+        a = caps_mod.account_caps(self.root)
+        return a["name"], (self.passwd().get(a["name"]) if a["exists"] else None)
+
+    # steps
+    def step_additions_install(self, c):
+        r = self.run(["sh", os.path.join(self.tree, "install")], timeout=APT_TIMEOUT,
+                     env={"DEBIAN_FRONTEND": "noninteractive"})
+        if r.rc == 0:
+            return "Tuxedo Additions are installed"
+        why = {2: "This system is not supported", 3: "The old Henge packages are installed",
+               4: "The media check failed"}.get(r.rc, "The install script failed (code %d)" % r.rc)
+        raise StepError(why)
+
+    def step_user_setup(self, c):
+        pw = c.pop("password", None)
+        passwd, groups = self.passwd(), self.group()
+        first = next((n for n, u in sorted(passwd.items()) if u["uid"] == 1000), None)
+        name = c["name"] or first or "tux"
+        exists = name in passwd
+        # refusals come first: they change nothing
+        if exists and passwd[name]["uid"] != 1000:
+            raise StepError("%s is not a login account (its id is not 1000)" % name)
+        if exists and os.path.basename(passwd[name]["shell"]) in LOGIN_SHELLS_OFF:
+            raise StepError("%s has no login shell" % name)
+        if c["lock_root"] and not c["sudo"]:
+            raise StepError("Root sign-in cannot end when the account has no sudo")
+        if c["lock_root"] and "sudo" not in groups:
+            raise StepError("Root sign-in cannot end: the sudo group is missing")
+        notes = []
+        want = ["audio", "video"] + (["sudo"] if c["sudo"] else [])
+        have = [g for g in want if g in groups]
+        if not exists:
+            argv = useradd_argv(name, have, not any(u["uid"] == 1000 for u in passwd.values()))
+            if self.run(argv).rc != 0:
+                raise StepError("The account was not created")
+        else:
+            member = name in groups.get("sudo", set())
+            if c["sudo"] and not member and "sudo" in groups:
+                if self.run(["usermod", "-aG", "sudo", name]).rc != 0:
+                    raise StepError("The account could not join the sudo group")
+            if not c["sudo"] and member:
+                if self.run(["gpasswd", "-d", name, "sudo"]).rc != 0:
+                    raise StepError("The account could not leave the sudo group")
+        if pw is not None:
+            r = self.run(["chpasswd"], input="%s:%s\n" % (name, pw), quiet=True)
+            pw = None
+            if r.rc != 0:
+                raise StepError("The password was not set")
+        elif not exists and self.run(["passwd", "-d", name]).rc != 0:  # useradd leaves a locked password
+            raise StepError("The account could not get an empty password")
+        try:
+            self.fs.mkdir(RUN)
+            marker = account_marker(name, c["autologin"], c["sudo"])
+            self.fs.write(RUN + "/account.json", json.dumps(marker, sort_keys=True) + "\n")
+        except (OSError, StepError) as e:
+            raise StepError("The account file was not written. Root sign-in stays open") from e
+        self.after_done.append(["systemctl", "restart", "serial-getty@ttyAMA0.service"])
+        if name != "tux" and "tux" in self.passwd() and caps_mod.shadow_hash(self.fs.read("/etc/shadow"), "tux") == "":
+            if self.run(["passwd", "-l", "tux"]).rc != 0:
+                raise StepError("The stock account tux was not locked")
+            notes.append("The stock account tux is locked")
+            if self._disable_stock_sudoers():
+                notes.append("its sudo file was moved aside")
+        if not c["sudo"]:
+            if name == "tux" and self._disable_stock_sudoers():
+                notes.append("The stock sudo file was moved aside (sudoers.d/tux.tux-disabled)")
+            for f in sorted(self._sudoers_naming(name)):
+                notes.append("%s still gives sudo" % f)
+        if c["sudo"] and "sudo" not in groups:
+            notes.append("The sudo group is missing")
+        if c["lock_root"]:
+            if self.run(["passwd", "-l", "root"]).rc != 0:
+                raise StepError("Root sign-in was not locked")
+        if name != "tux":
+            notes.append("The folder ~/Tux still uses /home/tux")
+        how = "signs in on the console by itself" if c["autologin"] else "asks for a login on the console"
+        return ". ".join(["Account %s is ready and %s" % (name, how)] + notes)
+
+    def _disable_stock_sudoers(self):
+        """The images ship this exact file. A name with a dot is ignored by sudo. Any other content stays."""
+        if self.fs.read("/etc/sudoers.d/tux") != STOCK_SUDOERS:
+            return False
+        self.fs.rename("/etc/sudoers.d/tux", "/etc/sudoers.d/tux.tux-disabled")
+        return True
+
+    def _sudoers_naming(self, name):
+        found = []
+        d = self.fs.p("/etc/sudoers.d")
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            return found
+        for n in names:
+            if "." in n or n.endswith("~"):  # sudo ignores these names
+                continue
+            text = self.fs.read("/etc/sudoers.d/" + n) or ""
+            if any(line.split() and line.split()[0] == name for line in text.splitlines() if not line.startswith("#")):
+                found.append("/etc/sudoers.d/" + n)
+        return found
+
+    def step_hostname_set(self, c):
+        new = c["name"]
+        old = (self.fs.read("/etc/hostname") or "").strip()
+        if self.run(["hostnamectl", "set-hostname", new]).rc != 0:
+            raise StepError("The host name was not set")
+        self.fs.write("/etc/hosts", fix_hosts(self.fs.read("/etc/hosts") or "", old, new))
+        return "Host name is %s" % new
+
+    def need_network(self):
+        if not caps_mod.have_network(self.root, self.connect):
+            raise StepError("No network")
+
+    def apt_update(self, force=False):
+        if self.updated and not force:
+            return
+        if self.apt(["apt-get", "update", "-o", "APT::Color=0"]).rc != 0:
+            raise StepError("apt-get update failed")
+        self.updated = True
+
+    def step_desktop_install(self, c):
+        self.need_network()
+        d = _find(self.cat, "desktops", c["id"])
+        user = None
+        if d.get("files"):
+            user, rec = self.account()
+            if rec is None:
+                raise StepError("No account yet. Set up the account first")
+            # the tty1 sign-in as the account only when the account step chose it
+            autologin = caps_mod.account_caps(self.root)["autologin"] == "user"
+            file_map = load_file_map(self.tree, d["files"], autologin)
+        self.apt_update()
+        if self.apt(apt_install_argv(d["packages"])).rc != 0:
+            raise StepError("apt-get install failed")
+        if d.get("files"):
+            self.install_session(file_map, user)
+        self.reboot = True
+        return "%s is installed. Restart the machine" % d["title"]
+
+    def install_session(self, file_map, user):
+        for src, dst, mode, subst in file_map:
+            with open(src, encoding="utf-8") as f:
+                text = f.read()
+            self.fs.write(dst, substitute(text, user) if subst else text, mode)
+        self.fs.mkdir("/etc/tux")
+        groups = self.group()
+        extra = [g for g in ("video", "render", "input", "dialout", "audio") if g in groups]
+        if extra and self.run(["usermod", "-aG", ",".join(extra), user]).rc != 0:
+            raise StepError("The account could not join the desktop groups")
+        self.run(["systemctl", "daemon-reload"], quiet=True)
+        if self.run(["systemctl", "enable", "getty@tty1.service"]).rc != 0:
+            raise StepError("The console login on tty1 was not enabled")
+
+    def step_apps_install(self, c):
+        self.need_network()
+        pk = []
+        for i in c["ids"]:
+            for p in _find(self.cat, "apps", i)["packages"]:
+                if p not in pk:
+                    pk.append(p)
+        self.apt_update()
+        if self.apt(apt_install_argv(pk)).rc != 0:
+            raise StepError("apt-get install failed")
+        return "%d applications are installed" % len(c["ids"])
+
+    def step_system_update(self, c):
+        self.need_network()
+        self.apt_update(force=True)
+        if self.apt(["apt-get", "upgrade"] + APT_OPTS).rc != 0:
+            raise StepError("apt-get upgrade failed")
+        return "The system is up to date"
+
+    def install_sshd_local(self):
+        """openssh-server from the media's own signed repository: this works with no network. A temporary
+        policy-rc.d keeps its postinst from starting sshd with Debian's defaults."""
+        repo = self.tree + "/apt"
+        work = RUN + "/additions/apt-work"
+        self.fs.mkdir(work)
+        self.fs.mkdir(work + "/lists/partial")
+        self.fs.write(work + "/sources.list",
+                      "deb [signed-by=%s] file:%s trixie main deps\n" % (KEYRING, repo))
+        opts = ["-o", "Dir::Etc::sourcelist=" + work + "/sources.list", "-o", "Dir::Etc::sourceparts=-",
+                "-o", "Dir::State::lists=" + work + "/lists", "-o", "APT::Get::List-Cleanup=0", "-o", "APT::Color=0"]
+        made = False
+        try:
+            if self.apt(["apt-get"] + opts + ["update"]).rc != 0:
+                raise StepError("The local repository did not load")
+            if not os.path.lexists(self.fs.p(POLICY_RC)):  # an admin's own file stays
+                self.fs.write(POLICY_RC, POLICY_TEXT, 0o755)
+                made = True
+            r = self.apt(["apt-get"] + opts + ["install", "--no-install-recommends"] + APT_OPTS + ["openssh-server"])
+            if r.rc != 0:
+                raise StepError("openssh-server was not installed")
+        finally:
+            if made:
+                try:
+                    self.fs.unlink(POLICY_RC)
+                except OSError as e:
+                    log("agent: policy-rc.d not removed: %s" % e)
+            shutil.rmtree(self.fs.p(work), ignore_errors=True)
+
+    def step_ssh_configure(self, c):
+        installed = "openssh-server" in caps_mod.installed_packages(self.runner)
+        user, rec = self.account()
+        if c["authorized_key"] and rec is None:
+            raise StepError("No account yet. Set up the account first")
+        fresh = False
+        if not installed and c["enabled"]:
+            self.install_sshd_local()
+            installed = fresh = True
+        try:
+            return self.ssh_apply(c, installed, user, rec)
+        except Exception:
+            if fresh:  # this step started the install, so a failure must not leave sshd up with the defaults
+                self.run(["systemctl", "disable", "--now", "ssh.service"])
+            raise
+
+    def ssh_apply(self, c, installed, user, rec):
+        if installed:
+            old = self.fs.read(SSH_CONF)
+            self.fs.write(SSH_CONF, sshd_conf(c["port"], c["password_auth"], c["root_login"]))
+            r = self.run(["sshd", "-t"])
+            if r.rc != 0:
+                if old is None:
+                    self.fs.unlink(SSH_CONF)
+                else:
+                    self.fs.write(SSH_CONF, old)
+                raise StepError("sshd rejected the settings. The old file is back")
+        if c["authorized_key"]:
+            self.add_key(user, rec, c["authorized_key"])
+        if installed:
+            if c["enabled"]:
+                ok = self.run(["systemctl", "enable", "ssh.service"]).rc == 0 and \
+                    self.run(["systemctl", "restart", "ssh.service"]).rc == 0
+            else:
+                ok = self.run(["systemctl", "disable", "--now", "ssh.service"]).rc == 0
+            if not ok:
+                raise StepError("The SSH service did not change")
+        if not c["enabled"]:
+            return "SSH is off"
+        return "SSH is on, port %d" % c["port"]
+
+    def add_key(self, user, rec, key):
+        """Adds the key to ~/.ssh/authorized_keys. Every name below the home is opened as a name, not as a link."""
+        uid, gid = rec["uid"], rec["gid"]
+        try:
+            dfd = self.fs.open_dir(rec["home"] + "/.ssh", create="last", mode=0o700, uid=uid, gid=gid, owner=uid)
+        except FileNotFoundError as e:
+            raise StepError("The home folder of the account is missing") from e
+        try:
+            got = self.fs.plain(dfd, "authorized_keys", uid)
+            text = None
+            if got:
+                fd, _ = got
+                try:
+                    os.fchmod(fd, 0o600)
+                    self.fs._fchown(fd, uid, gid)
+                    f = os.fdopen(fd, "r", encoding="utf-8", errors="replace")
+                except BaseException:
+                    os.close(fd)
+                    raise
+                with f:
+                    text = f.read()
+            new, added = authorized_keys_add(text, key)
+            if added:
+                self.fs.put(dfd, "authorized_keys", new.encode("utf-8"), 0o600, uid, gid)
+        finally:
+            os.close(dfd)
+
+    def fingerprints(self):
+        out = []
+        d = self.fs.p("/etc/ssh")
+        try:
+            names = sorted(n for n in os.listdir(d) if n.startswith("ssh_host_") and n.endswith("_key.pub"))
+        except OSError:
+            return out
+        for n in names:
+            r = self.runner.run(["ssh-keygen", "-lf", "/etc/ssh/" + n], timeout=15)
+            if r.rc == 0 and r.out.strip():
+                out.append(one_line(r.out.strip().splitlines()[0], 300))
+        return out
+
+    HANDLERS = {
+        "additions.install": step_additions_install, "user.setup": step_user_setup,
+        "hostname.set": step_hostname_set, "desktop.install": step_desktop_install,
+        "apps.install": step_apps_install, "ssh.configure": step_ssh_configure, "system.update": step_system_update,
+    }
+    LABELS = {
+        "additions.install": "Installing Tuxedo Additions", "user.setup": "Setting up the account",
+        "hostname.set": "Setting the host name", "desktop.install": "Installing the desktop",
+        "apps.install": "Installing applications", "ssh.configure": "Setting up SSH", "system.update": "Updating the system",
+    }
+
+    # jobs
+    def run_job(self, raw):
+        self.busy = True
+        self.updated = False
+        self.after_done = []
+        self.reboot = False
+        jid = raw.get("id") if isinstance(raw, dict) else None
+        self.job_id = jid if isinstance(jid, str) and JOB_ID_RE.match(jid) else ""
+        try:
+            self.busy_start()
+            if self.job_id:
+                self.post({"t": "ack", "job": self.job_id})  # the host drops the job (and its password) now
+            try:
+                _, steps = parse_job(raw)
+                self.secrets = secrets_of(steps)
+                self.sink = LogSink(lambda t: self.post({"t": "log", "job": self.job_id, "text": t}), self.secrets)
+                planned = plan_job(steps, self.cat)
+            except JobError as e:
+                self.sink = LogSink(lambda t: self.post({"t": "log", "job": self.job_id, "text": t}), [])
+                self.sink.add("Bad job: %s\n" % e)
+                self.sink.flush()
+                self.finish(False)
+                return
+            for s in steps:
+                if isinstance(s, dict):
+                    s.pop("password", None)
+            ok = True
+            stop = None
+            for p in planned:
+                if stop:
+                    self.step_event(p.i, "skipped", stop)
+                    continue
+                try:
+                    self.check_cancel()
+                except Cancelled:
+                    ok, stop = False, "Cancelled"
+                    self.step_event(p.i, "skipped", stop)
+                    continue
+                self.step_event(p.i, "running", self.LABELS.get(p.action, "Checking the step"))
+                try:
+                    if p.error:
+                        raise StepError(p.error)
+                    self.step_event(p.i, "ok", self.HANDLERS[p.action](self, p.clean) or "Done")
+                except Cancelled:
+                    ok, stop = False, "Cancelled"
+                    self.step_event(p.i, "failed", "Cancelled")
+                except StepError as e:
+                    ok, stop = False, "Skipped: step %d failed" % (p.i + 1)
+                    self.step_event(p.i, "failed", str(e))
+                except Exception as e:  # a bug must end the step, not the agent
+                    ok, stop = False, "Skipped: step %d failed" % (p.i + 1)
+                    self.sink.add("Internal error: %s: %s\n" % (type(e).__name__, e))
+                    self.sink.flush()
+                    self.step_event(p.i, "failed", "Internal error: %s" % type(e).__name__)
+            self.finish(ok)
+        finally:
+            if self.sink:
+                self.sink.flush()
+            self.secrets = []
+            self.busy_end()
+            self.busy = False
+            if self.stopping:
+                raise SystemExit(0)
+
+    def finish(self, ok):
+        try:
+            c = self.report()
+            info = {"ips": c["ips"], "ssh_fingerprints": self.fingerprints(),
+                    "user": c["account"]["name"] if c["account"]["exists"] else None}
+        except Exception as e:  # the job is over: say so even when the report fails
+            log("agent: no report after the job: %s" % e)
+            info = {"ips": [], "ssh_fingerprints": [], "user": None}
+        self.post({"t": "done", "job": self.job_id, "ok": ok, "reboot": bool(self.reboot), "info": info})
+        for argv in self.after_done:
+            self.runner.run(argv, timeout=60)
+        self.after_done = []
+
+    def serve(self):
+        self.report()
+        seq, last_active, errors = None, self.clock(), 0
+        while True:
+            t0 = self.clock()
+            try:
+                state, new = self.link.get(seq)
+            except OSError as e:
+                errors += 1
+                log("agent: host link: %s" % e)
+                if errors >= 8:
+                    return 1
+                self.sleep(min(30, 2 ** errors))
+                continue
+            errors = 0
+            seq = new if new is not None else seq
+            if state.get("inserted") is not True:
+                log("agent: the media is out; the agent ends")
+                return 0
+            job, taken = state.get("job"), state.get("taken")
+            if isinstance(job, dict):
+                key = job.get("id") if isinstance(job.get("id"), str) else "x" + hashlib.sha1(
+                    json.dumps(job, sort_keys=True).encode()).hexdigest()
+                if key != self.last_job and key != taken:  # taken: it runs or ran already
+                    self.last_job = key
+                    self.run_job(job)
+                    last_active = self.clock()
+                    continue
+            if self.clock() - last_active >= self.idle:
+                log("agent: no job for %d minutes; the agent ends" % (self.idle // 60))
+                return 0
+            spent = self.clock() - t0
+            if spent < self.min_poll:
+                self.sleep(self.min_poll - spent)
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] != ["run"] or len(argv) not in (1, 3) or (len(argv) == 3 and argv[1] != "--n"):
+        print("usage: agent run [--n N]", file=sys.stderr)
+        return 2
+    try:
+        n = int(argv[2]) if len(argv) == 3 else 0
+    except ValueError:
+        print("usage: agent run [--n N]", file=sys.stderr)
+        return 2
+    tree = os.path.dirname(os.path.abspath(__file__))
+    root = os.environ.get("TUX_ADDITIONS_ROOT", "/")  # test hook
+    if os.geteuid() != 0 and root == "/":
+        print("agent: it must run as root", file=sys.stderr)
+        return 2
+    try:
+        cat = load_catalogue(tree)
+    except (OSError, ValueError, CatalogueError) as e:
+        log("agent: the catalogue is refused: %s" % e)
+        try:
+            caps_mod.post_event({"t": "bad-media", "n": n, "why": one_line("The agent refuses actions.json: %s" % e)})
+        except (OSError, ValueError, RuntimeError):
+            pass
+        return 2
+    agent = Agent(n, tree=tree, root=root, catalogue=cat)
+
+    def stop(_sig, _frm):
+        agent.stopping = True
+        if not agent.busy:
+            raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, stop)
+    atexit.register(agent.busy_end)
+    return agent.serve()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

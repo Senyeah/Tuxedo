@@ -174,8 +174,7 @@ def boot(args, accel, d, tmp):
     p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200),
                       env=dict(os.environ, HV_SHOT_SECS="1"))
     try:
-        p.expect(r"\(automatic login\)", timeout=300)
-        p.expect(gu.shell_wide(), timeout=60)
+        gu.login(p, 300, 60)
         sh(p, "stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1")
         time.sleep(10)  # labwc and foot settle
         measure(p, args, accel, tag, shot, res)
