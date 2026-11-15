@@ -5,7 +5,7 @@
 """Henge to Tuxedo rename (docs/rename-tuxedo-plan.md, Stage 0).
 
   rename.py --gen-map              write tools/rename-map.txt from the tree
-  rename.py --check                fail if a henge token is not in the map
+  rename.py --check                fail if an old name is in the tree outside the keep list
   rename.py --stage N [--apply]    show (or make) the changes of stage N
 """
 import argparse, fnmatch, os, re, subprocess, sys
@@ -126,16 +126,32 @@ def gen_map():
     print(f"{len(seen)} tokens written to {os.path.relpath(MAP_FILE, ROOT)}")
 
 
+def leftovers(keep):
+    """(path, line number, token) for each old-name token outside the keep list."""
+    out = []
+    for p in tracked():
+        if keep.path(p):
+            continue
+        t = read(p)
+        if t is None:
+            continue
+        for n, line in enumerate(t.split("\n"), 1):
+            if keep.line(p, n, line):
+                continue
+            for old, _ in PHRASES:
+                line = line.replace(old, " ")
+            out += [(p, n, m.group(0)) for m in TOKEN.finditer(line)]
+    return out
+
+
 def check():
-    keep, m = Keep(), load_map()
-    bad = [t for t in distinct_tokens(keep) if t not in m]
-    for t in bad:
-        print("not in map:", t)
-    # A mixed-case spelling the rules do not know is a bug in the tree or the rules.
-    odd = [t for t in m if not re.search(r"Henge|HENGE|henge", t)]
-    for t in odd:
-        print("odd case:", t)
-    sys.exit(1 if bad or odd else 0)
+    """The rename is done: an old name outside tools/rename-keep.txt fails."""
+    left = leftovers(Keep())
+    for p, n, tok in left:
+        print(f"{p}:{n}: {tok}")
+    if left:
+        print(f"{len(left)} old names are not in tools/rename-keep.txt")
+    sys.exit(1 if left else 0)
 
 
 # Stages: path globs to touch, globs to skip, and a token test.

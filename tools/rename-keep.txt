@@ -24,3 +24,9 @@ line-re:(#|//) legacy name
 line-re:henge16k
 lines:LINUX-PLAN-11-display-resolution.md:248
 line-re:kernel/henge\.config
+# After the rename (15/11/2026). --check fails on any old name that is not kept here.
+# The ANGLE archive target: renaming it needs an ANGLE rebuild (open item).
+line-re:henge_angle_archive
+line-re:Copyright \(C\) 2026 Henge contributors
+# Text about images, catalogues, guests and packages that are from Henge (the app refuses or names them).
+line-re:Henge (image|catalogue|guest)|image for Henge|old Henge packages|henge-(\*|guest)
