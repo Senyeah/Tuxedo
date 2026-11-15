@@ -315,6 +315,7 @@ static Req *pick(HvVirtioHvcodec *d) {
 
 static void *worker(void *opaque) {
     HvVirtioHvcodec *d = opaque;
+    pthread_setname_np("tux-hvcodec");
     pthread_mutex_lock(&d->mu);
     for (;;) {
         Req *r;

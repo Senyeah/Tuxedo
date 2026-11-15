@@ -56,6 +56,7 @@ static void *prefault_thread(void *arg) {
     struct PrefaultArgs a = *(struct PrefaultArgs *)arg;
     free(arg);
     pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+    pthread_setname_np("tux-prefault");
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     for (uint64_t off = 0; off < a.size; off += 0x4000) __atomic_fetch_add((volatile uint64_t *)(a.ram + off), 0, __ATOMIC_RELAXED);

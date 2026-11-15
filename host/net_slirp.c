@@ -318,6 +318,7 @@ int hv_net_forward_state(uint16_t host_port, HvFwdAddr *out, int max, int *err) 
 
 static void *net_thread(void *unused) {
     (void)unused;
+    pthread_setname_np("tux-net");
     while (!atomic_load(&stopping)) {
         uint32_t timeout = 1000;
         int64_t now = now_ms();

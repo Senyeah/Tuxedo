@@ -85,6 +85,7 @@ static HvVfsReq *next(HvVirtioFs *f) {
 
 static void *worker(void *opaque) {
     HvVfsWorker *w = opaque;
+    pthread_setname_np("tux-fs");
     HvVirtioFs *f = w->f;
     HvVirtqElem e;
     pthread_mutex_lock(&f->mu);

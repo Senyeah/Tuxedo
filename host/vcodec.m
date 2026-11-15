@@ -1234,12 +1234,14 @@ static int listen_fd = -1;
 static char listen_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
 
 static void *connection(void *arg) {
+    pthread_setname_np("tux-vcodec-conn");
     hv_vcodec_serve((int)(intptr_t)arg);
     return NULL;
 }
 
 static void *listener(void *arg) {
     int server = (int)(intptr_t)arg;
+    pthread_setname_np("tux-vcodec-listen");
     for (;;) {
         int fd = accept(server, NULL, NULL);
         if (fd < 0) {
@@ -1254,6 +1256,7 @@ static void *listener(void *arg) {
 
 static void *probe(void *arg) {
     (void)arg;
+    pthread_setname_np("tux-vcodec-probe");
     hv_vt_caps(); /* so the first QUERY does not wait for the probe */
     return NULL;
 }

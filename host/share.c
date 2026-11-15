@@ -920,6 +920,7 @@ static int handle(Conn *c, Request *r) {
 
 static void *connection(void *arg) {
     Conn *c = arg;
+    pthread_setname_np("tux-share-conn");
     Request *r = malloc(sizeof *r);
     for (;;) {
         int got = read_request(c, r);
@@ -943,6 +944,7 @@ static void *connection(void *arg) {
 
 static void *listener(void *arg) {
     int server = (int)((intptr_t)arg >> 1), wallet = (int)((intptr_t)arg & 1);
+    pthread_setname_np(wallet ? "tux-wallet-listen" : "tux-share-listen");
     for (;;) {
         int fd = accept(server, NULL, NULL);
         if (fd < 0) {

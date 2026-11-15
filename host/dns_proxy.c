@@ -217,6 +217,7 @@ static void reply(Query *q, int rcode) {
 
 static void *lookup(void *arg) {
     Query *q = arg;
+    pthread_setname_np("tux-dns");
     if (atomic_load(&stopping)) {
         free(q);
         lookup_finished();

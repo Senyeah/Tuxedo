@@ -129,6 +129,7 @@ static uint64_t now_us(void) {
    until it is done. */
 static void *worker(void *opaque) {
     HvVirtioBlk *b = opaque;
+    pthread_setname_np("tux-blk");
     /* HV_BLK_STATS: requests, bytes, flushes and how busy this worker was, every 10 s. */
     int stats = getenv("HV_BLK_STATS") != NULL;
     uint64_t every = stats && atoi(getenv("HV_BLK_STATS")) > 0 ? (uint64_t)atoi(getenv("HV_BLK_STATS")) * 1000000 : 10000000;

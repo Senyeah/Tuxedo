@@ -6,6 +6,7 @@
 
 #include <dispatch/dispatch.h>
 #include <fcntl.h>
+#include <libproc.h>
 #include <mach/mach.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -31,19 +32,82 @@ static int fds(void) {
     for (int i = 0; i < 2048; i++) if (fcntl(i, F_GETFD) != -1) n++;
     return n;
 }
-static unsigned threads(void) {
+/* Threads that are not libdispatch's. The kernel keeps workqueue threads for as long as it likes (one stayed past
+   15 s in about 1 run in 10, and their run and blocked counts do not settle), so they are not counted here.
+   Every thread the engine makes is a pthread with a name that starts "tux-": tux_threads() counts those. */
+static unsigned threads_raw(unsigned *workqueue) {
     thread_act_array_t list;
     mach_msg_type_number_t n;
-    if (task_threads(mach_task_self(), &list, &n) != KERN_SUCCESS) return 0;
-    for (unsigned i = 0; i < n; i++) mach_port_deallocate(mach_task_self(), list[i]);
-    vm_deallocate(mach_task_self(), (vm_address_t)list, n * sizeof *list);
+    struct proc_workqueueinfo wq = {0};
+    /* Two samples that must agree: a workqueue thread can come or go between the two calls. */
+    for (int tries = 0; tries < 50; tries++) {
+        if (proc_pidinfo(getpid(), PROC_PIDWORKQUEUEINFO, 0, &wq, sizeof wq) != (int)sizeof wq) wq.pwq_nthreads = 0;
+        uint32_t before = wq.pwq_nthreads;
+        if (task_threads(mach_task_self(), &list, &n) != KERN_SUCCESS) return 0;
+        for (unsigned i = 0; i < n; i++) mach_port_deallocate(mach_task_self(), list[i]);
+        vm_deallocate(mach_task_self(), (vm_address_t)list, n * sizeof *list);
+        if (proc_pidinfo(getpid(), PROC_PIDWORKQUEUEINFO, 0, &wq, sizeof wq) != (int)sizeof wq) wq.pwq_nthreads = 0;
+        if (wq.pwq_nthreads == before) break;
+        usleep(1000);
+    }
+    *workqueue = wq.pwq_nthreads;
     return n;
 }
-static unsigned initial_threads;
+static unsigned threads(void) {
+    unsigned workqueue, n = threads_raw(&workqueue);
+    return n > workqueue ? n - workqueue : 0;
+}
+static unsigned tux_threads(void) {
+    thread_act_array_t list;
+    mach_msg_type_number_t n;
+    unsigned named = 0;
+    if (task_threads(mach_task_self(), &list, &n) != KERN_SUCCESS) return 0;
+    for (unsigned i = 0; i < n; i++) {
+        char name[64] = "";
+        pthread_t pt = pthread_from_mach_thread_np(list[i]);
+        if (pt) pthread_getname_np(pt, name, sizeof name);
+        named += !strncmp(name, "tux-", 4);
+        mach_port_deallocate(mach_task_self(), list[i]);
+    }
+    vm_deallocate(mach_task_self(), (vm_address_t)list, n * sizeof *list);
+    return named;
+}
+static unsigned initial_threads, initial_tux_threads, most_workqueue;
+/* Each live thread: pthread name, dispatch queue label, CPU time and run state. Printed when a thread stays. */
+static void dump_threads(void) {
+    thread_act_array_t list;
+    mach_msg_type_number_t n;
+    if (task_threads(mach_task_self(), &list, &n) != KERN_SUCCESS) return;
+    for (unsigned i = 0; i < n; i++) {
+        char name[64] = "";
+        pthread_t pt = pthread_from_mach_thread_np(list[i]);
+        if (pt) pthread_getname_np(pt, name, sizeof name);
+        thread_identifier_info_data_t id = {0};
+        mach_msg_type_number_t c = THREAD_IDENTIFIER_INFO_COUNT;
+        const char *label = "";
+        if (thread_info(list[i], THREAD_IDENTIFIER_INFO, (thread_info_t)&id, &c) == KERN_SUCCESS && id.dispatch_qaddr) {
+            dispatch_queue_t q = *(dispatch_queue_t *)(uintptr_t)id.dispatch_qaddr;
+            if (q) label = dispatch_queue_get_label(q);
+        }
+        thread_basic_info_data_t b = {0};
+        c = THREAD_BASIC_INFO_COUNT;
+        thread_info(list[i], THREAD_BASIC_INFO, (thread_info_t)&b, &c);
+        fprintf(stderr, "    thread %u: name \"%s\" queue \"%s\" pthread %s, cpu %d.%06d s, run state %d, %s\n", i, name, label,
+                pt ? "yes" : "no", b.user_time.seconds + b.system_time.seconds, b.user_time.microseconds, b.run_state,
+                b.flags & TH_FLAGS_IDLE ? "idle" : "not idle");
+        mach_port_deallocate(mach_task_self(), list[i]);
+    }
+    vm_deallocate(mach_task_self(), (vm_address_t)list, n * sizeof *list);
+    unsigned workqueue, raw = threads_raw(&workqueue);
+    fprintf(stderr, "    %u threads: %u workqueue threads, %u named tux-*\n", raw, workqueue, tux_threads());
+}
 /* libdispatch keeps idle workers for a few seconds, longer under load; a leaked thread stays. */
 static int threads_settled(void) {
-    for (int w = 0; w < 15000 && threads() > initial_threads; w++) usleep(1000);
-    return threads() <= initial_threads;
+    for (int w = 0; w < 15000 && (threads() > initial_threads || tux_threads() > initial_tux_threads); w++) usleep(1000);
+    unsigned workqueue;
+    threads_raw(&workqueue);
+    if (workqueue > most_workqueue) most_workqueue = workqueue;
+    return threads() <= initial_threads && tux_threads() <= initial_tux_threads;
 }
 static unsigned dead_ports(void) {
     mach_port_name_array_t names;
@@ -163,6 +227,7 @@ int main(void) {
     usleep(100000);
     int initial_fds = fds();
     initial_threads = threads();
+    initial_tux_threads = tux_threads();
     unsigned initial_dead_ports = dead_ports();
     /* A virt machine is built and released without a trace. */
     for (int i = 0; i < 3; i++) {
@@ -252,7 +317,11 @@ int main(void) {
                 check("virt leaves no descriptors", fds() == initial_fds);
                 check("virt leaves no threads", threads_settled());
                 check("no leaked CPU thread ports", dead_ports() == initial_dead_ports);
-                if (threads() > initial_threads) fprintf(stderr, "  %s #%d: %u threads, started with %u\n", cases[i].name, again, threads(), initial_threads);
+                if (threads() > initial_threads || tux_threads() > initial_tux_threads) {
+                    fprintf(stderr, "  %s #%d: %u threads (%u named tux-*), started with %u (%u)\n", cases[i].name, again, threads(),
+                            tux_threads(), initial_threads, initial_tux_threads);
+                    dump_threads();
+                }
             }
         }
         /* More output than the ring holds: the oldest bytes go, the newest stay. */
@@ -334,6 +403,8 @@ int main(void) {
     pthread_join(reader, NULL);
     hv_jit_region_close(&jit);
     unlink(rom); unlink(disk); rmdir(dir);
+    printf("VM lifecycle: %u threads and %u named tux-* at the start; at most %u workqueue threads after a machine (not counted)\n",
+           initial_threads, initial_tux_threads, most_workqueue);
     printf("VM lifecycle: the virt board (4 endings twice, a flood, video encode), %d failures\n", failures);
     return failures != 0;
 }

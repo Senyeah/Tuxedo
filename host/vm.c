@@ -532,6 +532,7 @@ static void gpu_hold_locked(int on) {
 
 static void *kicker_thread(void *unused) {
     (void)unused;
+    pthread_setname_np("tux-kicker");
     while (!atomic_load(&kicker_stopped)) {
         usleep(1000);
         if (atomic_load(&vm_paused)) {
@@ -687,6 +688,7 @@ void hv_vm_cpu_qos(void) {
 /* CPUs 1 and up: run whenever PSCI CPU_ON starts them; the machine stops with CPU 0. */
 static void *secondary_thread(void *arg) {
     HvCpu *c = arg;
+    pthread_setname_np("tux-cpu");
     hv_vm_cpu_qos();
     int r = hv_run(c);
     if (!c->halted)
@@ -705,6 +707,7 @@ int hv_vm_run_cpu0(void) {
 
 static void *cpu0_thread(void *unused) {
     (void)unused;
+    pthread_setname_np("tux-cpu0");
     hv_vm_cpu_qos();
     int r = hv_vm_run_cpu0();
     /* Finish CPU activity before flushing or telling the UI the Mac stopped.
