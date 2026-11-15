@@ -20,7 +20,7 @@ struct LinuxImage: Codable, Identifiable, Hashable {
     var minBuild: Int?
     /// A machine made from it starts in touch mode (LINUX-PLAN-12 decision 8: a Plasma image). Missing: the pointer.
     var touch: Bool?
-    /// The image's login user (package-image.sh reads it from the build's manifest). Missing: an image from before Tuxedo.
+    /// The image's login user (package-image.sh reads it from the build's manifest). Missing: a Henge image (checkGuest refuses it).
     var guestUser: String?
 
     var downloadBytes: Int64 { diskBytes + firmwareBytes }
@@ -103,6 +103,13 @@ enum LinuxCatalogue {
     static func checkBuild(_ image: LinuxImage, appBuild: Int) throws {
         if let min = image.minBuild, min > appBuild {
             throw LinuxError.text("\(image.name) needs a newer Tuxedo (build \(min); this is build \(appBuild)). Update Tuxedo to install it.")
+        }
+    }
+
+    /// An entry with no guestUser is a Henge image: its guest tools use names this app does not serve.
+    static func checkGuest(_ image: LinuxImage) throws {
+        if (image.guestUser ?? "").isEmpty {
+            throw LinuxError.text("\(image.name) is an image for Henge. Its Linux tools cannot talk to Tuxedo. Use a catalogue made for Tuxedo.")
         }
     }
 

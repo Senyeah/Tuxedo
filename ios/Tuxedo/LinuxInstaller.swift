@@ -96,6 +96,7 @@ final class LinuxInstaller: ObservableObject {
             defer { UIApplication.shared.isIdleTimerDisabled = false; endGrace() }
             do {
                 try LinuxCatalogue.checkBuild(image, appBuild: LinuxCatalogue.appBuild)
+                try LinuxCatalogue.checkGuest(image)
                 if let options { try LinuxUnpack.checkDisk(options.diskBytes, for: image) }
                 try checkSpace(image)
                 Machines.excludeFromBackup(Machines.root)

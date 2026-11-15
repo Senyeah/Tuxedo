@@ -67,6 +67,16 @@ struct LinuxCatalogueTests {
         precondition(tooNew?.contains("Update Tuxedo") == true)
         precondition(fails { try LinuxCatalogue.checkBuild(images[1], appBuild: 102) } != nil)
 
+        // guestUser: an entry without one is a Henge image and is refused; the message names Henge and a Tuxedo catalogue.
+        let refused = fails { try LinuxCatalogue.checkGuest(a) }
+        precondition(refused?.contains("image for Henge") == true && refused?.contains("catalogue made for Tuxedo") == true)
+        precondition(fails { try LinuxCatalogue.checkGuest(images[1]) } == nil)
+        var blank = images[1]
+        blank.guestUser = ""
+        precondition(fails { try LinuxCatalogue.checkGuest(blank) } != nil)
+        // Both gates on a Henge catalogue entry (minBuild 101, no guestUser) with this build: the build passes, the guest does not.
+        precondition(fails { try LinuxCatalogue.checkBuild(a, appBuild: 103) } == nil && fails { try LinuxCatalogue.checkGuest(a) } != nil)
+
         // Hashes: right one passes, wrong one deletes the file and says it was damaged.
         let fm = FileManager.default
         let tmp = fm.temporaryDirectory.appendingPathComponent("linux-catalogue-\(UUID().uuidString)")

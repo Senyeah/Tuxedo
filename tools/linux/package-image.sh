@@ -30,8 +30,9 @@ case $KIND in console|desktop) ;; *) echo "--kind console|desktop is required" >
 OUT=${OUT:-$LINUX/dist}
 MANIFEST=${MANIFEST:-${IMAGE%.img}.manifest}
 [ -f "$MANIFEST" ] || { echo "no manifest at $MANIFEST (--manifest)" >&2; exit 2; }
-# The first build that can install Linux: one past the build in Info.plist now
-[ -n "$MIN_BUILD" ] || MIN_BUILD=$(( $(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "$ROOT/ios/Tuxedo/Info.plist") + 1 ))
+# The build in Info.plist now: the app from this tree can install the image, an older app cannot
+[ -n "$MIN_BUILD" ] || MIN_BUILD=$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "$ROOT/ios/Tuxedo/Info.plist")
+[ -n "$(sed -n 's/^guest_user=//p' "$MANIFEST")" ] || { echo "no guest_user in $MANIFEST: Tuxedo refuses an entry without guestUser" >&2; exit 2; }
 
 HVSPARSE=$ROOT/build/hvsparse
 [ -x "$HVSPARSE" ] || make -C "$ROOT" build/hvsparse >/dev/null
@@ -70,7 +71,7 @@ mv -f "$TMP/$BASE.hvsparse.lzfse" "$OUT/$BASE.hvsparse.lzfse"
 DISK_SHA=$(sha "$OUT/$BASE.hvsparse.lzfse")
 
 KERNEL=$(sed -n 's/^kernel_version=//p' "$MANIFEST")
-# Empty for an image from before Tuxedo: no key, and the app reads the legacy user
+# Never empty: checked above
 GUEST_USER=$(sed -n 's/^guest_user=//p' "$MANIFEST")
 python3 - "$OUT/linux-images.json" "$KIND" "$DATE" "$KERNEL" "$MIN_BUILD" \
     "$BASE.hvsparse.lzfse" "$(size "$OUT/$BASE.hvsparse.lzfse")" "$DISK_SHA" "$UNPACKED" "$(size "$IMAGE")" \
