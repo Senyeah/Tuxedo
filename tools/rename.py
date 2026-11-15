@@ -246,6 +246,43 @@ S6_LITERALS = [
 ]
 
 
+# Stage 7 (docs/rename-tuxedo-plan.md): the new app. Bundle id, display name, error domains, stored names (UserDefaults
+# keys, Documents files, log tags, URL scheme, the ANGLE cache folder). Not here: wire and guest names (Stage 9),
+# the guest user (Stage 10), Keychain code and plists (by hand, with their tests).
+S7_PHRASES = [
+    ("nz.jackgreenhill.henge", "nz.jackgreenhill.tuxedo"),
+    ("com.henge.app", "nz.jackgreenhill.tuxedo"),
+    ("com.henge.linux-wallet", "nz.jackgreenhill.tuxedo.linux-wallet"),
+]
+_K = r"(?<![A-Za-z0-9_./-])henge\."
+S7_KEYS = (r"cpus|jitMethod|matchScreenColors|keepDebuggerAttached|display\.brightness|trackpad\.[A-Za-z]+|perf\.[A-Za-z]+"
+           r"|mouse\.[A-Za-z]+|linux\.(?:pasteKeys|keyboardFollows|catalogueURL)|lastRSDPort|jitPairingSource"
+           r"|jit\.(?:trollStoreAuto|autoEnable)|controls\.hintsShown|autopilot\.details|pairing\.")
+S7_RULES = [
+    (re.compile(r"\bhenge://"), "tux://"),
+    (re.compile(r"scheme=henge\b"), "scheme=tux"),
+    (re.compile(_K + r"(?=(?:" + S7_KEYS + r")(?![A-Za-z0-9_]))"), "tux."),
+    (re.compile(r"(?<![A-Za-z0-9_.-])henge(?=(?:-autopilot-once\.txt|-autopilot\.txt|-env\.txt|-native-prev\.log|-native\.log|-prev\.log|\.log|-mouse-probe|-unavailable)(?![A-Za-z0-9_]))"), "tux"),
+    (re.compile(r"(?<![A-Za-z0-9_])\[henge-(jit|dpy)\]"), r"[tux-\1]"),
+    (re.compile(r"(?<![A-Za-z0-9_-])henge-jit-(request|response)\b"), r"tux-jit-\1"),
+    (re.compile(r"Caches/Henge\b"), "Caches/Tux"),
+]
+# The display name and the error domains, in the app's own sources and the tests of its strings.
+S7_APP_RULES = [
+    (re.compile(r'domain: "Henge"'), 'domain: "Tux"'),
+    (re.compile(r'error\.domain == "Henge"'), 'error.domain == "Tux"'),
+    (re.compile(r"(?<![A-Za-z0-9_])Henge(JITHelper|JIT|BuiltInJIT)(?![A-Za-z0-9_])"), r"Tux\1"),
+    (re.compile(r'"henge: '), '"tux: '),
+    (re.compile(r"(?<![A-Za-z0-9_/~.-])Henge(?![A-Za-z0-9_/-])"), "Tuxedo"),
+]
+S7_LITERALS = [
+    ("devices/vgpu_virgl.m", 'stringByAppendingPathComponent:@"Henge"', 'stringByAppendingPathComponent:@"Tux"'),
+    ("host/vcodec.m", "on iOS, Henge left the screen", "on iOS, Tuxedo left the screen"),
+    ("host/vcodec.m", "%s: Henge is in the background on iOS", "%s: Tuxedo is in the background on iOS"),
+]
+S7_APP_GLOBS = [("ios/*", S7_APP_RULES), ("tests/*.swift", S7_APP_RULES)]
+
+
 STAGES = {
     3: dict(globs=["*.md", "ios/*", "host/*", "core/*", "devices/*", "tests/*", "tools/*", "Makefile", "ci/*", ".github/*"],
             skip=["docs/rename-tuxedo-plan.md", "CHANGELOG.md", "tools/rename*", "*.json", "*.plist", "*.yml", "*.yaml", "*.patch", "*.pbxproj"],
@@ -259,6 +296,8 @@ STAGES = {
             token=lambda t: False, rules=S5_RULES, file_rules=S5_FILE_RULES, moves=True),
     6: dict(globs=["*"], skip=["tools/rename*", "repo.json", "tools/update-source.py", "tools/linux/henge-*/*"],
             token=lambda t: t in ("HengeVM", "hengevm"), literals=S6_LITERALS),
+    7: dict(globs=["*"], skip=["tools/rename*", "repo.json", "tools/update-source.py", "*.patch", "tools/linux/henge-*/*"],
+            token=lambda t: False, rules=S7_RULES, file_rules=S7_APP_GLOBS, literals=S7_LITERALS, phrases=S7_PHRASES),
 }
 
 
@@ -295,6 +334,9 @@ def run_stage(n, apply):
         for i, line in enumerate(t.split("\n"), 1):
             new = line
             ok = not keep.line(p, i, line)
+            if ok:
+                for a, b in st.get("phrases", []):
+                    new = new.replace(a, b)
             if ok and p.endswith(".md") and st.get("md_prose"):
                 ok = md_prose_line(line, fence)
             elif ok and st.get("code_comments"):
@@ -312,10 +354,10 @@ def run_stage(n, apply):
                     return m[tok]
                 if st.get("md_prose") and p.endswith(".md"):
                     # Skip inline code spans.
-                    parts = re.split(r"(`[^`]*`)", line)
+                    parts = re.split(r"(`[^`]*`)", new)
                     new = "".join(x if x.startswith("`") else TOKEN.sub(sub, x) for x in parts)
                 else:
-                    new = TOKEN.sub(sub, line)
+                    new = TOKEN.sub(sub, new)
             if ok:
                 for rx, rep in rules:
                     new = rx.sub(rep, new)
