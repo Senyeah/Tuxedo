@@ -11,6 +11,9 @@ libslirp and glib for iOS). `TUX_ENTITLEMENTS` picks the app's entitlements file
 (`xcodebuild ... TUX_ENTITLEMENTS=Tuxedo/Tuxedo.personal.entitlements`, since
 `project.yml` sets it and an environment variable does not override that), and to
 the packager as an environment variable (`TUX_ENTITLEMENTS=... ios/scripts/package_ipa.sh`).
+A paid team uses `Tuxedo/Tuxedo.developer.entitlements`, which adds extended virtual addressing.
+It signs with a development profile that lasts one year. `dynamic-codesigning` stays out: Apple does not grant it,
+so JIT still needs an attached debugger.
 
 - **JIT**: on iOS 26+ (TXM) only an attached debugger can grant executable
   memory. Tuxedo uses the same machinery as Husk: StikDebug, TrollStore, a

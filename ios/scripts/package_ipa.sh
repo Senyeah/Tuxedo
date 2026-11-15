@@ -38,7 +38,7 @@ trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/Payload"
 cp -R "$APP" "$STAGE/Payload/"
 ENT="$STAGE/entitlements.plist"
-# TUX_ENTITLEMENTS picks another file, as for xcodebuild (Tuxedo/Tuxedo.personal.entitlements for a free team).
+# TUX_ENTITLEMENTS picks another file, as for xcodebuild (Tuxedo/Tuxedo.personal.entitlements for a free team, Tuxedo/Tuxedo.developer.entitlements for a paid one).
 cp "$IOS/${TUX_ENTITLEMENTS:-Tuxedo/Tuxedo.entitlements}" "$ENT"
 BANNED_KEYS=("com.apple.private.cs.debugger" "dynamic-codesigning" "com.apple.private.skip-library-validation")
 if [ "$TROLLSTORE" = true ]; then for k in "${BANNED_KEYS[@]}"; do plutil -remove "$k" "$ENT" 2>/dev/null || true; done; fi
