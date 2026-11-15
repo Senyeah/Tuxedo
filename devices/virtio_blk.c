@@ -295,7 +295,8 @@ HvVirtioBlk *hv_virtio_blk_create(HvMachine *m, HvPcie *bus, HvDisk *disk) {
     }
     if (!b->workers_started) { hv_virtio_blk_destroy(b); return NULL; }
     uint64_t capacity = disk->size / 512;
-    /* One descriptor per segment from the 256 in the queue, and no indirect tables: 8 leaves the ring room. */
+    /* 8 is from the macOS guest: Apple's driver ran out of ring descriptors with more. Linux gets the same value;
+       a larger one was not measured (HV_BLK_SEG_MAX tries one). */
     uint32_t seg_max = getenv("HV_BLK_SEG_MAX") ? (uint32_t)atoi(getenv("HV_BLK_SEG_MAX")) : 8;
     if (seg_max < 1 || seg_max > HV_VIRTQ_MAX_SEGS - 2) seg_max = 8;
     uint32_t blk_size = 512;
