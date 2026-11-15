@@ -245,6 +245,25 @@ class FakeRunner:
         if a == "gpasswd" and argv[1] == "-d":
             self.add_member(argv[3], argv[2], remove=True)
             return 0, ""
+        if a == "pgrep":
+            return 1, ""
+        if a == "usermod" and argv[1] == "-l":
+            new, old = argv[2], argv[-1]
+            for rel in ("etc/passwd", "etc/shadow"):
+                p = Path(self.root) / rel
+                p.write_text(p.read_text().replace("%s:" % old, "%s:" % new, 1).replace("/home/%s:" % old, "/home/%s:" % new))
+            g = Path(self.root) / "etc/group"
+            g.write_text(g.read_text().replace(":%s\n" % old, ":%s\n" % new))
+            if (Path(self.root) / "home" / old).exists():
+                (Path(self.root) / "home" / old).rename(Path(self.root) / "home" / new)
+            return 0, ""
+        if a == "groupmod" and argv[1] == "-n":
+            g = Path(self.root) / "etc/group"
+            g.write_text(g.read_text().replace("%s:x:1000:" % argv[3], "%s:x:1000:" % argv[2]))
+            return 0, ""
+        if a == "systemd-escape":
+            path = argv[-1].strip("/").replace("-", "\\x2d").replace("/", "-")
+            return 0, "%s.%s\n" % (path, argv[2].split("=")[1])
         if a == "ip":
             return 0, "2: eth0    inet 10.0.2.15/24 brd 10.0.2.255 scope global eth0\n"
         if a == "systemctl" and argv[1] == "is-enabled":
@@ -1025,11 +1044,53 @@ class User(Case):
         self.assertFalse((self.root / "etc/sudoers.d/tux").exists())
 
     def test_other_name_and_uid_taken(self):
-        self.make_root(tux_user=True)
+        self.make_root()
+        (self.root / "etc/passwd").write_text("root:x:0:0:root:/root:/bin/bash\npat:x:1000:1000::/home/pat:/bin/bash\n")
         self.run_job(self.job(name="sam"))
         add = self.runner.called("useradd")[0].argv
         self.assertNotIn("--uid", add)
         self.assertIn("~/Tux still uses /home/tux", self.final()[0][1])
+
+    def test_another_name_renames_the_stock_tux(self):
+        self.make_root(tux_user=True)
+        (self.root / "etc/group").write_text((self.root / "etc/group").read_text() + "tux:x:1000:\n")
+        (self.root / "etc/sudoers.d/tux").write_text("tux ALL=(ALL) NOPASSWD:ALL\n")
+        (self.root / "etc/systemd/system/getty@tty1.service.d").mkdir(parents=True)
+        tty1 = self.root / "etc/systemd/system/getty@tty1.service.d/autologin.conf"
+        tty1.write_text("[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin tux --noclear %I $TERM\n")
+        (self.root / "usr/lib/systemd/system").mkdir(parents=True)
+        (self.root / "usr/lib/systemd/system/home-tux-Tux.mount").write_text(
+            "[Mount]\nWhere=/home/tux/Tux\nOptions=noauto,uid=tux,gid=tux,conf=/etc/tux/davfs2.conf\n")
+        (self.root / "usr/lib/systemd/system/home-tux-Tux.automount").write_text("[Automount]\nWhere=/home/tux/Tux\n")
+        self.run_job(self.job(name="sam", password=PASSWORD))
+        s, m = self.final()[0]
+        self.assertEqual(s, "ok", m)
+        self.assertIn("renamed to sam", m)
+        self.assertEqual(self.runner.called("useradd"), [])
+        self.assertEqual(self.runner.called("usermod")[0].argv, ["usermod", "-l", "sam", "-d", "/home/sam", "-m", "tux"])
+        self.assertEqual(self.runner.called("groupmod")[0].argv, ["groupmod", "-n", "sam", "tux"])
+        passwd = (self.root / "etc/passwd").read_text()
+        self.assertIn("sam:x:1000:1000", passwd)
+        self.assertNotIn("tux:", passwd)
+        self.assertEqual(self.runner.called("passwd", "-l", "tux"), [])
+        # the account is signed in on tty1 by name, and the stock sudo file is out of the way
+        self.assertIn("--autologin sam ", tty1.read_text())
+        self.assertFalse((self.root / "etc/sudoers.d/tux").exists())
+        # the shared folder mount follows the account
+        mount = (self.root / "etc/systemd/system/home-sam-Tux.mount").read_text()
+        self.assertIn("Where=/home/sam/Tux", mount)
+        self.assertIn("uid=sam,gid=sam", mount)
+        self.assertTrue((self.root / "etc/systemd/system/home-sam-Tux.automount").exists())
+        self.assertEqual([c.argv[2] for c in self.runner.called("systemctl", "restart")],
+                         ["serial-getty@ttyAMA0.service", "getty@tty1.service"])
+
+    def test_no_autologin_removes_the_tty1_login_of_a_desktop_image(self):
+        self.make_root(tux_user=True)
+        (self.root / "etc/systemd/system/getty@tty1.service.d").mkdir(parents=True)
+        tty1 = self.root / "etc/systemd/system/getty@tty1.service.d/autologin.conf"
+        tty1.write_text("[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin tux --noclear %I $TERM\n")
+        self.run_job(self.job(name="tux", password=PASSWORD, autologin=False))
+        self.assertFalse(tty1.exists())
 
     def test_existing_account_gets_sudo_back(self):
         self.make_root(tux_user=True)
@@ -1142,16 +1203,17 @@ class User(Case):
         self.run_job(self.job(name="tux", password=PASSWORD))
         self.assertEqual(self.runner.called("passwd", "-d"), [])
 
-    def test_another_name_locks_the_stock_account_that_has_no_password(self):
+    def test_another_name_replaces_the_stock_account_that_has_no_password(self):
         self.make_root(tux_user=True)
         (self.root / "etc/sudoers.d/tux").write_text("tux ALL=(ALL) NOPASSWD:ALL\n")
         self.run_job(self.job(name="sam", password=PASSWORD))
         s, m = self.final()[0]
         self.assertEqual(s, "ok", m)
-        self.assertEqual([c.argv for c in self.runner.called("passwd")], [["passwd", "-l", "tux"], ["passwd", "-l", "root"]])
+        self.assertEqual([c.argv for c in self.runner.called("passwd")], [["passwd", "-l", "root"]])
         self.assertFalse((self.root / "etc/sudoers.d/tux").exists())
         self.assertEqual(self.read("etc/sudoers.d/tux.tux-disabled"), "tux ALL=(ALL) NOPASSWD:ALL\n")
-        self.assertIn("stock account tux is locked", m)
+        self.assertIn("renamed to sam", m)
+        self.assertNotIn("tux:", self.read("etc/passwd"))
         self.assertEqual(json.loads(self.read("var/lib/tux/account.json"))["name"], "sam")
 
     def test_another_name_leaves_a_stock_account_that_has_a_password(self):
@@ -1167,11 +1229,11 @@ class User(Case):
         self.run_job(self.job(name="tux", password=PASSWORD))
         self.assertEqual([c.argv for c in self.runner.called("passwd")], [["passwd", "-l", "root"]])
 
-    def test_a_failed_stock_lock_fails_the_step_and_root_stays_open(self):
+    def test_a_failed_rename_fails_the_step_and_root_stays_open(self):
         self.make_root(tux_user=True)
-        self.runner.when(["passwd", "-l", "tux"], rc=1)
+        self.runner.when(["usermod", "-l"], rc=1)
         self.run_job(self.job(name="sam", password=PASSWORD))
-        self.assertEqual(self.final()[0], ("failed", "The stock account tux was not locked"))
+        self.assertEqual(self.final()[0], ("failed", "The stock account tux was not renamed"))
         self.assertNotIn(["passwd", "-l", "root"], [c.argv for c in self.runner.calls])
 
     def test_no_password_anywhere(self):

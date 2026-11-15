@@ -629,6 +629,27 @@ def sc_d(m, media):
         raise Fail("the password is in " + "; ".join(bad))
 
 
+def sc_m(m, media):
+    m.need("id -u", lambda o: o == "0", "root console before the job")
+    steps = [{"action": "user.setup", "name": "sam", "password": PASSWORD3, "sudo": True, "autologin": True, "lock_root": True}]
+    jid, k, done = m.job(steps, 180)
+    msgs = m.expect_steps(jid, k, ["ok"], "job m")
+    if done["ok"] is not True or "renamed to sam" not in msgs[0]:
+        raise Fail(f"done {done}, message {msgs[0]!r}")
+    who = m.login(90)
+    if who is None or who[0] != "sam":
+        raise Fail(f"after the job the console must sign in as sam by itself, got {who}")
+    m.must_fail("getent passwd tux", "tux is gone from passwd")
+    m.need("id -u && id -un && echo $HOME", lambda o: o.split() == ["1000", "sam", "/home/sam"], "sam is uid 1000 with /home/sam")
+    m.need("id -nG", lambda o: "sudo" in o.split() and "video" in o.split(), "sam keeps sudo and video")
+    m.need("test -d /home/sam/Tux && ! test -e /home/tux", what="the Tux folder moved with the home")
+    m.need("systemctl is-enabled home-sam-Tux.automount home-tux-Tux.automount 2>&1 | tr '\\n' ' '",
+           lambda o: o.startswith("enabled") and "enabled enabled" not in o, "the shared folder mount follows sam; the one for tux is off")
+    m.need("sudo -n true 2>&1; echo rc=$?", lambda o: "rc=1" in o, "sudo asks for the password now (the stock rule is gone)")
+    ok("m: a new account renames the stock tux: uid 1000 and the home move, tux is gone, the console signs in as sam, "
+       "the shared folder mount follows, the stock sudo rule is gone")
+
+
 def sc_g(m, media):
     m.need("id -u", lambda o: o == "0", "root")
     m.need(f"mountpoint -q {MEDIA_MOUNT}", what="the media is mounted")
@@ -920,6 +941,14 @@ def main():
             if prep(run, m, media, "d"):
                 run.scenario("d", m, sc_d, media)
             m.kill()  # tux has no sudo any more, so no poweroff; the disk is thrown away
+        # ---- boot 3b: a new account replaces the stock tux
+        if run.want("m"):
+            m = Machine(args, run.clone(boot1, "boot3b"), args.tmp, "boot3b")
+            machines.append(m)
+            m.boot()
+            if prep(run, m, media, "m"):
+                run.scenario("m", m, sc_m, media)
+            m.kill()
         # ---- boot 4: the rest
         if any(run.want(k) for k in "gnefih"):
             m = Machine(args, run.clone(boot1, "boot4"), args.tmp, "boot4")

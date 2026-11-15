@@ -723,6 +723,13 @@ class Agent:
         notes = []
         want = ["audio", "video"] + (["sudo"] if c["sudo"] else [])
         have = [g for g in want if g in groups]
+        stock = (first == "tux" and name != "tux" and not exists
+                 and caps_mod.shadow_hash(self.fs.read("/etc/shadow"), "tux") == "")  # a tux with a password is someone's
+        if stock:
+            self._rename_stock(name)  # the stock tux becomes the new account: nobody can sign in as tux any more
+            passwd, groups = self.passwd(), self.group()
+            exists = True
+            notes.append("The stock account tux was renamed to %s" % name)
         if not exists:
             argv = useradd_argv(name, have, not any(u["uid"] == 1000 for u in passwd.values()))
             if self.run(argv).rc != 0:
@@ -749,9 +756,12 @@ class Agent:
         except (OSError, StepError) as e:
             raise StepError("The account file was not written. Root sign-in stays open") from e
         self.after_done.append(["systemctl", "restart", "serial-getty@ttyAMA0.service"])
-        # tty1 is the console the app shows: end the root shell there too, unless a desktop owns tty1
-        if not any(self.fs.exists(b) for b in ("/usr/bin/labwc", "/usr/bin/plasmashell", "/usr/bin/xfce4-session")):
+        # tty1 is the console the app shows. A desktop image's own tty1 login names an account: it follows this one
+        moved = self._follow_tty1(name, c["autologin"])
+        if moved or not any(self.fs.exists(b) for b in ("/usr/bin/labwc", "/usr/bin/plasmashell", "/usr/bin/xfce4-session")):
             self.after_done.append(["systemctl", "restart", "getty@tty1.service"])
+        if stock and self._disable_stock_sudoers():
+            notes.append("the stock sudo file was moved aside")
         if name != "tux" and "tux" in self.passwd() and caps_mod.shadow_hash(self.fs.read("/etc/shadow"), "tux") == "":
             if self.run(["passwd", "-l", "tux"]).rc != 0:
                 raise StepError("The stock account tux was not locked")
@@ -768,10 +778,60 @@ class Agent:
         if c["lock_root"]:
             if self.run(["passwd", "-l", "root"]).rc != 0:
                 raise StepError("Root sign-in was not locked")
-        if name != "tux":
+        if name != "tux" and not stock:
             notes.append("The folder ~/Tux still uses /home/tux")
         how = "signs in on the console by itself" if c["autologin"] else "asks for a login on the console"
         return ". ".join(["Account %s is ready and %s" % (name, how)] + notes)
+
+    def _rename_stock(self, name):
+        """tux to name: the same uid, groups and home content. The shared folder mount moves with it."""
+        for unit in ("home-tux-Tux.automount", "home-tux-Tux.mount"):
+            self.run(["systemctl", "stop", unit], quiet=True)
+        self.run(["umount", "-l", "/home/tux/Tux"], quiet=True)
+        self.run(["loginctl", "terminate-user", "tux"], quiet=True)
+        self.run(["pkill", "-KILL", "-u", "tux"], quiet=True)
+        for _ in range(20):  # usermod refuses while the account has a process
+            if self.run(["pgrep", "-u", "tux"], quiet=True).rc != 0:
+                break
+            self.sleep(0.25)
+        if self.run(["usermod", "-l", name, "-d", "/home/" + name, "-m", "tux"]).rc != 0:
+            raise StepError("The stock account tux was not renamed")
+        if "tux" in self.group() and self.run(["groupmod", "-n", name, "tux"]).rc != 0:
+            raise StepError("The group of the stock account was not renamed")
+        self._move_share(name)
+
+    def _move_share(self, name):
+        """The shared folder mount is for /home/<name>/Tux and the account's uid. The package ships it for tux."""
+        want = "/home/%s/Tux" % name
+        pair = []
+        for kind in ("mount", "automount"):
+            r = self.run(["systemd-escape", "--path", "--suffix=" + kind, want], quiet=True)
+            unit = r.out.strip()
+            text = self.fs.read("/usr/lib/systemd/system/home-tux-Tux.%s" % kind)
+            if r.rc != 0 or not re.fullmatch(r"[A-Za-z0-9:_.\\-]+", unit) or text is None:
+                return
+            pair.append((unit, text.replace("/home/tux/Tux", want).replace("uid=tux,gid=tux", "uid=%s,gid=%s" % (name, name))))
+        for unit, text in pair:
+            self.fs.write("/etc/systemd/system/" + unit, text)
+        self.run(["systemctl", "disable", "home-tux-Tux.automount"], quiet=True)
+        self.run(["systemctl", "daemon-reload"], quiet=True)
+        self.run(["systemctl", "enable", "--now", pair[1][0]], quiet=True)
+
+    TTY1_LOGIN = "/etc/systemd/system/getty@tty1.service.d/autologin.conf"
+
+    def _follow_tty1(self, name, autologin):
+        """A desktop image signs the account in on tty1 by a drop-in. It follows the choice. True when it changed."""
+        text = self.fs.read(self.TTY1_LOGIN)
+        if text is None or "--autologin" not in text:
+            return False
+        if autologin:
+            new = re.sub(r"--autologin\s+\S+", "--autologin " + name, text)
+            if new == text:
+                return False
+            self.fs.write(self.TTY1_LOGIN, new)
+        else:
+            self.fs.unlink(self.TTY1_LOGIN)
+        return True
 
     def _disable_stock_sudoers(self):
         """The images ship this exact file. A name with a dot is ignored by sudo. Any other content stays."""
