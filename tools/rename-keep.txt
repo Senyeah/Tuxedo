@@ -5,9 +5,6 @@ path:CHANGELOG.md
 path:LINUX-PLAN-09-risks.md
 path:tools/rename.py
 path:tools/rename-*.txt
-# Upstream's public source; Stage 12 deletes these, nothing renames them.
-path:repo.json
-path:tools/update-source.py
 # Credit links to real repos named Henge.
 line-re:github\.com/(Leviidev|hungbenjamin402|sonnx0868|gavinnolan|AdamLovattDevOps|braedonsaunders)/
 line-re:Leviidev/Henge

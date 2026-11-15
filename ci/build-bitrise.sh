@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build Tuxedo's unsigned, ad-hoc-signed IPA on a Bitrise macOS/Xcode stack.
-# SideStore or AltStore re-signs the IPA when installing it on the iPad.
+# Build check only: the IPA is not published.
 set -euo pipefail
 export HOMEBREW_NO_AUTO_UPDATE=1
 
@@ -53,10 +53,3 @@ ditto "$STIKJIT_ROOT/StikJIT.xcframework" "$TUX_ROOT/ios/deps/StikJIT.xcframewor
 make ios-lib
 mkdir -p "$HOME/Desktop"
 ./ios/scripts/package_ipa.sh
-
-mkdir -p "${BITRISE_DEPLOY_DIR:?Bitrise must set BITRISE_DEPLOY_DIR}"
-# The IPA is intentionally ad-hoc-signed, without embedded.mobileprovision.
-# Bitrise's deploy step treats an .ipa as an installable artifact and rejects it
-# without a provisioning profile. Wrap it so it is uploaded as a generic file;
-# users extract the IPA and let SideStore or AltStore re-sign it.
-( cd "$HOME/Desktop" && zip -0 -q "$BITRISE_DEPLOY_DIR/Tuxedo-color-fix-unsigned.zip" Tuxedo.ipa )

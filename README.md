@@ -12,15 +12,6 @@
   <a href="#linux-machines">Linux machines</a>
   ·
   <a href="docs/architecture.md">How it works</a>
-  ·
-  <a href="https://itslevii.dev">Website</a>
-  ·
-  <a href="https://github.com/Leviidev/Henge/releases">Releases</a>
-</p>
-
-<p align="center">
-  <a href="https://github.com/Leviidev/Henge/releases"><img src="https://img.shields.io/github/downloads/Leviidev/Henge/total?style=flat-square&color=2E6BFF&labelColor=111111" alt="Downloads"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/Leviidev/Henge?style=flat-square&color=2E6BFF&labelColor=111111" alt="GPL-2.0-or-later"></a>
 </p>
 
 Tuxedo is an arm64 JIT emulator. It runs a Debian Linux guest on an iPhone or iPad. Download an image, start the machine, and use it. macOS guest support was removed on 14/11/2026.
@@ -37,7 +28,12 @@ Tuxedo is an arm64 JIT emulator. It runs a Debian Linux guest on an iPhone or iP
 
 ## Install
 
-Sideload `Henge.ipa` from [Releases](https://github.com/Leviidev/Henge/releases) with SideStore or AltStore, or install `Henge.tipa` with TrollStore or TrollStore Lite. To get updates in SideStore or AltStore, add Henge's source, `https://raw.githubusercontent.com/Leviidev/Henge/main/repo.json`, or `https://itslevii.dev/repo.json` for all of Leviidev's apps. iOS or iPadOS 17 or later, on an A14 or M1 chip or newer. So far it's tested only on an iPhone 17 Pro and in the iOS Simulator: iPad support hasn't run on a real iPad yet.
+Tuxedo has no public download. Build it yourself, then sideload it.
+
+1. Build `Tuxedo.ipa` with `ios/scripts/package_ipa.sh` (see [Building](#building)). It is ad-hoc signed.
+2. Install it with SideStore or AltStore, which sign it again with your certificate. Or build `Tuxedo.tipa` with `package_ipa.sh --trollstore` and install it with TrollStore or TrollStore Lite.
+
+It needs iOS or iPadOS 17 or later, on an A14 or M1 chip or newer. So far it's tested only on an iPhone 17 Pro and in the iOS Simulator: iPad support hasn't run on a real iPad yet.
 
 - **JIT** is required: StikDebug, TrollStore (which stops at iOS 17.0), TrollStore Lite (which needs a jailbreak), a jailbreak on its own, or the StikJIT helper built into Tuxedo (iOS 26 or later).
 - **Storage:** a Linux image downloads at about 0.2 GB (console) or 0.3 GB (desktop). The disk grows to the size you pick (16 GB by default).
@@ -83,9 +79,7 @@ The Mac tool (`build/tuxvm`) runs all of this under `make test-linux-*`. The app
 
 ## Building
 
-To use Henge, install the [latest release](https://github.com/Leviidev/Henge/releases). Every change lands on `main` as it's made, so `main` can be unfinished between releases.
-
-On a Mac with Xcode 27 or later and `xcodegen`. Henge takes StikJIT, on-device pairing, libslirp and glib from a built [Husk](https://github.com/Leviidev/Husk) checkout at `~/Documents/Coding/Husk` (set `HUSK` to use another path):
+On a Mac with Xcode 27 or later and `xcodegen`. Tuxedo takes StikJIT, on-device pairing, libslirp and glib from a built [Husk](https://github.com/Leviidev/Husk) checkout at `~/Documents/Coding/Husk` (set `HUSK` to use another path):
 
 ```bash
 ios/scripts/fetch_deps.sh
@@ -102,3 +96,7 @@ That produces `~/Desktop/Tuxedo.ipa`, and `package_ipa.sh --trollstore` writes `
 GPL-2.0-or-later. Tuxedo compiles in code from Husk (GPL-2.0-or-later), so the shipped binary is a combined GPL work. It cannot go on the App Store. See [docs/licensing.md](docs/licensing.md).
 
 A Linux image holds Debian packages and, next to it, a U-Boot binary. U-Boot is GPL-2.0, mostly or later, and Debian's packages have their own licences. [docs/licensing.md](docs/licensing.md) says where their source comes from.
+
+## Credits
+
+Tuxedo started as a fork of Henge by Leviidev (https://github.com/Leviidev/Henge). It collects fixes from community forks: [hungbenjamin402](https://github.com/hungbenjamin402/Henge), [sonnx0868](https://github.com/sonnx0868/Henge), [gavinnolan](https://github.com/gavinnolan/Henge), [AdamLovattDevOps](https://github.com/AdamLovattDevOps/Henge) and [braedonsaunders](https://github.com/braedonsaunders/Henge). It uses code and builds from [Husk](https://github.com/Leviidev/Husk), StikJIT, idevice, QEMU's `virt` board, UTM's libepoxy and virglrenderer forks, ANGLE and SwiftTerm. [docs/licensing.md](docs/licensing.md) lists their licences, and [CHANGELOG.md](CHANGELOG.md) credits each change.
