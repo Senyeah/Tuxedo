@@ -6,7 +6,7 @@
  #include "dispatch_common.h"
 +
 +#if defined(__APPLE__) && PLATFORM_HAS_EGL
-+/* Henge: ANGLE is linked in, so no EGL or GLES framework exists to dlopen, and its symbols are hidden from
++/* Tuxedo: ANGLE is linked in, so no EGL or GLES framework exists to dlopen, and its symbols are hidden from
 +   dlsym. Every library name gets one handle, and names come from eglGetProcAddress. */
 +#define TUX_STATIC_GL 1
 +static char tux_gl_handle;

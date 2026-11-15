@@ -285,7 +285,7 @@ static void step2(void) {
 static void step2e(void) {
     printf("step 2e: Venus host-visible memory: shm fd, MTLBuffer over one mapping, the window over the fd\n");
     char name[64];
-    snprintf(name, sizeof name, "/henge-a11-%d", getpid());
+    snprintf(name, sizeof name, "/tux-a11-%d", getpid());
     int fd = shm_open(name, O_CREAT | O_EXCL | O_RDWR, 0600);
     shm_unlink(name);
     const uint64_t len = 4 * PG, off = 112ull << 20, gpa = WIN_PA + off;

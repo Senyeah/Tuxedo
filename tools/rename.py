@@ -178,9 +178,6 @@ S4_LITERALS = [
     ("host/main.c", '"henge.sigterm"', '"tux.sigterm"'), ("host/main.c", '"henge.suspend"', '"tux.suspend"'),
     ("host/vm.c", '"henge.background"', '"tux.background"'), ("host/vm.c", '"henge.pointer"', '"tux.pointer"'),
     ("devices/vgpu_virgl.m", '"henge-virgl"', '"tux-virgl"'),
-    ("ios/Henge/PortForwards.swift", '"henge.forwards"', '"tux.forwards"'),
-    ("ios/Henge/VolumeClicks.swift", '"henge.volume.stream"', '"tux.volume.stream"'),
-    ("ios/Henge/HengeLog.swift", '"com.henge.log.reader"', '"tux.log.reader"'),
     ("tests/test_vm_lifecycle.c", '"HENGE ', '"TUX '),
     # The smoke.py flag that args.henge_dtb reads.
     ("tools/linux/*.py", "henge-dtb", "tux-dtb"), ("tools/linux/README.md", "henge-dtb", "tux-dtb"),
@@ -286,7 +283,7 @@ S7_APP_GLOBS = [("ios/*", S7_APP_RULES), ("tests/*.swift", S7_APP_RULES)]
 # Stage 9 (docs/rename-tuxedo-plan.md): wire names, guest packages, guest paths, units, FFmpeg names, DKMS module.
 # Host and guest change together. Stage 10 keeps: the guest user, hostname and fs label (a bare `henge` is kept unless a
 # rule below names its context), /home/henge, sudoers, autologin, `henge@`. Kept forever: hv_*, hvcodec, credit lines.
-S9_KEEP_PATHS = ("tools/linux/rootfs/etc/sudoers.d/henge", "tools/linux/u-boot-henge.config")
+S9_KEEP_PATHS = ()
 S9_KEEP_TOKENS = ("henge16k", "henge_angle_archive", "libhenge_angle_archive")
 S9_LITERALS = [
     ("dev.henge.Keyboard", "nz.jackgreenhill.tuxedo.Keyboard"),
@@ -377,16 +374,15 @@ STAGES = {
     4: dict(globs=["*"],
             skip=["tools/linux/henge-guest/*", "tools/linux/henge-va/*", "tools/linux/henge-ffmpeg/*",
                   "tools/linux/henge-codec-dkms/*", "tools/linux/rootfs*", "tools/linux/customize*.sh",
-                  "tools/rename*", "tools/linux/hvcodec/ffmpeg-henge.patch", "repo.json", "tools/update-source.py"],
+                  "tools/rename*"],
             token=is_stage4_token, ctx=stage4_ctx, literals=S4_LITERALS, no_phrases=True),
-    5: dict(globs=["*"], skip=["tools/rename*", "repo.json", "tools/update-source.py", "*.patch"],
+    5: dict(globs=["*"], skip=["tools/rename*", "*.patch"],
             token=lambda t: False, rules=S5_RULES, file_rules=S5_FILE_RULES, moves=True),
-    6: dict(globs=["*"], skip=["tools/rename*", "repo.json", "tools/update-source.py", "tools/linux/henge-*/*"],
+    6: dict(globs=["*"], skip=["tools/rename*", "tools/linux/henge-*/*"],
             token=lambda t: t in ("HengeVM", "hengevm"), literals=S6_LITERALS),
-    7: dict(globs=["*"], skip=["tools/rename*", "repo.json", "tools/update-source.py", "*.patch", "tools/linux/henge-*/*"],
+    7: dict(globs=["*"], skip=["tools/rename*", "*.patch", "tools/linux/henge-*/*"],
             token=lambda t: False, rules=S7_RULES, file_rules=S7_APP_GLOBS, literals=S7_LITERALS, phrases=S7_PHRASES),
-    9: dict(globs=["*"], skip=["tools/rename*", "repo.json", "tools/update-source.py", "tools/gfx/*", "tools/linux/u-boot-henge.config",
-                              "tools/linux/build-uboot.sh", "tools/linux/rootfs/etc/*", "LINUX-PLAN-04-kernel-16k.md"],
+    9: dict(globs=["*"], skip=["tools/rename*", "tools/gfx/*", "tools/linux/build-uboot.sh", "tools/linux/rootfs/etc/*", "LINUX-PLAN-04-kernel-16k.md"],
             token=lambda t: False, moves=s9_moves, custom=s9_line),
 }
 
