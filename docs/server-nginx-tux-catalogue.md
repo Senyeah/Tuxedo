@@ -2,7 +2,7 @@
 
 Written 15/11/2026 (GMT+12). This is the record of the server change for the Tuxedo apt repository and image catalogue. The server holds the only copy of the configuration, so keep this file correct when the server changes.
 
-**This file is not complete.** The writer of this file did not read the server. The two blocks marked "TO FILL" must hold the exact text from the server. Do not guess them.
+The text below is the exact text from the server, added on 15/11/2026. The old config is saved on the server as `/home/USER/nginx/default.conf.bak-before-tux-20261115`.
 
 ## What was changed (15/11/2026)
 
@@ -15,18 +15,32 @@ The Henge route (`https://walkies.site/henge-linux-catalogue/`) and its containe
 
 ## The location block
 
-TO FILL: the exact block that was added to `/home/USER/nginx/default.conf`.
+The block was added to `/home/USER/nginx/default.conf`, after the `henge-linux-catalogue` blocks and before `location = /webmusic`. It copies them.
 
 ```nginx
-# TO FILL
+location = /tux-linux-catalogue {
+    return 301 /tux-linux-catalogue/;
+}
+
+location /tux-linux-catalogue/ {
+    proxy_pass http://tux-linux-catalogue:80/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    # Images are hundreds of MB: stream them, no temp files on the proxy
+    proxy_buffering off;
+    proxy_max_temp_file_size 0;
+}
 ```
 
 ## The container
 
-TO FILL: the exact `docker run` command for `tux-linux-catalogue` (name, image, volume, network, restart policy).
+The container is a copy of the old `henge-linux-catalogue` container. The directory `/home/USER/tux-linux-catalogue/files` is `chmod 755`.
 
 ```sh
-# TO FILL
+docker run -d --name tux-linux-catalogue --restart unless-stopped --network proxy-net \
+  -v /home/USER/tux-linux-catalogue/files:/usr/share/nginx/html:ro nginx:alpine
 ```
 
 ## To undo
