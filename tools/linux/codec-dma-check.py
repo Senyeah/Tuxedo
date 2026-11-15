@@ -32,6 +32,7 @@ import tempfile
 import time
 
 import pexpect
+import guest_user as gu
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -39,7 +40,6 @@ _spec = importlib.util.spec_from_file_location("vcodec_check", os.path.join(HERE
 vc = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(vc)
 Fail, sh, need, put, fetch, probe, ffmpeg_case = vc.Fail, vc.sh, vc.need, vc.put, vc.fetch, vc.probe, vc.ffmpeg_case
-SHELL = vc.SHELL
 TCP = "TUX_VCODEC=10.0.2.4:8470"
 
 
@@ -50,7 +50,7 @@ def boot(args, disk, share, err_log):
     print(f"--   booting {os.path.basename(disk)} through U-Boot (host load average {os.getloadavg()[0]:.1f})")
     p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 250))
     p.expect(r"\(automatic login\)", timeout=600)
-    p.expect(SHELL, timeout=60)
+    p.expect(gu.shell_wide(), timeout=60)
     sh(p, "stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1")
     sh(p, "systemctl is-system-running --wait", 300)
     return p
@@ -91,6 +91,7 @@ def main():
     args = ap.parse_args()
     args.linux_dir = args.linux_dir or vc.linux_dir()
     image = args.image or os.path.join(args.linux_dir, "KW-out", "debian-desktop.img")
+    gu.use(image)
     args.firmware = args.firmware or os.path.join(args.linux_dir, "u-boot.bin")
     debs = sorted(f for f in os.listdir(os.path.join(args.out, "codec")) if f.startswith("tux-codec-dkms_") and f.endswith(".deb"))
     for f in (args.tuxvm, image, args.firmware):
@@ -149,7 +150,7 @@ def main():
                            "echo APT_RC=$?; grep -E 'tux-codec|dkms|Building|Installing|newly installed|Need to get|After this operation' /tmp/apt.log | tail -18", "install", 3600)
             res["install_secs"] = time.time() - t0
             check("apt install tux-codec-dkms", "APT_RC=0" in text, f"{res['install_secs']:.0f} s\n" + text.strip())
-            st = need(p, "sudo dkms status tux-codec; ls -l /dev/hvcodec; id henge | tr ' ' '\\n' | grep -c video; lsmod | grep -c tux_codec; "
+            st = need(p, f"sudo dkms status tux-codec; ls -l /dev/hvcodec; id {gu.user()} | tr ' ' '\\n' | grep -c video; lsmod | grep -c tux_codec; "
                          "sudo dmesg | grep -iE 'tux|hvcodec' | tail -3", "after the install")
             print(st)
             check("DKMS built and installed the module for the running kernel", re.search(rf"{re.escape(kver)}.*installed", st))

@@ -30,10 +30,10 @@ import tempfile
 import time
 
 import pexpect
+import guest_user as gu
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MARK = "TUX_RC_"
-SHELL = r"henge@henge:[^\n]*\$ "
 WAYLAND = "export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0"
 BAD = r"virtio_gpu|drm.*error|\[drm|WARNING:|BUG:|Oops|rcu: INFO|detected stall|soft lockup"
 LOG = "/tmp/gl.log"
@@ -60,7 +60,7 @@ def sh(p, cmd, limit=60):
         raise Fail(f"{cmd[:80]!r}: no answer within {limit} s")
     out = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", p.before).replace("\r", "")
     out = "\n".join(l for l in out.splitlines() if not l.startswith("[virgl"))
-    return re.sub(r"^henge@henge:[^\n$]*\$ ", "", out).strip(), int(p.match.group(1))
+    return re.sub(gu.prompt_prefix(), "", out).strip(), int(p.match.group(1))
 
 
 def scenes(p):
@@ -93,7 +93,7 @@ def wait_stderr(errfile, pattern, limit):
 
 def desktop_up(p, label):
     p.expect(r"\(automatic login\)", timeout=300)
-    p.expect(SHELL, timeout=60)
+    p.expect(gu.shell_wide(), timeout=60)
     sh(p, "stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1")
     time.sleep(10)  # labwc settles
     out, _ = sh(p, f"{WAYLAND}; eglinfo 2>/dev/null | grep -m1 'OpenGL ES profile renderer'")
@@ -137,6 +137,8 @@ def main():
     args = ap.parse_args()
 
     image = os.path.join(d, "debian-desktop.img")
+
+    gu.use(image)
     partuuid = open(os.path.join(d, "debian-desktop.partuuid")).read().strip()
     tmp = tempfile.mkdtemp(prefix="gpu-pause-check-", dir=args.work_dir)
     disk, errfile = os.path.join(tmp, "disk.img"), os.path.join(tmp, "stderr")

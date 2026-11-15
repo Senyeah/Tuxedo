@@ -20,10 +20,10 @@ import tempfile
 import time
 
 import pexpect
+import guest_user as gu
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 QEMU = os.environ.get("QEMU", "/opt/homebrew/bin/qemu-system-aarch64")
-SHELL = r"henge@henge:\S*\$ "
 MARK = "TUX_RC_"
 
 
@@ -47,7 +47,7 @@ def sh(p, cmd, limit=30):
     p.sendline(f"{cmd}; echo {MARK}$?")
     p.expect(MARK + r"(\d+)\r*\n", timeout=limit)
     out = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", p.before).replace("\r", "")
-    out = re.sub(r"^henge@henge:[^\n$]*\$ ", "", out)
+    out = re.sub(gu.prompt_prefix(), "", out)
     return out.strip(), int(p.match.group(1))
 
 
@@ -61,7 +61,7 @@ def need(p, cmd, ok, what, limit=30):
 def boot(args, disk, scale):
     p = pexpect.spawn(argv(args, disk)[0], argv(args, disk)[1:], encoding="utf-8", timeout=60 * scale)
     p.expect(r"\(automatic login\)", timeout=120 * scale)
-    p.expect(SHELL, timeout=30 * scale)
+    p.expect(gu.shell(), timeout=30 * scale)
     p.sendline(f"stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1; echo {MARK}$((6 * 7))")
     p.expect(MARK + r"42\r*\n", timeout=30)
     need(p, "systemctl is-system-running --wait", lambda o: o == "running", "system state", 120)
@@ -75,14 +75,15 @@ def host_mb(disk):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--qemu", action="store_true")
-    ap.add_argument("--image", default=os.path.join(ROOT, "build", "linux", "debian-console.img"))
-    ap.add_argument("--firmware", default=os.path.join(ROOT, "build", "linux", "u-boot.bin"))
+    ap.add_argument("--image", default=os.path.join(gu.linux_dir(), "debian-console.img"))
+    ap.add_argument("--firmware", default=os.path.join(gu.linux_dir(), "u-boot.bin"))
     ap.add_argument("--tuxvm", default=os.path.join(ROOT, "build", "tuxvm"))
     ap.add_argument("--size-gb", type=int, default=4)
     ap.add_argument("--mb", type=int, default=512)
     ap.add_argument("--cpus", type=int, default=1)
     ap.add_argument("--work-dir", help="where the clone goes (the image's APFS volume; default TMPDIR)")
     args = ap.parse_args()
+    gu.use(args.image)
     scale = 4 if args.qemu else 1
 
     tmp = tempfile.mkdtemp(prefix="trim-check-", dir=args.work_dir)
@@ -98,14 +99,14 @@ def main():
         print(f"  guest discard: granularity {gran} B, max {maxb >> 20} MiB per request")
         timer, _ = sh(p, "systemctl is-enabled fstrim.timer")
         print(f"  fstrim.timer: {timer}" + ("" if timer == "enabled" else " (images built before P4 lack it)"))
-        need(p, "dd if=/dev/urandom of=/home/henge/keep bs=1M count=64 status=none && sync && "
-             "sha256sum /home/henge/keep > /home/henge/keep.sum && sync", lambda o: True, "keep file", 60)
+        need(p, "dd if=/dev/urandom of=$HOME/keep bs=1M count=64 status=none && sync && "
+             "sha256sum ~/keep > ~/keep.sum && sync", lambda o: True, "keep file", 60)
         need(p, "sudo fstrim /", lambda o: True, "first trim", 120)  # drop what the image's own deletes left
         base = host_mb(disk)
-        need(p, f"dd if=/dev/urandom of=/home/henge/big bs=1M count={args.mb} status=none && sync",
+        need(p, f"dd if=/dev/urandom of=$HOME/big bs=1M count={args.mb} status=none && sync",
              lambda o: True, "write", 180 * scale)
         full = host_mb(disk)
-        need(p, "rm /home/henge/big && sync", lambda o: True, "delete")
+        need(p, "rm ~/big && sync", lambda o: True, "delete")
         t = time.monotonic()
         out = need(p, "sudo fstrim -v /", lambda o: "trimmed" in o, "fstrim", 180 * scale)
         took = time.monotonic() - t
@@ -122,7 +123,7 @@ def main():
         p.expect(pexpect.EOF, timeout=60 * scale)
 
         p = boot(args, disk, scale)
-        need(p, "cd /home/henge && sha256sum -c keep.sum", lambda o: o.endswith("OK"), "file written before the trim")
+        need(p, "cd ~ && sha256sum -c keep.sum", lambda o: o.endswith("OK"), "file written before the trim")
         need(p, "sudo dmesg --level=err,crit,alert,emerg | grep -vE 'usb 1-2|usb1-port2' | wc -l",
              lambda o: o == "0", "dmesg errors, second boot")
         p.sendline("sudo poweroff")

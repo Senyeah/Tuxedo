@@ -50,7 +50,7 @@ A machine runs Debian 13 (trixie) for arm64, minimal. Tuxedo starts it with U-Bo
 - **Console**: a text terminal on the serial port. About 0.2 GB to download.
 - **Desktop**: labwc (Wayland) and one terminal, with the screen, pointer and keyboard. About 0.3 GB to download.
 
-Both are 16 KB-page Debian kernels (`linux-image-arm64-16k`). The disk is 3 GB inside the image and grows to the size you pick at install (16 GB by default). The user is `henge`, who logs in by itself and has passwordless `sudo`. There is no SSH server.
+Both are 16 KB-page Debian kernels (`linux-image-arm64-16k`). The disk is 3 GB inside the image and grows to the size you pick at install (16 GB by default). The user is `tux`, who logs in by itself and has passwordless `sudo`. There is no SSH server.
 
 ### Get an image
 

@@ -363,6 +363,7 @@ struct ForwardsDetails: View {
     @State private var copied: String?
 
     private var forwards: [PortForward] { machines.all.first { $0.id == machine }?.forwards ?? [] }
+    private var user: String { machines.all.first { $0.id == machine }?.user ?? VirtualMachine.legacyGuestUser }
 
     var body: some View {
         if forwards.isEmpty {
@@ -403,7 +404,7 @@ struct ForwardsDetails: View {
     }
 
     private func connect(_ f: PortForward, _ a: ForwardPolicy.Address) -> some View {
-        let text = ForwardPolicy.connectText(f, address: a.ip)
+        let text = ForwardPolicy.connectText(f, address: a.ip, user: user)
         return HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(text).font(.system(.callout, design: .monospaced)).textSelection(.enabled)

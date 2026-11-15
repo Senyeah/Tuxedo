@@ -70,12 +70,14 @@ mv -f "$TMP/$BASE.hvsparse.lzfse" "$OUT/$BASE.hvsparse.lzfse"
 DISK_SHA=$(sha "$OUT/$BASE.hvsparse.lzfse")
 
 KERNEL=$(sed -n 's/^kernel_version=//p' "$MANIFEST")
+# Empty for an image from before Tuxedo: no key, and the app reads the legacy user
+GUEST_USER=$(sed -n 's/^guest_user=//p' "$MANIFEST")
 python3 - "$OUT/linux-images.json" "$KIND" "$DATE" "$KERNEL" "$MIN_BUILD" \
     "$BASE.hvsparse.lzfse" "$(size "$OUT/$BASE.hvsparse.lzfse")" "$DISK_SHA" "$UNPACKED" "$(size "$IMAGE")" \
-    "$FW_NAME" "$(size "$FIRMWARE")" "$FW_SHA" "$TOUCH" <<'PY'
+    "$FW_NAME" "$(size "$FIRMWARE")" "$FW_SHA" "$TOUCH" "$GUEST_USER" <<'PY'
 import json, os, sys
 (path, kind, date, kernel, min_build, disk, disk_bytes, disk_sha, unpacked, logical,
- fw, fw_bytes, fw_sha, touch) = sys.argv[1:]
+ fw, fw_bytes, fw_sha, touch, guest_user) = sys.argv[1:]
 entry = {
     "id": f"debian-{kind}",
     "name": "Debian 13 (console)" if kind == "console" else "Debian 13 (desktop)",
@@ -92,6 +94,7 @@ entry = {
     "kernel": kernel,
     "minBuild": int(min_build),
     **({"touch": True} if touch == "1" else {}),
+    **({"guestUser": guest_user} if guest_user else {}),
 }
 cat = {"images": []}
 if os.path.exists(path):

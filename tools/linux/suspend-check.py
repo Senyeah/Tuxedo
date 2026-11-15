@@ -30,9 +30,9 @@ import tempfile
 import time
 
 import pexpect
+import guest_user as gu
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-SHELL = r"henge@henge:\S*\$ "
 MARK = "TUX_RC_"
 KERNEL_BAD = (r"WARNING:|BUG:|Oops|Call trace:|soft lockup|hard LOCKUP|rcu: INFO|detected stall|"
               r"blocked for more than|watchdog|clocksource|Unable to handle|Internal error")
@@ -61,7 +61,7 @@ def sh(p, cmd, limit=60):
     except pexpect.TIMEOUT:
         raise Fail(f"{cmd!r}: no answer within {limit} s")
     out = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", p.before).replace("\r", "")
-    out = re.sub(r"^henge@henge:[^\n$]*\$ ", "", out)
+    out = re.sub(gu.prompt_prefix(), "", out)
     return out.strip(), int(p.match.group(1))
 
 
@@ -120,6 +120,7 @@ def main():
     ap.add_argument("--expect-stall", action="store_true", help="with --no-pause: pass only if the guest stalls")
     ap.add_argument("--work-dir", help="where the clone goes (the image's APFS volume; default TMPDIR)")
     args = ap.parse_args()
+    gu.use(args.image)
     lengths = [float(x) for x in args.seconds.split(",") if x]
 
     tmp = tempfile.mkdtemp(prefix="suspend-check-", dir=args.work_dir)
@@ -131,7 +132,7 @@ def main():
         argv = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', disk + ".stderr", args.tuxvm, "--firmware", args.firmware, "--ram", "2048", "--cpus", str(args.cpus), "--disk", disk]
         p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 200))
         p.expect(r"\(automatic login\)", timeout=180)
-        p.expect(SHELL, timeout=60)
+        p.expect(gu.shell(), timeout=60)
         p.sendline(f"stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1; echo {MARK}$((6 * 7))")
         p.expect(MARK + r"42\r*\n", timeout=60)
         need(p, "systemctl is-system-running --wait", lambda o: o in ("running", "degraded"), "system state", 180)

@@ -28,6 +28,8 @@ import sys
 import tempfile
 import time
 
+import guest_user as gu
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROBE = os.path.join(HERE, "secrets-probe.py")
 
@@ -287,13 +289,13 @@ def import_check(env, daemon_bin, dump):
 
 
 def firewall():
-    """tux-secrets-firewall: only root and henge reach 10.0.2.4:81, and the rule comes back after anything that
+    """tux-secrets-firewall: only root and tux reach 10.0.2.4:81, and the rule comes back after anything that
     flushes nftables (nftables.service's start, reload and stop, nft flush ruleset). Stopping the follower keeps it."""
     script = "/t/tux-guest/usr/lib/tux/tux-secrets-firewall"
     sh = lambda cmd: subprocess.run(cmd, shell=True, capture_output=True, text=True)  # noqa: E731
     import socketserver
     import threading
-    sh("id henge || useradd -M henge; ip addr add 10.0.2.4/32 dev lo")
+    sh("id tux || useradd -M tux; ip addr add 10.0.2.4/32 dev lo")
 
     class Answer(socketserver.BaseRequestHandler):
         def handle(self):
@@ -306,16 +308,16 @@ def firewall():
     get = "python3 -c \"import http.client as h; c=h.HTTPConnection('10.0.2.4', 81, timeout=3); c.request('GET','/'); print(c.getresponse().status)\""
 
     def reach(user):
-        prefix = "" if user == "root" else f"setpriv --reuid={user} --regid={user if user == 'henge' else 'nogroup'} --clear-groups "
+        prefix = "" if user == "root" else f"setpriv --reuid={user} --regid={user if user == 'tux' else 'nogroup'} --clear-groups "
         return sh(prefix + get).stdout.strip() == "200"
 
     def guarded(what, wait=5.0):
         end = time.monotonic() + wait
         while time.monotonic() < end:
-            if not reach("nobody") and reach("henge") and reach("root"):
+            if not reach("nobody") and reach("tux") and reach("root"):
                 return
             time.sleep(0.2)
-        raise Fail(f"firewall {what}: nobody {reach('nobody')}, henge {reach('henge')}, root {reach('root')}")
+        raise Fail(f"firewall {what}: nobody {reach('nobody')}, tux {reach('tux')}, root {reach('root')}")
 
     try:
         time.sleep(0.5)
@@ -370,13 +372,13 @@ def package():
     dpkg("-i", "/tmp/tux-guest.deb")
     if enabled() != "enabled" or diverted() != 3 or "kwalletd6" not in open("/usr/share/dbus-1/services/org.kde.kwalletd6.service.tux").read():
         raise Fail(f"install: unit {enabled()}, {diverted()} diversions")
-    # The README's command, as the user types it in Konsole: on henge's PATH, and it reaches the import
-    as_tux = ["setpriv", "--reuid=henge", "--regid=henge", "--clear-groups", "--reset-env", "sh", "-lc"]
+    # The README's command, as the user types it in Konsole: on tux's PATH, and it reaches the import
+    as_tux = ["setpriv", "--reuid=tux", "--regid=tux", "--clear-groups", "--reset-env", "sh", "-lc"]
     where = subprocess.run(as_tux + ["command -v tux-secrets"], capture_output=True, text=True).stdout.strip()
     r = subprocess.run(as_tux + ["tux-secrets --import --wallet no-such-wallet"], capture_output=True, text=True)
     if where != "/usr/bin/tux-secrets" or r.returncode == 0 or "no wallet" not in r.stderr:
-        raise Fail(f"tux-secrets for henge: {where!r}, import {r.returncode} {r.stderr[-200:]!r}")
-    print("ok: package: tux-secrets is on henge's PATH and reaches the import", flush=True)
+        raise Fail(f"tux-secrets for tux: {where!r}, import {r.returncode} {r.stderr[-200:]!r}")
+    print("ok: package: tux-secrets is on tux's PATH and reaches the import", flush=True)
     dpkg("-r", "tux-guest")
     if enabled() == "enabled" or diverted() != 0 or "kwalletd6" not in open("/usr/share/dbus-1/services/org.kde.kwalletd6.service").read():
         raise Fail(f"remove: unit {enabled()}, {diverted()} diversions")
@@ -479,12 +481,12 @@ def boot(args, image, store, machine, steps):
         for i in range(0, len(data), 600):
             need(f"printf %s '{data[i:i + 600]}' >> /tmp/probe.b64")
         need("base64 -d /tmp/probe.b64 > /tmp/probe.py")
-        # The README's command for henge, from a login shell as in Konsole
-        where = need("bash -lc 'command -v tux-secrets'", "tux-secrets on henge's PATH").splitlines()[-1]
+        # The README's command for the guest user, from a login shell as in Konsole
+        where = need("bash -lc 'command -v tux-secrets'", f"tux-secrets on {gu.user()}'s PATH").splitlines()[-1]
         out, rc = sh(p, "bash -lc 'tux-secrets --import --wallet no-such-wallet' 2>&1", 60)
         if where != "/usr/bin/tux-secrets" or rc == 0 or "no wallet" not in out:
-            raise Fail(f"tux-secrets for henge: {where!r}, import {rc} {out.strip()[-200:]!r}")
-        print("ok: tux-secrets is on henge's PATH and reaches the import", flush=True)
+            raise Fail(f"tux-secrets for {gu.user()}: {where!r}, import {rc} {out.strip()[-200:]!r}")
+        print(f"ok: tux-secrets is on {gu.user()}'s PATH and reaches the import", flush=True)
         steps(host, need, probe, err)
         p.sendline("sudo poweroff")
         p.expect(pexpect.EOF, timeout=120)
@@ -548,8 +550,8 @@ def vm(args):
             root = need("sudo " + get.format(port=81))
             port80 = need(get.format(port=80))
             if mine != "status 200" or root != "status 200" or "status" in other or port80 != "status 404":
-                raise Fail(f"port rule: henge {mine!r}, nobody {other!r}, root {root!r}, port 80 {port80!r}")
-            print(f"ok: henge and root reach the wallet's port, nobody is refused ({other.split(':')[0]}), port 80 has no wallet", flush=True)
+                raise Fail(f"port rule: {gu.user()} {mine!r}, nobody {other!r}, root {root!r}, port 80 {port80!r}")
+            print(f"ok: {gu.user()} and root reach the wallet's port, nobody is refused ({other.split(':')[0]}), port 80 has no wallet", flush=True)
 
             # The rule comes back after whatever flushes nftables, and a restart of its own unit leaves no gap
             for what in ("systemctl restart nftables", "systemctl reload nftables", "systemctl stop nftables",
@@ -561,10 +563,10 @@ def vm(args):
                     if "status" not in other and mine == "status 200":
                         break
                     if time.monotonic() > end:
-                        raise Fail(f"after {what}: nobody {other!r}, henge {mine!r}")
+                        raise Fail(f"after {what}: nobody {other!r}, {gu.user()} {mine!r}")
                     time.sleep(0.5)
                 need("systemctl is-active tux-secrets-firewall", f"the firewall unit after {what}")
-                print(f"ok: after {what}, nobody is refused and henge reaches the port", flush=True)
+                print(f"ok: after {what}, nobody is refused and {gu.user()} reaches the port", flush=True)
 
             host.line("secrets lock")
             end = time.monotonic() + 60
@@ -645,6 +647,7 @@ def main():
     if args.container:
         container(args)
     else:
+        gu.use(args.image)
         vm(args)
         print("secrets-check: all checks passed")
 

@@ -94,6 +94,7 @@ def main():
     args = ap.parse_args()
     d = args.linux_dir or smoke.linux_dir()
     image = args.image or os.path.join(d, "debian-desktop.img")
+    smoke.gu.use(image)
     kernel, initrd = (os.path.join(d, f) for f in ("Image", "initrd.img"))
     pu = image[:-4] + ".partuuid"
     if not os.path.exists(pu):

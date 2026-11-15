@@ -92,6 +92,7 @@ def upload(p, local, remote):
 
 def one(args):
     image = args.image
+    smoke.gu.use(image)
     kernel, initrd = (os.path.join(smoke.linux_dir(), f) for f in ("Image", "initrd.img"))
     for f in (args.tuxvm, kernel, initrd, image, image[:-4] + ".partuuid"):
         if not os.path.exists(f):

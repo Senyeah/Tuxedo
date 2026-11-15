@@ -30,6 +30,7 @@ FOOT = 's=$EPOCHREALTIME; seq 1 20000; e=$EPOCHREALTIME; echo $s $e >> /tmp/seq.
 
 def one(args, d, n):
     image = os.path.join(d, "debian-desktop.img")
+    smoke.gu.use(image)
     kernel, initrd = (os.path.join(d, f) for f in ("Image", "initrd.img"))
     partuuid = open(image[:-4] + ".partuuid").read().strip()
     append = f"console=ttyAMA0 earlycon=pl011,0x9000000 root=PARTUUID={partuuid} rw"

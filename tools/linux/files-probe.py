@@ -183,7 +183,7 @@ def bench(d, name, tarball, bundle, mb):
 
 
 def main():
-    os.umask(0o022)  # Debian gives henge 002; the expected trees in files-check.py have 022's modes
+    os.umask(0o022)  # Debian gives the user 002; the expected trees in files-check.py have 022's modes
     a = sys.argv[1:]
     {"ro": lambda: ro(a[1]), "change": lambda: change(a[1]), "view": lambda: view(a[1]),
      "wait": lambda: wait(a[1], a[2], float(a[3])), "mmap": lambda: do_mmap(a[1]), "build": lambda: build(a[1]),

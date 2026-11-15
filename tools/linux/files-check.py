@@ -32,10 +32,10 @@ import tempfile
 import time
 
 import pexpect
+import guest_user as gu
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HERE = os.path.dirname(os.path.abspath(__file__))
-SHELL = r"henge@henge:\S*\$ "
 MARK = "TUX_RC_"
 MEDIA = "/media/tux"
 FSX_URL = "https://raw.githubusercontent.com/linux-test-project/ltp/20230127/testcases/kernel/fs/fsx-linux/fsx-linux.c"
@@ -156,7 +156,7 @@ class Vm:
         self.p = p = pexpect.spawn(cmd[0], cmd[1:], encoding="utf-8", timeout=60, env=env, maxread=65536)
         p.logfile_read = open(self.disk + ".console", "a")  # for a failure: the guest's side
         p.expect(r"\(automatic login\)", timeout=300)
-        p.expect(SHELL, timeout=60)
+        p.expect(gu.shell(), timeout=60)
         p.sendline(f"set +m +H; stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1; echo {MARK}$((6 * 7))")
         p.expect(MARK + r"42\r*\n", timeout=30)
         self.need("systemctl is-system-running --wait", lambda o: o == "running", "system state", 180)
@@ -166,7 +166,7 @@ class Vm:
         p.sendline(f"{cmd}; echo {MARK}$?")
         p.expect(MARK + r"(\d+)\r*\n", timeout=limit)
         out = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", p.before).replace("\r", "")
-        out = re.sub(r"^henge@henge:[^\n$]*\$ ", "", out)
+        out = re.sub(gu.prompt_prefix(), "", out)
         return out.strip(), int(p.match.group(1))
 
     def need(self, cmd, ok=lambda o: True, what="", limit=60):
@@ -252,14 +252,14 @@ def check_mounts(vm):
         if not m or m[0] != fstype or mode not in m[1].split(","):
             raise Fail(f"{MEDIA}/{name}: want {fstype} {mode}, got {m}")
     vm.need(f"stat -c %U:%G {MEDIA}/a {MEDIA}/b {MEDIA}/c {MEDIA}/c/f.txt {MEDIA}/b/dir",
-            lambda o: set(o.split()) == {"henge:henge"}, "owners")
-    vm.need(f"touch {MEDIA}/c/owned && stat -c %U:%G {MEDIA}/c/owned && rm {MEDIA}/c/owned", lambda o: o == "henge:henge",
+            lambda o: set(o.split()) == {f"{gu.user()}:{gu.user()}"}, "owners")
+    vm.need(f"touch {MEDIA}/c/owned && stat -c %U:%G {MEDIA}/c/owned && rm {MEDIA}/c/owned", lambda o: o == f"{gu.user()}:{gu.user()}",
             "owner of a new file")
-    ok("a, b and c are mounted at /media/tux as ro virtiofs, overlay and rw virtiofs, owned by henge")
+    ok("a, b and c are mounted at /media/tux as ro virtiofs, overlay and rw virtiofs, owned by the guest user")
 
 
 def check_ro(vm, dirs, before):
-    for who, prefix in (("henge", ""), ("root after a rw remount", "sudo ")):
+    for who, prefix in ((gu.user(), ""), ("root after a rw remount", "sudo ")):
         if prefix:
             vm.need(f"sudo mount -o remount,bind,rw {MEDIA}/a", what="remount rw")
         r = vm.probe("ro", f"{MEDIA}/a") if not prefix else json.loads(
@@ -302,7 +302,7 @@ def check_changes(vm, dirs, before, share):
 
     out = vm.need("tux-files export b", what="export")
     dest = out.splitlines()[-1].rsplit(": ", 1)[-1]
-    rel = os.path.relpath(dest, "/home/henge/Tux")
+    rel = os.path.relpath(dest, f"{gu.home()}/Tux")
     host_dest = os.path.join(share, rel)
     want_files = {"new.txt", "f.txt", "dir/inner.txt", "renamed.txt", "rendir2/x.txt", "newdir/a.txt", "hl.txt",
                   "hl2.txt", "big.bin"}
@@ -541,7 +541,7 @@ def check_escape(vm, dirs):
     mac = {"Users", "Applications", "System", "Library", "private"}
     if mac & set(listing) or "etc" not in listing:
         raise Fail(f"escape: the link to / lists {listing}")
-    vm.need(f"cat {MEDIA}/c/up/etc/hostname", lambda o: o == "henge", "escape: ../../.. is the guest's /")
+    vm.need(f"cat {MEDIA}/c/up/etc/hostname", lambda o: o == gu.host(), "escape: ../../.. is the guest's /")
     vm.need(f"ls {MEDIA}/c/deep/etc-link/ 2>&1; true", lambda o: "No such file" in o, "escape: a link to /private/etc")
     for n in ("escape", "up", "deep/etc-link"):
         os.remove(os.path.join(dirs["c"], n))
@@ -577,7 +577,7 @@ def check_bench(vm, args, share, times):
     for where, d, tar, mb in (("c: Read-write (virtio-fs)", f"{MEDIA}/c", "/var/tmp/small.tar", args.dd_mb),
                               ("b: Copy-on-write (overlay)", f"{MEDIA}/b", "/var/tmp/small.tar", args.dd_mb),
                               ("root disk (ext4)", "/var/tmp/rootbench", "/var/tmp/small.tar", args.dd_mb),
-                              ("~/Tux (davfs2)", "/home/henge/Tux", "/var/tmp/small-dav.tar", args.davfs_mb)):
+                              ("~/Tux (davfs2)", f"{gu.home()}/Tux", "/var/tmp/small-dav.tar", args.davfs_mb)):
         n = args.davfs_files if "davfs" in where else args.files
         r = vm.probe("bench", d, where, tar, "/var/tmp/tux.bundle", mb, limit=7200)
         r["files"] = n
@@ -603,7 +603,7 @@ def check_no_folders(vm):
     ok("boot 2 without --folder: the system is running, no unit failed, /media/tux is empty")
 
 
-# The causes the README lists: everything is henge's (no chown), no devices or sockets on the host, PATH_MAX 1024
+# The causes the README lists: everything is the guest user's (no chown), no devices or sockets on the host, PATH_MAX 1024
 PJD_EXPECTED = re.compile(r"^((l?chown|-u \S+ -g \S+ chown)\b.*got EPERM|mknod [bc]: .*got EPERM|bind: .*got EPERM|.*got ENAMETOOLONG)")
 
 
@@ -680,6 +680,7 @@ def main():
     args = ap.parse_args()
     d = linux_dir()
     image = args.image or os.path.join(d, "debian-console.img")
+    gu.use(image)
     args.firmware = args.firmware or os.path.join(d, "u-boot.bin")
 
     # Docker Desktop shares the checkout but not TMPDIR (/var/folders): build-guest-pkg.sh's /out must be in reach.

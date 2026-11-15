@@ -6,8 +6,6 @@ enum ForwardPolicy {
     /// iOS binds no port below 1024.
     static let phonePorts = 1024...65535
     static let guestPorts = 1...65535
-    /// The guest images' user.
-    static let guestUser = "henge"
     static let sshPhonePort = 2222
 
     /// The one-tap rule: 2222 on the phone to the guest's sshd.
@@ -71,8 +69,8 @@ enum ForwardPolicy {
     }
 
     /// What another device uses to connect: an ssh command for the guest's port 22, else address:port.
-    static func connectText(_ f: PortForward, address: String) -> String {
-        f.guestPort == 22 ? "ssh -p \(f.phonePort) \(guestUser)@\(address)" : "\(address):\(f.phonePort)"
+    static func connectText(_ f: PortForward, address: String, user: String) -> String {
+        f.guestPort == 22 ? "ssh -p \(f.phonePort) \(user)@\(address)" : "\(address):\(f.phonePort)"
     }
 
     struct Address: Hashable {

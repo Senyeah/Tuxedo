@@ -8,6 +8,7 @@ import sys
 import time
 
 import pexpect
+import guest_user as gu
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.environ.get("TUX_LINUX_OUT") or os.path.join(os.path.dirname(subprocess.run(
@@ -27,7 +28,7 @@ def run(child, cmd, timeout=120):
     child.sendline(f"{cmd}; echo {MARK}$?")
     child.expect(rf"{MARK}(\d+)\r*\n", timeout=timeout)
     text = child.before.decode(errors="replace")
-    text = re.sub(r"^(\x1b\[[0-9;?]*[a-zA-Z])*henge@henge:[^$]*\$ ", "", text)
+    text = re.sub(rf"^(\x1b\[[0-9;?]*[a-zA-Z])*{gu.user()}@{gu.host()}:[^$]*\$ ", "", text)
     text = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", text).replace("\r", "")
     return text.strip("\n"), int(child.match.group(1))
 
@@ -47,6 +48,7 @@ def main():
     ap.add_argument("--no-save", action="store_true")
     ap.add_argument("--its-off", action="store_true", help="no ITS: MSI-X absent, INTx used")
     args = ap.parse_args()
+    gu.use(os.path.join(OUT, "debian-console.img"))
 
     os.makedirs(args.ref, exist_ok=True)
     cmd = [os.path.join(HERE, "qemu-ref.sh"), "--accel", args.accel]
@@ -85,7 +87,7 @@ def main():
     boot_s = time.time() - t0
     check("login", True, f"{'shell' if i == 0 else 'login prompt'} after {boot_s:.1f}s")
     if i == 1:
-        child.sendline("henge")
+        child.sendline(gu.user())
         child.expect(PROMPT)
     child.sendline("bind 'set enable-bracketed-paste off'; stty -echo")
     child.expect(PROMPT)

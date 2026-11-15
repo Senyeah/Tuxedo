@@ -52,7 +52,7 @@ The build takes the tag and settings from `tools/linux/versions.env` and `tools/
 | --- | --- |
 | Source | `https://source.denx.de/u-boot/u-boot.git`, tag `v2026.10`, commit `5508406582f6f7120dce0c4b3059819a41788db2` |
 | Patches | none |
-| Config | `qemu_arm64_defconfig`, then `tools/linux/u-boot-henge.config` merged with `scripts/kconfig/merge_config.sh` and `make olddefconfig`. The fragment sets `CONFIG_BOOTDELAY=0` and turns off `CONFIG_BOOTMETH_EFI_BOOTMGR`. |
+| Config | `qemu_arm64_defconfig`, then `tools/linux/u-boot-tux.config` merged with `scripts/kconfig/merge_config.sh` and `make olddefconfig`. The fragment sets `CONFIG_BOOTDELAY=0` and turns off `CONFIG_BOOTMETH_EFI_BOOTMGR`. |
 | Binary of this build | `build/linux/u-boot.bin`, SHA-256 `7b9486aed668717b8fa0b1d9d3d62516f96588993f0eccb3e8d8d7d5e4fe283e` (1,506,312 bytes) |
 | Toolchain | the `debian:trixie` image of `tools/linux/Dockerfile`, which is not pinned by digest |
 

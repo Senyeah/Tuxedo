@@ -14,7 +14,7 @@
    is picked for the index, so the guest remounts an overlay on it). The guest's helper mounts each folder at
    /media/tux/<name>. Every path below a folder opens below that folder's descriptor (safe_path.h), and the
    Read-only and Copy-on-write modes refuse every change here, not only in the guest. Everything has uid and gid
-   1000 (the guest's user henge). */
+   1000 (the guest's user). */
 
 #define HV_FS_MAX_FOLDERS 8
 #define HV_FS_NAME_MAX 64 /* bytes of UTF-8 */

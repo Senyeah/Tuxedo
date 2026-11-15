@@ -41,10 +41,10 @@ import tempfile
 import time
 
 import pexpect
+import guest_user as gu
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MARK = "TUX_RC_"
-SHELL = r"henge@henge:[^\n]*\$ "
 PACKAGES = ["ffmpeg", "gcc", "libc6-dev", "pkg-config", "libavformat-dev", "libavcodec-dev", "libavutil-dev"]
 SIZES = {"4k": "3840x2160", "1080p": "1920x1080"}
 CODECS = ["h264", "hevc8", "hevc10", "av1", "vp9"]
@@ -123,7 +123,7 @@ def sh(p, cmd, limit=60):
     except pexpect.TIMEOUT:
         raise Fail(f"{cmd[:100]!r}: no answer within {limit} s")
     out = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", p.before).replace("\r", "\n")
-    return re.sub(r"^henge@henge:[^\n$]*\$ ", "", out), int(p.match.group(1))
+    return re.sub(gu.prompt_prefix(), "", out), int(p.match.group(1))
 
 
 def need(p, cmd, what, limit=60):
@@ -266,7 +266,7 @@ def boot(args, disk, share, err_log):
     print(f"--   booting {os.path.basename(disk)} (host load average {os.getloadavg()[0]:.1f})")
     p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 250))
     p.expect(r"\(automatic login\)", timeout=300)
-    p.expect(SHELL, timeout=60)
+    p.expect(gu.shell_wide(), timeout=60)
     sh(p, "stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1")
     sh(p, "systemctl is-system-running --wait", 180)
     return p
@@ -524,6 +524,7 @@ def main():
     args = ap.parse_args()
     args.linux_dir = args.linux_dir or linux_dir()
     image = args.image or os.path.join(args.linux_dir, "debian-desktop.img")
+    gu.use(image)
     for f in (args.tuxvm, image, os.path.join(args.linux_dir, "Image"), os.path.join(args.linux_dir, "initrd.img")):
         if not os.path.exists(f):
             raise Fail(f"missing {f}")

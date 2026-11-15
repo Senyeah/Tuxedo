@@ -57,6 +57,7 @@ struct LinuxUnpackTests {
         func machine(_ img: LinuxImage, disk: Int64) -> VirtualMachine {
             var m = VirtualMachine(name: "Dev \"quoted\"", ramMB: 1536, diskBytes: disk)
             m.osName = img.name
+            m.guestUser = "tux"
             return m
         }
 
@@ -84,10 +85,10 @@ struct LinuxUnpackTests {
         try check(Data(contentsOf: dir.appendingPathComponent("u-boot.bin")) == Data("firmware".utf8))
         precondition(!fm.fileExists(atPath: dir.appendingPathComponent("disk.img.hvsparse").path))
         let info = MachineFolder.info(dir)
-        precondition(info?.ramMB == 1536 && info?.name == "Dev \"quoted\"") // a quote must not break the file
+        precondition(info?.ramMB == 1536 && info?.name == "Dev \"quoted\"" && info?.guestUser == "tux") // a quote must not break the file
         try check(String(contentsOf: dir.appendingPathComponent("installed"), encoding: .utf8) == "Test Linux")
         let recovered = MachineList.recover(id: UUID(), folder: dir, defaultRAMMB: 2048)
-        precondition(recovered?.diskBytes == want && recovered?.osName == "Test Linux")
+        precondition(recovered?.diskBytes == want && recovered?.osName == "Test Linux" && recovered?.user == "tux")
 
         // The image's own size: no growing.
         let dir2 = tmp.appendingPathComponent("machine2")

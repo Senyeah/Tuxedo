@@ -34,10 +34,10 @@ import tempfile
 import time
 
 import pexpect
+import guest_user as gu
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MARK = "TUX_RC_"
-SHELL = r"henge@henge:[^\n]*\$ "
 WAYLAND = "export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0"
 PACKAGES = ["mesa-va-drivers", "vainfo", "ffmpeg", "mpv"]
 # Debian's ffmpeg has VA-API; tux-ffmpeg, first in PATH when installed, does not (it decodes with -hwaccel tux).
@@ -95,7 +95,7 @@ def sh(p, cmd, limit=60):
     except pexpect.TIMEOUT:
         raise Fail(f"{cmd[:100]!r}: no answer within {limit} s")
     out = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", p.before).replace("\r", "\n")
-    return re.sub(r"^henge@henge:[^\n$]*\$ ", "", out), int(p.match.group(1))
+    return re.sub(gu.prompt_prefix(), "", out), int(p.match.group(1))
 
 
 def need(p, cmd, what, limit=60):
@@ -160,7 +160,7 @@ def boot(args, disk, share, err_log):
     print(f"--   booting {os.path.basename(disk)} (host load average {os.getloadavg()[0]:.1f})")
     p = pexpect.spawn(argv[0], argv[1:], encoding="utf-8", codec_errors="replace", dimensions=(50, 250), env=env)
     p.expect(r"\(automatic login\)", timeout=300)
-    p.expect(SHELL, timeout=60)
+    p.expect(gu.shell_wide(), timeout=60)
     sh(p, "stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1")
     sh(p, "systemctl is-system-running --wait", 180)
     return p
@@ -326,6 +326,7 @@ def main():
     names = [n for n in CLIPS if CLIPS[n][0] in codecs]
     args.linux_dir = args.linux_dir or linux_dir()
     image = args.image or os.path.join(args.linux_dir, "debian-desktop.img")
+    gu.use(image)
     for f in (args.tuxvm, image, os.path.join(args.linux_dir, "Image"), os.path.join(args.linux_dir, "initrd.img"),
               os.path.join(args.linux_dir, "debian-desktop.partuuid")):
         if not os.path.exists(f):

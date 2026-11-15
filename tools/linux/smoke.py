@@ -46,6 +46,7 @@ import tempfile
 import time
 
 import pexpect
+import guest_user as gu
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CPROJECT = os.path.join(ROOT, "tools", "linux", "cproject.sh")
@@ -58,7 +59,6 @@ PROMPT = r"\(initramfs\) "
 # get a 5 s floor instead, as three times those is inside scheduling noise (E8 findings).
 LIMITS = {"prompt": 9, "command": 5, "poweroff": 5}
 
-SHELL = r"henge@henge:\S*\$ "  # not anchored: a kernel line can follow it in the same read
 MARK = "TUX_RC_"  # ends each --disk command; its echo shows "$?", never digits
 # Add a pattern only with a note in the findings log.
 DMESG_ALLOW = [
@@ -264,7 +264,7 @@ def sh(p, cmd, limit):
     p.sendline(f"{cmd}; echo {MARK}$?")
     expect(p, MARK + r"(\d+)\r*\n", limit, cmd)
     out = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", p.before).replace("\r", "")
-    return re.sub(r"^henge@henge:[^\n$]*\$ ", "", out), int(p.match.group(1))
+    return re.sub(gu.prompt_prefix(), "", out), int(p.match.group(1))
 
 
 def check(p, cmd, limit, ok, what):
@@ -280,7 +280,7 @@ def login(p, append, limit=DISK_LIMITS["login"]):
     if append:  # extlinux.conf says quiet, which hides this line
         expect(p, "Kernel command line: " + re.escape(append) + r"\r*\n", left(), "boot")
     expect(p, r"\(automatic login\)", left(), "autologin")
-    expect(p, SHELL, left(), "autologin")
+    expect(p, gu.shell(), left(), "autologin")
     # Quiet the console first: kernel lines in the middle of output break the parsing. The marker
     # is printed after that, and its echo has no "42" (sudo drops typed-ahead lines).
     p.sendline(f"stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1; echo {MARK}$((6 * 7))")
@@ -361,6 +361,7 @@ def uboot_checks(p, image, times, scale):
 def disk(args, times):
     d = args.linux_dir or linux_dir()
     kernel, initrd, image = (os.path.join(d, f) for f in ("Image", "initrd.img", "debian-console.img"))
+    gu.use(image)
     firmware = os.path.join(d, "u-boot.bin") if args.uboot else None
     for f in [image, image[:-4] + ".partuuid"] + ([firmware] if args.uboot else [kernel, initrd]):
         if not os.path.exists(f):
@@ -415,7 +416,7 @@ def disk(args, times):
                 check(p, "dpkg-query -W -f='${db:Status-Abbrev} ${Package}\\n' tux-guest", limit("command"),
                       lambda o: o == "ii  tux-guest", "tux-guest package")
                 check(p, "systemctl is-enabled tux-firstboot.service tux-grow.service "
-                      "home-henge-Tux.automount", limit("command"),
+                      "home-tux-Tux.automount", limit("command"),
                       lambda o: o.split() == ["enabled", "enabled", "enabled"], "tux-guest units enabled")
                 check(p, "lsblk -rno NAME,TYPE,MOUNTPOINTS /dev/vda", limit("command"),
                       lambda o: "vda1 part /" in o.split("\n"), "root on virtio-blk")
@@ -478,6 +479,7 @@ def wait_for_logind_keys(p):
 def power(args, times):
     d = args.linux_dir or linux_dir()
     kernel, initrd, image = (os.path.join(d, f) for f in ("Image", "initrd.img", "debian-console.img"))
+    gu.use(image)
     firmware = os.path.join(d, "u-boot.bin") if args.uboot else None
     for f in [image, image[:-4] + ".partuuid"] + ([firmware] if args.uboot else [kernel, initrd]):
         if not os.path.exists(f):
@@ -614,6 +616,7 @@ def stress(args, times):
     d = args.linux_dir or linux_dir()
     kernel, initrd = os.path.join(d, "Image"), os.path.join(d, "initrd.img")
     image = args.image or os.path.join(d, "debian-console.img")
+    gu.use(image)
     partuuid = os.path.join(d, "debian-console.partuuid")
     firmware = os.path.join(d, "u-boot.bin") if args.uboot else None
     for f in [image, partuuid] + ([firmware] if args.uboot else [kernel, initrd]):

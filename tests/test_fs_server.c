@@ -286,7 +286,7 @@ static void test_root(void) {
     check("root: no create", create_in(FUSE_ROOT_ID, "x", 1, NULL), -LX_EPERM);
     check("root: getattr", getattr(FUSE_ROOT_ID), 0);
     check("root: a directory", last_attr.mode, S_IFDIR | 0555);
-    check("root: owned by henge", last_attr.uid * 10000 + last_attr.gid, 1000 * 10000 + 1000);
+    check("root: owned by uid and gid 1000, the guest user", last_attr.uid * 10000 + last_attr.gid, 1000 * 10000 + 1000);
 }
 
 static void test_names(void) {
@@ -451,7 +451,7 @@ static void test_rw(void) {
     getattr(n);
     check("chmod took", last_attr.mode & 07777, 0600);
     s = (FuseSetattrIn){.valid = FATTR_UID | FATTR_GID, .uid = 1000, .gid = 1000};
-    check("chown to henge does nothing", call(FUSE_SETATTR, n, &s, sizeof s, NULL, 0), 0);
+    check("chown to uid and gid 1000 does nothing", call(FUSE_SETATTR, n, &s, sizeof s, NULL, 0), 0);
     s.uid = 0;
     check("chown to root", call(FUSE_SETATTR, n, &s, sizeof s, NULL, 0), -LX_EPERM);
     s = (FuseSetattrIn){.valid = FATTR_MTIME, .mtime = 1000000000};

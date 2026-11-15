@@ -25,11 +25,11 @@ import tempfile
 import time
 
 import pexpect
+import guest_user as gu
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OUT = os.environ.get("TUX_LINUX_OUT") or os.path.join(os.path.dirname(subprocess.run(
     ["git", "-C", ROOT, "rev-parse", "--path-format=absolute", "--git-common-dir"], capture_output=True, text=True, check=True).stdout.strip()), "build", "linux")
-SHELL = r"henge@henge:\S*\$ "
 MARK = "TUX_RC_"
 CPROJECT = os.path.join(ROOT, "tools", "linux", "cproject.sh")
 BAD_LOG = r"Out of memory|oom-kill|oom_reaper|Killed process|invoked oom|page allocation failure|Call trace|BUG:|WARNING:"
@@ -55,7 +55,7 @@ class Vm:
         cmd = ["/bin/sh", "-c", 'exec "$@" 2>"$0"', self.err, a.tuxvm, "--firmware", a.firmware, "--ram", str(a.ram), "--cpus", str(a.cpus), "--disk", self.disk]
         self.p = p = pexpect.spawn(cmd[0], cmd[1:], encoding="utf-8", timeout=60, env=env)
         p.expect(r"\(automatic login\)", timeout=120)
-        p.expect(SHELL, timeout=30)
+        p.expect(gu.shell(), timeout=30)
         p.sendline(f"set +m; stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1; echo {MARK}$((6 * 7))")
         p.expect(MARK + r"42\r*\n", timeout=30)
         self.need("systemctl is-system-running --wait", lambda o: o == "running", "system state", 120)
@@ -66,7 +66,7 @@ class Vm:
         p.sendline(f"{cmd}; echo {MARK}$?")
         p.expect(MARK + r"(\d+)\r*\n", timeout=limit)
         out = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", p.before).replace("\r", "")
-        out = re.sub(r"^henge@henge:[^\n$]*\$ ", "", out)
+        out = re.sub(gu.prompt_prefix(), "", out)
         return out.strip(), int(p.match.group(1))
 
     def need(self, cmd, ok, what, limit=30):
@@ -260,6 +260,7 @@ def main():
     ap.add_argument("--save-image", help="keep the used disk here (with the packages --load installed) for later --image runs")
     ap.add_argument("--work-dir", help="where the clone goes (the image's APFS volume; default TMPDIR)")
     args = ap.parse_args()
+    gu.use(args.image)
 
     tmp = tempfile.mkdtemp(prefix="balloon-check-", dir=args.work_dir)
     disk = os.path.join(tmp, "disk.img")

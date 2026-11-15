@@ -31,6 +31,16 @@ struct MachineModelTests {
             precondition(!String(decoding: data, as: UTF8.self).contains("\"\(dropped)\""), dropped)
         }
 
+        // The guest user: a machine with no field logs in as the legacy user; one made from a new image as tux.
+        precondition(old[0].guestUser == nil && old[0].user == "henge" && back[1].user == "henge") // legacy name
+        precondition(!String(decoding: data, as: UTF8.self).contains("guestUser"))
+        var tuxMachine = linux
+        tuxMachine.guestUser = "tux"
+        let tuxData = try JSONEncoder().encode([tuxMachine])
+        let tuxBack = MachineList.decode(tuxData, diskExists: { _ in true })!
+        precondition(tuxBack == [tuxMachine] && tuxBack[0].user == "tux")
+        precondition(String(decoding: tuxData, as: UTF8.self).contains("\"guestUser\":\"tux\""))
+
         // lastExternalScreen is optional: old JSON decodes without it, and a saved size round-trips.
         precondition(old[0].lastExternalScreen == nil && back[1].lastExternalScreen == nil)
         var withScreen = old[0]
@@ -66,6 +76,10 @@ struct MachineModelTests {
         let stale = try folder("linux-stale", files: ["installed": "", "machine.json": #"{"kind":"linux","ecid":7}"#, "disk.img": "xx", "u-boot.bin": "fw"])
         let srec = MachineList.recover(id: id, folder: stale, defaultRAMMB: 3072)!
         precondition(srec.name == "Linux" && srec.ramMB == 3072 && srec.osName == nil && srec.diskBytes == 2)
+        precondition(rec.guestUser == nil && rec.user == "henge" && srec.user == "henge") // legacy name
+        let tuxFolder = try folder("linux-tux", files: ["installed": "Debian 13\n", "machine.json": #"{"name":"T","ramMB":2048,"guestUser":"tux"}"#,
+                                                      "disk.img": "xx", "u-boot.bin": "fw"])
+        precondition(MachineList.recover(id: id, folder: tuxFolder, defaultRAMMB: 1024)!.user == "tux")
 
         let noFirmware = try folder("linux-nofw", files: ["installed": "", "machine.json": linuxJSON, "disk.img": "x"])
         precondition(MachineList.recover(id: id, folder: noFirmware, defaultRAMMB: 1024) == nil)
@@ -116,7 +130,11 @@ struct MachineModelTests {
         let exp = MachineFolder.exportInfo(VirtualMachine(name: "Deb", ramMB: 1024, diskBytes: 0))
         precondition(Set(exp.keys) == ["name", "ramMB"] && exp["ramMB"] as? Int == 1024)
         let exported = try JSONDecoder().decode(MachineFile.self, from: JSONSerialization.data(withJSONObject: exp))
-        precondition(exported.name == "Deb" && exported.ramMB == 1024)
+        precondition(exported.name == "Deb" && exported.ramMB == 1024 && exported.guestUser == nil)
+        let expTux = MachineFolder.exportInfo(tuxMachine)
+        precondition(Set(expTux.keys) == ["name", "ramMB", "guestUser"])
+        let expTuxBack = try JSONDecoder().decode(MachineFile.self, from: JSONSerialization.data(withJSONObject: expTux))
+        precondition(expTuxBack.guestUser == "tux")
 
         // R9: the screen choices are optional; old JSON decodes without them and saved ones round-trip.
         precondition(old[0].screenFollowsExternal == nil && back[1].screenFollowsExternal == nil)
@@ -232,8 +250,9 @@ struct MachineModelTests {
 
         // What Details shows.
         precondition(ForwardPolicy.title(ssh) == "SSH" && ForwardPolicy.title(web) == "Port 8000")
-        precondition(ForwardPolicy.connectText(ssh, address: "192.168.1.20") == "ssh -p 2222 henge@192.168.1.20")
-        precondition(ForwardPolicy.connectText(web, address: "192.168.1.20") == "192.168.1.20:8000")
+        precondition(ForwardPolicy.connectText(ssh, address: "192.168.1.20", user: old[0].user) == "ssh -p 2222 henge@192.168.1.20") // legacy name
+        precondition(ForwardPolicy.connectText(ssh, address: "192.168.1.20", user: tuxMachine.user) == "ssh -p 2222 tux@192.168.1.20")
+        precondition(ForwardPolicy.connectText(web, address: "192.168.1.20", user: "tux") == "192.168.1.20:8000")
         let lines = "127.0.0.1 lo0\n100.101.102.103 utun3\n192.168.1.20 en0\n"
         precondition(ForwardPolicy.parseAddresses(lines).map(\.ip) == ["192.168.1.20", "100.101.102.103", "127.0.0.1"])
         precondition(ForwardPolicy.networkName("en0") == "Wi-Fi" && ForwardPolicy.networkName("utun3") == "VPN"

@@ -115,6 +115,7 @@ final class Machines: ObservableObject {
             let missing = MachineFolder.required.filter { !FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path) }
             guard missing.isEmpty, Self.hasDisk(folder) else { throw message("The folder is missing \((missing + (Self.hasDisk(folder) ? [] : ["disk.img"])).joined(separator: ", ")).") }
             var machine = VirtualMachine(name: info.name ?? folder.lastPathComponent, ramMB: info.ramMB ?? 2048, diskBytes: 0)
+            machine.guestUser = info.guestUser
             importing = machine.name
             unpacked = 0
             let dest = machine.directory

@@ -36,6 +36,7 @@ TESTS = {
 
 def one(args, d, tuxvm, n):
     image = os.path.join(d, "debian-console.img")
+    smoke.gu.use(image)
     kernel, initrd = (os.path.join(d, f) for f in ("Image", "initrd.img"))
     partuuid = open(image[:-4] + ".partuuid").read().strip()
     append = f"console=ttyAMA0 earlycon=pl011,0x9000000 root=PARTUUID={partuuid} rw"

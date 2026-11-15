@@ -131,6 +131,7 @@ final class LinuxInstaller: ObservableObject {
         var machine = VirtualMachine(name: name.isEmpty ? "Debian" : name, ramMB: options.ramMB, diskBytes: options.diskBytes)
         machine.osName = image.name
         if image.touch == true { machine.touchInput = true }
+        machine.guestUser = image.guestUser
         phase = .decoding
         received = 0
         expected = image.diskBytes

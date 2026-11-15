@@ -99,7 +99,7 @@ echo "vmlinuz: $VMLINUZ_FILE"
 
 # GPT with one partition at 1 MB and the legacy-boot attribute
 truncate -s ${SIZE_MB}M "$IMG"
-sgdisk -o -n 1:2048:0 -t 1:8300 -c 1:henge-root -A 1:set:2 -u 1:"$PARTUUID" "$IMG" >/dev/null
+sgdisk -o -n 1:2048:0 -t 1:8300 -c 1:tux-root -A 1:set:2 -u 1:"$PARTUUID" "$IMG" >/dev/null
 SECTORS=$(sgdisk -i 1 "$IMG" | sed -n 's/^Partition size: \([0-9]*\) sectors.*/\1/p')
 [ -n "$SECTORS" ]
 
@@ -107,7 +107,7 @@ SECTORS=$(sgdisk -i 1 "$IMG" | sed -n 's/^Partition size: \([0-9]*\) sectors.*/\
 # A whole number of 16 KB pages: on a 16 KB kernel resize2fs rounds its target down to one, and would see a shrink.
 FSBYTES=$((SECTORS * 512 / 16384 * 16384))
 truncate -s "$FSBYTES" "$FSIMG"
-mke2fs -q -t ext4 -L henge-root -U "$FSUUID" -E root_owner=0:0,hash_seed="$FSUUID" -d "$ROOT" "$FSIMG"
+mke2fs -q -t ext4 -L tux-root -U "$FSUUID" -E root_owner=0:0,hash_seed="$FSUUID" -d "$ROOT" "$FSIMG"
 [ $(( $(dumpe2fs -h "$FSIMG" 2>/dev/null | sed -n 's/^Block count: *//p') * 4096 % 16384 )) -eq 0 ]
 dd if="$FSIMG" of="$IMG" bs=1M seek=1 conv=notrunc,sparse status=none
 rm -f "$FSIMG"
@@ -140,6 +140,9 @@ echo "$PARTUUID" > "/out/$NAME.partuuid"
     echo "image_file=$IMAGE_FILE"
     echo "rootfs_used_mb=$(du -sxm "$ROOT" | cut -f1)"
     echo "partuuid=$PARTUUID"
+    # Read back from the rootfs: tools/linux/guest_user.py and package-image.sh take the user from here
+    echo "guest_user=$(chroot "$ROOT" id -nu 1000)"
+    echo "guest_host=$(cat "$ROOT/etc/hostname")"
     echo "image_sha256=$(sha256sum /out/$NAME.img | cut -d' ' -f1)"
     echo "[extlinux.conf]"
     cat "$ROOT/boot/extlinux/extlinux.conf"

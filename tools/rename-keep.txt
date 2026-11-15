@@ -22,3 +22,8 @@ line-re:^Copyright: (the )?Henge (contributors|authors)
 # Dated result records that quote the old package names and versions (Decision 20).
 lines:docs/guest-video-encode-plan.md:806-809
 lines:docs/guest-video-encode-plan.md:955
+# Stage 10: the legacy guest user (machines copied from Henge), the kernel suffix of a plan no build uses, and a run record.
+line-re:(#|//) legacy name
+line-re:henge16k
+lines:LINUX-PLAN-11-display-resolution.md:248
+line-re:kernel/henge\.config

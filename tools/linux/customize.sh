@@ -2,7 +2,7 @@
 # Runs inside the new root filesystem, after the packages are installed.
 set -eu
 
-chmod 0440 /etc/sudoers.d/henge
+chmod 0440 /etc/sudoers.d/tux
 
 # Small initramfs; MODULES=dep would look at the build host
 sed -i 's/^MODULES=.*/MODULES=list/; s/^COMPRESS=.*/COMPRESS=zstd/' /etc/initramfs-tools/initramfs.conf
@@ -10,13 +10,13 @@ grep -q '^COMPRESS=zstd' /etc/initramfs-tools/initramfs.conf
 grep -q '^MODULES=list' /etc/initramfs-tools/initramfs.conf
 printf '%s\n' virtio_pci virtio_blk virtio_net virtio_rng ext4 >> /etc/initramfs-tools/modules
 
-useradd --create-home --shell /bin/bash --groups sudo,audio,video henge
-passwd -d henge
-install -d -o henge -g henge /home/henge/Tux
+useradd --create-home --shell /bin/bash --groups sudo,audio,video tux
+passwd -d tux
+install -d -o tux -g tux /home/tux/Tux
 
 # tux-guest enables its own units; fail the build if it did not
 dpkg-query -W -f='${Status}' tux-guest | grep -q 'install ok installed'
-systemctl is-enabled tux-firstboot.service tux-grow.service home-henge-Tux.automount tux-status.service
+systemctl is-enabled tux-firstboot.service tux-grow.service home-tux-Tux.automount tux-status.service
 systemctl enable systemd-networkd.service systemd-resolved.service systemd-timesyncd.service fstrim.timer
 # The device owns the volume and the screen brightness: a saved guest level must not set them at boot
 systemctl mask alsa-restore.service alsa-state.service 'systemd-backlight@backlight:tux-backlight.service'

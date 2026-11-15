@@ -24,9 +24,9 @@ import time
 import unicodedata
 
 import pexpect
+import guest_user as gu
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-SHELL = r"henge@henge:\S*\$ "
 MARK = "TUX_RC_"
 MB = 1 << 20
 
@@ -45,7 +45,7 @@ def sh(p, cmd, limit=30):
     p.sendline(f"{cmd}; echo {MARK}$?")
     p.expect(MARK + r"(\d+)\r*\n", timeout=limit)
     out = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", p.before).replace("\r", "")
-    out = re.sub(r"^henge@henge:[^\n$]*\$ ", "", out)
+    out = re.sub(gu.prompt_prefix(), "", out)
     return out.strip(), int(p.match.group(1))
 
 
@@ -60,7 +60,7 @@ def boot(args, disk, share):
     a = argv(args, disk, share)
     p = pexpect.spawn(a[0], a[1:], encoding="utf-8", timeout=60)
     p.expect(r"\(automatic login\)", timeout=120)
-    p.expect(SHELL, timeout=30)
+    p.expect(gu.shell(), timeout=30)
     p.sendline(f"stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1; echo {MARK}$((6 * 7))")
     p.expect(MARK + r"42\r*\n", timeout=30)
     need(p, "systemctl is-system-running --wait", lambda o: o == "running", "system state", 120)
@@ -90,13 +90,14 @@ def nfc(names):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--image", default=os.path.join(ROOT, "build", "linux", "debian-console.img"))
-    ap.add_argument("--firmware", default=os.path.join(ROOT, "build", "linux", "u-boot.bin"))
+    ap.add_argument("--image", default=os.path.join(gu.linux_dir(), "debian-console.img"))
+    ap.add_argument("--firmware", default=os.path.join(gu.linux_dir(), "u-boot.bin"))
     ap.add_argument("--tuxvm", default=os.path.join(ROOT, "build", "tuxvm"))
     ap.add_argument("--cpus", type=int, default=2)
     ap.add_argument("--size-mb", type=int, default=100, help="size of the copy test in each direction")
     ap.add_argument("--work-dir", help="where the clone goes (the image's APFS volume; default TMPDIR)")
     args = ap.parse_args()
+    gu.use(args.image)
 
     tmp = tempfile.mkdtemp(prefix="share-check-", dir=args.work_dir)
     disk = os.path.join(tmp, "disk.img")
@@ -106,18 +107,18 @@ def main():
     try:
         subprocess.run(["/bin/cp", "-c", args.image, disk], check=True)
         p = boot(args, disk, share)
-        home = "/home/henge/Tux"
+        home = f"{gu.home()}/Tux"
 
-        need(p, "systemctl is-enabled home-henge-Tux.automount", lambda o: o == "enabled", "automount enabled")
-        need(p, "systemctl is-active home-henge-Tux.automount", lambda o: o == "active", "automount active")
-        need(p, "systemctl is-active home-henge-Tux.mount; true", lambda o: o == "inactive", "not mounted before use")
+        need(p, "systemctl is-enabled home-tux-Tux.automount", lambda o: o == "enabled", "automount enabled")
+        need(p, "systemctl is-active home-tux-Tux.automount", lambda o: o == "active", "automount active")
+        need(p, "systemctl is-active home-tux-Tux.mount; true", lambda o: o == "inactive", "not mounted before use")
         t = time.monotonic()
         need(p, f"ls -la {home}", what="first visit", limit=60)
         print(f"  first visit mounts the share: {time.monotonic() - t:.2f} s")
         need(p, f"findmnt -n -t fuse -o FSTYPE,SOURCE {home}", lambda o: o.split() == ["fuse", "http://10.0.2.4/"],
              "mount type and source")
-        need(p, f"stat -c %U:%G {home}", lambda o: o == "henge:henge", "owner of the folder")
-        need(p, f"touch {home}/owned && stat -c %U {home}/owned", lambda o: o == "henge", "owner of a new file")
+        need(p, f"stat -c %U:%G {home}", lambda o: o == f"{gu.user()}:{gu.user()}", "owner of the folder")
+        need(p, f"touch {home}/owned && stat -c %U {home}/owned", lambda o: o == gu.user(), "owner of a new file")
         need(p, f"rm {home}/owned")
 
         # Create, rename, delete
@@ -213,7 +214,7 @@ def main():
 
         # No share: boot must reach running, and the folder must give up in time and not hang
         p = boot(args, disk, None)
-        need(p, "systemctl is-active home-henge-Tux.automount", lambda o: o == "active", "automount active")
+        need(p, "systemctl is-active home-tux-Tux.automount", lambda o: o == "active", "automount active")
         t = time.monotonic()
         out, rc = sh(p, f"ls {home}", 90)
         waited = time.monotonic() - t

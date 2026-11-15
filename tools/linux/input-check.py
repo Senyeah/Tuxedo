@@ -22,10 +22,10 @@ import tempfile
 import time
 
 import pexpect
+import guest_user as gu
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MARK = "TUX_RC_"
-SHELL = r"henge@henge:[^\n]*\$ "
 
 
 class Fail(Exception):
@@ -47,7 +47,7 @@ def sh(p, cmd, limit=60):
     except pexpect.TIMEOUT:
         raise Fail(f"{cmd!r}: no answer within {limit} s")
     out = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", p.before).replace("\r", "")
-    return re.sub(r"^henge@henge:[^\n$]*\$ ", "", out), int(p.match.group(1))
+    return re.sub(gu.prompt_prefix(), "", out), int(p.match.group(1))
 
 
 def feed(path, lines):
@@ -118,6 +118,7 @@ def main():
     args = ap.parse_args()
     d = args.linux_dir or linux_dir()
     image = args.image or os.path.join(d, "debian-desktop.img")
+    gu.use(image)
     partuuid = open(os.path.join(d, "debian-desktop.partuuid")).read().strip()
     kernel, initrd = (os.path.join(d, f) for f in ("Image", "initrd.img"))
     # u-boot.bin has no countdown for the keyboard to stop (P2)
@@ -142,7 +143,7 @@ def main():
                           env=dict(os.environ, HV_INPUT_FILE=infile))
         try:
             p.expect(r"\(automatic login\)", timeout=150)
-            p.expect(SHELL, timeout=60)
+            p.expect(gu.shell_wide(), timeout=60)
             sh(p, "stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1")
             time.sleep(4)  # labwc and logind settle
             run(p, args, infile)

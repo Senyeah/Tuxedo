@@ -76,6 +76,7 @@ def main():
     ap.add_argument("--pause", type=int, default=60, help="seconds of the pause in step 5")
     ap.add_argument("--work-dir", help="where the clone goes (the image's APFS volume)")
     args = ap.parse_args()
+    smoke.gu.use(args.image)
     kernel, initrd = (os.path.join(smoke.linux_dir(), f) for f in ("Image", "initrd.img"))
     partuuid = open(args.image[:-4] + ".partuuid").read().strip()
     append = f"console=ttyAMA0 earlycon=pl011,0x9000000 root=PARTUUID={partuuid} rw"

@@ -2,7 +2,7 @@
 Description=Tuxedo shared folder (on first use)
 
 [Automount]
-Where=/home/henge/Tux
+Where=/home/tux/Tux
 TimeoutIdleSec=0
 
 [Install]

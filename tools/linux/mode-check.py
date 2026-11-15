@@ -66,6 +66,7 @@ def main():
     args = ap.parse_args()
     d = args.linux_dir or smoke.linux_dir()
     kernel, initrd, image = (os.path.join(d, f) for f in ("Image", "initrd.img", "debian-console.img"))
+    smoke.gu.use(image)
     for f in (args.tuxvm, kernel, initrd, image, image[:-4] + ".partuuid"):
         if not os.path.exists(f):
             raise Fail(f"missing {f}")

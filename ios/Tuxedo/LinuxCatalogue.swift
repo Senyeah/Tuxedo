@@ -20,6 +20,8 @@ struct LinuxImage: Codable, Identifiable, Hashable {
     var minBuild: Int?
     /// A machine made from it starts in touch mode (LINUX-PLAN-12 decision 8: a Plasma image). Missing: the pointer.
     var touch: Bool?
+    /// The image's login user (package-image.sh reads it from the build's manifest). Missing: an image from before Tuxedo.
+    var guestUser: String?
 
     var downloadBytes: Int64 { diskBytes + firmwareBytes }
 

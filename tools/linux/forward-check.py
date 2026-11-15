@@ -27,6 +27,7 @@ import tempfile
 import time
 
 import pexpect
+import guest_user as gu
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import smoke  # noqa: E402
@@ -112,7 +113,7 @@ class Run:
         env = {k: v for k, v in os.environ.items() if k != "SSH_AUTH_SOCK"}  # only the run's own key
         cmd = ["ssh", "-F", "/dev/null", "-i", self.key, "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none",
                "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "BatchMode=yes",
-               "-o", "ConnectTimeout=15", "-o", "LogLevel=ERROR", "-p", str(port), f"henge@{addr}", command]
+               "-o", "ConnectTimeout=15", "-o", "LogLevel=ERROR", "-p", str(port), f"{gu.user()}@{addr}", command]
         r = subprocess.run(cmd, input=data, capture_output=True, timeout=limit, env=env)
         if r.returncode:
             raise Fail(f"ssh to {addr}:{port} ({command!r}): status {r.returncode}, {r.stderr.decode(errors='replace')[-500:]!r}")
@@ -165,7 +166,7 @@ def check(args, run):
     run.need(f"mkdir -p -m 700 ~/.ssh && echo '{pub}' > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys")
 
     out = run.ssh("127.0.0.1", ssh_port, "echo forward-ok $(id -un) $(uname -m)").decode().strip()
-    if out != "forward-ok henge aarch64":
+    if out != f"forward-ok {gu.user()} aarch64":
         raise Fail(f"ssh through the forward said {out!r}")
     blob = os.urandom(16 << 20)
     want = hashlib.sha256(blob).hexdigest()
@@ -180,7 +181,7 @@ def check(args, run):
     down = time.monotonic() - t
     if hashlib.sha256(back).hexdigest() != run.need("cut -d' ' -f1 /tmp/blob.sha"):
         raise Fail("16 MB from the guest over ssh arrived damaged")
-    print(f"ok: ssh -p {ssh_port} henge@127.0.0.1 logs in with the run's key; 16 MB in {16 / up:.1f} MB/s, out {16 / down:.1f} MB/s")
+    print(f"ok: ssh -p {ssh_port} {gu.user()}@127.0.0.1 logs in with the run's key; 16 MB in {16 / up:.1f} MB/s, out {16 / down:.1f} MB/s")
 
     run.serve()
     run.curl("127.0.0.1", http_port)
@@ -216,7 +217,7 @@ def check(args, run):
         out = run.ssh(lan, ssh_port, "echo forward-ok").decode().strip()
         if out != "forward-ok":
             raise Fail(f"ssh on {lan} said {out!r}")
-        print(f"ok: --forward-addr local: ssh -p {ssh_port} henge@{lan} and henge@127.0.0.1")
+        print(f"ok: --forward-addr local: ssh -p {ssh_port} {gu.user()}@{lan} and {gu.user()}@127.0.0.1")
     else:
         print("ok: --forward-addr local: ssh on 127.0.0.1 (no LAN address to try)")
     run.serve()
@@ -234,6 +235,7 @@ def main():
     ap.add_argument("--work-dir", help="where the clone goes (the image's APFS volume; default TMPDIR)")
     ap.add_argument("--keep-logs", help="copy tuxvm's logs here")
     args = ap.parse_args()
+    gu.use(args.image)
     tmp = tempfile.mkdtemp(prefix="forward-check-", dir=args.work_dir)
     run = Run(args, tmp)
     try:

@@ -19,10 +19,10 @@ import tempfile
 import time
 
 import pexpect
+import guest_user as gu
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 QEMU = os.environ.get("QEMU", "/opt/homebrew/bin/qemu-system-aarch64")
-SHELL = r"henge@henge:\S*\$ "
 MARK = "TUX_RC_"
 
 
@@ -45,14 +45,14 @@ def sh(p, cmd, limit=30):
     p.sendline(f"{cmd}; echo {MARK}$?")
     p.expect(MARK + r"(\d+)\r*\n", timeout=limit)
     out = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", p.before).replace("\r", "")
-    out = re.sub(r"^henge@henge:[^\n$]*\$ ", "", out)
+    out = re.sub(gu.prompt_prefix(), "", out)
     return out.strip(), int(p.match.group(1))
 
 
 def boot(args, disk, scale):
     p = pexpect.spawn(argv(args, disk)[0], argv(args, disk)[1:], encoding="utf-8", timeout=60 * scale)
     p.expect(r"\(automatic login\)", timeout=120 * scale)
-    p.expect(SHELL, timeout=30 * scale)
+    p.expect(gu.shell(), timeout=30 * scale)
     p.sendline(f"stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1; echo {MARK}$((6 * 7))")
     p.expect(MARK + r"42\r*\n", timeout=30)
     # The grow unit can still run when the autologin shell appears
@@ -87,14 +87,15 @@ def grown(p, gb, what):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--qemu", action="store_true")
-    ap.add_argument("--image", default=os.path.join(ROOT, "build", "linux", "debian-console.img"))
-    ap.add_argument("--firmware", default=os.path.join(ROOT, "build", "linux", "u-boot.bin"))
+    ap.add_argument("--image", default=os.path.join(gu.linux_dir(), "debian-console.img"))
+    ap.add_argument("--firmware", default=os.path.join(gu.linux_dir(), "u-boot.bin"))
     ap.add_argument("--tuxvm", default=os.path.join(ROOT, "build", "tuxvm"))
     ap.add_argument("--size-gb", type=int, default=16)
     ap.add_argument("--extra-gb", type=int, default=4)
     ap.add_argument("--cpus", type=int, default=1)
     ap.add_argument("--work-dir", help="where the clone goes (the image's APFS volume; default TMPDIR)")
     args = ap.parse_args()
+    gu.use(args.image)
     scale = 4 if args.qemu else 1
 
     tmp = tempfile.mkdtemp(prefix="grow-check-", dir=args.work_dir)
@@ -118,7 +119,7 @@ def main():
              lambda o: "disk unchanged" not in o, "first boot ran the grow tools")
         need(p, "cat /var/lib/tux/grow-size", lambda o: o == str(args.size_gb << 21), "grow stamp after first boot")
         mid = need(p, "cat /etc/machine-id", lambda o: re.fullmatch(r"[0-9a-f]{32}", o), "machine id")
-        need(p, "echo growcheck > /home/henge/keep; sync", lambda o: True, "write a file")
+        need(p, "echo growcheck > ~/keep; sync", lambda o: True, "write a file")
         p.sendline("sudo poweroff")
         p.expect(pexpect.EOF, timeout=60 * scale)
 
@@ -131,7 +132,7 @@ def main():
         need(p, "systemctl show -p ConditionResult tux-firstboot.service",
              lambda o: o == "ConditionResult=no", "first-boot unit skipped")
         need(p, "cat /etc/machine-id", lambda o: o == mid, "machine id kept")
-        need(p, "cat /home/henge/keep", lambda o: o == "growcheck", "file kept")
+        need(p, "cat ~/keep", lambda o: o == "growcheck", "file kept")
         need(p, "systemctl is-system-running", lambda o: o == "running", "system state")
         p.sendline("sudo poweroff")
         p.expect(pexpect.EOF, timeout=60 * scale)
@@ -146,7 +147,7 @@ def main():
              lambda o: "disk unchanged" not in o and "resize2fs" in o, "a bigger disk runs the grow tools")
         need(p, "cat /var/lib/tux/grow-size", lambda o: o == str(bigger << 21), "grow stamp after growing")
         need(p, "cat /etc/machine-id", lambda o: o == mid, "machine id kept")
-        need(p, "cat /home/henge/keep", lambda o: o == "growcheck", "file kept")
+        need(p, "cat ~/keep", lambda o: o == "growcheck", "file kept")
         need(p, "systemctl is-system-running", lambda o: o == "running", "system state")
         p.sendline("sudo poweroff")
         p.expect(pexpect.EOF, timeout=60 * scale)

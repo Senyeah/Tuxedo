@@ -31,11 +31,11 @@ import tempfile
 import time
 
 import pexpect
+import guest_user as gu
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PROBE = os.path.join(ROOT, "tools", "linux", "wlprobe.py")
 MARK = "TUX_RC_"
-SHELL = r"henge@henge:[^\n]*\$ "
 WAYLAND = "export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0"
 SCENE = "build:duration=10.0"  # the gate's short scene set
 SIZE = "1280x720"
@@ -65,7 +65,7 @@ def sh(p, cmd, limit=60):
         raise Fail(f"{cmd[:80]!r}: no answer within {limit} s")
     out = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", p.before).replace("\r", "")
     out = "\n".join(l for l in out.splitlines() if not l.startswith("[virgl"))  # virglrenderer's own log lines
-    return re.sub(r"^henge@henge:[^\n$]*\$ ", "", out), int(p.match.group(1))
+    return re.sub(gu.prompt_prefix(), "", out), int(p.match.group(1))
 
 
 def lit_fraction(path):
@@ -158,6 +158,7 @@ def boot(args, accel, d, tmp):
     """One boot and every measurement. Returns the numbers."""
     tag = "virgl" if accel else "pixman"
     image = os.path.join(d, "debian-desktop.img")
+    gu.use(image)
     partuuid = open(os.path.join(d, "debian-desktop.partuuid")).read().strip()
     clone, shot = os.path.join(tmp, f"disk-{tag}.img"), os.path.join(tmp, f"shot-{tag}.png")
     r = subprocess.run(["/bin/cp", "-c", image, clone], capture_output=True, text=True)
@@ -174,7 +175,7 @@ def boot(args, accel, d, tmp):
                       env=dict(os.environ, HV_SHOT_SECS="1"))
     try:
         p.expect(r"\(automatic login\)", timeout=300)
-        p.expect(SHELL, timeout=60)
+        p.expect(gu.shell_wide(), timeout=60)
         sh(p, "stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1")
         time.sleep(10)  # labwc and foot settle
         measure(p, args, accel, tag, shot, res)

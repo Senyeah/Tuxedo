@@ -75,6 +75,7 @@ def guest_clip(p, env=WL, limit=15, want=None):
 
 def one(args):
     image = args.image
+    smoke.gu.use(image)
     kernel, initrd = (os.path.join(smoke.linux_dir(), f) for f in ("Image", "initrd.img"))
     partuuid = open(image[:-4] + ".partuuid").read().strip()
     append = f"console=ttyAMA0 earlycon=pl011,0x9000000 root=PARTUUID={partuuid} rw"

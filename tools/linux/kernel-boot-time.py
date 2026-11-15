@@ -40,11 +40,11 @@ import tempfile
 import time
 
 import pexpect
+import guest_user as gu
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 QEMU = os.environ.get("QEMU", "/opt/homebrew/bin/qemu-system-aarch64")
 KVER = "6.12.107+deb13-arm64-16k"
-SHELL = r"henge@henge:\S*\$ "
 ANSI = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
 MARKS = [
     ("unpack", r"Freeing initrd memory"),
@@ -151,7 +151,7 @@ def one(a, machine, boot, initrd_on, files, tmp):
         t_kernel = time.monotonic()
         res["uboot_total"] = t_kernel - t0
         if initrd_on:
-            expect(p, SHELL, lim, "login")
+            expect(p, gu.shell(), lim, "login")
             res["login"] = time.monotonic() - t_kernel
             p.sendline("cat /proc/uptime")
             expect(p, r"(\d+\.\d+) \d+\.\d+\r*\n", 10, "uptime")
@@ -201,6 +201,7 @@ def main():
     ap.add_argument("--json", default=None)
     a = ap.parse_args()
     a.dir = a.dir or linux_dir()
+    gu.use(os.path.join(a.dir, "debian-console.img"))
     # The countdown is stopped to type commands, so use the stock build when there is one (P2)
     fw = next((f for f in (os.path.join(a.dir, "u-boot-stock.bin"), os.path.join(a.dir, "u-boot.bin")) if os.path.exists(f)),
               os.path.join(a.dir, "u-boot.bin"))

@@ -27,10 +27,10 @@ import tempfile
 import time
 
 import pexpect
+import guest_user as gu
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MARK = "TUX_RC_"
-SHELL = r"henge@henge:[^\n]*\$ "
 ENVSET = "export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 MESA_SHADER_CACHE_DISABLE=true"
 GAP = """import os, sys, time
 mx = n = over = 0
@@ -67,7 +67,7 @@ def sh(p, cmd, limit=60):
         raise Fail(f"{cmd[:80]!r}: no answer within {limit} s")
     out = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", p.before).replace("\r", "")
     out = "\n".join(l for l in out.splitlines() if not l.startswith("[virgl"))
-    return re.sub(r"^henge@henge:[^\n$]*\$ ", "", out), int(p.match.group(1))
+    return re.sub(gu.prompt_prefix(), "", out), int(p.match.group(1))
 
 
 def settle(p, secs):
@@ -119,6 +119,7 @@ def start_ms(p, scene, secs, gap):
 
 def boot_process(args, d, tmp, cache, n):
     image = os.path.join(d, "debian-desktop.img")
+    gu.use(image)
     partuuid = open(os.path.join(d, "debian-desktop.partuuid")).read().strip()
     clone = os.path.join(tmp, f"disk-{n}.img")
     r = subprocess.run(["/bin/cp", "-c", image, clone], capture_output=True, text=True)
@@ -134,7 +135,7 @@ def boot_process(args, d, tmp, cache, n):
     res = {"start 1": {}, "start 2": {}, "after restart": {}}
     try:
         p.expect(r"\(automatic login\)", timeout=300)
-        p.expect(SHELL, timeout=60)
+        p.expect(gu.shell_wide(), timeout=60)
         sh(p, "stty -echo; bind 'set enable-bracketed-paste off'; sudo dmesg -n 1")
         put_text(p, GAP, "/tmp/gap.py")
         settle(p, 10)
@@ -144,7 +145,7 @@ def boot_process(args, d, tmp, cache, n):
             res["start 2"][scene] = start_ms(p, scene, args.duration, False)
         p.sendline("sudo reboot")
         p.expect(r"\(automatic login\)", timeout=300)
-        p.expect(SHELL, timeout=60)
+        p.expect(gu.shell_wide(), timeout=60)
         settle(p, 10)
         for scene in args.scenes:
             res["after restart"][scene] = start_ms(p, scene, args.duration, False)

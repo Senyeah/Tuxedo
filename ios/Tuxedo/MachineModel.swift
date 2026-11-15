@@ -49,6 +49,10 @@ struct VirtualMachine: Identifiable, Codable, Hashable {
     var folders: [SharedFolder]?
     /// Linux: TCP ports on the phone's local networks that lead into the guest (ForwardPolicy). Missing: none.
     var forwards: [PortForward]?
+    /// Linux: the guest's login user, from its image. Missing: the legacy name (a machine from before Tuxedo).
+    var guestUser: String?
+    var user: String { guestUser ?? Self.legacyGuestUser }
+    static let legacyGuestUser = "henge" // legacy name
 
     var directory: URL { MachinePaths.directory(for: id) }
     var disk: URL { directory.appendingPathComponent("disk.img") }
@@ -107,6 +111,8 @@ enum MachinePaths {
 struct MachineFile: Codable {
     var name: String?
     var ramMB: Int?
+    /// Missing: VirtualMachine.legacyGuestUser.
+    var guestUser: String?
 }
 
 /// What an exported machine folder holds.
@@ -124,7 +130,9 @@ enum MachineFolder {
 
     /// machine.json for an export.
     static func exportInfo(_ machine: VirtualMachine) -> [String: Any] {
-        ["name": machine.name, "ramMB": machine.ramMB]
+        var info: [String: Any] = ["name": machine.name, "ramMB": machine.ramMB]
+        if let user = machine.guestUser { info["guestUser"] = user }
+        return info
     }
 }
 
@@ -156,6 +164,7 @@ enum MachineList {
         var machine = VirtualMachine(id: id, name: info.name ?? "Linux", ramMB: info.ramMB ?? defaultRAMMB, diskBytes: size)
         let os = (try? String(contentsOf: marker, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         machine.osName = os.isEmpty ? nil : os
+        machine.guestUser = info.guestUser
         return machine
     }
 

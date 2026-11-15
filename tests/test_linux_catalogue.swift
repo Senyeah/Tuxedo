@@ -14,7 +14,7 @@ struct LinuxCatalogueTests {
       "kernel":"6.12.107+deb13-arm64-16k","minBuild":102},
      {"id":"future","name":"Future","version":"1","kind":"console","diskURL":"https://cdn.example.com/f.lzfse","diskBytes":10,
       "diskSHA256":"00","unpackedBytes":20,"logicalBytes":30,"firmwareURL":"https://cdn.example.com/u.bin","firmwareBytes":5,
-      "firmwareSHA256":"00","minBuild":9999,"touch":true}]}
+      "firmwareSHA256":"00","minBuild":9999,"touch":true,"guestUser":"tux"}]}
     """
 
     static func fails(_ body: () throws -> Void) -> String? {
@@ -31,6 +31,7 @@ struct LinuxCatalogueTests {
         precondition(a.firmwareURL.absoluteString == "http://192.168.1.5:8000/u-boot-860450f43d3b.bin")
         precondition(images[1].diskURL.absoluteString == "https://cdn.example.com/f.lzfse") // absolute URLs stay
         precondition(a.touch == nil && images[1].touch == true) // TS7: "touch": true starts a new machine in touch mode
+        precondition(a.guestUser == nil && images[1].guestUser == "tux") // an entry with no user is an image from before Tuxedo
         precondition(fails { _ = try LinuxCatalogue.decode(Data("{\"nope\":1}".utf8), base: base) } != nil)
         precondition(fails { _ = try LinuxCatalogue.decode(Data("{\"images\":[{\"id\":\"x\"}]}".utf8), base: base) } != nil)
 
@@ -74,7 +75,7 @@ struct LinuxCatalogueTests {
         let file = tmp.appendingPathComponent("blob")
         try Data("tux".utf8).write(to: file)
         let hello = try FileHash.sha256(of: file)
-        precondition(hello == "90961d66d0be50ec2ba9eb0bc994120ebd6e0d61052185c53bdf9107778436bd")
+        precondition(hello == "ec2dc675422c8eeb1eef26e7c67c3d74713e947bda7378896d8e3cf4dc5f0161")
         precondition(fails { try FileHash.verify(file, expected: hello.uppercased(), what: "disk") } == nil && fm.fileExists(atPath: file.path))
         let bad = fails { try FileHash.verify(file, expected: String(repeating: "0", count: 64), what: "disk") }
         precondition(bad?.contains("damaged") == true && !fm.fileExists(atPath: file.path))
