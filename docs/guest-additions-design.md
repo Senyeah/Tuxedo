@@ -189,10 +189,10 @@ The agent posts `ack`, then runs the steps in order. While it runs a job it hold
 - **Plain guest with no `tux-guest`:** the app cannot reach it. It shows this and a **Type the commands** button:
 
 ```
-mkdir -p /mnt/tux && mount -t virtiofs -o ro tux-files /mnt/tux && sh /mnt/tux/tux-additions/install
+s=; [ "$(id -u)" = 0 ] || s=sudo; $s mkdir -p /mnt/tux && $s mount -t virtiofs -o ro tux-files /mnt/tux && $s sh /mnt/tux/tux-additions/install
 ```
 
-  This works in a root shell. The `install` script runs `sudo` on itself when it is not root, and the `mount` needs root too, so the app text says "Log in as root, or run `sudo -i` first". After `install` finishes, `tux-files` starts and the normal flow takes over, with no second Insert.
+  The command works in a root shell and in the `tux` user's shell: it puts `sudo` in front of each step when the user is not root. (The images' `tux` user has passwordless sudo.) After `install` finishes, `tux-files` starts and the normal flow takes over, with no second Insert.
 
 ## 7. The host
 

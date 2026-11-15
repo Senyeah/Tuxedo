@@ -788,7 +788,7 @@ struct AdditionsPolicyTests {
         check("guest user: another name is saved", AdditionsPolicy.guestUserUpdate(name: "bob", current: "tux") == "bob"
               && AdditionsPolicy.guestUserUpdate(name: "bob", current: nil) == "bob" && AdditionsPolicy.guestUserUpdate(name: "bob", current: "bob") == nil)
         check("guest user: back to tux", AdditionsPolicy.guestUserUpdate(name: "tux", current: "bob") == "tux")
-        check("bootstrap command", AdditionsPolicy.bootstrapCommand == "mkdir -p /mnt/tux && mount -t virtiofs -o ro tux-files /mnt/tux && sh /mnt/tux/tux-additions/install")
+        check("bootstrap command", AdditionsPolicy.bootstrapCommand == "s=; [ \"$(id -u)\" = 0 ] || s=sudo; $s mkdir -p /mnt/tux && $s mount -t virtiofs -o ro tux-files /mnt/tux && $s sh /mnt/tux/tux-additions/install")
     }
 
     // MARK: The saved report

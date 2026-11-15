@@ -262,7 +262,7 @@ enum AdditionsPolicy {
     static let jobStartTimeout: TimeInterval = 90
 
     /// The bootstrap for a guest with no tux-guest (design 6).
-    static let bootstrapCommand = "mkdir -p /mnt/tux && mount -t virtiofs -o ro tux-files /mnt/tux && sh /mnt/tux/tux-additions/install"
+    static let bootstrapCommand = "s=; [ \"$(id -u)\" = 0 ] || s=sudo; $s mkdir -p /mnt/tux && $s mount -t virtiofs -o ro tux-files /mnt/tux && $s sh /mnt/tux/tux-additions/install"
 }
 
 /// The texts of Tuxedo Additions, short, in Simplified Technical English.
@@ -307,7 +307,7 @@ enum AdditionsText {
     static let tuxMountNote = "The ~/Tux folder still uses /home/tux."
 
     static let connectWaiting = "Waiting for the guest. Tuxedo Additions starts by itself when the guest has tux-guest 1.11 or newer."
-    static let connectBootstrap = "The guest does not answer. It may not have tux-guest. Log in as root, or run sudo -i first. Then run this command in the guest."
+    static let connectBootstrap = "The guest does not answer. It may not have tux-guest. Run this command in the guest. It uses sudo when you are not root."
     static let typeCommands = "Type the commands"
     static let copyCommands = "Copy"
     static let restartNote = "Restart the machine to use the new desktop and settings."

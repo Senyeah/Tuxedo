@@ -360,8 +360,8 @@ def sc_j(m, media):
 
 
 def sc_a(m, media, n):
-    # the design's bootstrap command (section 6); the console is the tux user, so only the mount needs sudo here
-    m.need("sudo sh -c 'mkdir -p /mnt/tux && mount -t virtiofs -o ro tux-files /mnt/tux'", what="mount tux-files at /mnt/tux")
+    # the mount part of the app's bootstrap command (design section 6), typed as the tux user: it must use sudo itself
+    m.need('s=; [ "$(id -u)" = 0 ] || s=sudo; $s mkdir -p /mnt/tux && $s mount -t virtiofs -o ro tux-files /mnt/tux', what="mount tux-files at /mnt/tux")
     m.need("ls /mnt/tux/tux-additions/install /mnt/tux/tux-additions/SHA256SUMS.gpg", what="the media under /mnt/tux")
     m.need("[ $(id -u) -ne 0 ]", what="the console is not root before the install")
     # no network: only the link to the app stays
