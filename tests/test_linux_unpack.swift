@@ -87,6 +87,7 @@ struct LinuxUnpackTests {
         let info = MachineFolder.info(dir)
         precondition(info?.ramMB == 1536 && info?.name == "Dev \"quoted\"" && info?.guestUser == "tux") // a quote must not break the file
         try check(String(contentsOf: dir.appendingPathComponent("installed"), encoding: .utf8) == "Test Linux")
+        precondition(!fm.fileExists(atPath: dir.appendingPathComponent("installing").path)) // the installing marker goes when the folder is complete
         let recovered = MachineList.recover(id: UUID(), folder: dir, defaultRAMMB: 2048)
         precondition(recovered?.diskBytes == want && recovered?.osName == "Test Linux" && recovered?.user == "tux")
 

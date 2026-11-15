@@ -58,6 +58,7 @@ final class Machines: ObservableObject {
     /// Machine folders nothing refers to (an install cut short by a crash or by quitting): their disks take real space.
     /// A folder whose install finished (Tuxedo stopped before it was listed) is listed again instead, and nothing is
     /// removed when the list itself could not be read: every machine would look unreferenced.
+    /// A folder that Tuxedo did not start (MachineList.leftover) is kept: it can be a copy put there from outside.
     private func removeLeftovers() {
         if listUnreadable {
             TuxLog.log("machines", "the list of machines could not be read: no machine folder is removed")
@@ -68,14 +69,17 @@ final class Machines: ObservableObject {
         let items = (try? fm.contentsOfDirectory(at: Self.root, includingPropertiesForKeys: nil)) ?? []
         for item in items {
             guard let id = UUID(uuidString: item.lastPathComponent), !known.contains(id) else { continue }
-            if let machine = MachineList.recover(id: id, folder: item, defaultRAMMB: Device.suggestedRAMGB * 1024) {
+            switch MachineList.leftover(id: id, folder: item, defaultRAMMB: Device.suggestedRAMGB * 1024) {
+            case .recover(let machine):
                 all.append(machine)
                 save()
                 TuxLog.log("machines", "\(machine.name) finished installing but was not listed: listed again")
-                continue
+            case .remove:
+                TuxLog.log("machines", "removing the unfinished machine \(id)")
+                try? fm.removeItem(at: item)
+            case .keep:
+                TuxLog.log("machines", "the folder \(id) is not in the list and Tuxedo did not start it: kept")
             }
-            TuxLog.log("machines", "removing the unfinished machine \(id)")
-            try? fm.removeItem(at: item)
         }
     }
 
@@ -121,6 +125,8 @@ final class Machines: ObservableObject {
             let dest = machine.directory
             let fm = FileManager.default
             try fm.createDirectory(at: dest, withIntermediateDirectories: true)
+            let installing = dest.appendingPathComponent(MachinePaths.installingMarker)
+            try Data().write(to: installing)
             excludeFromBackup()
             for name in MachineFolder.files {
                 let from = folder.appendingPathComponent(name)
@@ -145,6 +151,7 @@ final class Machines: ObservableObject {
             machine.diskBytes = (try? fm.attributesOfItem(atPath: machine.disk.path)[.size] as? Int64) ?? 0
             all.append(machine)
             save()
+            try? fm.removeItem(at: installing) // after the list has it
             TuxLog.log("machines", "imported \(machine.name) (\(machine.diskBytes >> 30) GB disk)")
         } catch {
             lastError = error.localizedDescription

@@ -105,6 +105,8 @@ enum MachinePaths {
     nonisolated static func directory(for id: UUID) -> URL { root.appendingPathComponent(id.uuidString, isDirectory: true) }
     /// The file the installer puts in a machine's folder once the guest is on its disk (it holds the release's name).
     nonisolated static let installedMarker = "installed"
+    /// In a machine's folder while this app fills it (an install or an import). Removed when the folder is complete.
+    nonisolated static let installingMarker = "installing"
 }
 
 /// machine.json in an exported machine folder (LinuxUnpack and MachineFolder.exportInfo write it).
@@ -166,6 +168,19 @@ enum MachineList {
         machine.osName = os.isEmpty ? nil : os
         machine.guestUser = info.guestUser
         return machine
+    }
+
+    enum Leftover { case recover(VirtualMachine), remove, keep }
+
+    /// What to do with a machine folder that the list does not name. Only a folder that this app started and did not
+    /// finish (the installing marker, no installed marker) is removed. A folder with no marker is not ours to delete:
+    /// it can be a copy that is not complete yet, and its disk can be the only one.
+    static func leftover(id: UUID, folder: URL, defaultRAMMB: Int) -> Leftover {
+        if let machine = recover(id: id, folder: folder, defaultRAMMB: defaultRAMMB) { return .recover(machine) }
+        let fm = FileManager.default
+        let installing = fm.fileExists(atPath: folder.appendingPathComponent(MachinePaths.installingMarker).path)
+        let installed = fm.fileExists(atPath: folder.appendingPathComponent(MachinePaths.installedMarker).path)
+        return installing && !installed ? .remove : .keep
     }
 
     static let tabTitle = "Machines"

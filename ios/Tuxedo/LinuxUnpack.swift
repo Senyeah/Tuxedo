@@ -121,6 +121,8 @@ enum LinuxUnpack {
         do {
             try checkDisk(diskBytes, for: image)
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            let installing = dir.appendingPathComponent(MachinePaths.installingMarker)
+            try Data().write(to: installing)
             let packed = dir.appendingPathComponent("disk.img.hvsparse")
             let disk = dir.appendingPathComponent("disk.img")
             let decoded = try decode(files.disk, to: packed) { progress(.decode, $0, $1) }
@@ -135,6 +137,7 @@ enum LinuxUnpack {
             try JSONSerialization.data(withJSONObject: MachineFolder.exportInfo(machine)).write(to: dir.appendingPathComponent("machine.json"))
             // Last: the list is rebuilt from folders with this marker after a crash
             try (machine.osName ?? "").write(to: dir.appendingPathComponent(MachinePaths.installedMarker), atomically: true, encoding: .utf8)
+            try? fm.removeItem(at: installing)
         } catch {
             try? fm.removeItem(at: dir)
             throw error

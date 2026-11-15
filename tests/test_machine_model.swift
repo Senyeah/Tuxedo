@@ -88,6 +88,34 @@ struct MachineModelTests {
         let noDisk = try folder("linux-nodisk", files: ["installed": "", "machine.json": linuxJSON, "u-boot.bin": "fw"])
         precondition(MachineList.recover(id: id, folder: noDisk, defaultRAMMB: 1024) == nil)
 
+        // An unlisted folder is removed only when this app started it and did not finish it.
+        func what(_ dir: URL) -> String {
+            switch MachineList.leftover(id: id, folder: dir, defaultRAMMB: 1024) {
+            case .recover: return "recover"
+            case .remove: return "remove"
+            case .keep: return "keep"
+            }
+        }
+        precondition(what(ok) == "recover")
+        // A copy from outside that is not complete yet (no marker), in each order the files can arrive.
+        precondition(what(noMarker) == "keep" && what(noDisk) == "keep" && what(noFirmware) == "keep")
+        let f0 = try folder("copy-disk-only", files: ["disk.img": "x"])
+        let f1 = try folder("copy-empty", files: [:])
+        let f2 = try folder("cut-short", files: ["installing": "", "disk.img": "x"])
+        let f3 = try folder("cut-short-early", files: ["installing": ""])
+        let f4 = try folder("both", files: ["installing": "", "installed": "Debian 13\n", "machine.json": linuxJSON,
+                                                       "disk.img": "x", "u-boot.bin": "fw"])
+        let f5 = try folder("both-broken", files: ["installing": "", "installed": "", "disk.img": "x"])
+        precondition(what(f0) == "keep")
+        precondition(what(f1) == "keep")
+        // An install or an import that stopped part way.
+        precondition(what(f2) == "remove")
+        precondition(what(f3) == "remove")
+        // Stopped between the two markers: complete, so listed again.
+        precondition(what(f4) == "recover")
+        // Both markers but not bootable: kept for the person to look at, never deleted.
+        precondition(what(f5) == "keep")
+
 
         // I5: a per-machine CPU count falls back to the global one, and stays in range.
         precondition(old[0].cpus == nil && old[0].cpuCount(fallback: 4) == 4)
