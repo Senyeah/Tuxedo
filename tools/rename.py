@@ -236,6 +236,16 @@ def s5_moves():
     return out
 
 
+# Stage 6 (docs/rename-tuxedo-plan.md): guest-visible device names, with the prose and tests that quote them.
+# Package trees (Stage 9) and the image scripts' code (Stage 10) stay; their HengeVM/hengevm mentions go with them.
+S6_LITERALS = [
+    ("devices/devstatus.c", '{"Henge", "Device battery"', '{"Tux", "Device battery"'),
+    ("host/share.c", "Server: Henge\\r", "Server: Tux\\r"),
+    ("host/share.c", 'is_root ? "Henge" :', 'is_root ? "Tux" :'),
+    ("tools/linux/hvcodec/ffmpeg-henge.patch", '.name                   = "Henge",', '.name                   = "Tux",'),
+]
+
+
 STAGES = {
     3: dict(globs=["*.md", "ios/*", "host/*", "core/*", "devices/*", "tests/*", "tools/*", "Makefile", "ci/*", ".github/*"],
             skip=["docs/rename-tuxedo-plan.md", "CHANGELOG.md", "tools/rename*", "*.json", "*.plist", "*.yml", "*.yaml", "*.patch", "*.pbxproj"],
@@ -247,6 +257,8 @@ STAGES = {
             token=is_stage4_token, ctx=stage4_ctx, literals=S4_LITERALS, no_phrases=True),
     5: dict(globs=["*"], skip=["tools/rename*", "repo.json", "tools/update-source.py", "*.patch"],
             token=lambda t: False, rules=S5_RULES, file_rules=S5_FILE_RULES, moves=True),
+    6: dict(globs=["*"], skip=["tools/rename*", "repo.json", "tools/update-source.py", "tools/linux/henge-*/*"],
+            token=lambda t: t in ("HengeVM", "hengevm"), literals=S6_LITERALS),
 }
 
 
