@@ -15,6 +15,17 @@ struct DisplayModePolicyTests {
         let port = DisplayInsets(top: 62, left: 0, bottom: 34, right: 0)
         precondition(mode(panel, land, cap: panel) == "2248x1144")
         precondition(mode(CGSize(width: 1206, height: 2622), port, cap: CGSize(width: 2622, height: 2622)) == "1200x2328")
+        // What Settings says about the guest on an external screen.
+        func facts(_ w: Double, _ h: Double) -> ExternalScreenFacts {
+            ExternalScreenFacts(mode: CGSize(width: w, height: h), native: CGSize(width: w, height: h), hz: 60, modes: [], overscan: .zero)
+        }
+        precondition(DisplayReportPolicy.size(CGSize(width: 2560, height: 1440)) == "2560 × 1440")
+        precondition(DisplayReportPolicy.coverage(guest: GuestMode(w: 2560, h: 1440), facts: facts(2560, 1440)).hasPrefix("Linux fills the whole screen"))
+        precondition(DisplayReportPolicy.coverage(guest: GuestMode(w: 1360, h: 768), facts: facts(1366, 768)).contains("multiple of 8"))
+        precondition(DisplayReportPolicy.coverage(guest: GuestMode(w: 3840, h: 2160), facts: facts(5120, 2880)).contains("4K"))
+        precondition(DisplayReportPolicy.coverage(guest: GuestMode(w: 1920, h: 1080), facts: facts(2560, 1440)).contains("56 %"))
+        precondition(DisplayReportPolicy.modeRange([CGSize(width: 1280, height: 720), CGSize(width: 2560, height: 1440)]) == "2 modes, up to 2560 × 1440")
+        precondition(DisplayReportPolicy.modeRange([]) == nil)
         // External sizes inside the cap stay as they are.
         precondition(mode(CGSize(width: 3840, height: 2160)) == "3840x2160")
         precondition(mode(CGSize(width: 2560, height: 1440)) == "2560x1440")

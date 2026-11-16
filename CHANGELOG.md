@@ -33,6 +33,16 @@ Every change keeps its original author in the git history.
 - Tests: `make test-additions-engine`, `test-additions-builder`, `test-additions-agent`, `test-additions-policy`, `test-tux-files-additions` and `test-tux-guest-scripts`. Not run on the iPhone: part 5b of `docs/iphone-checklist.md`.
 - Plasma from the Additions gets `kscreen` (the Display page in System Settings) and `upower` (the battery icon). Both are only Recommends in Debian, and the Additions install skips Recommends.
 
+### iPhone with an external display
+- On an external display the phone always shows the touchpad. A saved "console" choice no longer leaves the phone blank with a console that nobody can see and that holds the hardware keyboard. The choice returns when the display is gone.
+- When the console gives up the keyboard, the session takes the hardware keys back at once.
+- Face ID is asked once for each launch of the app. A return from the background does not ask again. A locked phone does.
+- Settings has an "External display" section: the screen's size and rate, the modes it offers, the overscan setting, and the size and scale that Linux uses on it.
+
+### iPhone mouse
+- An iPhone now asks for pointer lock while a machine runs (private API, `PhonePointerLock` in `ios/Tuxedo/Hardware.swift`). UIKit sends the request only on an iPad or a Mac. The app writes it into the scene's client settings directly. The iOS 27.0 simulator grants it to an iPhone. With the lock, the iPhone's pointer is hidden and stays in its place, so a click can't reach the Home bar. Not tested on a phone. Settings has the switch "Capture an external mouse".
+- The edge push stops while the pointer is locked.
+
 ### The screen is a Magic Trackpad 2
 - The session's trackpad is no longer a relative mouse: the engine presents it to the Mac as
   a Magic Trackpad 2 (Apple's vendor multitouch format) on the xHCI USB bus, so the guest's

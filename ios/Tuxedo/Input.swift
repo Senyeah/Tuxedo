@@ -24,6 +24,7 @@ struct KeyboardCatcher: UIViewRepresentable {
         var typing = false
         var suspended = false
         private var hiding: NSObjectProtocol?
+        private var released: NSObjectProtocol?
 
         override init(frame: CGRect) {
             super.init(frame: frame)
@@ -33,12 +34,16 @@ struct KeyboardCatcher: UIViewRepresentable {
                                                             object: nil, queue: .main) { [weak self] _ in
                 self?.keyboardHid()
             }
+            released = NotificationCenter.default.addObserver(forName: .consoleReleasedKeys, object: nil, queue: .main) { [weak self] _ in
+                DispatchQueue.main.async { self?.takeKeyboard() }
+            }
         }
 
         required init?(coder: NSCoder) { fatalError("made in code") }
 
         deinit {
             if let hiding { NotificationCenter.default.removeObserver(hiding) }
+            if let released { NotificationCenter.default.removeObserver(released) }
         }
 
         /// iPadOS's own hide-keyboard key closes the keyboard without asking the app, which then went on

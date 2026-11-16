@@ -110,6 +110,7 @@ enum PointerLock {
 
     static func set(_ on: Bool) {
         wanted = on
+        let phone = !Device.isPad && PhonePointerLock.install()
         let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
         for window in windows {
             guard let root = window.rootViewController else { continue }
@@ -122,16 +123,81 @@ enum PointerLock {
                 class_replaceMethod(kind, #selector(getter: UIViewController.prefersPointerLocked), imp_implementationWithBlock(answer), "B@:")
             }
             root.setNeedsUpdateOfPrefersPointerLocked()
+            if phone { PhonePointerLock.update(window.windowScene, wanted: on) }
         }
     }
 
+    static var locked: Bool {
+        UIApplication.shared.connectedScenes.contains { $0.pointerLockState?.isLocked == true }
+    }
+
     /// iPadOS only locks the pointer to an app that fills the screen: in a window (Stage Manager, or iPadOS 26's windows)
-    /// the request is ignored and the system pointer stays separate from the guest's (#18). An iPhone never locks it, and
-    /// its apps are always full screen, so the hint is for iPad only.
+    /// the request is ignored and the system pointer stays separate from the guest's (#18). An iPhone app is always full
+    /// screen, so the hint is for iPad only.
     static var refused: Bool {
         guard Device.isPad, wanted, GCMouse.current != nil else { return false }
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.filter { $0.activationState == .foregroundActive }
         return !scenes.isEmpty && !scenes.contains { $0.pointerLockState?.isLocked == true }
+    }
+}
+
+/// Pointer lock on an iPhone (private API, docs/mouse-capture-ios.md). UIKit gives a scene its lock state only on an
+/// iPad or a Mac (`_UIPointerLockStateIsAvailableForScene` tests the idiom), so an iPhone app never sends the request.
+/// The iOS 27 shell grants the request when it arrives. This gives the app's scene its lock state.
+enum PhonePointerLock {
+    static let offKey = "tux.mouse.phoneLockOff"
+    private static let componentKey = "_UIPointerLockStateSceneComponentKey"
+    private static let find = NSSelectorFromString("_sceneComponentForKey:")
+    private static let register = NSSelectorFromString("_registerSceneComponent:forKey:")
+    private static var installed: Bool?
+    private static var sent: Bool?
+
+    private typealias Alloc = @convention(c) (AnyClass, Selector) -> Unmanaged<AnyObject>?
+    private typealias Init = @convention(c) (Unmanaged<AnyObject>, Selector, UIScene) -> Unmanaged<AnyObject>?
+    private typealias SetStatus = @convention(c) (NSObject, Selector, Int) -> Void // 1 is _UIPointerLockStatusLocked
+
+    static func install() -> Bool {
+        if let installed { return installed }
+        let on = !UserDefaults.standard.bool(forKey: offKey) && replaceGetter()
+        installed = on
+        TuxLog.log("input", "pointer lock: iPhone path \(on ? "on" : "off")")
+        return on
+    }
+
+    private static func replaceGetter() -> Bool {
+        let kind: AnyClass = UIPointerLockState.self
+        let alloc = NSSelectorFromString("alloc"), make = NSSelectorFromString("initWithScene:")
+        guard UIScene.instancesRespond(to: find), UIScene.instancesRespond(to: register),
+              kind.instancesRespond(to: make),
+              let getter = class_getInstanceMethod(UIScene.self, #selector(getter: UIScene.pointerLockState)),
+              let allocMethod = class_getClassMethod(kind, alloc), let makeMethod = class_getInstanceMethod(kind, make) else { return false }
+        let allocate = unsafeBitCast(method_getImplementation(allocMethod), to: Alloc.self)
+        let initialize = unsafeBitCast(method_getImplementation(makeMethod), to: Init.self)
+        let answer: @convention(block) (UIScene) -> AnyObject? = { scene in
+            // The same scenes as UIKit's test, without the idiom.
+            guard let window = scene as? UIWindowScene, window.session.role == .windowApplication else { return nil }
+            if let have = scene.perform(find, with: componentKey)?.takeUnretainedValue() { return have }
+            guard let raw = allocate(kind, alloc), let state = initialize(raw, make, scene)?.takeRetainedValue() else { return nil }
+            scene.perform(register, with: state, with: componentKey)
+            return state
+        }
+        method_setImplementation(getter, imp_implementationWithBlock(answer))
+        return true
+    }
+
+    /// UIKit's own path from `prefersPointerLocked` has the idiom test in three more places, so the preference goes
+    /// into the scene's client settings directly. The answer comes back through the lock state above.
+    static func update(_ scene: UIWindowScene?, wanted: Bool) {
+        let fbs = NSSelectorFromString("_FBSScene"), change = NSSelectorFromString("updateUIClientSettingsWithBlock:")
+        let put = NSSelectorFromString("setPreferredPointerLockStatus:")
+        guard let scene, scene.session.role == .windowApplication, scene.pointerLockState != nil, scene.responds(to: fbs),
+              let target = scene.perform(fbs)?.takeUnretainedValue(), target.responds(to: change) else { return }
+        let block: @convention(block) (NSObject) -> Void = { settings in
+            guard settings.responds(to: put) else { return }
+            unsafeBitCast(settings.method(for: put), to: SetStatus.self)(settings, put, wanted ? 1 : 0)
+        }
+        _ = target.perform(change, with: unsafeBitCast(block, to: AnyObject.self))
+        if sent != wanted { sent = wanted; TuxLog.log("input", "pointer lock: iPhone asks for \(wanted ? "locked" : "unlocked")") }
     }
 }
 
@@ -154,6 +220,7 @@ final class HardwareMouse {
     private var movesLogged = 0, movesSince = 0, lastMoveLog = Date()
     private var sumX: Float = 0, sumY: Float = 0, zeroMoves = 0
     private var edge = EdgePush()
+    private var locked = false
     private var pushed = 0
     private var lastScrollFirst: Float = 0, lastScrollSecond: Float = 0
 
@@ -187,11 +254,12 @@ final class HardwareMouse {
             for button in self.buttons.releaseAll(for: Self.key(mouse)) { Self.send(button, false) }
             self.mice.removeAll { $0 === mouse }
         })
-        observers.append(NotificationCenter.default.addObserver(forName: UIPointerLockState.didChangeNotification, object: nil, queue: .main) { note in
+        observers.append(NotificationCenter.default.addObserver(forName: UIPointerLockState.didChangeNotification, object: nil, queue: .main) { [weak self] note in
             // The scene comes in the user info: the notification's object isn't it.
             let scene = note.userInfo?[UIPointerLockState.sceneUserInfoKey] as? UIScene
             let locked = scene?.pointerLockState?.isLocked ?? false
             TuxLog.log("input", "pointer lock: \(locked ? "on" : "off")")
+            self?.locked = PointerLock.locked
         })
         edge = EdgePush()
         if !Device.isPad {
@@ -199,6 +267,7 @@ final class HardwareMouse {
             PointerWatch.start()
         }
         PointerLock.set(true)
+        locked = PointerLock.locked
     }
 
     func stop() {
@@ -290,7 +359,7 @@ final class HardwareMouse {
 
     /// Runs for every delta, also the near-zero ones that come while the system pointer is held at an edge.
     private func pushAtEdge(_ dx: Float, _ dy: Float) {
-        guard !Device.isPad else { return }
+        guard !Device.isPad, !locked else { return } // a locked pointer stays where it was, possibly at an edge
         let (x, y) = edge.motion(Double(dx * speed), Double(-dy * speed), now: CACurrentMediaTime())
         guard x != 0 || y != 0 else { return }
         tux_vm_mouse_move(x, y)

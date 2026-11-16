@@ -57,7 +57,9 @@ so JIT still needs an attached debugger.
 - **Hardware input** (`Tuxedo/Hardware.swift`): a keyboard's keys go to the guest's
   USB keyboard by HID usage, which is how iOS reports them. A trackpad or mouse
   goes through GameController with the pointer locked, which iPadOS allows only
-  for an app filling the screen. The first scroll values are logged to
+  for an app filling the screen. UIKit never asks for the lock on an iPhone, so
+  there the app asks with a private call
+  ([docs/mouse-capture-ios.md](../docs/mouse-capture-ios.md)). The first scroll values are logged to
   `tux.log`, to tune scrolling from a real device.
 - **Chips**: the virtual CPU offers Armv8.5 instructions (`core/sysreg.c`), which
   Linux uses and which run as they are, so Tuxedo needs an A14 or M1 or newer.

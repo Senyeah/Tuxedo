@@ -1,11 +1,16 @@
-/// When a session asks for Face ID, and when a machine's wallet is open. A machine asks at each start
-/// (a restart too) and each time the app comes back from the background; the machine stays paused and hidden until
-/// the check passes.
+/// When a session asks for Face ID, and when a machine's wallet is open. A machine asks once for each launch of the app
+/// (oncePerLaunch): a start, a restart or a return from the background asks no more after a pass. The device locking
+/// still asks again. The machine stays paused and hidden until the check passes.
 /// Pure policy: SessionAuth does the check, SessionView follows the phase and opens KeychainStore with it.
 struct SessionGate: Equatable {
     /// Face ID only, with no passcode fallback, for the session's check (SessionAuth). The owner chose the fallback.
     /// It does not bind the wallet's items to Face ID: they have no rule of their own (KeychainStore).
     static let faceIDOnly = false
+
+    /// The owner chose it: one Face ID check for each launch of the app, not for each return from the background.
+    static let oncePerLaunch = true
+    /// A check passed in this launch of the app (every machine, every gate).
+    static var passedThisLaunch = false
 
     enum Check: Equatable {
         case faceID
@@ -39,7 +44,14 @@ struct SessionGate: Equatable {
     private(set) var ticket = 0
     private var testUnlocked = false
 
-    init(check: Check = .faceID) { self.check = check }
+    private let once: Bool
+
+    init(check: Check = .faceID, once: Bool = false) {
+        self.check = check
+        self.once = once
+    }
+
+    private var remembered: Bool { once && check == .faceID && Self.passedThisLaunch }
 
     var secretsUnlocked: Bool { phase == .open && (check == .faceID || testUnlocked) }
     /// The guest's screen is hidden and the machine does not run.
@@ -79,6 +91,10 @@ struct SessionGate: Equatable {
                 phase = .open
                 return .opened
             }
+            if remembered {
+                phase = .open
+                return .opened
+            }
             phase = .checking
             ticket += 1
             return .check(ticket)
@@ -91,15 +107,19 @@ struct SessionGate: Equatable {
     mutating func checked(_ ticket: Int, passed: Bool) {
         guard phase == .checking, ticket == self.ticket else { return }
         phase = passed ? .open : .refused
+        if passed && check == .faceID { Self.passedThisLaunch = true }
     }
 
     mutating func unlockForTest() {
         if check == .skippedForTest { testUnlocked = true }
     }
 
-    /// The app went to the background: the wallet locks, and the next return asks again.
-    mutating func leave() {
-        if phase == .open || phase == .checking { phase = .away }
+    /// The app went to the background: the wallet locks, and the next return asks again. After a pass in this
+    /// launch (oncePerLaunch) an open session stays open, unless the device is locking.
+    mutating func leave(deviceLocking: Bool = false) {
+        guard phase == .open || phase == .checking else { return }
+        if phase == .open && remembered && !deviceLocking { return }
+        phase = .away
     }
 
     /// The session closed, or its machine stopped or restarts: the next start asks again.

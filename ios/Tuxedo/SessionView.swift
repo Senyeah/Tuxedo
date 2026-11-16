@@ -13,7 +13,7 @@ struct SessionView: View {
         self.machine = machine
         self.close = close
         let check = SessionGate.Check.for(environment: ProcessInfo.processInfo.environment)
-        var gate = SessionGate(check: check)
+        var gate = SessionGate(check: check, once: SessionGate.oncePerLaunch)
         if SessionGate.testUnlock(environment: ProcessInfo.processInfo.environment) { gate.unlockForTest() }
         _gate = State(initialValue: gate)
     }
@@ -108,7 +108,8 @@ struct SessionView: View {
         return GuestMode(w: m.screen.width, h: m.screen.height)
     }
 
-    private var consoleShown: Bool { consoleChoice == .console }
+    /// On a monitor the phone is the pad: a console there would be invisible and still hold the keys. The saved choice stays.
+    private var consoleShown: Bool { consoleChoice == .console && !display.isExternal }
     /// LINUX-PLAN-12: the picture takes direct touches. Only while the phone shows the picture; the saved choice stays.
     /// Upright on the phone: the picture under the status bar and the home bar, into the corners.
     /// The window's own bottom inset: the home bar, never the keyboard.
@@ -316,6 +317,12 @@ struct SessionView: View {
         }
         .onChange(of: pointerNeeded) { PointerLock.set(!$0) }
         .onChange(of: touchActive) { touchModeChanged($0) }
+        .onChange(of: liveMode) { mode in
+            ExternalScreenReport.shared.guest = mode.flatMap { m in externalMode != nil ? (m, guestScale(for: m)) : nil }
+        }
+        .onChange(of: externalMode) { _ in
+            ExternalScreenReport.shared.guest = liveMode.flatMap { m in externalMode != nil ? (m, guestScale(for: m)) : nil }
+        }
         .onChange(of: gate.blanksExternal(inactive: inactive)) { display.guestHidden = $0 }
         .onAppear { display.guestHidden = gate.blanksExternal(inactive: inactive) }
         .onChange(of: scenePhase) { phase in
@@ -340,7 +347,7 @@ struct SessionView: View {
             else if phase == .inactive { setBackground(false) }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataWillBecomeUnavailableNotification)) { _ in
-            if SessionGate.away(scene: .active, appInBackground: false, deviceLocking: true).lock { leaveGate() } // the device locks
+            if SessionGate.away(scene: .active, appInBackground: false, deviceLocking: true).lock { leaveGate(deviceLocking: true) } // the device locks
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
             if scenePhase == .active { setBackground(false) } // asks again if the lock left the session away
@@ -379,6 +386,7 @@ struct SessionView: View {
             VolumeClicks.shared.stop()
             PointerButtons.guest.releaseAll()
             DeviceStatus.shared.stop()
+            ExternalScreenReport.shared.guest = nil
             gate.end()
             KeychainStore.shared.setUnlocked(false)
             FolderSession.shared.end()
@@ -560,7 +568,6 @@ struct SessionView: View {
         if !controlsHidden {
             PadToolPill(pad: externalPad, tuning: TrackpadFeel.tuning(motion: motionFeel)) {
                 padTool("eye.slash", "Hide controls") { hideControls() }
-                padTool("terminal", "Show the console") { switchView() }
                 padTool("keyboard", "Keyboard") { typing.toggle() }
                 pasteTool(keysMenu: Self.roomForKeysMenu(full.width))
                 padTool("info.circle", "Details") { showDetails = true }
@@ -1240,8 +1247,9 @@ struct SessionView: View {
     }
 
     /// The wallet locks and the next return asks again (SessionGate.away).
-    private func leaveGate() {
-        gate.leave()
+    private func leaveGate(deviceLocking: Bool = false) {
+        gate.leave(deviceLocking: deviceLocking)
+        guard gate.phase == .away else { return } // still open: Face ID passed in this launch
         typing = false
         KeychainStore.shared.setUnlocked(false)
     }

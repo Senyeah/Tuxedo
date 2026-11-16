@@ -130,3 +130,37 @@ struct ModeFollower {
         return pending
     }
 }
+
+/// What Settings says about an external screen and the guest on it.
+struct ExternalScreenFacts: Equatable {
+    var mode: CGSize          // the screen's current mode, in pixels
+    var native: CGSize        // the panel
+    var hz: Int
+    var modes: [CGSize]
+    var overscan: DisplayInsets
+}
+
+enum DisplayReportPolicy {
+    static func size(_ s: CGSize) -> String { "\(Int(s.width)) × \(Int(s.height))" }
+
+    static func size(_ m: GuestMode) -> String { "\(m.w) × \(m.h)" }
+
+    /// Whether the guest fills the screen, and what keeps it from doing so.
+    static func coverage(guest: GuestMode, facts: ExternalScreenFacts) -> String {
+        let all = guest.w == Int(facts.mode.width) && guest.h == Int(facts.mode.height)
+        if all { return "Linux fills the whole screen, one guest pixel for each screen pixel." }
+        let limit = DisplayModePolicy.externalMode(pixels: facts.mode, insets: facts.overscan)
+        if guest == limit {
+            let capped = facts.mode.width > DisplayModePolicy.externalCap.width || facts.mode.height > DisplayModePolicy.externalCap.height
+            return capped ? "Linux is at its largest size (4K). The screen shows it scaled up."
+                          : "Linux is a few pixels smaller than the screen: its size is a multiple of 8."
+        }
+        let shown = Int((Double(guest.w * guest.h) / max(facts.mode.width * facts.mode.height, 1) * 100).rounded())
+        return "Linux uses \(shown) % of the screen's pixels. This machine has a fixed screen size (Details), so the screen scales it."
+    }
+
+    static func modeRange(_ modes: [CGSize]) -> String? {
+        guard let top = modes.max(by: { $0.width * $0.height < $1.width * $1.height }) else { return nil }
+        return "\(modes.count) modes, up to \(size(top))"
+    }
+}

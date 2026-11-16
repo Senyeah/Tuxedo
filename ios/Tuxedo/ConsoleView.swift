@@ -185,6 +185,12 @@ struct ConsoleView: UIViewRepresentable {
             let term = model.terminal
             if term.isFirstResponder { term.resignFirstResponder() }
             if term.superview === self { term.removeFromSuperview() }
+            NotificationCenter.default.post(name: .consoleReleasedKeys, object: nil)
         }
     }
+}
+
+extension Notification.Name {
+    /// The console let go of the keys: the key listener takes them.
+    static let consoleReleasedKeys = Notification.Name("tux.consoleReleasedKeys")
 }

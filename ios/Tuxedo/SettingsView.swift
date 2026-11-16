@@ -5,6 +5,7 @@ struct SettingsView: View {
     @AppStorage(JITCoordinator.autoEnableKey) private var jitAtLaunch = false
     @AppStorage(HardwareMouse.speedKey) private var mouseSpeed = 1.0
     @AppStorage(HardwareMouse.reverseKey) private var reverseScrolling = false
+    @AppStorage(PhonePointerLock.offKey) private var phoneLockOff = false
     @AppStorage(HardwareMouse.scrollSpeedKey) private var scrollSpeed = 0.3
     @AppStorage(VolumeClicks.inputModeKey) private var inputMode = VolumeClicks.InputMode.touchscreen
     @AppStorage(VolumeClicks.modeKey) private var volumeMode = VolumeClicks.Mode.delayHold
@@ -19,6 +20,7 @@ struct SettingsView: View {
     @AppStorage(DeskAppearance.key) private var appearance = DeskAppearance.system
     @AppStorage(LinuxCatalogue.urlKey) private var linuxCatalogueURL = ""
     @AppStorage(KeyboardFollow.storageKey) private var keyboardFollows = true
+    @ObservedObject private var screen = ExternalScreenReport.shared
 
     /// The second footer paragraph: how you click, given the selected input mode.
     private var inputDescription: String {
@@ -84,6 +86,12 @@ struct SettingsView: View {
                     .listRowBackground(Desk.card)
                 }
                 if !Device.isPad {
+                    Section("Mouse") {
+                        Toggle("Capture an external mouse", isOn: Binding(get: { !phoneLockOff }, set: { phoneLockOff = !$0 }))
+                        Text("While a machine runs, the mouse moves only the machine's pointer. The iPhone's pointer stays hidden, so a click can't reach the Home bar. Experimental. A change applies the next time Tuxedo opens.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    .listRowBackground(Desk.card)
                     Section("Trackpad") {
                         Picker("Input mode", selection: $inputMode) {
                             Text("Touchscreen").tag(VolumeClicks.InputMode.touchscreen)
@@ -136,6 +144,25 @@ struct SettingsView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 .listRowBackground(Desk.card)
+                Section("External display") {
+                    if let f = screen.facts {
+                        LabeledContent("Screen", value: "\(DisplayReportPolicy.size(f.mode)) px, \(f.hz) Hz")
+                        if f.native != f.mode { LabeledContent("Panel", value: "\(DisplayReportPolicy.size(f.native)) px") }
+                        if let range = DisplayReportPolicy.modeRange(f.modes) { LabeledContent("It offers", value: range) }
+                        if f.overscan != .zero { LabeledContent("Overscan", value: "The screen cuts off part of the picture") }
+                        if let g = screen.guest {
+                            LabeledContent("Linux", value: "\(DisplayReportPolicy.size(g.mode)), scale \(Int(g.scale))")
+                            Text(DisplayReportPolicy.coverage(guest: g.mode, facts: f)).font(.footnote).foregroundStyle(.secondary)
+                        } else {
+                            Text("No machine is running on it.").font(.footnote).foregroundStyle(.secondary)
+                        }
+                        Text("iOS does not tell apps the display's name or model.").font(.footnote).foregroundStyle(.secondary)
+                    } else {
+                        Text("No external display is connected.").font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                .listRowBackground(Desk.card)
+                .onAppear { screen.refresh() }
                 Section("Appearance") {
                     Picker("Appearance", selection: $appearance) {
                         ForEach(DeskAppearance.allCases) { Text($0.title).tag($0) }

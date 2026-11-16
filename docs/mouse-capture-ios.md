@@ -6,6 +6,40 @@ It was written on 13/11/2026 against commit `8f97ab2` on `linux/integration`. Th
 
 This is an investigation and a plan. No code was changed. Nothing was run on the phone or in the simulator.
 
+## Update, 16/11/2026: pointer lock on an iPhone (test P1)
+
+This part is newer than the text below it. The verdict below was written before test P1 was done.
+
+Test P1 was done in the iOS 27.0 simulator (iPhone 18 Pro), with lldb and then with the app's own code. It was not done on a phone.
+
+- The block is in UIKit, in the app's process. `_UIPointerLockStateIsAvailableForScene` returns true only when `_UIDeviceNativeUserInterfaceIdiom()` is 1 (iPad) or 5 (Mac).
+- Four places use that test: `-[UIScene pointerLockState]`, `-[UIViewController setNeedsUpdateOfPrefersPointerLocked]`, `-[UIViewController _effectivePointerLockViewController]`, and the settings action (through the getter). Thus `scene.pointerLockState` is nil on an iPhone, and UIKit never calls `prefersPointerLocked`.
+- The shell does not have that test. `[[scene _FBSScene] updateUIClientSettingsWithBlock:]` with `setPreferredPointerLockStatus:1` made `settings.pointerLockStatus` change from 0 to 1 (`_UIPointerLockStatusLocked`).
+- The shell takes the lock away when the app goes to the background, and gives it back in the foreground.
+
+What the app does now (`PhonePointerLock` in `ios/Tuxedo/Hardware.swift`, iPhone only):
+
+1. It replaces `-[UIScene pointerLockState]` with a getter that has no idiom test. The getter makes the `UIPointerLockState` and registers it as the scene component `_UIPointerLockStateSceneComponentKey`, as UIKit does on an iPad. Then `isLocked` and `UIPointerLockState.didChangeNotification` work.
+2. It writes `preferredPointerLockStatus` into the scene's client settings each time `PointerLock.set` runs.
+3. It stops the edge push while the pointer is locked.
+
+The log lines are `pointer lock: iPhone path on`, `pointer lock: iPhone asks for locked` and `pointer lock: on`. The switch is Settings, Mouse, "Capture an external mouse" (`tux.mouse.phoneLockOff`).
+
+Not known until a test on the phone:
+
+- Does SpringBoard on a real iPhone grant the lock? The simulator's shell does.
+- Does a granted lock hide and hold the pointer that the iPhone draws? The phone log says "AssistiveTouch off", but a pointer was there and it clicked the Home bar. If that pointer is the system's own (PointerUI), the lock is expected to hold it as on an iPad. If it is AssistiveTouch's, the result is not known.
+- Do GameController deltas continue with no limit while the pointer is locked? On an iPad they do.
+
+Other private paths that were examined for the Home bar:
+
+| Path | Result |
+| --- | --- |
+| `BKSMousePointerService` (move or suppress the pointer) | The runtime has the entitlement string `com.apple.backboard.mouse-pointer-service-client`. A personal team can't sign it. |
+| `PSPointerClientController` (`persistentlyHidePointerAssertionForReason:`, `autohidePointerForReason:`) | Not tested. It hides the pointer but does not stop its clicks. |
+| `UIAccessibility.requestGuidedAccessSession` | Needs a supervised phone with the app in `autonomousSingleAppModePermittedAppIDs`. Guided Access from the side button needs no code. |
+| Scene client settings `homeIndicatorAutoHidden`, `screenEdgesDeferringSystemGestures` | Already set through the public API. They did not stop the click. |
+
 ## Verdict
 
 iOS does not let an app capture the pointer on an iPhone. Pointer lock is an iPad feature. Tuxedo asks for the lock, and the iPhone ignores the request.

@@ -121,6 +121,39 @@ struct SessionGateTests {
         precondition(SessionGate.away(scene: .inactive, appInBackground: false, deviceLocking: false) == .init(lock: false, pause: false))
         precondition(SessionGate.away(scene: .active, appInBackground: false, deviceLocking: false) == .init(lock: false, pause: false))
 
+        // Once per launch of the app: the first pass is the only check. The background, a restart and another machine
+        // ask no more; the device locking still does.
+        precondition(SessionGate.oncePerLaunch)
+        SessionGate.passedThisLaunch = false
+        var once = SessionGate(once: true)
+        let o1 = ticket(once.ask())
+        once.checked(o1, passed: false)
+        precondition(!SessionGate.passedThisLaunch && once.phase == .refused) // a refusal is not a pass
+        let o2 = ticket(once.ask())
+        once.checked(o2, passed: true)
+        precondition(SessionGate.passedThisLaunch && once.secretsUnlocked)
+        once.leave() // the app goes to the background
+        precondition(once.phase == .open && once.secretsUnlocked && !once.covered)
+        precondition(once.hidesGuest(inactive: true) && !once.hidesGuest(inactive: false)) // the app switcher still sees black
+        once.leave(deviceLocking: true)
+        precondition(once.phase == .away && !once.secretsUnlocked)
+        precondition(once.ask() == .opened && once.secretsUnlocked) // back: no check
+        once.end() // the guest restarted
+        precondition(once.ask() == .opened && once.secretsUnlocked)
+        var other = SessionGate(once: true) // another machine in the same launch
+        precondition(other.ask() == .opened && other.secretsUnlocked)
+        var each = SessionGate() // the old behaviour is still there with once: false
+        precondition(ticket(each.ask()) == 1)
+        SessionGate.passedThisLaunch = false
+        var fresh = SessionGate(once: true) // a new launch of the app
+        _ = ticket(fresh.ask())
+        var checking = SessionGate(once: true)
+        _ = ticket(checking.ask())
+        checking.leave() // the app leaves during the first check: that is not a pass
+        precondition(checking.phase == .away)
+        _ = ticket(checking.ask())
+        SessionGate.passedThisLaunch = false
+
         // One Keychain service per machine, and back.
         let a = UUID(uuidString: "0D3A5F6E-1C2B-4E8F-9A7B-6C5D4E3F2A1B")!, b = UUID()
         precondition(WalletScope.id(a) == "0d3a5f6e-1c2b-4e8f-9a7b-6c5d4e3f2a1b")
