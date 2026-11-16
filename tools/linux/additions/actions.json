@@ -17,10 +17,11 @@
       "title": "KDE Plasma",
       "packages": [
         "plasma-desktop", "plasma-workspace", "kwin-wayland", "konsole", "systemsettings", "powerdevil", "plasma-pa", "plasma-nm", "kscreen", "upower",
+        "dolphin", "kio-extras", "plasma-systemmonitor", "network-manager-config-connectivity-debian",
         "libpam-systemd", "xkb-data", "fonts-dejavu-core", "libgl1-mesa-dri", "libegl1", "libgles2", "pipewire", "pipewire-bin",
         "pipewire-alsa", "pipewire-pulse", "wireplumber", "python3", "python3-cryptography", "libsecret-tools", "wl-clipboard", "xclip", "dbus-user-session"
       ],
-      "size_mb": 420,
+      "size_mb": 455,
       "files": ["desktop-labwc", "desktop-plasma"]
     },
     {
@@ -58,7 +59,9 @@
     {"id": "jq", "title": "jq", "group": "tools", "packages": ["jq"], "size_mb": 1},
     {"id": "rsync", "title": "rsync", "group": "tools", "packages": ["rsync"], "size_mb": 1},
     {"id": "ripgrep", "title": "ripgrep", "group": "tools", "packages": ["ripgrep"], "size_mb": 2},
-    {"id": "unzip", "title": "zip and unzip", "group": "tools", "packages": ["zip", "unzip"], "size_mb": 1}
+    {"id": "unzip", "title": "zip and unzip", "group": "tools", "packages": ["zip", "unzip"], "size_mb": 1},
+    {"id": "zsh", "title": "Zsh, with suggestions and highlighting", "group": "tools", "packages": ["zsh", "zsh-autosuggestions", "zsh-syntax-highlighting"], "size_mb": 20},
+    {"id": "discover", "title": "Discover (software centre for Plasma)", "group": "tools", "packages": ["plasma-discover"], "size_mb": 25}
   ],
   "ssh": {"port_min": 1, "port_max": 65535, "default_port": 22}
 }

@@ -223,7 +223,7 @@ final class HardwareMouse {
     private var edge = EdgePush()
     private var locked = false
     private var pushed = 0
-    private var lastScrollFirst: Float = 0, lastScrollSecond: Float = 0
+    private var scroll = MouseScroll()
 
     func start() {
         stopObserving() // SessionView can start it twice
@@ -238,8 +238,7 @@ final class HardwareMouse {
         TuxLog.log("input", "AssistiveTouch \(UIAccessibility.isAssistiveTouchRunning ? "on" : "off"), idiom \(UIDevice.current.userInterfaceIdiom.rawValue)")
         movesLogged = 0
         movesSince = 0
-        lastScrollFirst = 0
-        lastScrollSecond = 0
+        scroll = MouseScroll(swapsAxes: defaults.bool(forKey: MouseScroll.swapKey))
         GCMouse.mice().forEach { attach($0) }
         observers.append(NotificationCenter.default.addObserver(forName: .GCMouseDidConnect, object: nil, queue: .main) { [weak self] note in
             if let mouse = note.object as? GCMouse { self?.attach(mouse) }
@@ -287,6 +286,7 @@ final class HardwareMouse {
             input.leftButton.pressedChangedHandler = nil
             input.rightButton?.pressedChangedHandler = nil
             input.middleButton?.pressedChangedHandler = nil
+            input.auxiliaryButtons?.forEach { $0.pressedChangedHandler = nil }
             input.scroll.valueChangedHandler = nil
         }
         mice.removeAll()
@@ -312,17 +312,24 @@ final class HardwareMouse {
             return
         }
         mice.append(mouse)
-        TuxLog.log("input", "mouse: \(mouse.vendorName ?? "?"), right button \(input.rightButton != nil), middle \(input.middleButton != nil), pressed \(input.leftButton.isPressed) \(input.rightButton?.isPressed ?? false) \(input.middleButton?.isPressed ?? false), try \(tries)")
+        let aux = input.auxiliaryButtons ?? []
+        TuxLog.log("input", "mouse: \(mouse.vendorName ?? "?"), right button \(input.rightButton != nil), middle \(input.middleButton != nil), \(aux.count) extra, pressed \(input.leftButton.isPressed) \(input.rightButton?.isPressed ?? false) \(input.middleButton?.isPressed ?? false), try \(tries)")
         input.mouseMovedHandler = { [weak self] _, dx, dy in self?.moved(dx, dy) }
         let name = mouse.vendorName ?? "?", key = Self.key(mouse)
         input.leftButton.pressedChangedHandler = { [weak self] _, _, pressed in self?.button(0, pressed, name, key) }
         input.rightButton?.pressedChangedHandler = { [weak self] _, _, pressed in self?.button(1, pressed, name, key) }
         input.middleButton?.pressedChangedHandler = { [weak self] _, _, pressed in self?.button(2, pressed, name, key) }
+        // The first two extra buttons are back and forward, as USB lists them; the rest (DPI, profiles) are the mouse's own.
+        for (i, extra) in aux.prefix(2).enumerated() {
+            let physical = Int32(3 + i)
+            extra.pressedChangedHandler = { [weak self] _, _, pressed in self?.button(physical, pressed, name, key) }
+        }
         input.scroll.valueChangedHandler = { [weak self] _, first, second in self?.scrolled(first, second) }
         // The press that made AssistiveTouch's device appear came before these handlers
         if input.leftButton.isPressed { button(0, true, name, key) }
         if input.rightButton?.isPressed == true { button(1, true, name, key) }
         if input.middleButton?.isPressed == true { button(2, true, name, key) }
+        for (i, extra) in aux.prefix(2).enumerated() where extra.isPressed { button(Int32(3 + i), true, name, key) }
     }
 
     /// GameController's Y runs upward. What doesn't make a whole step yet waits for the next move.
@@ -380,38 +387,17 @@ final class HardwareMouse {
         if !pressed { StickyKeys.shared.releaseAll() }
     }
 
-    /// GameController puts vertical motion on the first axis and horizontal on the second.
-    /// The curve was tuned for macOS, which accelerates wheel units roughly quadratically: a tunable square root
-    /// and cap each event to keep a small pad gesture from jumping across a page.
+    /// GameController's scroll is a dpad: x first, then y. MouseScroll turns the pair into hi-res wheel units.
     private func scrolled(_ first: Float, _ second: Float) {
-        // GameController reports both axis states when either one changes. On a
-        // Magic Keyboard it calls us twice per movement, with one stale axis in
-        // each call; sending both values doubles the scroll and adds sideways drift.
-        let verticalChanged = first != lastScrollFirst
-        let horizontalChanged = second != lastScrollSecond
-        lastScrollFirst = first
-        lastScrollSecond = second
-        let mostlyVertical = abs(first) > 2 * abs(second)
-        let mostlyHorizontal = abs(second) > 2 * abs(first)
-        let verticalRaw = verticalChanged && !mostlyHorizontal ? -first : 0
-        let horizontalRaw = horizontalChanged && !mostlyVertical ? second : 0
         let defaults = UserDefaults.standard
         let configured = defaults.object(forKey: Self.scrollSpeedKey) == nil
             ? 0.3 : defaults.double(forKey: Self.scrollSpeedKey)
         let scale = Float(configured.isFinite ? min(max(configured, 0.1), 1.5) : 0.3)
-        let way: Int32 = reverse ? -1 : 1
-        let horizontal = way * Self.wheelUnits(horizontalRaw, scale: scale)
-        let vertical = way * Self.wheelUnits(verticalRaw, scale: scale)
+        let (horizontal, vertical) = scroll.hiRes(first, second, scale: scale, reverse: reverse)
         if scrollsLogged < 24 {
             scrollsLogged += 1
-            TuxLog.log("input", "scroll raw: \(first), \(second); units: \(horizontal), \(vertical)")
+            TuxLog.log("input", "scroll raw: \(first), \(second); hi-res: \(horizontal), \(vertical)")
         }
         if horizontal != 0 || vertical != 0 { tux_vm_mouse_scroll(horizontal, vertical) }
-    }
-
-    private static func wheelUnits(_ value: Float, scale: Float) -> Int32 {
-        guard value.isFinite else { return 0 }
-        let units = Int32(min(32, (22 * scale * abs(value).squareRoot()).rounded()))
-        return value < 0 ? -units : units
     }
 }

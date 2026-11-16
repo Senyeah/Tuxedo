@@ -387,7 +387,7 @@ class Media(unittest.TestCase):
         self.assertEqual(on_disk, mapped, "a session file is not in the map, or the map names a missing file")
         # what tux-session and the labwc autostart start must be in the map
         for need in ("usr/local/bin/tux-session", "usr/local/bin/tux-display", "etc/xdg/labwc/autostart",
-                     "etc/profile.d/tux-desktop.sh", "etc/systemd/system/getty@tty1.service.d/autologin.conf"):
+                     "etc/profile.d/tux-desktop.sh", "etc/zsh/zprofile", "etc/systemd/system/getty@tty1.service.d/autologin.conf"):
             self.assertIn(need, mapped)
 
     def test_plasma_files_are_copies_of_the_desktop_image(self):

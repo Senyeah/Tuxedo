@@ -161,18 +161,20 @@ static NSUInteger device_mask(uint16_t k) {
 }
 - (void)rightMouseDown:(NSEvent *)e { if (self.captured) mouse_button(1, 1); }
 - (void)rightMouseUp:(NSEvent *)e { if (self.captured) mouse_button(1, 0); }
-- (void)otherMouseDown:(NSEvent *)e { if (self.captured) mouse_button(2, 1); }
-- (void)otherMouseUp:(NSEvent *)e { if (self.captured) mouse_button(2, 0); }
+/* AppKit numbers the buttons 0 left, 1 right, 2 middle, 3 back, 4 forward; the guest does the same. */
+- (void)otherMouseDown:(NSEvent *)e { if (self.captured) mouse_button((int)e.buttonNumber, 1); }
+- (void)otherMouseUp:(NSEvent *)e { if (self.captured) mouse_button((int)e.buttonNumber, 0); }
 - (void)scrollWheel:(NSEvent *)e {
     if (!self.captured) return;
-    static double acc_y, acc_x; /* trackpads give fine deltas: gather whole steps */
-    acc_y += e.hasPreciseScrollingDeltas ? e.scrollingDeltaY / 10.0 : e.scrollingDeltaY;
-    acc_x += e.hasPreciseScrollingDeltas ? e.scrollingDeltaX / 10.0 : e.scrollingDeltaX;
+    static double acc_y, acc_x; /* gather whole hi-res units */
+    double k = e.hasPreciseScrollingDeltas ? 12 : 120; /* a notch is 120; a trackpad's points are 10 to a notch */
+    acc_y += e.scrollingDeltaY * k;
+    acc_x += e.scrollingDeltaX * k;
     int sy = (int)acc_y, sx = (int)acc_x;
     acc_y -= sy;
     acc_x -= sx;
-    if (sy) { hv_virt_machine_lock(); hv_vm_mouse_wheel(sy); hv_virt_machine_unlock(); }
-    if (sx) { hv_virt_machine_lock(); hv_vm_mouse_hwheel(-sx); hv_virt_machine_unlock(); }
+    if (sy) { hv_virt_machine_lock(); hv_vm_mouse_wheel_hires(sy); hv_virt_machine_unlock(); }
+    if (sx) { hv_virt_machine_lock(); hv_vm_mouse_hwheel_hires(-sx); hv_virt_machine_unlock(); }
 }
 @end
 

@@ -189,6 +189,7 @@ def run(p, args, infile):
     lines = ["type hello", "msleep 300",
              "rel 40 0", "msleep 50", "rel 0 30", "msleep 100",
              "click 0 0", "msleep 200", "rclick", "msleep 200",
+             "btn 0x113 1", "msleep 100", "btn 0x113 0", "msleep 100", "btn 0x114 1", "msleep 100", "btn 0x114 0", "msleep 200",
              "scroll 0 1", "msleep 100", "scroll 0 -1", "msleep 100", "scroll 1 0", "msleep 200",
              "msleep 300"]
     lines += finger_path(1, [(cx - 1000 + 100 * i, cy) for i in range(21)]) + ["msleep 300"]
@@ -240,6 +241,12 @@ def check_capture(cap):
                     res.append((float(m.group(1)), float(m.group(2))))
         return res
     wheel = nums("mouse", "POINTER_SCROLL_WHEEL")
+    # the second number of each axis is libinput's v120: 120 is one notch, as the hi-res event gives it
+    v120 = []
+    for l in lines["mouse"]:
+        m = re.search(r"POINTER_SCROLL_WHEEL.*vert -?[\d.]+/\s*(-?[\d.]+)\*? horiz -?[\d.]+/\s*(-?[\d.]+)", l)
+        if m:
+            v120.append((float(m.group(1)), float(m.group(2))))
     mmotion = nums("mouse", "POINTER_MOTION")
     motion = nums("tp", "POINTER_MOTION")
     fscroll = nums("tp", "POINTER_SCROLL_FINGER")
@@ -251,6 +258,10 @@ def check_capture(cap):
          and count("mouse", "POINTER_BUTTON", r"BTN_LEFT.*released") == 1),
         ("virtio mouse BTN_RIGHT press and release", count("mouse", "POINTER_BUTTON", r"BTN_RIGHT.*pressed") == 1
          and count("mouse", "POINTER_BUTTON", r"BTN_RIGHT.*released") == 1),
+        ("virtio mouse BTN_SIDE and BTN_EXTRA press and release",
+         all(count("mouse", "POINTER_BUTTON", rf"{b}.*{w}") == 1 for b in ("BTN_SIDE", "BTN_EXTRA") for w in ("pressed", "released"))),
+        ("a notch is 120 in libinput's v120: up, down, right",
+         v120 == [(-120.0, 0.0), (120.0, 0.0), (0.0, 120.0)]),
         ("wheel +1 scrolls up, -1 scrolls down, hwheel +1 scrolls right",
          len(wheel) == 3 and wheel[0][0] < 0 and wheel[1][0] > 0 and wheel[2][1] > 0),
         ("trackpad one finger: +x moves right, +y moves down",

@@ -67,12 +67,16 @@ static void answer(HvVirtioInput *d) {
             set_bit(data, HV_BTN_LEFT);
             set_bit(data, HV_BTN_RIGHT);
             set_bit(data, HV_BTN_MIDDLE);
-            size = HV_BTN_MIDDLE / 8 + 1;
+            set_bit(data, HV_BTN_SIDE);
+            set_bit(data, HV_BTN_EXTRA);
+            size = HV_BTN_EXTRA / 8 + 1;
         } else if (mouse && subsel == HV_EV_REL) {
             set_bit(data, HV_REL_X);
             set_bit(data, HV_REL_Y);
             set_bit(data, HV_REL_HWHEEL);
             set_bit(data, HV_REL_WHEEL);
+            set_bit(data, HV_REL_WHEEL_HI_RES);
+            set_bit(data, HV_REL_HWHEEL_HI_RES);
             size = 2;
         } else if (touch && subsel == HV_EV_KEY) {
             set_bit(data, HV_BTN_TOUCH);
@@ -241,9 +245,7 @@ static void expand_frame_locked(HvVirtioInput *d) {
     if (any) put_locked(d, HV_EV_SYN, 0, 0);
 }
 
-void hv_virtio_input_send(HvVirtioInput *d, uint16_t type, uint16_t code, int32_t value) {
-    if (!d) return;
-    pthread_mutex_lock(&d->mu);
+static void send_locked(HvVirtioInput *d, uint16_t type, uint16_t code, int32_t value) {
     if (d->tail - d->head == HV_VINPUT_RING) {
         d->head++; /* full: lose the oldest */
         d->dropped++;
@@ -252,6 +254,32 @@ void hv_virtio_input_send(HvVirtioInput *d, uint16_t type, uint16_t code, int32_
     d->ring[i].type = type;
     d->ring[i].code = code;
     d->ring[i].value = (uint32_t)value;
+}
+
+void hv_virtio_input_send(HvVirtioInput *d, uint16_t type, uint16_t code, int32_t value) {
+    if (!d) return;
+    pthread_mutex_lock(&d->mu);
+    send_locked(d, type, code, value);
+    pthread_mutex_unlock(&d->mu);
+    hv_machine_wake(d->vio.m);
+}
+
+void hv_virtio_input_wheel(HvVirtioInput *d, int horizontal, int32_t hi) {
+    if (!d || d->kind != HV_VINPUT_MOUSE || !hi) return;
+    const uint16_t hires = horizontal ? HV_REL_HWHEEL_HI_RES : HV_REL_WHEEL_HI_RES;
+    const uint16_t notch = horizontal ? HV_REL_HWHEEL : HV_REL_WHEEL;
+    int32_t *rest = &d->wheel_rest[horizontal != 0];
+    pthread_mutex_lock(&d->mu);
+    while (hi) {
+        int32_t piece = hi > 120 ? 120 : hi < -120 ? -120 : hi; /* at most a notch: a guest that kept 8 bits would still turn the right way */
+        hi -= piece;
+        send_locked(d, HV_EV_REL, hires, piece);
+        *rest += piece;
+        int32_t whole = *rest / 120;
+        *rest -= whole * 120;
+        if (whole) send_locked(d, HV_EV_REL, notch, whole);
+        send_locked(d, HV_EV_SYN, 0, 0);
+    }
     pthread_mutex_unlock(&d->mu);
     hv_machine_wake(d->vio.m);
 }

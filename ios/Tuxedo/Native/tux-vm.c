@@ -489,8 +489,8 @@ void tux_vm_mouse_button(int button, int down) {
 }
 void tux_vm_mouse_scroll(int dx, int dy) {
     if (!lock_running()) return;
-    if (dy) hv_vm_mouse_wheel(dy);
-    if (dx) hv_vm_mouse_hwheel(dx);
+    if (dy) hv_vm_mouse_wheel_hires(dy);
+    if (dx) hv_vm_mouse_hwheel_hires(dx);
     pthread_rwlock_unlock(&api_lock);
 }
 int tux_vm_pointer(int *x, int *y) {

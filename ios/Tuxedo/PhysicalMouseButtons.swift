@@ -2,7 +2,7 @@
 import Foundation
 
 /// Compatibility mapping for GameController physical mice/trackpads only.
-/// Guest button IDs are 0 = left, 1 = right, 2 = middle; touch controls retain those IDs.
+/// Guest button IDs are 0 = left, 1 = right, 2 = middle, 3 = back, 4 = forward; touch controls use the first two.
 /// State is per device: with AssistiveTouch one click can come from a device that then disconnects.
 struct PhysicalMouseButtons {
     static let swapKey = "tux.mouse.swapRightAndMiddle"
@@ -18,8 +18,8 @@ struct PhysicalMouseButtons {
 
     /// The guest button to send, or nil when another device keeps the guest's state as it is.
     mutating func event(_ physicalButton: Int32, pressed: Bool, device: Int = 0) -> Int32? {
-        guard (0...2).contains(physicalButton) else { return nil }
-        let guestButton = swapsRightAndMiddle && physicalButton != 0 ? 3 - physicalButton : physicalButton
+        guard (0...4).contains(physicalButton) else { return nil }
+        let guestButton = swapsRightAndMiddle && (physicalButton == 1 || physicalButton == 2) ? 3 - physicalButton : physicalButton
         let others = heldByOthers(than: device)
         if pressed {
             byDevice[device, default: []].insert(guestButton)

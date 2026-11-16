@@ -14,6 +14,7 @@ struct SettingsView: View {
     @AppStorage(TrackpadFeel.hapticsKey) private var haptics = PadHaptics.Level.all
     @AppStorage(TrackpadFeel.motionKey) private var motionFeel = PadTuning.Motion().style
     @AppStorage(PhysicalMouseButtons.swapKey) private var swapMouseButtons = false
+    @AppStorage(MouseScroll.swapKey) private var swapScrollAxes = false
     @AppStorage(EngineTuning.fastFlushKey) private var fastFlush = true
     @AppStorage(EngineTuning.wfiSpinKey) private var wfiSpin = false
     @AppStorage(EngineTuning.superblocksKey) private var superblocks = false
@@ -81,6 +82,9 @@ struct SettingsView: View {
                         Toggle("Swap physical right and middle buttons", isOn: $swapMouseButtons)
                         Text("Only enable this if your physical mouse's right and middle buttons are reversed in the guest. Touch controls stay unchanged. Restart the session to apply.")
                             .font(.footnote).foregroundStyle(.secondary)
+                        Toggle("Swap scroll axes", isOn: $swapScrollAxes)
+                        Text("Only enable this if up and down scroll sideways in the guest. Restart the session to apply.")
+                            .font(.footnote).foregroundStyle(.secondary)
                         Text("A Magic Keyboard or a Bluetooth mouse moves the guest's pointer. Pointer speed changes apply the next time a machine starts; scroll speed changes apply immediately.")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
@@ -88,6 +92,9 @@ struct SettingsView: View {
                 }
                 if !Device.isPad {
                     Section("Mouse") {
+                        Toggle("Swap scroll axes", isOn: $swapScrollAxes)
+                        Text("Only enable this if up and down scroll sideways in the guest. Restart the session to apply.")
+                            .font(.footnote).foregroundStyle(.secondary)
                         Toggle("Capture an external mouse", isOn: Binding(get: { !phoneLockOff }, set: { phoneLockOff = !$0 }))
                         Text("While a machine runs, the mouse moves only the machine's pointer. The iPhone's pointer stays hidden, so a click can't reach the Home bar. Experimental. A change applies the next time Tuxedo opens.")
                             .font(.footnote).foregroundStyle(.secondary)

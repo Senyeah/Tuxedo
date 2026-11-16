@@ -130,8 +130,8 @@ void tux_vm_set_display_scale(double scale);
 void tux_vm_key(uint16_t code, int down);
 void tux_vm_key_hid(uint8_t usage, int down); /* a hardware keyboard: iOS gives each key's HID usage */
 void tux_vm_mouse_move(int dx, int dy);
-void tux_vm_mouse_button(int button, int down);
-/* Wheel units: dy > 0 up, dx > 0 right. */
+void tux_vm_mouse_button(int button, int down); /* 0 left, 1 right, 2 middle, 3 back, 4 forward */
+/* Hi-res wheel units, 120 to a notch: dy > 0 up, dx > 0 right. */
 void tux_vm_mouse_scroll(int dx, int dy);
 /* The Magic Trackpad 2 the guest sees on its USB bus: a finger on it. phase: 0 down, 1 move, 2 up;
    finger a stable 1..15 per touch; x, y sensor units 0..8134, 0..5206. ts_ms is the touch

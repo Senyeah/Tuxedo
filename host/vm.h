@@ -129,9 +129,13 @@ const char *hv_vm_reason_name(int reason);
 void hv_vm_key(uint16_t code, int down);
 void hv_vm_key_hid(uint8_t usage, int down); /* HID keyboard usage, which is what iOS reports for a hardware keyboard */
 void hv_vm_mouse_move(int dx, int dy);
-void hv_vm_mouse_button(int button, int down); /* 0 left, 1 right, 2 middle */
+void hv_vm_mouse_button(int button, int down); /* 0 left, 1 right, 2 middle, 3 back, 4 forward */
+/* Whole notches: up and right are positive. */
 void hv_vm_mouse_wheel(int dy);
 void hv_vm_mouse_hwheel(int dx);
+/* 120 is one notch, as a hi-res wheel reports. */
+void hv_vm_mouse_wheel_hires(int dy);
+void hv_vm_mouse_hwheel_hires(int dx);
 /* The virt board's power key: GPIO pin 3 high for 100 ms. Any thread; no effect before a machine exists. */
 int hv_vm_power_button(void); /* 1 if the key will be pressed */
 /* The Magic Trackpad 2 on the USB bus: a finger on it. phase: 0 down, 1 move, 2 up; id a

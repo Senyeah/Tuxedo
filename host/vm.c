@@ -816,20 +816,13 @@ static void button_now(void *ctx) {
     if (atomic_load(&input_stopping)) return;
     intptr_t v = (intptr_t)ctx;
     int button = (int)(v >> 1), down = (int)(v & 1);
-    if (button == 0) {
-        hv_virtio_input_send(devs.mouse, HV_EV_KEY, HV_BTN_LEFT, down);
-        hv_virtio_input_send(devs.mouse, HV_EV_SYN, 0, 0);
-    } else if (button == 1) {
-        hv_virtio_input_send(devs.mouse, HV_EV_KEY, HV_BTN_RIGHT, down);
-        hv_virtio_input_send(devs.mouse, HV_EV_SYN, 0, 0);
-    } else if (button == 2) {
-        hv_virtio_input_send(devs.mouse, HV_EV_KEY, HV_BTN_MIDDLE, down);
-        hv_virtio_input_send(devs.mouse, HV_EV_SYN, 0, 0);
-    }
+    static const uint16_t codes[] = {HV_BTN_LEFT, HV_BTN_RIGHT, HV_BTN_MIDDLE, HV_BTN_SIDE, HV_BTN_EXTRA};
+    hv_virtio_input_send(devs.mouse, HV_EV_KEY, codes[button], down);
+    hv_virtio_input_send(devs.mouse, HV_EV_SYN, 0, 0);
 }
 
 void hv_vm_mouse_button(int button, int down) {
-    if (button < 0 || button > 2) return;
+    if (button < 0 || button > 4) return;
     dispatch_async_f(pointer_queue(), (void *)(intptr_t)(button << 1 | !!down), button_now);
 }
 
@@ -852,18 +845,10 @@ int hv_vm_power_button(void) {
     return 1;
 }
 
-/* The guest takes a wheel event as 8 bits: -200 arrives as +56, the wrong way. So big moves go in pieces. */
-static void wheel(uint16_t axis, int amount) {
-    while (amount) {
-        int piece = amount > 100 ? 100 : amount < -100 ? -100 : amount;
-        hv_virtio_input_send(devs.mouse, HV_EV_REL, axis, piece);
-        hv_virtio_input_send(devs.mouse, HV_EV_SYN, 0, 0);
-        amount -= piece;
-    }
-}
-
-void hv_vm_mouse_wheel(int dy) { wheel(HV_REL_WHEEL, dy); }
-void hv_vm_mouse_hwheel(int dx) { wheel(HV_REL_HWHEEL, dx); }
+void hv_vm_mouse_wheel_hires(int dy) { hv_virtio_input_wheel(devs.mouse, 0, dy); }
+void hv_vm_mouse_hwheel_hires(int dx) { hv_virtio_input_wheel(devs.mouse, 1, dx); }
+void hv_vm_mouse_wheel(int dy) { hv_vm_mouse_wheel_hires(dy * 120); }
+void hv_vm_mouse_hwheel(int dx) { hv_vm_mouse_hwheel_hires(dx * 120); }
 
 void hv_vm_touch(int id, int phase, int x, int y, uint32_t ts_ms) {
     if (x < 0) x = 0;

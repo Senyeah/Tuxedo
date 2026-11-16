@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# zsh does not read /etc/profile.d: this starts the desktop on tty1 as bash does.
+[ -r /etc/profile.d/tux-desktop.sh ] && emulate sh -c '. /etc/profile.d/tux-desktop.sh'

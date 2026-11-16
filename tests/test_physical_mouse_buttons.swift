@@ -33,8 +33,18 @@ struct PhysicalMouseButtonTests {
         check(swapped.releaseAll() == [1, 2], "cleanup must release mapped buttons")
         check(swapped.releaseAll().isEmpty, "cleanup must be idempotent")
         check(swapped.event(-1, pressed: true) == nil, "negative code must be ignored")
-        check(swapped.event(3, pressed: true) == nil, "unsupported code must be ignored")
+        check(swapped.event(5, pressed: true) == nil, "unsupported code must be ignored")
         check(swapped.held.isEmpty, "invalid input must not stick")
+
+        // Back and forward pass through, with or without the swap.
+        for var buttons in [standard, swapped] {
+            check(buttons.event(3, pressed: true) == 3, "back must stay back")
+            check(buttons.event(4, pressed: true) == 4, "forward must stay forward")
+            check(buttons.held == [3, 4], "both extra buttons are held")
+            check(buttons.event(3, pressed: false) == 3, "back release must match")
+            check(buttons.event(4, pressed: false) == 4, "forward release must match")
+            check(buttons.held.isEmpty, "extra buttons must not stick")
+        }
 
         // Two devices: AssistiveTouch's pointer and the USB mouse can both report a button.
         var two = PhysicalMouseButtons(swapsRightAndMiddle: false)
@@ -56,6 +66,6 @@ struct PhysicalMouseButtonTests {
         check(two.releaseAll(for: 1) == [0], "device 1 disconnect releases left")
         check(two.releaseAll().isEmpty, "nothing left to release")
 
-        print("PASS: standard mapping, right/middle swap, left drag, releases, disconnect cleanup and per-device state")
+        print("PASS: standard mapping, right/middle swap, back and forward, left drag, releases, disconnect cleanup and per-device state")
     }
 }

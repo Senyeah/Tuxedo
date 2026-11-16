@@ -128,7 +128,8 @@ final class PadButtons: UIView {
         }
 
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-            guard touch == nil, let t = touches.first else { return }
+            // A mouse's click lands on whatever the system pointer is over: only a finger is a key press.
+            guard touch == nil, let t = touches.first(where: { $0.type != .indirectPointer }) else { return }
             touch = t
             let l = t.location(in: self)
             let w = max(Double(bounds.width), 1), h = max(Double(bounds.height), 1)

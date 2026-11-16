@@ -555,6 +555,13 @@ test-physical-mouse-buttons: $(B)/test_physical_mouse_buttons
 	$<
 .PHONY: test-physical-mouse-buttons
 
+$(B)/test_mouse_scroll: ios/Tuxedo/MouseScroll.swift tests/test_mouse_scroll.swift | $(B)
+	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
+
+test-mouse-scroll: $(B)/test_mouse_scroll
+	$<
+.PHONY: test-mouse-scroll
+
 $(B)/test_display_mode_policy: ios/Tuxedo/DisplayModePolicy.swift tests/test_display_mode_policy.swift | $(B)
 	xcrun --sdk macosx swiftc $^ -o $@
 

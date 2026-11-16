@@ -570,6 +570,8 @@ static void test_default_board(void) {
     hv_vm_destroy();
 }
 
+static void test_mouse(HvVirtioInput *m);
+
 static void test_vm(void) {
     char rom[256], disk[256], error[256];
     snprintf(rom, sizeof rom, "%s/firmware", dir);
@@ -598,6 +600,7 @@ static void test_vm(void) {
     check("second byte", rd32(vm, VIRT_UART), 'k');
     /* the touchscreen through the host layer (TS2) */
     HvVirtioInput *ts = hv_vm_devs()->touch;
+    test_mouse(hv_vm_devs()->mouse);
     check("touchscreen in the board's devices", ts && ts == hv_vm_virt()->touch, 1);
     if (ts) {
         uint32_t queued = ts->ftail;
@@ -1770,6 +1773,70 @@ static void touch_expect(const char *what, const char *want) {
         printf("  FAIL %s: \"%s\", expected \"%s\"\n", what, got, want);
         failures++;
     }
+}
+
+/* The mouse's events since the ring was at tail, as "R11:30 R8:1 S |" (type letter, code, value). */
+static void mouse_events(HvVirtioInput *m, uint32_t since, char *out, size_t cap) {
+    size_t at = 0;
+    out[0] = 0;
+    for (uint32_t i = since; i != m->tail; i++) {
+        char tok[32];
+        uint16_t type = m->ring[i % HV_VINPUT_RING].type, code = m->ring[i % HV_VINPUT_RING].code;
+        int32_t value = (int32_t)m->ring[i % HV_VINPUT_RING].value;
+        if (type == HV_EV_SYN) snprintf(tok, sizeof tok, "|");
+        else snprintf(tok, sizeof tok, "%c%u:%d", type == HV_EV_REL ? 'R' : 'K', code, value);
+        at += (size_t)snprintf(out + at, cap - at, "%s%s", at ? " " : "", tok);
+    }
+}
+
+static void mouse_expect(HvVirtioInput *m, const char *what, uint32_t since, const char *want) {
+    char got[256];
+    mouse_events(m, since, got, sizeof got);
+    checks++;
+    if (strcmp(got, want)) {
+        printf("  FAIL %s: \"%s\", expected \"%s\"\n", what, got, want);
+        failures++;
+    }
+}
+
+static void test_mouse(HvVirtioInput *m) {
+    if (!m) return;
+    uint8_t *c = m->vio.config;
+    m->vio.config_write(&m->vio, 0, 0x11 | HV_EV_KEY << 8, 2);
+    check("mouse: key bits reach BTN_EXTRA", c[2], HV_BTN_EXTRA / 8 + 1);
+    int keys = 0;
+    for (int i = 0; i < 0x120; i++) keys += c[8 + i / 8] >> (i % 8) & 1;
+    check("mouse: left, right, middle, side and extra", keys, 5);
+    check("mouse: BTN_SIDE and BTN_EXTRA", (c[8 + HV_BTN_SIDE / 8] >> (HV_BTN_SIDE % 8) & 1) && (c[8 + HV_BTN_EXTRA / 8] >> (HV_BTN_EXTRA % 8) & 1), 1);
+    m->vio.config_write(&m->vio, 0, 0x11 | HV_EV_REL << 8, 2);
+    check("mouse: relative bits", c[2] == 2 && c[8] == 0x43 && c[9] == 0x19, 1); /* X, Y, HWHEEL, WHEEL, WHEEL_HI_RES, HWHEEL_HI_RES */
+
+    uint32_t t = m->tail;
+    hv_vm_mouse_wheel(1);
+    mouse_expect(m, "mouse: one notch", t, "R11:120 R8:1 |");
+    t = m->tail;
+    hv_vm_mouse_wheel_hires(-30);
+    hv_vm_mouse_wheel_hires(-30);
+    hv_vm_mouse_wheel_hires(-30);
+    hv_vm_mouse_wheel_hires(-30);
+    mouse_expect(m, "mouse: four quarter notches make one old step", t, "R11:-30 | R11:-30 | R11:-30 | R11:-30 R8:-1 |");
+    t = m->tail;
+    hv_vm_mouse_hwheel_hires(60);
+    hv_vm_mouse_hwheel_hires(60);
+    mouse_expect(m, "mouse: sideways has its own remainder", t, "R12:60 | R12:60 R6:1 |");
+    t = m->tail;
+    hv_vm_mouse_wheel_hires(250);
+    mouse_expect(m, "mouse: a big move goes in pieces of a notch", t, "R11:120 R8:1 | R11:120 R8:1 | R11:10 |");
+    t = m->tail;
+    hv_vm_mouse_wheel_hires(0);
+    mouse_expect(m, "mouse: nothing is nothing", t, "");
+    t = m->tail;
+    hv_vm_mouse_button(3, 1);
+    hv_vm_mouse_button(4, 1);
+    hv_vm_mouse_button(5, 1);
+    hv_vm_mouse_button(-1, 1);
+    for (int i = 0; i < 400 && m->tail - t < 4; i++) usleep(5000); /* the buttons go by the pointer queue */
+    mouse_expect(m, "mouse: back and forward are BTN_SIDE and BTN_EXTRA, no other", t, "K275:1 | K276:1 |");
 }
 
 static void test_touch(void) {
