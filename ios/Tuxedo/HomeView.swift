@@ -142,7 +142,7 @@ extension VirtualMachine {
     var summary: String {
         var parts: [String] = []
         parts.append(osName ?? "Linux")
-        parts.append("\(ramMB / 1024) GB")
+        parts.append("\(MemoryAmount.text(ramMB)) GB")
         return parts.joined(separator: " · ")
     }
 }

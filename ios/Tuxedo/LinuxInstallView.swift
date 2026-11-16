@@ -10,7 +10,7 @@ struct LinuxInstallView: View {
 
     @State private var selected: String?
     @State private var name = "Debian"
-    @State private var ramGB = 2
+    @State private var ramMB = 2048
     @State private var diskGB = Int(LinuxUnpack.defaultDiskBytes >> 30)
     @State private var deleteAfter = false
     @State private var refresh = 0 // redraws the list when a download is deleted
@@ -97,16 +97,10 @@ struct LinuxInstallView: View {
                     .padding(.horizontal, 17)
                     .padding(.vertical, 14)
                 Rectangle().fill(Desk.hairline).frame(height: 0.5)
-                Stepper(value: $ramGB, in: Device.memoryChoices) {
-                    HStack {
-                        Text("Memory").font(.system(size: 16))
-                        Spacer()
-                        Text("\(ramGB) GB").font(.system(size: 16, weight: .semibold))
-                    }
-                }
-                .padding(.horizontal, 17)
-                .padding(.vertical, 10)
-                if let text = Device.memoryNote(ramGB) {
+                MemoryField(mb: $ramMB)
+                    .padding(.horizontal, 17)
+                    .padding(.vertical, 10)
+                if let text = Device.memoryNote(mb: ramMB) {
                     Text(text).font(.system(size: 13)).foregroundStyle(Desk.dim)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 17)
@@ -138,7 +132,7 @@ struct LinuxInstallView: View {
             let have = LinuxDownload.haveAll(image, in: LinuxInstaller.folder)
             Button(have ? "Install" : "Download and Install") {
                 linux.reset()
-                linux.install(image, options: .init(name: name, ramMB: ramGB * 1024,
+                linux.install(image, options: .init(name: name, ramMB: ramMB,
                                                     diskBytes: LinuxUnpack.diskBytes(chosen: Int64(max(diskGB, minGB)) << 30, for: image),
                                                     keepDownload: !deleteAfter))
             }

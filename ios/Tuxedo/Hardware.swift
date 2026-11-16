@@ -30,12 +30,9 @@ enum Device {
         return mb >= 14_000 ? 8 : mb >= 10_000 ? 6 : 4
     }
 
-    /// The choices for a machine's memory, in GB.
-    static let memoryChoices = 1...16
-
     /// What a choice risks on this device, if anything.
-    static func memoryNote(_ gb: Int) -> String? {
-        gb > suggestedRAMGB ? "More than \(suggestedRAMGB) GB is a lot for this \(name): iOS may close Tuxedo when Linux gets busy." : nil
+    static func memoryNote(mb: Int) -> String? {
+        mb > suggestedRAMGB * 1024 ? "More than \(suggestedRAMGB) GB is a lot for this \(name): iOS may close Tuxedo when Linux gets busy." : nil
     }
 
     /// The virtual CPU offers Armv8.5 instructions (core/sysreg.c), and Linux uses them. They run as

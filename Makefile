@@ -562,6 +562,13 @@ test-mouse-scroll: $(B)/test_mouse_scroll
 	$<
 .PHONY: test-mouse-scroll
 
+$(B)/test_memory_amount: ios/Tuxedo/MemoryAmount.swift tests/test_memory_amount.swift | $(B)
+	xcrun --sdk macosx swiftc -parse-as-library $^ -o $@
+
+test-memory-amount: $(B)/test_memory_amount
+	$<
+.PHONY: test-memory-amount
+
 $(B)/test_display_mode_policy: ios/Tuxedo/DisplayModePolicy.swift tests/test_display_mode_policy.swift | $(B)
 	xcrun --sdk macosx swiftc $^ -o $@
 
