@@ -70,7 +70,7 @@ The build takes the tag and settings from `tools/linux/versions.env` and `tools/
 
 `build-uboot.sh --stock` builds the unmodified defconfig as `u-boot-stock.bin`, which tests use. The catalogue serves the binary as `u-boot-<first 12 hex digits of the SHA-256>.bin`. A bit-for-bit rebuild has not been tried: the compiler comes from whatever `debian:trixie` is on the day.
 
-To hand out the source with a binary, publish a tarball of that tag next to it, with the fragment, `build-uboot.sh` and `versions.env`. Whether a link to DENX's server is enough is a legal question for the host to settle. The tarball avoids it.
+`tools/linux/package-source.sh` (`make linux-source`) writes `build/linux/source/u-boot-v2026.10/`: the tarball of that tag (`git archive` of the commit above), the fragment, `build-uboot.sh`, `run.sh`, `Dockerfile`, `versions.env`, a manifest with the hashes, `README.txt` with the build steps and a written offer, and `SHA256SUMS`. Merging the fragment over the defconfig from that tarball gives the same `.config` as the shipped build. `publish-apt.sh --rsync` puts the folder on the server next to the FFmpeg offers, at `https://walkies.site/tux-linux-catalogue/source/u-boot-v2026.10/`. Keep it there for as long as a binary built from it is in the catalogue. Whether a written offer is enough in law is for the host to decide; the tarball gives the complete source from the same place.
 
 ### The Debian image
 
@@ -90,6 +90,8 @@ apt-cache showsrc PACKAGE          # names the source package of a binary packag
 ```
 
 The binary package `linux-image-6.12.107+deb13-arm64-16k` does not resolve by its own name. Its source is `linux`, and `linux-image-arm64-16k` is a metapackage whose source is `linux-signed-arm64`. The build passes `mmdebstrap` only a `deb` line, so the image has no source line, and a person who has only the image needs the lines above. `snapshot.debian.org` is run by Debian, and Tuxedo does not control it.
+
+`package-source.sh` also writes `build/linux/source/debian-images-20261110T000000Z/`, the offer for these images: a written offer valid for three years, both image manifests, `SOURCES-console.txt` and `SOURCES-desktop.txt` (each binary package with its Debian source package and version, from the snapshot's `Sources` index), and `fetch-source.sh`, which downloads every listed source package from the snapshot into a folder. On 16/11/2026 the lists matched 185 console packages and 361 desktop packages by version, took the closest version for one (`login`, whose version has a `+really` suffix), and left three Tuxedo packages (`tux-guest`, `tux-va`, `tux-ffmpeg`) for their own offers. The signed kernel packages list both `linux-signed-arm64` and `linux`, because the signed package holds only signatures. `fetch-source.sh` was run for one source package (`libzstd`); the full download was not run. The host can run it and serve the result from the same folder, which makes the offer a copy and not a pointer to Debian.
 
 ### FFmpeg (tux-ffmpeg)
 

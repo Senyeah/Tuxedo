@@ -284,9 +284,12 @@ linux-ffmpeg-pkg:
 	TUX_LINUX_OUT=$(LINUX_OUT) tools/linux/build-ffmpeg-pkg.sh
 linux-apt:
 	TUX_LINUX_OUT=$(LINUX_OUT) tools/linux/publish-apt.sh
+# The U-Boot and Debian image source offers in $(LINUX_OUT)/source (package-source.sh; local only)
+linux-source:
+	TUX_LINUX_OUT=$(LINUX_OUT) tools/linux/package-source.sh
 test-linux-ffmpeg-pkg: $(B)/tuxvm
 	uv run tools/linux/vcodec-check.py --tuxvm $(B)/tuxvm --apt $(LINUX_OUT)/apt --sizes 4k,1080p --codecs hevc8,h264 --no-software $(VCODEC_ARGS)
-.PHONY: linux-ffmpeg-pkg linux-apt test-linux-ffmpeg-pkg
+.PHONY: linux-ffmpeg-pkg linux-apt linux-source test-linux-ffmpeg-pkg
 
 # VE4: the tux-codec-dkms package (the module is built against the pinned 16 KB kernel's headers with -Werror, and
 # installed by DKMS in the container), then the DMA channel in a clone of the desktop image booted through U-Boot with
