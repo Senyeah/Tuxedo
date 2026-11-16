@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Runs inside the new root filesystem, after the packages are installed.
 set -eu
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Compositor frame-time probe: a shm client that redraws a W x H window every frame callback.
 import array, mmap, os, socket, struct, sys, time
 W, H, SECS = int(sys.argv[1]), int(sys.argv[2]), float(sys.argv[3])

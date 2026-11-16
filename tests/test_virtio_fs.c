@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* The virtio-fs device (devices/virtio_fs.c) on a fake ring in guest RAM: its config, INIT and LOOKUP, a 1 MB READ
    across 64 segments (and the JIT's code for those pages dropped), a chain of 129 segments (refused, and the ring
    still works), FORGET on the high-priority queue, requests that finish out of order on the 4 workers (at most 3 of them in opens), FIFO opens

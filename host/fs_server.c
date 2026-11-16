@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* The file server for folders from the Files app (fs_server.h).
 
    Node ids: 1 is the root the server makes, 2 is .tux-folders, 3 to 11 are the folders' own roots (fixed, so a

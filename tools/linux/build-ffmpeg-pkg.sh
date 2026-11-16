@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Build tux-ffmpeg_<version>_arm64.deb (docs/guest-video-encode-plan.md, VE3.1, VE3.2) from the build of
 # build-ffmpeg.sh in $TUX_LINUX_OUT/ffmpeg, in an arm64 debian:trixie container with the pinned snapshot.
 # The binaries go in /usr/lib/tux/ffmpeg/bin; postinst links ffmpeg and ffprobe into /usr/local/bin.

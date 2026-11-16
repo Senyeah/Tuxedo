@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* The folder and clipboard a virtual machine shares with the device it runs on.
 
    The folder is a small WebDAV server, so the guest mounts it like any

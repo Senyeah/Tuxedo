@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* hvcodec: the guest's video codecs on the host's VideoToolbox (docs/guest-video-encode-plan.md).
    The protocol is in vcodec_proto.h. Off unless tuxvm runs with --vcodec. */
 #ifndef TUXVM_VCODEC_H

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 // Crafted guest input to the VideoToolbox back end (tools/gfx/virglrenderer-videotoolbox.patch), called directly
 // through virgl_video.h. Linked without the video frameworks: the library must name them itself.
 #include <mach/mach.h>

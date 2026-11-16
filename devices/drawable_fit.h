@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef HV_DRAWABLE_FIT_H
 #define HV_DRAWABLE_FIT_H
 #import <QuartzCore/CAMetalLayer.h>

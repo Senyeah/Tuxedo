@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 /// On an iPhone the mouse drives AssistiveTouch's pointer, which stops at the phone's edges, and then the

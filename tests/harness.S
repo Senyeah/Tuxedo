@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 // Running a test program natively with every register taken from a HvCpu.
 //
 // hv_native_run(HvCpu *cpu, void *entry) saves the host state and jumps to a

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* The codec table: what VideoToolbox can encode and decode on this device, found at run time
    (docs/guest-video-encode-plan.md, "Encoders and run-time detection", steps 1 to 6). */
 #ifndef TUXVM_VT_CAPS_H

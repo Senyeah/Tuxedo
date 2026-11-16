@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* /.tux/secrets: the store behind a Linux guest's wallet (tux-secrets). See secrets.h and tools/linux/README.md.
 
    GET    /state[?since=N]  "locked" or "unlocked"; with since, waits up to 25 s for a change after N.

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* A sampling profiler for the iOS build (host/main.c has the Mac one).
    Every guest CPU thread registers itself; a sampler thread reads each one's PC
    1000 times a second and sorts it into: asleep, in translated code, or in a host

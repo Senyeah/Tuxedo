@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Build the patched ffmpeg for the guest (docs/guest-video-encode-plan.md, VE2.6): FFmpeg $FFMPEG_VERSION with
 # tools/linux/hvcodec/ffmpeg-tux.patch, libhvcodec and tux-codec-info, for arm64 Debian trixie.
 # Runs on the Mac; builds natively in an arm64 debian:trixie container with packages from the pinned snapshot.

@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
 # A11 spike: builds window_probe (steps 1 and 2) into $OUT. Nothing here is part of the default build.
 # Usage: tools/gfx/venus-spike/build.sh OUT_DIR
 set -eu

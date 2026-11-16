@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 /// The rules for a Linux machine's folders from Files, with no UIKit and no engine, so tests/test_folder_policy.swift

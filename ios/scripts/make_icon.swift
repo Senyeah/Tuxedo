@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 // make_icon.swift DIR: draws the app icon's two windows as transparent 1024x1024 layers, for
 // ios/Tuxedo/AppIcon.icon/Assets (Icon Composer's format: iOS adds the glass). l0 is the front one.
 // Geometry is in the pixels of docs/tuxedo-icon-source.png (1500), the master; the layers scale it to 1024.

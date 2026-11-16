@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* VideoToolbox decode helpers that hvcodec (host/vcodec.m) and the virgl video back end
    (tools/gfx/virglrenderer-videotoolbox.patch) both need: format descriptions from parameter sets,
    sample buffers, IOSurface pool attributes, synchronous decode and errors. Plain C interface. */

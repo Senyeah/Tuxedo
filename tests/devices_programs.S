@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 // Guest programs for the device tests (JIT only, EL1, MMU off, on the virt map).
 #include "harness.h"
 

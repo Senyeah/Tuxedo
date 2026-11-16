@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* The guest's DNS through the host's own resolver (issue #34).
 
    libslirp answers the guest's queries to 10.0.2.3 by sending them on to the host's first IPv4 name server, which

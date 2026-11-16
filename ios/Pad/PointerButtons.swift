@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 /// Who holds each mouse button. The guest hears a press only when the first owner presses

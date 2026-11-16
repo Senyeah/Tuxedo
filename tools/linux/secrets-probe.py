@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Runs in the guest (or a Debian container) for secrets-check.py: one step of the wallet through its D-Bus
 clients. Prints "OK ..." and exits 0, or prints "FAIL ..." and exits 1.
 

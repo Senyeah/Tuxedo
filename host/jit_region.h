@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef TUXVM_JIT_REGION_H
 #define TUXVM_JIT_REGION_H
 

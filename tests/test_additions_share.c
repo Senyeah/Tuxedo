@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* GET and POST /.tux/additions through the share server on a Unix socket, as the Tuxedo Additions agent in a guest
    uses them: 200 with the sequence, 400 for a body that is not a JSON object with a string "t", 413 over 64 KB (by
    Content-Length and chunked), the long poll with X-Tux-Seq, the job in the answer, a "done" event that takes the

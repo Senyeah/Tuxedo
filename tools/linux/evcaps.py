@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
 # TS3, run in the guest as root: what each touchscreen evdev node offers (names, ids, bits, axis ranges).
 # The same text on Tuxedo and on QEMU's virtio-multitouch-pci shows how the two devices differ.
 import fcntl, glob, os, struct

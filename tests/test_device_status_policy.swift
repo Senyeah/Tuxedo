@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 // DeviceStatusPolicy (ios/Tuxedo/DeviceStatusPolicy.swift): what the phone gives a Linux guest, and when the guest's

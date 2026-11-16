@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Boot the Tuxedo Linux guest on QEMU virt, the reference for Tuxedo's board.
 set -eu
 

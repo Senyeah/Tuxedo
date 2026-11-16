@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Build tux-va_<version>_arm64.deb into $TUX_LINUX_OUT/va, in an arm64 debian:trixie container with the pinned
 # snapshot. tux-va/tux_va.c is the VA-API driver that goes in front of Mesa's virgl driver (the why is in that
 # file). Before the package: the driver against a stand-in for Mesa's (tux-va/test). After it: the package is

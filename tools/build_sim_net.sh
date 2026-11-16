@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-or-later
 # libffi, glib and libslirp for the iOS Simulator, so TuxSim's guests get a network.
 # Husk's build_ios.sh builds for iphoneos only; this runs a copy of it with the simulator SDK.
 # Output: $HUSK/build/ios-sim-arm64/sysroot (make ios-sim-lib uses it when it exists).

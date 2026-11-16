@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 /// The rules DeviceStatus follows, without UIKit, so they can be tested on the Mac.

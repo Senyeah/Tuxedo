@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 /// One external display as LegacyExternalDisplay drives it: ExternalDisplaySceneDelegate in the

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Source from a build script. Sets GFX_ROOT (the main checkout's build/gfx, also from a worktree) and
 # TUX_GFX=1 when the iOS and simulator graphics libraries are there; empty otherwise.
 GFX_ROOT="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/build/gfx"

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* The hvcodec DMA channel: the virtio device (devices/virtio_hvcodec.c), the guest's tux_codec module
    (tools/linux/tux-codec-dkms) and libhvcodec's /dev/hvcodec client. docs/guest-video-encode-plan.md has the design.
 

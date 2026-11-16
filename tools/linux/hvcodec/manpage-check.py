@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
 """ffmpeg-tux(7) must list each *_tux encoder, each of its options and their named values, and each scale_tux
 option (docs/guest-video-encode-plan.md, VE3.2). Python 3 standard library only: build-ffmpeg-pkg.sh runs it in the
 build container and vcodec-check.py --apt in the guest.

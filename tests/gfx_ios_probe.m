@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 // Starts and stops the virgl renderer in a process built for iOS or the simulator: the static ANGLE,
 // libepoxy and virglrenderer must resolve their GL lookups with no EGL or GLES framework (make ios-gfx-probe).
 #import <Foundation/Foundation.h>

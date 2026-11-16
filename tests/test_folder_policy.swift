@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 // FM8: a Linux machine's folders from Files (ios/Tuxedo/FolderPolicy.swift, SharedFolder in MachineModel.swift):

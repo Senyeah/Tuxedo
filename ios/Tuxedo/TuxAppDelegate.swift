@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import UIKit
 
 /// The app's UIKit delegate, for what SwiftUI's App cannot express.

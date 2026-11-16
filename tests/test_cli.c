@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* tuxvm's command line: virt is the only board, and the macOS flags are unknown options. */
 #include <spawn.h>
 #include <stdio.h>

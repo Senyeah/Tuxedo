@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* /.tux/secrets through the share server on a Unix socket, as tux-secrets in a Linux guest uses it,
    with the folder store that tuxvm uses. */
 #include "secrets.h"

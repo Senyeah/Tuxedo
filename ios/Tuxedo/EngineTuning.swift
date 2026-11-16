@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 /// Engine settings, without a rebuild. Defaults below, then the Performance settings,

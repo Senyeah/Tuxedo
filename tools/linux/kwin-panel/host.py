@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+# SPDX-License-Identifier: GPL-2.0-or-later
 """A stand-in for host/share.c's /.tux/keyboard, for keyboard-panel-check.sh: host.py PORT LOG.
 PUT /.tux/keyboard: the body goes to LOG. GET /.tux/keyboard[?since=N]: "height F", held up to 25 s.
 PUT /height sets F, as the app does."""

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef TUXVM_LINUX_BOOT_H
 #define TUXVM_LINUX_BOOT_H
 

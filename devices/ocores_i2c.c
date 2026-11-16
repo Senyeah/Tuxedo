@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "ocores_i2c.h"
 
 #include <stdlib.h>

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 /// The pad's energy grid, one cell for each dot. `core` is fast and white, `tail` is slow and

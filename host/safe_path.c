@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* Paths that stay below a shared folder (safe_path.h).
 
    O_NOFOLLOW only checks a path's last part, so a link in a directory part of "a/b" is followed. Two ways stop

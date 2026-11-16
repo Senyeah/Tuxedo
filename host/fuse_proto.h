@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef TUXVM_FUSE_PROTO_H
 #define TUXVM_FUSE_PROTO_H
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 // Exceptions and system registers, run through the JIT only (they need EL1).
 // The vector table records ESR, FAR, ELR, SPSR in x20..x23, counts exceptions
 // in x24 and puts the vector offset in x25. Synchronous faults resume at

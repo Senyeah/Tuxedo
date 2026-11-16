@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+# SPDX-License-Identifier: GPL-2.0-or-later
 """A test window for keyboard-panel-check.sh: window.py LOG [--text] [--float WxH].
 An xdg_toplevel, maximized unless --float, that draws at each size the compositor gives it and writes
 "W H" to LOG. --text: it has a text field (text-input-v3, enabled while it has the focus)."""

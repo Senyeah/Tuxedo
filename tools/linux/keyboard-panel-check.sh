@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
 # tux-keyboard as KWin's input method, with the panel that keeps windows above the device keyboard.
 # Runs kwin_wayland with its virtual backend in a container (kwin-panel/check.py has the checks). Runs on the Mac.
 set -eu

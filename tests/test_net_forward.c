@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* The forward table (host/net_forward.c): parsing, checks, which interfaces count as local networks, and what a
    refresh adds and removes as rules and addresses change. Fake interface lists and fake slirp calls. */
 #include "net_forward.h"

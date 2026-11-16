@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import SwiftUI
 
 /// The tool pill: a dark capsule with the keys' edge, so it sits in the pad's light and not over it.

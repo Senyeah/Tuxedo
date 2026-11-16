@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
 # The Tuxedo Additions media, built on the Mac (docs/guest-additions-design.md, section 4):
 #   $TUX_LINUX_OUT/additions/tux-additions/   install, agent, tux_additions_caps.py, actions.json, versions.json,
 #     install-order.txt, README.txt, desktop-labwc/, desktop-plasma/, SHA256SUMS, SHA256SUMS.gpg, tux-archive.gpg, source/SOURCES.txt,

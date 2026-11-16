@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Run a command in the builder image. Artefacts go to /out, sources to the /work volume.
 set -eu
 

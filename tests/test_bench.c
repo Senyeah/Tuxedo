@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* Native vs JIT timing for typical code shapes (see bench_programs.S). */
 #include "harness.h"
 

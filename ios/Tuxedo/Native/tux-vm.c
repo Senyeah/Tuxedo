@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "share.h"
 #include "net_slirp.h"
 #include <sys/mman.h>

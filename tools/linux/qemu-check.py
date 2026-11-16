@@ -1,4 +1,5 @@
 #!/usr/bin/env -S uv run --with pexpect python3
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Drive tools/linux/qemu-ref.sh through U-Boot and Linux, check the guest and save reference output."""
 import argparse
 import os

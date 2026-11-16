@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 // A stand-in for Mesa's driver: three configs, and the surface formats Mesa 25.0 gives a virgl decode config.
 #include <va/va_backend.h>
 

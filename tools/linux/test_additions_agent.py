@@ -1,4 +1,5 @@
 #!/usr/bin/env -S uv run --script
+# SPDX-License-Identifier: GPL-2.0-or-later
 # /// script
 # requires-python = ">=3.11"
 # dependencies = []

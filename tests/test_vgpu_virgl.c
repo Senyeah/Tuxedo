@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 // The virtio GPU with the real virgl renderer (devices/vgpu_virgl.m): a driver written in C posts
 // control-queue requests, a recorded virgl clear runs on ANGLE (Metal), and TRANSFER_FROM_HOST_3D
 // brings the colour back into guest RAM. Needs the libraries from tools/gfx (make test-vgpu-virgl).

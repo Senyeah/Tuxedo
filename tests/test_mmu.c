@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 // Stage 1 walker: granules, block sizes, TTBR0/TTBR1, TBI, permissions and
 // fault codes, checked directly against hv_mmu_walk.
 #include <stdio.h>

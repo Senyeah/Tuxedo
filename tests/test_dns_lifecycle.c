@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "dns_proxy.h"
 #include "machine.h"
 #include <dns_sd.h>

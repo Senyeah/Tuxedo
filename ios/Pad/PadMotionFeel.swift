@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 /// The motion haptic's strength: the size of the finger's acceleration, from speeding up,

@@ -1,4 +1,5 @@
 #!/bin/zsh
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Builds Tuxedo for iOS and writes ~/Desktop/Tuxedo.ipa (or ~/Desktop/Tuxedo.tipa with --trollstore).
 # Unsigned build, then signed ad hoc inside out with the entitlements file named by the
 # TUX_ENTITLEMENTS environment variable (default Tuxedo/Tuxedo.entitlements), as Husk's

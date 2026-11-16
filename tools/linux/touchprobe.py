@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
 # TS3 probe, run in the guest: a full-screen Wayland window that prints what wl_touch and wl_pointer give it.
 # Lines: "configure W H", "down ID X Y", "motion ID X Y", "up ID", "frame", "cancel", "button X Y STATE".
 import array, mmap, os, socket, struct, sys

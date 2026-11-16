@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 // Load/store programs. x0 points at a 64 KB data buffer (16 KB aligned); SP is
 // in a separate stack buffer. test_mem.c compares registers and the data buffer.
 #include "harness.h"

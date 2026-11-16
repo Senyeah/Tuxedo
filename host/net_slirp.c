@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* The guest's network: user-mode NAT through libslirp (as QEMU's -netdev user),
    so it needs no root and no entitlement. 10.0.2.0/24: the host is 10.0.2.2,
    DNS 10.0.2.3, the guest gets 10.0.2.15 by DHCP. DNS over UDP is answered through the

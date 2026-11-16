@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 /// How a Linux machine's wallet items are named in the Keychain (KeychainStore): one Keychain service per machine,

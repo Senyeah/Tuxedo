@@ -1,4 +1,5 @@
 #!/usr/bin/env -S uv run
+# SPDX-License-Identifier: GPL-2.0-or-later
 # /// script
 # requires-python = ">=3.9"
 # dependencies = ["pexpect"]

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-or-later
 # G7: pack a guest image for download and add it to linux-images.json. Runs on a Mac (needs build/hvsparse).
 # Usage: package-image.sh --image FILE --kind console|desktop [--out DIR] [--firmware FILE] [--manifest FILE]
 #        [--date YYYYMMDD] [--min-build N] [--no-verify] [--touch]

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 /// The steps of the Tuxedo Additions wizard (docs/guest-additions-design.md, section 8).

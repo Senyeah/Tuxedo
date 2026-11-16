@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 // hvcodec (host/vcodec.m) through a socket pair, with no guest: make test-vcodec.
 #include <CoreMedia/CoreMedia.h>
 #include <CoreVideo/CoreVideo.h>

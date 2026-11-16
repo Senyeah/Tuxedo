@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* hvcodec: the codec core and its TCP front end. Each connection is a context with its own sessions and frame
    table, served by its own thread; closing it frees everything it made. Frames stay on the host as IOSurface
    pixel buffers, so a transcode sends only compressed data and handles.

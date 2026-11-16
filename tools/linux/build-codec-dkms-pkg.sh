@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Build tux-codec-dkms_<version>_all.deb (docs/guest-video-encode-plan.md, VE4.2) into $TUX_LINUX_OUT/codec, in
 # an arm64 debian:trixie container with the pinned snapshot. The module source is tools/linux/tux-codec-dkms with
 # host/vcodec_dev.h, the device's ABI. Before the package, the module is built against the pinned 16 KB kernel's

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 // test DIR: loads DIR/virtio_gpu_drv_video.so as libva does, and checks the surface formats of each config.
 #include <dlfcn.h>
 #include <stdio.h>

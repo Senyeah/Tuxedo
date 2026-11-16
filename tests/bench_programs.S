@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 // Benchmarks: typical guest code shapes, timed natively and through the JIT
 // by test_bench.c (not part of `make test`; run build/test_bench by hand).
 #include "harness.h"

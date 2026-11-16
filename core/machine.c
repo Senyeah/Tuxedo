@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "machine.h"
 
 #include <mach/mach.h>

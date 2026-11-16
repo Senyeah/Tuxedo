@@ -1,4 +1,5 @@
 #!/bin/zsh
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copies the prebuilt iOS pieces Tuxedo links into ios/deps (not in git):
 #   StikJIT.xcframework   Built-in StikJIT (MPL-2.0), as Husk vendors it
 #   libhusk_rppairing.a   on-device pairing (Husk's src/rppairing-ios, scripts/build_rppairing_ios.sh)

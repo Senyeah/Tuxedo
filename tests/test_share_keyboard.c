@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* /.tux/keyboard through the share server on a Unix socket, as tux-keyboard in a Linux desktop uses it:
    PUT is the guest's request for the device's keyboard, GET the device keyboard's height. */
 #include "share.h"

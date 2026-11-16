@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "share.h"
 #include "additions.h"
 #include "secrets.h"

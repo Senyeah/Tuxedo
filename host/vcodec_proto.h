@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* The hvcodec protocol: a guest process asks the host's VideoToolbox to decode, encode and convert video.
    docs/guest-video-encode-plan.md has the design. The guest reaches it at 10.0.2.4:8470 (TCP through libslirp).
 

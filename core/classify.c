@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "classify.h"
 
 /* Decoding follows the A64 top-level encoding table in the Arm ARM:

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 // virglrenderer on ANGLE (Metal) behind HvGpu3dOps. See vgpu_virgl.h.
 #import <Foundation/Foundation.h>
 #import <IOSurface/IOSurfaceRef.h>

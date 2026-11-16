@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "guest_ram.h"
 
 #include <errno.h>

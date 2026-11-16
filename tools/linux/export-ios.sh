@@ -1,4 +1,5 @@
 #!/bin/zsh
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Makes a folder Tuxedo on iOS can bring in, for a Linux machine (twin of tools/export_ios.sh).
 #   tools/linux/export-ios.sh DISK FIRMWARE [NAME] [RAM_MB] [OUTDIR]
 # DISK is a Debian image (build/linux/debian-console.img), FIRMWARE is u-boot.bin.

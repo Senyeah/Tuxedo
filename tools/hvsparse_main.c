@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* hvsparse pack SRC DST | hvsparse unpack SRC DST: see host/hvsparse.h. */
 #include <stdio.h>
 #include <string.h>

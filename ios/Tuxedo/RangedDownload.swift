@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 /// Downloads `url` into the file `part`, appending: a download that stops for any reason (no network, Tuxedo

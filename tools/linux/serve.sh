@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-or-later
 # G7: serve build/linux/dist over HTTP for a LAN install. Opens a port, so it asks first.
 # Usage: serve.sh [--dir DIR] [--bind ADDR] [--port N] [--yes]
 set -euo pipefail

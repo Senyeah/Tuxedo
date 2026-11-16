@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* The hvcodec DMA device (devices/virtio_hvcodec.c) on the virt board, driven as the tux_codec module drives it,
    with a test backend in place of host/vcodec.m: enumeration and config, contexts, direct and indirect chains,
    chains far past HV_VIRTQ_MAX_SEGS, data both ways, a reply larger than its buffer (REST), contexts that do not wait

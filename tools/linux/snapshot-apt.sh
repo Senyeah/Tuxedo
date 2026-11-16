@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Sourced inside an arm64 debian:trixie container: apt from the pinned snapshot, then install $APT_PKGS.
 # Needs versions.env sourced first.
 SNAP=http://snapshot.debian.org/archive/debian/$DEBIAN_SNAPSHOT/

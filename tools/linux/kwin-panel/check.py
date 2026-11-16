@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Runs in the container (keyboard-panel-check.sh), inside dbus-run-session: tux-keyboard as KWin's input method.
 
 Installs the package's files and the image's kwinrc as the image has them, starts kwin_wayland --virtual

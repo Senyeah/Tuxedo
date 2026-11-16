@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import UIKit
 
 /// The two keys. They take touches in their own views, so a finger on a key is never a pad

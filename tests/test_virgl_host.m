@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 // Host renderer smoke test: virglrenderer on ANGLE's Metal backend, output to an IOSurface.
 // Needs the libraries from tools/gfx (make test-virgl-host). Not part of make test.
 // Exit 0 only when both read-backs equal the clear colour.

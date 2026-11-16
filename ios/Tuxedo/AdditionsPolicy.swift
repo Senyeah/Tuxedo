@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 /// The rules for Tuxedo Additions (docs/guest-additions-design.md), with no UIKit and no engine, so

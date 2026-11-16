@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef TUXVM_CLASSIFY_H
 #define TUXVM_CLASSIFY_H
 

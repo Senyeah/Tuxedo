@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+# SPDX-License-Identifier: GPL-2.0-or-later
 """A stand-in for Plasma's panel, for keyboard-panel-check.sh: dock.py top|bottom HEIGHT.
 A layer-shell surface over the whole edge that keeps HEIGHT for itself (an exclusive zone)."""
 import array

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* Tuxedo Additions: the media, the job and the guest's events (additions.h).
 
    One lock holds the state. It is taken before the folder table's lock (fs_server.c) and never after it: the server

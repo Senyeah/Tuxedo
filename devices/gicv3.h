@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef TUXVM_GICV3_H
 #define TUXVM_GICV3_H
 

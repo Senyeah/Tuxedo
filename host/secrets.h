@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef TUXVM_SECRETS_H
 #define TUXVM_SECRETS_H
 

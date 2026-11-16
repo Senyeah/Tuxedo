@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 // Tuxedo Additions in the app (ios/Tuxedo/Additions*.swift, docs/guest-additions-design.md): version order, the

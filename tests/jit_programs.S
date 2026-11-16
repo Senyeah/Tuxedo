@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 // Small programs run natively and through the JIT; test_jit.c compares every
 // register, SP, NZCV, FPSR and FPCR afterwards. They do no loads or stores
 // (those come with the MMU tests), but SP is used as an ordinary operand.

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* Tuxedo Additions, engine side (host/additions.c, and the reserved entry in host/fs_server.c): the JSON check, the
    top-level "t" of an event, the event ring (order, gap, limits), the job and its wipe, the guest's and the app's
    JSON, the reserved folder entry (not counted, found or cleared by the user-folder calls, in .tux-folders with its

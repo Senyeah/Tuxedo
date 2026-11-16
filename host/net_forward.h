@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* TCP forwards from the host into the guest: the rules, the addresses they listen on, and what to add and remove when
    either changes. No libslirp here: net_slirp.c gives the add and remove calls (on its thread), tests give fakes. */
 #ifndef TUXVM_NET_FORWARD_H

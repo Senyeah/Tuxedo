@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 /// The rules for a Linux machine's port forwards, and how the engine's state reads (tux_vm_forward_state).

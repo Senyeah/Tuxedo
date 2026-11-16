@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
 # cproject.sh DIR [N]: writes a C project of N units for make -j (E11). ./prog prints one checksum,
 # the same on any host with 64-bit long long.
 set -e

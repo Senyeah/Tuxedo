@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 // Before iOS 27 the external display scene reaches the app only when Info.plist's scene manifest

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "operands.h"
 
 /* Follows the A64 encoding index. Only the copied groups are decoded here:

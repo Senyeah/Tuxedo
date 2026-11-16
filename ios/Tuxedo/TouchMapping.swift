@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import CoreGraphics
 
 /// Touches on the Linux picture (LINUX-PLAN-12): a point becomes a fraction of the guest picture, sent as 0...32767

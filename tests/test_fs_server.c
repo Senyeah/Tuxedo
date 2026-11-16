@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* The Files folder server (host/fs_server.c) driven by FUSE requests, as the guest's kernel sends them, on temporary
    folders on the Mac: "..", ".", "/" and NUL in names; links to / and to .. in a directory part and the last part;
    a hard link out of a folder; every change in the Read-only and Copy-on-write modes; case and Unicode rules (on

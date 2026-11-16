@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* The share server's folder through its Unix socket: links to / and to .. in a directory part or the last part,
    "..", NUL and absolute paths do not leave it, and normal files and folders still work. Twice: with
    O_NOFOLLOW_ANY and O_RESOLVE_BENEATH when the OS has them, then a part at a time without clonefile. */

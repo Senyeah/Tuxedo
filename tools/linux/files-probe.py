@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+# SPDX-License-Identifier: GPL-2.0-or-later
 """The guest's half of files-check.py: runs in the guest, prints one JSON line per command.
 
   ro DIR              every change, expected to fail with EROFS

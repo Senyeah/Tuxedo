@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef TUXVM_GUEST_RAM_H
 #define TUXVM_GUEST_RAM_H
 

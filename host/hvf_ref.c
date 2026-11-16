@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* tuxvm-ref: a Mac-only test tool. Runs the same machine (TuxVM's RAM,
    devices and disks) with the guest CPU on Hypervisor.framework
    instead of the JIT, so a JIT run can be compared against real hardware at

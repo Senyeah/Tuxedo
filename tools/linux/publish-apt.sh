@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
 # The Tuxedo apt repository and the source offer, built on the Mac (docs/guest-video-encode-plan.md, VE3.3):
 #   $OUT/apt     dists/trixie/{Release,InRelease,Release.gpg}, main/binary-{arm64,all}, pool/main/t/<package>/,
 #                tux-archive.asc

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef TUXVM_SYSREG_H
 #define TUXVM_SYSREG_H
 

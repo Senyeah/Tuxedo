@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Build the tux-guest package into a directory (default /out). Runs on the Mac, builds inside the container.
 # build-image.sh calls the same --inner step, so this is for a package on its own.
 set -eu

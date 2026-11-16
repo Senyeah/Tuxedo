@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* The virtio-fs device with no folders (HvVmConfig.fs_always) and a new machine for Tuxedo Additions, through
    host/vm.c: the device is there with fs_always and with folders, it is not there with neither; it takes the slot after
    the touchscreen, so no other device moves; a board without it is as it was (same slots, same device tree); and

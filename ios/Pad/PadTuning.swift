@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 /// Every number of the pad's look and haptics, in one place (docs/external-trackpad-plan.md).

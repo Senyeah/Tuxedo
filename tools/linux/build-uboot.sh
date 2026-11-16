@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Build U-Boot for the QEMU virt board. Runs on the Mac, builds inside the container.
 # build-uboot.sh makes u-boot.bin with the boot-speed fragment (u-boot-tux.config);
 # --stock makes u-boot-stock.bin from the unmodified defconfig, which keeps the autoboot countdown.

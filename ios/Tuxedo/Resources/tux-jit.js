@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 const CMD_DETACH = 0;
 const CMD_PREPARE_REGION = 1;
 const CMD_NEW_BREAKPOINTS = 2;

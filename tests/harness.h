@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 // Shared by the block-level tests: assembler macros for test programs (when
 // included from a .s file) and the C side of the native-vs-JIT comparison.
 #ifndef TUXVM_TEST_HARNESS_H

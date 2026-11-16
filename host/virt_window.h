@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef HV_VIRT_WINDOW_H
 #define HV_VIRT_WINDOW_H
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 /// Fetches a catalogue entry's firmware and disk into one folder, checking each against the catalogue's SHA-256.

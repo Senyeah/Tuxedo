@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "jit_region.h"
 
 #include <stdio.h>

@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+# SPDX-License-Identifier: GPL-2.0-or-later
 """A stand-in for host/secrets.c, for secrets-check.py --container: the same /.tux/secrets protocol on
 127.0.0.1, items in memory, plus PUT /control ("lock" or "unlock") and GET /control/dump (the store as JSON)
 in place of the app's Face ID check and the Keychain."""

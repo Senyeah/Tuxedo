@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 // Entering and leaving translated code.
 //
 // hv_enter(HvCpu *cpu, void *block) saves the host's callee-saved registers,

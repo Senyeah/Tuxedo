@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* The engine (TuxVM, ../host/vm.h) as the Swift side sees it. */
 #ifndef TUX_VM_H
 #define TUX_VM_H

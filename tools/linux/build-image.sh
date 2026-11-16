@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Build the Debian disk image: the console image, or with --desktop the desktop image.
 # Runs on the Mac, builds inside the container.
 set -eu

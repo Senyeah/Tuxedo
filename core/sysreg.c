@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "sysreg.h"
 
 #include <mach/mach_time.h>

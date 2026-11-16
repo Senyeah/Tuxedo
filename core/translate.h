@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef TUXVM_TRANSLATE_H
 #define TUXVM_TRANSLATE_H
 

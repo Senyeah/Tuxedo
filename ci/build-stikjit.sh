@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Rebuild StikJIT 1.9.0 with full-width debugserver addresses. Its shipped
 # nine-digit packet format truncates JIT mappings above 0xfffffffff on iPads.
 set -euo pipefail

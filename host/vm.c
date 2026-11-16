@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "vm.h"
 #include "linux_boot.h"
 #include "vgpu_metal.h"

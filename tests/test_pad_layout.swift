@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 // Where the pad and its keys go, and the keyboard rule (ios/Pad/PadLayout.swift).

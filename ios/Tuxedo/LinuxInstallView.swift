@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import SwiftUI
 
 /// The Linux side of the Install view: choose an image, then download, check, unpack and start it.

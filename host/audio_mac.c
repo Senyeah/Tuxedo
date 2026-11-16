@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* The guest's sound on the host (Mac or iOS): the default output device through an AudioUnit
    whose render callback pulls PCM straight from the virtio-snd ring. The unit
    is set to the stream's own format, and CoreAudio converts to the device. */

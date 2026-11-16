@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Builds Tuxedo for the iOS Simulator, boots a simulator if none is booted, installs and launches it.
 # Usage: ios/scripts/sim_build.sh [device name or UDID]   (default: the booted simulator, else "iPhone 18 Pro")
 set -euo pipefail

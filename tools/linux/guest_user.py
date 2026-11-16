@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 """The guest user and hostname of an image: one place for every check that logs in or names a home folder.
 
 build-image.sh writes guest_user= and guest_host= into the image's .manifest. An image from before Tuxedo has a

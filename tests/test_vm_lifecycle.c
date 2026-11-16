@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "tux-vm.h"
 #include "tux-ios-jit.h"
 #include "jit_region.h"

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "virtio_rng.h"
 
 #include <stdlib.h>

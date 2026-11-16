@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import UIKit
 
 /// The external screen now connected, and the guest's size on it, for Settings.

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Source-only verification: no signing assets, external dependencies or simulator needed.
 set -euo pipefail
 cd "$(dirname "$0")/../.."

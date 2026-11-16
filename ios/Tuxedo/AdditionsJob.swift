@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 /// The job the app gives the guest's agent (docs/guest-additions-design.md, 5.5). The password is in the JSON that

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 // VE0.1 and VE0.2 (docs/guest-video-encode-plan.md): the hardware limit of a transcode with no guest, and the
 // codec table. Each clip is decoded with VTDecompressionSession and each IOSurface frame goes straight to
 // VTCompressionSession. Built for the Mac (make vt-transcode-bench) and as an iOS probe (make ios-vt-bench).

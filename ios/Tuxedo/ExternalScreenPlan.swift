@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 /// Before iOS 27: which connected external screens show the running machine. A screen not showing

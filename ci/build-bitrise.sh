@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Build Tuxedo's unsigned, ad-hoc-signed IPA on a Bitrise macOS/Xcode stack.
 # Build check only: the IPA is not published.
 set -euo pipefail

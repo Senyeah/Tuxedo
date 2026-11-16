@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /// When a session asks for Face ID, and when a machine's wallet is open. A machine asks once for each launch of the app
 /// (oncePerLaunch): a start, a restart or a return from the background asks no more after a pass. The device locking
 /// still asks again. The machine stays paused and hidden until the check passes.

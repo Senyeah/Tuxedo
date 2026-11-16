@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 /// The events the guest's agent sends (docs/guest-additions-design.md, 5.3) and the app's replay of them into a state.

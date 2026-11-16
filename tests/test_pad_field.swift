@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
 // The pad's energy grid and its colour maths (ios/Pad/PadField.swift), as the plan's tests list.

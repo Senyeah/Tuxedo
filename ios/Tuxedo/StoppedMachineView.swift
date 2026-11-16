@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 import SwiftUI
 
 /// Terminal state after the engine has released the previous guest (a Linux machine).
