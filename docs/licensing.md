@@ -27,6 +27,17 @@ go on the App Store.
 
 The licence files in `ios/Tuxedo/Resources/legal/` are in the root of `Tuxedo.app`. The app has no screen that shows them yet. When it gets one, it must list `LICENSES-TuxedoAdditions.txt` too, because that file holds the source offer for the media (see Tuxedo Additions below).
 
+## The licence of the app binary
+
+Every Tuxedo source file is GPL-2.0-or-later. A file carries the line `SPDX-License-Identifier: GPL-2.0-or-later` in a comment at the top, and a new file gets it when it is made. Five files that ship inside published packages have no such line yet: `tux_va.c` in `tux-va`, `kwin-keyboard.js` and `tux-keyboard.sh` in `tux-guest`, and `tux-desktop.sh` and `tux_additions_caps.py` in the Additions media. A header changes the package content, and a published file in the apt pool never changes, so each gets its line when its package version next goes up.
+
+What licence an app binary has depends on what is linked into it. This is a technical reading, not legal advice.
+
+- Without graphics acceleration, the binary holds GPL-2.0-or-later code, LGPL-2.1-or-later code (glib, libintl and QEMU's `tcg-apple-jit.h`), MPL-2.0 code (StikJIT) and MIT or BSD code. The LGPL-2.1 allows its code to be used under the GPL, and MPL-2.0 section 3.3 allows MPL code in a GPL work. So the whole binary is GPL-2.0-or-later.
+- With graphics acceleration, ANGLE's static libraries add abseil and astc-encoder, which are Apache-2.0. Apache-2.0 does not fit GPL-2.0-only, but it fits GPL-3.0. Every GPL file in the tree allows "or later" (for the Husk files, that rests on Husk's README, which says GPL-2.0-or-later), so the whole binary can be handed out under GPL-3.0-or-later. Whoever hands out such a binary must say that it is under those terms and offer the source under them. A binary built without `TUX_GFX` has no Apache-2.0 code.
+
+The tree holds no GPL-2.0-only file. If one is added, a graphics build can no longer be handed out.
+
 ## Linux guests
 
 A Linux machine needs two things that are not in the repository or in the app: a U-Boot binary and a Debian disk image. The app does carry one set of Linux packages, the Tuxedo Additions media (see below). `tools/linux` builds both ([README](../tools/linux/README.md)). The app downloads them from a catalogue, or imports them from a folder. Whoever hosts them hands out GPL binaries, so that person must also hand out, or offer, the source. The repository holds no U-Boot or Debian source and applies no patch to either. FFmpeg is different: the repository has a patch to it, and the source offer is part of the apt repository (see FFmpeg below).
