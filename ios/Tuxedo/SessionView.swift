@@ -1155,6 +1155,8 @@ struct SessionView: View {
         }
         started = Date()
         additions.begin(current) // after the boot: the engine made a new, empty log of events
+        // The prompt on the Installed screen asked for the wizard: it waits at Connect until the guest answers
+        if SetupHint.take(machine.id), additions.insert() { openWizard(AdditionsWizardRequest()) }
         var used = Machines.shared.all.first { $0.id == machine.id } ?? machine // keeps lastExternalScreen
         used.lastUsed = started
         Machines.shared.update(used)

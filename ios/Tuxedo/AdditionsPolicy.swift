@@ -308,8 +308,8 @@ enum AdditionsText {
     static let lockRootNote = "Root cannot sign in at the console. Use sudo from the account."
     static let tuxMountNote = "The ~/Tux folder still uses /home/tux."
 
-    static let connectWaiting = "Waiting for the guest. Tuxedo Additions starts by itself when the guest has tux-guest 1.11 or newer."
-    static let connectBootstrap = "The guest does not answer. It may not have tux-guest. Run this command in the guest. It uses sudo when you are not root."
+    static let connectWaiting = "Connecting to the machine. This takes a few seconds while it starts."
+    static let connectBootstrap = "The machine has not answered. An image from the Tuxedo catalogue answers by itself, so this one may come from somewhere else and lack the Tuxedo tools. Run this command in the machine to add them. It uses sudo when you are not root."
     static let typeCommands = "Type the commands"
     static let copyCommands = "Copy"
     static let restartToggle = "The new desktop starts after the restart. Turn this off to restart the machine yourself later."

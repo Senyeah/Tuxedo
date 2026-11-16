@@ -8,6 +8,8 @@ struct InstallView: View {
     @ObservedObject private var linux = LinuxInstaller.shared
     @ObservedObject private var jit = JITCoordinator.shared
     @State private var jitReady = JITBootstrap.ready
+    @State private var offeredFor: UUID? // the machine the setup prompt came up for, once
+    @State private var promptShown = false
 
     var body: some View {
         NavigationStack {
@@ -20,6 +22,10 @@ struct InstallView: View {
                 .deskColumn()
             }
             .background(Desk.page)
+            .overlay(alignment: .bottom) { setupPrompt }
+            .onChange(of: linux.phase) { _, phase in offerSetup(phase) }
+            .onAppear { offerSetup(linux.phase) }
+            .sensoryFeedback(.impact(weight: .light), trigger: promptShown) { _, shown in shown }
             .navigationTitle(linux.busy ? "Installing" : "Install Linux")
             .task {
                 while !Task.isCancelled { // the region may be claimed after a hand-off to StikDebug
@@ -27,6 +33,41 @@ struct InstallView: View {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                 }
             }
+        }
+    }
+}
+
+extension InstallView {
+    @ViewBuilder fileprivate var setupPrompt: some View {
+        if promptShown, case .installed(let id) = linux.phase, let machine = Machines.shared.all.first(where: { $0.id == id }) {
+            SetupPrompt(name: machine.name,
+                        blocker: jitReady ? nil : (JITBootstrap.lastFailure ?? "Turn on JIT to start it."),
+                        setUp: {
+                            SetupHint.request(machine.id)
+                            promptShown = false
+                            linux.reset()
+                            start(machine)
+                        },
+                        dismiss: { withAnimation(.smooth) { promptShown = false } })
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
+                .deskColumn()
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    /// The prompt rises a moment after the Installed screen, once for each new machine.
+    fileprivate func offerSetup(_ phase: LinuxInstaller.Phase) {
+        guard case .installed(let id) = phase else {
+            promptShown = false
+            return
+        }
+        guard offeredFor != id else { return }
+        offeredFor = id
+        Task {
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard case .installed(id) = linux.phase else { return }
+            withAnimation(.spring(duration: 0.6, bounce: 0.25)) { promptShown = true }
         }
     }
 }

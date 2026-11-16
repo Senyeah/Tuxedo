@@ -25,6 +25,8 @@ import UIKit
 ///   linux-catalogue URL   set the Linux catalogue URL and load it
 ///   linux-download ID  download that catalogue entry and wait; linux-delete ID removes it
 ///   linux-install ID NAME DISK_GB RAM_MB keep|delete  download, unpack and list a machine, then wait
+///   installed-demo [NAME]  the Installed screen of the Install tab for a machine already listed (the newest, or NAME),
+///                      with the setup prompt, for a screenshot
 ///   snap [NAME]        the guest's screen (1920x1080) into Documents/NAME.jpg (snap.jpg)
 ///   log TEXT           a marker in tux.log
 ///   details [forwards] open the session's Details (and its Port Forwards page), for a screenshot
@@ -170,6 +172,11 @@ enum Autopilot {
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
             TuxLog.log("autopilot", "linux-install \(w[0]): \(LinuxInstaller.shared.phase)")
+        case "installed-demo":
+            let all: [VirtualMachine] = Machines.shared.all
+            let machine = arg.isEmpty ? all.max { $0.added < $1.added } : all.first { $0.name.lowercased() == arg.lowercased() }
+            guard let machine else { TuxLog.log("autopilot", "no machine called \(arg)"); return }
+            LinuxInstaller.shared.showInstalled(machine.id)
         case "snap": // the guest's screen, full size, into Documents/snap.jpg (or NAME.jpg): "snap", "snap safari"
             let name = arg.isEmpty ? "snap" : arg
             let url = docs.appendingPathComponent("\(name).jpg")

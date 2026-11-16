@@ -76,6 +76,9 @@ final class LinuxInstaller: ObservableObject {
 
     func reset() { if !busy { phase = .idle; current = nil } }
 
+    /// For Autopilot's installed-demo: the Installed screen for a machine that is already listed.
+    func showInstalled(_ id: UUID) { if !busy { phase = .installed(id) } }
+
     func download(_ image: LinuxImage) { run(image, options: nil) }
 
     /// Downloads what is missing, then unpacks it into a new machine in the list.
