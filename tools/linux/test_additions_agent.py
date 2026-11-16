@@ -1689,7 +1689,7 @@ class Desktop(Case):
         self.run_job([{"action": "desktop.install", "id": "plasma"}])
         self.assertEqual(self.final()[0][0], "ok", self.final())
         pk = self.runner.called("apt-get", "install")[0].argv
-        for p in ("plasma-desktop", "kwin-wayland", "powerdevil", "pipewire-pulse"):
+        for p in ("plasma-desktop", "kwin-wayland", "powerdevil", "pipewire-pulse", "kscreen", "upower"): # kscreen: Display settings; upower: the battery
             self.assertIn(p, pk)
         self.assertFalse({"sddm", "lightdm", "kde-plasma-desktop"} & set(pk))
         self.assertEqual(self.read("etc/tux/session"), "plasma\n")

@@ -31,6 +31,7 @@ Every change keeps its original author in the git history.
 - The Desktop step shows on every guest, also one that has a desktop. A person can install KDE Plasma or Xfce and switch between the installed desktops. A switch writes `/etc/tux/session` (`tux-session` starts labwc, Plasma or Xfce from tty1) and needs no download for a desktop that is installed. No display manager is used. The job can carry `reboot_after`; the Review step has a "Restart when finished" switch for it. Real-guest check: `tools/linux/desktop-check.py`.
 - Licences: the app now carries GPL and LGPL binaries (`tux-ffmpeg` and Debian packages). `docs/licensing.md` and `ios/Tuxedo/Resources/legal/LICENSES-TuxedoAdditions.txt` have the source offer.
 - Tests: `make test-additions-engine`, `test-additions-builder`, `test-additions-agent`, `test-additions-policy`, `test-tux-files-additions` and `test-tux-guest-scripts`. Not run on the iPhone: part 5b of `docs/iphone-checklist.md`.
+- Plasma from the Additions gets `kscreen` (the Display page in System Settings) and `upower` (the battery icon). Both are only Recommends in Debian, and the Additions install skips Recommends.
 
 ### The screen is a Magic Trackpad 2
 - The session's trackpad is no longer a relative mouse: the engine presents it to the Mac as

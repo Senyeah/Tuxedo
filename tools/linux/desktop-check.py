@@ -133,6 +133,10 @@ def main():
         process_up(m, ["kwin_wayland"], 300, "plasma")
         process_up(m, ["plasmashell"], 120, "plasma shell")
         ok("plasma: the session runs on tty1 (kwin_wayland, plasmashell)")
+        m.need("dpkg -s kscreen upower >/dev/null 2>&1", what="kscreen and upower are installed")
+        m.need("ls /usr/share/applications | grep -q -i kscreen", what="the Display settings page (kcm_kscreen) exists")
+        m.need("upower -e >/dev/null", what="upower answers on D-Bus")
+        ok("plasma: Display settings (kscreen) and the battery service (upower) are there")
         if a.only == "p":
             return 0
         k = m.mark()
